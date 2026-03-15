@@ -36,7 +36,6 @@
       width: 100%;
     }
 
-    /* Background */
     .bg {
       position: fixed;
       inset: 0;
@@ -56,7 +55,6 @@
       pointer-events: none;
     }
 
-    /* App container */
     .app {
       position: relative;
       z-index: 1;
@@ -68,7 +66,6 @@
       padding: env(safe-area-inset-top, 20px) 0 env(safe-area-inset-bottom, 20px);
     }
 
-    /* Header */
     .header {
       padding: 20px 24px 12px;
       text-align: center;
@@ -76,11 +73,7 @@
       flex-shrink: 0;
     }
 
-    .header-crest {
-      font-size: 22px;
-      margin-bottom: 4px;
-      opacity: 0.8;
-    }
+    .header-crest { font-size: 22px; margin-bottom: 4px; opacity: 0.8; }
 
     .header-title {
       font-family: 'Cinzel', serif;
@@ -99,7 +92,6 @@
       margin-top: 2px;
     }
 
-    /* Status bar */
     .status-bar {
       display: flex;
       justify-content: center;
@@ -128,12 +120,13 @@
       animation: pulse-dot 2s infinite;
     }
 
+    .status-dot.synced { background: var(--gold); box-shadow: 0 0 6px var(--gold); }
+
     @keyframes pulse-dot {
       0%, 100% { opacity: 1; }
       50% { opacity: 0.4; }
     }
 
-    /* Messages */
     .messages {
       flex: 1;
       overflow-y: auto;
@@ -194,7 +187,11 @@
       border-bottom-left-radius: 0;
     }
 
-    /* Thinking indicator */
+    .message.herald .message-bubble.live-briefing {
+      border-left: 2px solid var(--green);
+      border-color: rgba(39,174,96,0.3);
+    }
+
     .thinking {
       display: flex;
       align-items: center;
@@ -215,10 +212,7 @@
       color: var(--gold-dim);
     }
 
-    .thinking-dots {
-      display: flex;
-      gap: 3px;
-    }
+    .thinking-dots { display: flex; gap: 3px; }
 
     .thinking-dots span {
       width: 4px;
@@ -236,7 +230,6 @@
       30% { transform: translateY(-4px); opacity: 1; }
     }
 
-    /* Input area */
     .input-area {
       flex-shrink: 0;
       padding: 12px 20px 16px;
@@ -267,16 +260,9 @@
       transition: border-color 0.2s;
     }
 
-    .text-input:focus {
-      border-color: rgba(201,168,76,0.5);
-    }
+    .text-input:focus { border-color: rgba(201,168,76,0.5); }
+    .text-input::placeholder { color: var(--text-dim); font-style: italic; }
 
-    .text-input::placeholder {
-      color: var(--text-dim);
-      font-style: italic;
-    }
-
-    /* Mic button */
     .mic-btn {
       width: 52px;
       height: 52px;
@@ -310,7 +296,6 @@
 
     .mic-btn svg { width: 22px; height: 22px; }
 
-    /* Send button */
     .send-btn {
       width: 42px;
       height: 42px;
@@ -329,7 +314,6 @@
     .send-btn:active { transform: scale(0.94); background: rgba(201,168,76,0.15); }
     .send-btn svg { width: 18px; height: 18px; }
 
-    /* Voice transcript preview */
     .voice-preview {
       font-size: 11px;
       color: var(--gold-dim);
@@ -340,7 +324,6 @@
       font-style: italic;
     }
 
-    /* API key setup */
     .setup-overlay {
       position: fixed;
       inset: 0;
@@ -415,7 +398,6 @@
       max-width: 320px;
     }
 
-    /* Welcome message */
     .welcome {
       text-align: center;
       padding: 24px 16px;
@@ -455,9 +437,16 @@
       letter-spacing: 0.05em;
     }
 
-    .quick-cmd:active {
-      background: rgba(201,168,76,0.1);
-      color: var(--gold);
+    .quick-cmd:active { background: rgba(201,168,76,0.1); color: var(--gold); }
+
+    .sync-banner {
+      font-size: 10px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--green);
+      text-align: center;
+      padding: 4px;
+      opacity: 0.7;
     }
   </style>
 </head>
@@ -485,11 +474,14 @@
 
   <div class="status-bar">
     <div class="status-item">
-      <div class="status-dot"></div>
+      <div class="status-dot" id="onlineDot"></div>
       Online
     </div>
     <div class="status-item" id="statusPhase1">Phase 1: DRY RUN</div>
-    <div class="status-item" id="statusBankroll">$97 Paper</div>
+    <div class="status-item" id="statusSync">
+      <div class="status-dot" id="syncDot"></div>
+      <span id="syncLabel">Syncing...</span>
+    </div>
   </div>
 
   <div class="messages" id="messages">
@@ -502,6 +494,7 @@
         <button class="quick-cmd" onclick="sendQuick('trading update')">Trading Update</button>
         <button class="quick-cmd" onclick="sendQuick('empire overview')">Empire Overview</button>
         <button class="quick-cmd" onclick="sendQuick('what is the status of Trade 002 SOL')">Trade #002 Status</button>
+        <button class="quick-cmd" onclick="loadLatestBriefing()">Latest Auto-Briefing</button>
       </div>
     </div>
   </div>
@@ -530,28 +523,57 @@
 </div>
 
 <script>
+  // ── GIST CONFIG ───────────────────────────────────────────────────────────
+  const GIST_ID       = "7f8beaced903cda4a933a9faa1a28ce7";
+  const GIST_FILENAME = "herald_briefing.md";
+  const GIST_URL      = `https://api.github.com/gists/${GIST_ID}`;
+
+  // ── HERALD SYSTEM PROMPT ──────────────────────────────────────────────────
   const HERALD_SYSTEM = `YOU ARE HERALD
-Empire Intelligence & Command Interface for miked's AI Empire.
+Empire Intelligence and Command Interface for miked's AI Empire.
+Updated: 2026-03-15 — Directive #11 Phase 1 LIVE.
 
 YOUR PURPOSE
 You are the single point of contact for the entire AI Empire.
 You synthesize status, route commands, track KPIs, and escalate decisions that need human judgment.
+You are now connected to live empire data via Guardian auto-scan every 4 hours.
 
-THE EMPIRE
-Phase 1 — Freddie Trading Team: DRY RUN. Bankroll $97 paper. Trade #001 closed -$3.00 (managed exit). Trade #002 SOL OPEN — entry $89.10, stop $86.30, max risk $4.85.
-Real money threshold: 60% win rate over 2 weeks.
-Guardian ruleset: 5% max trade, 15% daily loss limit. Approved: SOL, JUP, BONK, WIF, RAY, PYTH, WLFI.
+THE EMPIRE — CURRENT STATE
+Phase 1 — Freddie Trading Team: DRY RUN. Bankroll $97 paper.
+Trade #001: SOLUSD Long — Entry $92.50 — Result -$3.00 NET (-3%) — MANAGED EXIT
+Trade #002: SOLUSD Long — OPEN — Entry $89.10 — Stop $86.60 — Break-even $89.55
+Last known SOL price: ~$88.55 — Stop distance $1.95 — WATCH_HIGH condition
+FOMC RISK: Fed decision March 18 2:00 PM ET — hold expected — language is wildcard
+Real money threshold: 60% NET win rate over 2 weeks paper.
 
-Phase 2 — Retirement (PLANNED)
-Phase 3 — APEX Empire (Claude Projects — separate project)
-Phase 4 — Revenue Engine (PLANNED)
-Phase 5 — Builder Agent (FUTURE)
+INFRASTRUCTURE
+OpenClaw agents: 5/5 ONLINE — Guardian, Quant, Researcher, Trader, Critic
+All agents model: gemini-2.5-flash-lite (FIXED 2026-03-15 — was burning $300+/month on Opus)
+Guardian auto-scan: Every 4 hours — ACP broadcast to all agents
+Researcher price alert: Every 30 min — $88.20 enter / $86.60 stand down
+HERALD automation: Directive #11 Phase 1 LIVE — auto-briefing every 4 hours via Guardian
+SCOUT: LIVE — external intelligence agent — checks X, YouTube, TikTok, Reddit, macro
+Anthropic API key: Configured and working
 
-SOVEREIGN directives active (2026-03-13):
-1. Trade #002 active monitor — watch $91.50, $88.20, $86.30, $85.00
-2. FORGE: ACP wiring — Priority 1 build task
-3. Herald Voice App — greenlit, deploying today
-4. Paper trade milestone tracking — LEDGER scorecard active
+ACTIVE DIRECTIVES
+Directive #9: Post-trade lessons + SCOUT external intelligence
+Directive #10: PULSE agent — AI trend monitor (QUEUED)
+Directive #11: Empire automation — replacing claude.ai Projects with Python scripts
+Directive #12: HERALD Voice App ACP integration — IN PROGRESS
+
+GUARDIAN RULESET
+Max trade size: 5% of bankroll
+Daily loss limit: 15% of bankroll
+Stop loss: 3-5% below entry minimum
+Approved assets: SOL, JUP, BONK, WIF, RAY, PYTH, WLFI
+Min Risk/Reward: 2:1 NET of all costs
+SCOUT brief mandatory before every Level 2 real money trade
+FOMC check mandatory before any trade entry
+
+NORTH STAR
+Empire pays for its own infrastructure costs.
+Current cost: ~$3-5/month. Current revenue: $0 (paper trading).
+Goal: $3-5/month net profit from trading.
 
 YOUR RULES
 - Lead with the most important thing first
@@ -559,12 +581,14 @@ YOUR RULES
 - Never execute — inform, route, recommend
 - End responses with: What do you need from me?
 - Keep responses concise — this is a mobile voice interface
+- If asked about live price or latest briefing — tell user to tap Latest Auto-Briefing button
 
 BRIEFING FORMAT when asked:
 === HERALD BRIEFING — [DATE] ===
 TRADING: Status | Bankroll | Win Rate
-APEX: Status
+SOL: Price | Stop distance | Condition
 TOP PRIORITY: [one thing]
+FOMC: [days away or passed]
 ESCALATIONS: [if any]
 What do you need from me?`;
 
@@ -573,12 +597,13 @@ What do you need from me?`;
   let recognition = null;
   let isListening = false;
 
-  // Check for saved API key
+  // ── STARTUP ───────────────────────────────────────────────────────────────
   window.onload = function() {
     const saved = localStorage.getItem('herald_api_key');
     if (saved) {
       apiKey = saved;
       showApp();
+      fetchLatestBriefing(false); // silent check on load
     }
   };
 
@@ -591,6 +616,7 @@ What do you need from me?`;
     apiKey = input;
     localStorage.setItem('herald_api_key', apiKey);
     showApp();
+    fetchLatestBriefing(false);
   }
 
   function showApp() {
@@ -598,6 +624,65 @@ What do you need from me?`;
     document.getElementById('mainApp').style.display = 'flex';
   }
 
+  // ── GIST FETCH ────────────────────────────────────────────────────────────
+  async function fetchLatestBriefing(showInChat) {
+    showInChat = showInChat !== undefined ? showInChat : true;
+    try {
+      const response = await fetch(GIST_URL, {
+        headers: { 'Accept': 'application/vnd.github.v3+json' }
+      });
+      if (!response.ok) throw new Error('Gist fetch failed');
+      const data = await response.json();
+      const content = data.files[GIST_FILENAME].content;
+
+      // Extract timestamp from comment
+      const tsMatch = content.match(/Updated: ([^\n]+)/);
+      const timestamp = tsMatch ? tsMatch[1].trim() : 'unknown';
+
+      // Update sync status
+      document.getElementById('syncDot').classList.add('synced');
+      document.getElementById('syncLabel').textContent = 'Live ' + timestamp.substring(11, 16);
+
+      if (showInChat) {
+        // Strip the comment line
+        const briefingText = content.replace(/<!--.*?-->\n\n/, '').trim();
+        addBriefingMessage(briefingText, timestamp);
+      }
+    } catch (err) {
+      document.getElementById('syncLabel').textContent = 'Offline';
+      if (showInChat) {
+        addMessage('herald', 'Could not fetch latest auto-briefing. Guardian may not have run yet or check your connection.');
+      }
+    }
+  }
+
+  function loadLatestBriefing() {
+    fetchLatestBriefing(true);
+  }
+
+  function addBriefingMessage(text, timestamp) {
+    const messages = document.getElementById('messages');
+    const welcome = messages.querySelector('.welcome');
+    if (welcome) welcome.remove();
+
+    const div = document.createElement('div');
+    div.className = 'message herald';
+
+    const label = document.createElement('div');
+    label.className = 'message-label';
+    label.textContent = 'HERALD — AUTO-BRIEFING ' + timestamp.substring(0, 10);
+
+    const bubble = document.createElement('div');
+    bubble.className = 'message-bubble live-briefing';
+    bubble.textContent = text;
+
+    div.appendChild(label);
+    div.appendChild(bubble);
+    messages.appendChild(div);
+    messages.scrollTop = messages.scrollHeight;
+  }
+
+  // ── CHAT ──────────────────────────────────────────────────────────────────
   function handleKey(e) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -617,8 +702,6 @@ What do you need from me?`;
 
   function addMessage(role, text) {
     const messages = document.getElementById('messages');
-
-    // Remove welcome if present
     const welcome = messages.querySelector('.welcome');
     if (welcome) welcome.remove();
 
@@ -690,7 +773,7 @@ What do you need from me?`;
           'anthropic-dangerous-direct-browser-access': 'true'
         },
         body: JSON.stringify({
-          model: 'claude-sonnet-4-20250514',
+          model: 'claude-haiku-4-5-20251001',
           max_tokens: 1024,
           system: HERALD_SYSTEM,
           messages: conversationHistory
@@ -710,21 +793,12 @@ What do you need from me?`;
       conversationHistory.push({ role: 'assistant', content: reply });
       addMessage('herald', reply);
 
-      // Speak the response --- clean up formatting symbols first
       if ('speechSynthesis' in window) {
         const clean = reply
-          .replace(/={2,}/g, '')           // remove ===
-          .replace(/\*{1,}/g, '')          // remove * and **
-          .replace(/#{1,}/g, '')           // remove ###
-          .replace(/\|/g, '')              // remove table pipes
-          .replace(/[-]{3,}/g, '')         // remove --- dividers
-          .replace(/_{2,}/g, '')           // remove __
-          .replace(/`{1,3}/g, '')          // remove backticks
-          .replace(/\[|\]/g, '')           // remove brackets
-          .replace(/\n{2,}/g, '. ')        // double newlines become pauses
-          .replace(/\n/g, ' ')             // single newlines become spaces
-          .replace(/\s{2,}/g, ' ')         // clean up extra spaces
-          .trim();
+          .replace(/={2,}/g, '').replace(/\*{1,}/g, '').replace(/#{1,}/g, '')
+          .replace(/\|/g, '').replace(/[-]{3,}/g, '').replace(/_{2,}/g, '')
+          .replace(/`{1,3}/g, '').replace(/\[|\]/g, '')
+          .replace(/\n{2,}/g, '. ').replace(/\n/g, ' ').replace(/\s{2,}/g, ' ').trim();
         const utterance = new SpeechSynthesisUtterance(clean);
         utterance.rate = 0.92;
         utterance.pitch = 0.9;
@@ -739,18 +813,13 @@ What do you need from me?`;
     }
   }
 
-  // Voice input
+  // ── VOICE INPUT ───────────────────────────────────────────────────────────
   function toggleVoice() {
     if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
       alert('Voice input is not supported in this browser. Please use Chrome on iOS or Android.');
       return;
     }
-
-    if (isListening) {
-      stopListening();
-      return;
-    }
-
+    if (isListening) { stopListening(); return; }
     startListening();
   }
 
@@ -768,8 +837,7 @@ What do you need from me?`;
     };
 
     recognition.onresult = (e) => {
-      const transcript = Array.from(e.results)
-        .map(r => r[0].transcript).join('');
+      const transcript = Array.from(e.results).map(r => r[0].transcript).join('');
       document.getElementById('voicePreview').textContent = transcript;
       document.getElementById('textInput').value = transcript;
     };
