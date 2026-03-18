@@ -448,6 +448,16 @@
       padding: 4px;
       opacity: 0.7;
     }
+
+    .disclaimer {
+      text-align: center;
+      padding: 8px 24px;
+      font-size: 10px;
+      color: var(--text-dim);
+      border-top: 1px solid rgba(201,168,76,0.08);
+      font-style: italic;
+      flex-shrink: 0;
+    }
   </style>
 </head>
 <body>
@@ -520,6 +530,12 @@
     </div>
     <div class="voice-preview" id="voicePreview"></div>
   </div>
+
+  <div class="disclaimer">
+    This is an AI-generated briefing tool. Information may be inaccurate.
+    Not professional advice of any kind.
+  </div>
+
 </div>
 
 <script>
@@ -531,35 +547,46 @@
   // ── HERALD SYSTEM PROMPT ──────────────────────────────────────────────────
   const HERALD_SYSTEM = `YOU ARE HERALD
 Empire Intelligence and Command Interface for miked's AI Empire.
-Updated: 2026-03-15 — Directive #11 Phase 1 LIVE.
+Updated: 2026-03-18 — Directive #11 Phase 1 LIVE. Billy LIVE.
 
 YOUR PURPOSE
 You are the single point of contact for the entire AI Empire.
-You synthesize status, route commands, track KPIs, and escalate decisions that need human judgment.
-You are now connected to live empire data via Guardian auto-scan every 4 hours.
+You synthesize status, route commands, track KPIs, and escalate
+decisions that need human judgment. You bridge all platforms.
 
 THE EMPIRE — CURRENT STATE
 Phase 1 — Freddie Trading Team: DRY RUN. Bankroll $97 paper.
 Trade #001: SOLUSD Long — Entry $92.50 — Result -$3.00 NET (-3%) — MANAGED EXIT
-Trade #002: SOLUSD Long — OPEN — Entry $89.10 — Stop $86.60 — Break-even $89.55
-Last known SOL price: ~$88.55 — Stop distance $1.95 — WATCH_HIGH condition
-FOMC RISK: Fed decision March 18 2:00 PM ET — hold expected — language is wildcard
+Trade #002: SOLUSD Long — OPEN — Entry $89.10 — Stop $90.00 (trailed) — Break-even $89.55
+Last known SOL price: ~$93.60 — Stop distance $3.60 — HOLDING
+FOMC: March 18 2:00 PM ET — Fed decision today — be at screen 1:45 PM ET
 Real money threshold: 60% NET win rate over 2 weeks paper.
+
+BILLY — Long-term conviction investor agent. Paper phase.
+KPI Tranche 1 received: $200. Billy chose to sit on sideline pre-FOMC.
+Post-FOMC: Billy evaluates first allocation after market settles.
 
 INFRASTRUCTURE
 OpenClaw agents: 5/5 ONLINE — Guardian, Quant, Researcher, Trader, Critic
-All agents model: gemini-2.5-flash-lite (FIXED 2026-03-15 — was burning $300+/month on Opus)
+All agents model: gemini-2.5-flash-lite
 Guardian auto-scan: Every 4 hours — ACP broadcast to all agents
-Researcher price alert: Every 30 min — $88.20 enter / $86.60 stand down
-HERALD automation: Directive #11 Phase 1 LIVE — auto-briefing every 4 hours via Guardian
-SCOUT: LIVE — external intelligence agent — checks X, YouTube, TikTok, Reddit, macro
-Anthropic API key: Configured and working
+Researcher price alert: Every 30 min — triggers at $88.20 and $90.00
+HERALD automation: Directive #11 Phase 1 LIVE — auto-briefing every 4 hours
+SCOUT: LIVE — external intelligence agent
+SENTINEL: LIVE — health monitor every 4 hours
+LEDGER: LIVE — cost tracker every scan
+SOVEREIGN: LIVE v1.0 — empire controller
+PULSE: LIVE — weekly report every Sunday 8AM
+Billy: LIVE v1.0 — long-term investor — paper phase
+Legal Sentinel: LIVE v1.0 — legal advisor
+Empire balance: $50.47
 
 ACTIVE DIRECTIVES
 Directive #9: Post-trade lessons + SCOUT external intelligence
-Directive #10: PULSE agent — AI trend monitor (QUEUED)
-Directive #11: Empire automation — replacing claude.ai Projects with Python scripts
-Directive #12: HERALD Voice App ACP integration — IN PROGRESS
+Directive #11: Empire automation — Python scripts replace claude.ai Projects
+Directive #12: ERC-8004 Empire Identity — Level 4 build target
+Directive #13: DEX Build Order — Level 3+ build targets
+Directive #14: Agent-to-agent messaging — acp_router.py
 
 GUARDIAN RULESET
 Max trade size: 5% of bankroll
@@ -587,8 +614,9 @@ BRIEFING FORMAT when asked:
 === HERALD BRIEFING — [DATE] ===
 TRADING: Status | Bankroll | Win Rate
 SOL: Price | Stop distance | Condition
+BILLY: Capital | Positions | Next action
 TOP PRIORITY: [one thing]
-FOMC: [days away or passed]
+FOMC: [status]
 ESCALATIONS: [if any]
 What do you need from me?`;
 
@@ -603,7 +631,7 @@ What do you need from me?`;
     if (saved) {
       apiKey = saved;
       showApp();
-      fetchLatestBriefing(false); // silent check on load
+      fetchLatestBriefing(false);
     }
   };
 
@@ -634,17 +662,11 @@ What do you need from me?`;
       if (!response.ok) throw new Error('Gist fetch failed');
       const data = await response.json();
       const content = data.files[GIST_FILENAME].content;
-
-      // Extract timestamp from comment
       const tsMatch = content.match(/Updated: ([^\n]+)/);
       const timestamp = tsMatch ? tsMatch[1].trim() : 'unknown';
-
-      // Update sync status
       document.getElementById('syncDot').classList.add('synced');
       document.getElementById('syncLabel').textContent = 'Live ' + timestamp.substring(11, 16);
-
       if (showInChat) {
-        // Strip the comment line
         const briefingText = content.replace(/<!--.*?-->\n\n/, '').trim();
         addBriefingMessage(briefingText, timestamp);
       }
@@ -664,18 +686,14 @@ What do you need from me?`;
     const messages = document.getElementById('messages');
     const welcome = messages.querySelector('.welcome');
     if (welcome) welcome.remove();
-
     const div = document.createElement('div');
     div.className = 'message herald';
-
     const label = document.createElement('div');
     label.className = 'message-label';
     label.textContent = 'HERALD — AUTO-BRIEFING ' + timestamp.substring(0, 10);
-
     const bubble = document.createElement('div');
     bubble.className = 'message-bubble live-briefing';
     bubble.textContent = text;
-
     div.appendChild(label);
     div.appendChild(bubble);
     messages.appendChild(div);
@@ -704,18 +722,14 @@ What do you need from me?`;
     const messages = document.getElementById('messages');
     const welcome = messages.querySelector('.welcome');
     if (welcome) welcome.remove();
-
     const div = document.createElement('div');
     div.className = `message ${role}`;
-
     const label = document.createElement('div');
     label.className = 'message-label';
     label.textContent = role === 'user' ? 'miked' : 'HERALD';
-
     const bubble = document.createElement('div');
     bubble.className = 'message-bubble';
     bubble.textContent = text;
-
     div.appendChild(label);
     div.appendChild(bubble);
     messages.appendChild(div);
@@ -728,17 +742,14 @@ What do you need from me?`;
     const div = document.createElement('div');
     div.className = 'message herald';
     div.id = 'thinking';
-
     const label = document.createElement('div');
     label.className = 'message-label';
     label.textContent = 'HERALD';
-
     const thinking = document.createElement('div');
     thinking.className = 'thinking';
     thinking.innerHTML = `
       <div class="thinking-text">Thinking</div>
       <div class="thinking-dots"><span></span><span></span><span></span></div>`;
-
     div.appendChild(label);
     div.appendChild(thinking);
     messages.appendChild(div);
@@ -754,15 +765,11 @@ What do you need from me?`;
     const input = document.getElementById('textInput');
     const text = input.value.trim();
     if (!text) return;
-
     input.value = '';
     input.style.height = 'auto';
-
     addMessage('user', text);
     conversationHistory.push({ role: 'user', content: text });
-
     showThinking();
-
     try {
       const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
@@ -779,20 +786,16 @@ What do you need from me?`;
           messages: conversationHistory
         })
       });
-
       const data = await response.json();
       removeThinking();
-
       if (data.error) {
         addMessage('herald', `Error: ${data.error.message}`);
         conversationHistory.pop();
         return;
       }
-
       const reply = data.content[0].text;
       conversationHistory.push({ role: 'assistant', content: reply });
       addMessage('herald', reply);
-
       if ('speechSynthesis' in window) {
         const clean = reply
           .replace(/={2,}/g, '').replace(/\*{1,}/g, '').replace(/#{1,}/g, '')
@@ -805,7 +808,6 @@ What do you need from me?`;
         utterance.volume = 1;
         window.speechSynthesis.speak(utterance);
       }
-
     } catch (err) {
       removeThinking();
       addMessage('herald', 'Connection error. Check your API key and internet connection.');
@@ -829,19 +831,16 @@ What do you need from me?`;
     recognition.continuous = false;
     recognition.interimResults = true;
     recognition.lang = 'en-US';
-
     recognition.onstart = () => {
       isListening = true;
       document.getElementById('micBtn').classList.add('listening');
       document.getElementById('voicePreview').textContent = 'Listening...';
     };
-
     recognition.onresult = (e) => {
       const transcript = Array.from(e.results).map(r => r[0].transcript).join('');
       document.getElementById('voicePreview').textContent = transcript;
       document.getElementById('textInput').value = transcript;
     };
-
     recognition.onend = () => {
       isListening = false;
       document.getElementById('micBtn').classList.remove('listening');
@@ -849,13 +848,11 @@ What do you need from me?`;
       document.getElementById('voicePreview').textContent = '';
       if (text) sendMessage();
     };
-
     recognition.onerror = () => {
       isListening = false;
       document.getElementById('micBtn').classList.remove('listening');
       document.getElementById('voicePreview').textContent = '';
     };
-
     recognition.start();
   }
 
