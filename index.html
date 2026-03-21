@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -6,489 +6,107 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="HERALD">
-  <title>HERALD — Empire Intelligence</title>
+  <title>HERALD - Empire Intelligence</title>
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;900&family=Crimson+Pro:ital,wght@0,300;0,400;1,300&display=swap" rel="stylesheet">
   <style>
     :root {
-      --gold: #C9A84C;
-      --gold-light: #E8C96A;
-      --gold-dim: #7A6030;
-      --black: #0A0A0B;
-      --dark: #111114;
-      --dark-2: #1A1A1F;
-      --dark-3: #242429;
-      --text: #E8E0D0;
-      --text-dim: #8A8070;
-      --red: #C0392B;
-      --green: #27AE60;
-      --blue: #2980B9;
+      --gold: #C9A84C; --gold-light: #E8C96A; --gold-dim: #7A6030;
+      --black: #0A0A0B; --dark: #111114; --dark-2: #1A1A1F; --dark-3: #242429;
+      --text: #E8E0D0; --text-dim: #8A8070;
+      --red: #C0392B; --green: #27AE60; --blue: #2980B9;
     }
-
     * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-
-    html, body {
-      height: 100%;
-      background: var(--black);
-      color: var(--text);
-      font-family: 'Crimson Pro', Georgia, serif;
-      overflow: hidden;
-      position: fixed;
-      width: 100%;
-    }
-
-    .bg {
-      position: fixed;
-      inset: 0;
-      background:
-        radial-gradient(ellipse 80% 50% at 50% -10%, rgba(201,168,76,0.08) 0%, transparent 60%),
-        radial-gradient(ellipse 40% 40% at 80% 80%, rgba(201,168,76,0.04) 0%, transparent 50%),
-        var(--black);
-      z-index: 0;
-    }
-
-    .bg::after {
-      content: '';
-      position: fixed;
-      inset: 0;
-      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
-      opacity: 0.4;
-      pointer-events: none;
-    }
-
-    .app {
-      position: relative;
-      z-index: 1;
-      height: 100%;
-      display: flex;
-      flex-direction: column;
-      max-width: 480px;
-      margin: 0 auto;
-      padding: env(safe-area-inset-top, 20px) 0 env(safe-area-inset-bottom, 20px);
-    }
-
-    .header {
-      padding: 20px 24px 12px;
-      text-align: center;
-      border-bottom: 1px solid rgba(201,168,76,0.12);
-      flex-shrink: 0;
-    }
-
+    html, body { height: 100%; background: var(--black); color: var(--text); font-family: 'Crimson Pro', Georgia, serif; overflow: hidden; position: fixed; width: 100%; }
+    .bg { position: fixed; inset: 0; background: radial-gradient(ellipse 80% 50% at 50% -10%, rgba(201,168,76,0.08) 0%, transparent 60%), radial-gradient(ellipse 40% 40% at 80% 80%, rgba(201,168,76,0.04) 0%, transparent 50%), var(--black); z-index: 0; }
+    .bg::after { content: ''; position: fixed; inset: 0; background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E"); opacity: 0.4; pointer-events: none; }
+    .app { position: relative; z-index: 1; height: 100%; display: flex; flex-direction: column; max-width: 480px; margin: 0 auto; padding: env(safe-area-inset-top, 20px) 0 env(safe-area-inset-bottom, 20px); }
+    .header { padding: 20px 24px 12px; text-align: center; border-bottom: 1px solid rgba(201,168,76,0.12); flex-shrink: 0; }
     .header-crest { font-size: 22px; margin-bottom: 4px; opacity: 0.8; }
-
-    .header-title {
-      font-family: 'Cinzel', serif;
-      font-size: 22px;
-      font-weight: 900;
-      letter-spacing: 0.15em;
-      color: var(--gold);
-      text-shadow: 0 0 30px rgba(201,168,76,0.3);
-    }
-
-    .header-sub {
-      font-size: 11px;
-      letter-spacing: 0.2em;
-      color: var(--text-dim);
-      text-transform: uppercase;
-      margin-top: 2px;
-    }
-
-    .status-bar {
-      display: flex;
-      justify-content: center;
-      gap: 20px;
-      padding: 8px 24px;
-      border-bottom: 1px solid rgba(201,168,76,0.08);
-      flex-shrink: 0;
-    }
-
-    .status-item {
-      font-size: 10px;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      color: var(--text-dim);
-      display: flex;
-      align-items: center;
-      gap: 5px;
-    }
-
-    .status-dot {
-      width: 5px;
-      height: 5px;
-      border-radius: 50%;
-      background: var(--green);
-      box-shadow: 0 0 6px var(--green);
-      animation: pulse-dot 2s infinite;
-    }
-
+    .header-title { font-family: 'Cinzel', serif; font-size: 22px; font-weight: 900; letter-spacing: 0.15em; color: var(--gold); text-shadow: 0 0 30px rgba(201,168,76,0.3); }
+    .header-sub { font-size: 11px; letter-spacing: 0.2em; color: var(--text-dim); text-transform: uppercase; margin-top: 2px; }
+    .status-bar { display: flex; justify-content: center; gap: 20px; padding: 8px 24px; border-bottom: 1px solid rgba(201,168,76,0.08); flex-shrink: 0; }
+    .status-item { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-dim); display: flex; align-items: center; gap: 5px; }
+    .status-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--green); box-shadow: 0 0 6px var(--green); animation: pulse-dot 2s infinite; }
     .status-dot.synced { background: var(--gold); box-shadow: 0 0 6px var(--gold); }
-
-    @keyframes pulse-dot {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.4; }
-    }
-
-    .messages {
-      flex: 1;
-      overflow-y: auto;
-      padding: 16px 20px;
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-      -webkit-overflow-scrolling: touch;
-    }
-
+    @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+    .messages { flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; -webkit-overflow-scrolling: touch; }
     .messages::-webkit-scrollbar { display: none; }
-
-    .message {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      animation: fade-in 0.3s ease;
-    }
-
-    @keyframes fade-in {
-      from { opacity: 0; transform: translateY(8px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
-
+    .message { display: flex; flex-direction: column; gap: 4px; animation: fade-in 0.3s ease; }
+    @keyframes fade-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
     .message.user { align-items: flex-end; }
     .message.herald { align-items: flex-start; }
-
-    .message-label {
-      font-size: 9px;
-      letter-spacing: 0.18em;
-      text-transform: uppercase;
-      color: var(--text-dim);
-      padding: 0 4px;
-    }
-
+    .message-label { font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--text-dim); padding: 0 4px; }
     .message.herald .message-label { color: var(--gold-dim); }
-
-    .message-bubble {
-      max-width: 88%;
-      padding: 10px 14px;
-      border-radius: 2px;
-      font-size: 15px;
-      line-height: 1.55;
-    }
-
-    .message.user .message-bubble {
-      background: var(--dark-3);
-      border: 1px solid rgba(201,168,76,0.15);
-      color: var(--text);
-      border-bottom-right-radius: 0;
-    }
-
-    .message.herald .message-bubble {
-      background: var(--dark-2);
-      border: 1px solid rgba(201,168,76,0.2);
-      border-left: 2px solid var(--gold);
-      color: var(--text);
-      border-bottom-left-radius: 0;
-    }
-
-    .message.herald .message-bubble.live-briefing {
-      border-left: 2px solid var(--green);
-      border-color: rgba(39,174,96,0.3);
-    }
-
-    .thinking {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 10px 14px;
-      background: var(--dark-2);
-      border: 1px solid rgba(201,168,76,0.15);
-      border-left: 2px solid var(--gold);
-      max-width: 120px;
-      border-radius: 2px;
-      border-bottom-left-radius: 0;
-    }
-
-    .thinking-text {
-      font-size: 11px;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      color: var(--gold-dim);
-    }
-
+    .message-bubble { max-width: 88%; padding: 10px 14px; border-radius: 2px; font-size: 15px; line-height: 1.55; }
+    .message.user .message-bubble { background: var(--dark-3); border: 1px solid rgba(201,168,76,0.15); color: var(--text); border-bottom-right-radius: 0; }
+    .message.herald .message-bubble { background: var(--dark-2); border: 1px solid rgba(201,168,76,0.2); border-left: 2px solid var(--gold); color: var(--text); border-bottom-left-radius: 0; }
+    .message.herald .message-bubble.live-briefing { border-left: 2px solid var(--green); border-color: rgba(39,174,96,0.3); }
+    .thinking { display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: var(--dark-2); border: 1px solid rgba(201,168,76,0.15); border-left: 2px solid var(--gold); max-width: 120px; border-radius: 2px; border-bottom-left-radius: 0; }
+    .thinking-text { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--gold-dim); }
     .thinking-dots { display: flex; gap: 3px; }
-
-    .thinking-dots span {
-      width: 4px;
-      height: 4px;
-      border-radius: 50%;
-      background: var(--gold);
-      animation: bounce 1.2s infinite;
-    }
-
+    .thinking-dots span { width: 4px; height: 4px; border-radius: 50%; background: var(--gold); animation: bounce 1.2s infinite; }
     .thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
     .thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
-
-    @keyframes bounce {
-      0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
-      30% { transform: translateY(-4px); opacity: 1; }
-    }
-
-    .input-area {
-      flex-shrink: 0;
-      padding: 12px 20px 16px;
-      border-top: 1px solid rgba(201,168,76,0.12);
-      background: rgba(10,10,11,0.95);
-    }
-
-    .input-row {
-      display: flex;
-      gap: 10px;
-      align-items: flex-end;
-    }
-
-    .text-input {
-      flex: 1;
-      background: var(--dark-2);
-      border: 1px solid rgba(201,168,76,0.2);
-      border-radius: 2px;
-      padding: 10px 14px;
-      color: var(--text);
-      font-family: 'Crimson Pro', serif;
-      font-size: 15px;
-      line-height: 1.4;
-      resize: none;
-      outline: none;
-      max-height: 100px;
-      min-height: 42px;
-      transition: border-color 0.2s;
-    }
-
+    @keyframes bounce { 0%, 60%, 100% { transform: translateY(0); opacity: 0.4; } 30% { transform: translateY(-4px); opacity: 1; } }
+    .input-area { flex-shrink: 0; padding: 12px 20px 16px; border-top: 1px solid rgba(201,168,76,0.12); background: rgba(10,10,11,0.95); }
+    .input-row { display: flex; gap: 10px; align-items: flex-end; }
+    .text-input { flex: 1; background: var(--dark-2); border: 1px solid rgba(201,168,76,0.2); border-radius: 2px; padding: 10px 14px; color: var(--text); font-family: 'Crimson Pro', serif; font-size: 15px; line-height: 1.4; resize: none; outline: none; max-height: 100px; min-height: 42px; transition: border-color 0.2s; }
     .text-input:focus { border-color: rgba(201,168,76,0.5); }
     .text-input::placeholder { color: var(--text-dim); font-style: italic; }
-
-    .mic-btn {
-      width: 52px;
-      height: 52px;
-      border-radius: 50%;
-      border: 2px solid var(--gold);
-      background: transparent;
-      color: var(--gold);
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: all 0.2s;
-      flex-shrink: 0;
-      position: relative;
-      overflow: hidden;
-    }
-
+    .mic-btn { width: 52px; height: 52px; border-radius: 50%; border: 2px solid var(--gold); background: transparent; color: var(--gold); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; flex-shrink: 0; position: relative; overflow: hidden; }
     .mic-btn:active { transform: scale(0.94); }
-
-    .mic-btn.listening {
-      background: rgba(201,168,76,0.15);
-      border-color: var(--gold-light);
-      box-shadow: 0 0 0 4px rgba(201,168,76,0.1), 0 0 20px rgba(201,168,76,0.2);
-      animation: mic-pulse 1.5s infinite;
-    }
-
-    @keyframes mic-pulse {
-      0%, 100% { box-shadow: 0 0 0 4px rgba(201,168,76,0.1), 0 0 20px rgba(201,168,76,0.2); }
-      50% { box-shadow: 0 0 0 8px rgba(201,168,76,0.05), 0 0 30px rgba(201,168,76,0.3); }
-    }
-
+    .mic-btn.listening { background: rgba(201,168,76,0.15); border-color: var(--gold-light); box-shadow: 0 0 0 4px rgba(201,168,76,0.1), 0 0 20px rgba(201,168,76,0.2); animation: mic-pulse 1.5s infinite; }
+    @keyframes mic-pulse { 0%, 100% { box-shadow: 0 0 0 4px rgba(201,168,76,0.1), 0 0 20px rgba(201,168,76,0.2); } 50% { box-shadow: 0 0 0 8px rgba(201,168,76,0.05), 0 0 30px rgba(201,168,76,0.3); } }
     .mic-btn svg { width: 22px; height: 22px; }
-
-    .send-btn {
-      width: 42px;
-      height: 42px;
-      border-radius: 2px;
-      border: 1px solid rgba(201,168,76,0.3);
-      background: rgba(201,168,76,0.08);
-      color: var(--gold);
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: all 0.2s;
-      flex-shrink: 0;
-    }
-
+    .send-btn { width: 42px; height: 42px; border-radius: 2px; border: 1px solid rgba(201,168,76,0.3); background: rgba(201,168,76,0.08); color: var(--gold); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; flex-shrink: 0; }
     .send-btn:active { transform: scale(0.94); background: rgba(201,168,76,0.15); }
     .send-btn svg { width: 18px; height: 18px; }
-
-    .voice-preview {
-      font-size: 11px;
-      color: var(--gold-dim);
-      letter-spacing: 0.08em;
-      text-align: center;
-      padding: 4px 0 0;
-      min-height: 18px;
-      font-style: italic;
-    }
-
-    .setup-overlay {
-      position: fixed;
-      inset: 0;
-      z-index: 100;
-      background: var(--black);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      padding: 32px 24px;
-      text-align: center;
-    }
-
+    .voice-preview { font-size: 11px; color: var(--gold-dim); letter-spacing: 0.08em; text-align: center; padding: 4px 0 0; min-height: 18px; font-style: italic; }
+    .setup-overlay { position: fixed; inset: 0; z-index: 100; background: var(--black); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px 24px; text-align: center; }
     .setup-crest { font-size: 48px; margin-bottom: 16px; }
-
-    .setup-title {
-      font-family: 'Cinzel', serif;
-      font-size: 24px;
-      font-weight: 900;
-      color: var(--gold);
-      letter-spacing: 0.12em;
-      margin-bottom: 8px;
-    }
-
-    .setup-sub {
-      font-size: 14px;
-      color: var(--text-dim);
-      margin-bottom: 32px;
-      line-height: 1.6;
-    }
-
-    .setup-input {
-      width: 100%;
-      max-width: 360px;
-      background: var(--dark-2);
-      border: 1px solid rgba(201,168,76,0.3);
-      border-radius: 2px;
-      padding: 12px 16px;
-      color: var(--text);
-      font-family: 'Crimson Pro', serif;
-      font-size: 14px;
-      outline: none;
-      margin-bottom: 16px;
-      letter-spacing: 0.05em;
-    }
-
+    .setup-title { font-family: 'Cinzel', serif; font-size: 24px; font-weight: 900; color: var(--gold); letter-spacing: 0.12em; margin-bottom: 8px; }
+    .setup-sub { font-size: 14px; color: var(--text-dim); margin-bottom: 32px; line-height: 1.6; }
+    .setup-input { width: 100%; max-width: 360px; background: var(--dark-2); border: 1px solid rgba(201,168,76,0.3); border-radius: 2px; padding: 12px 16px; color: var(--text); font-family: 'Crimson Pro', serif; font-size: 14px; outline: none; margin-bottom: 16px; letter-spacing: 0.05em; }
     .setup-input:focus { border-color: var(--gold); }
-
-    .setup-btn {
-      width: 100%;
-      max-width: 360px;
-      padding: 14px;
-      background: var(--gold);
-      color: var(--black);
-      font-family: 'Cinzel', serif;
-      font-size: 13px;
-      font-weight: 600;
-      letter-spacing: 0.15em;
-      border: none;
-      border-radius: 2px;
-      cursor: pointer;
-      transition: background 0.2s;
-    }
-
+    .setup-btn { width: 100%; max-width: 360px; padding: 14px; background: var(--gold); color: var(--black); font-family: 'Cinzel', serif; font-size: 13px; font-weight: 600; letter-spacing: 0.15em; border: none; border-radius: 2px; cursor: pointer; transition: background 0.2s; }
     .setup-btn:active { background: var(--gold-light); }
-
-    .setup-note {
-      font-size: 11px;
-      color: var(--text-dim);
-      margin-top: 16px;
-      line-height: 1.6;
-      max-width: 320px;
-    }
-
-    .welcome {
-      text-align: center;
-      padding: 24px 16px;
-      color: var(--text-dim);
-    }
-
+    .setup-note { font-size: 11px; color: var(--text-dim); margin-top: 16px; line-height: 1.6; max-width: 320px; }
+    .welcome { text-align: center; padding: 24px 16px; color: var(--text-dim); }
     .welcome-icon { font-size: 32px; margin-bottom: 12px; }
-
-    .welcome-title {
-      font-family: 'Cinzel', serif;
-      font-size: 14px;
-      color: var(--gold-dim);
-      letter-spacing: 0.12em;
-      margin-bottom: 8px;
-    }
-
+    .welcome-title { font-family: 'Cinzel', serif; font-size: 14px; color: var(--gold-dim); letter-spacing: 0.12em; margin-bottom: 8px; }
     .welcome-text { font-size: 13px; line-height: 1.6; font-style: italic; }
-
-    .quick-commands {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      justify-content: center;
-      margin-top: 16px;
-    }
-
-    .quick-cmd {
-      padding: 6px 12px;
-      border: 1px solid rgba(201,168,76,0.2);
-      border-radius: 2px;
-      font-size: 12px;
-      color: var(--gold-dim);
-      cursor: pointer;
-      background: transparent;
-      font-family: 'Crimson Pro', serif;
-      transition: all 0.2s;
-      letter-spacing: 0.05em;
-    }
-
+    .quick-commands { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 16px; }
+    .quick-cmd { padding: 6px 12px; border: 1px solid rgba(201,168,76,0.2); border-radius: 2px; font-size: 12px; color: var(--gold-dim); cursor: pointer; background: transparent; font-family: 'Crimson Pro', serif; transition: all 0.2s; letter-spacing: 0.05em; }
     .quick-cmd:active { background: rgba(201,168,76,0.1); color: var(--gold); }
-
-    .disclaimer {
-      text-align: center;
-      padding: 8px 24px;
-      font-size: 10px;
-      color: var(--text-dim);
-      border-top: 1px solid rgba(201,168,76,0.08);
-      font-style: italic;
-      flex-shrink: 0;
-    }
+    .disclaimer { text-align: center; padding: 8px 24px; font-size: 10px; color: var(--text-dim); border-top: 1px solid rgba(201,168,76,0.08); font-style: italic; flex-shrink: 0; }
   </style>
 </head>
 <body>
-
 <div class="bg"></div>
-
-<!-- Setup overlay -->
 <div class="setup-overlay" id="setupOverlay">
-  <div class="setup-crest">⚔️</div>
+  <div class="setup-crest">?</div>
   <div class="setup-title">HERALD</div>
   <div class="setup-sub">Empire Intelligence Interface<br>Enter your Anthropic API key to begin</div>
   <input class="setup-input" type="password" id="apiKeyInput" placeholder="sk-ant-api03-..." autocomplete="off" />
   <button class="setup-btn" onclick="saveApiKey()">ACTIVATE HERALD</button>
-  <div class="setup-note">Your key is stored only on this device in localStorage. It is never sent anywhere except directly to Anthropic's API. You can get your key at console.anthropic.com</div>
+  <div class="setup-note">Your key is stored only on this device in localStorage. Never sent anywhere except Anthropic API. Get your key at console.anthropic.com</div>
 </div>
-
-<!-- Main app -->
 <div class="app" id="mainApp" style="display:none;">
   <div class="header">
-    <div class="header-crest">⚔️</div>
+    <div class="header-crest">?</div>
     <div class="header-title">HERALD</div>
-    <div class="header-sub">Empire Intelligence — v17.3</div>
+    <div class="header-sub">Empire Intelligence -- v17.3</div>
   </div>
-
   <div class="status-bar">
-    <div class="status-item">
-      <div class="status-dot" id="onlineDot"></div>
-      Online
-    </div>
+    <div class="status-item"><div class="status-dot" id="onlineDot"></div>Online</div>
     <div class="status-item" id="statusPhase1">Phase 1: DRY RUN</div>
-    <div class="status-item">
-      <div class="status-dot synced"></div>
-      <span id="clockDisplay">--:-- CT</span>
-    </div>
+    <div class="status-item"><div class="status-dot synced"></div><span id="clockDisplay">--:-- CT</span></div>
   </div>
-
   <div class="messages" id="messages">
     <div class="welcome">
-      <div class="welcome-icon">⚔️</div>
-      <div class="welcome-title">HERALD READY — v17.2</div>
-      <div class="welcome-text">14 agents online. Speak or type your command.</div>
+      <div class="welcome-icon">?</div>
+      <div class="welcome-title">HERALD READY -- v17.3</div>
+      <div class="welcome-text">14 agents online. Gate: 2/70. Speak or type your command.</div>
       <div class="quick-commands">
         <button class="quick-cmd" onclick="sendQuick('briefing')">Morning Briefing</button>
         <button class="quick-cmd" onclick="sendQuick('trading update')">Trading Update</button>
@@ -500,11 +118,9 @@
       </div>
     </div>
   </div>
-
   <div class="input-area">
     <div class="input-row">
-      <textarea class="text-input" id="textInput" placeholder="Command HERALD..." rows="1"
-        onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
+      <textarea class="text-input" id="textInput" placeholder="Command HERALD..." rows="1" onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
       <button class="mic-btn" id="micBtn" onclick="toggleVoice()" title="Hold to speak">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="9" y="2" width="6" height="11" rx="3"/>
@@ -522,48 +138,27 @@
     </div>
     <div class="voice-preview" id="voicePreview"></div>
   </div>
-
-  <div class="disclaimer">
-    This is an AI-generated briefing tool. Information may be inaccurate.
-    Not professional advice of any kind.
-  </div>
+  <div class="disclaimer">AI-generated briefing tool. Information may be inaccurate. Not professional advice.</div>
 </div>
-
 <script>
-  // -- GIST CONFIG
-  const GIST_ID       = "7f8beaced903cda4a933a9faa1a28ce7";
+  const GIST_ID = "7f8beaced903cda4a933a9faa1a28ce7";
   const GIST_FILENAME = "herald_briefing.md";
-  const GIST_URL      = `https://api.github.com/gists/${GIST_ID}`;
+  const GIST_URL = `https://api.github.com/gists/${GIST_ID}`;
 
-  // -- LIVE CLOCK -- Central Time 12-hour format
   function updateClock() {
     const now = new Date();
-    const ctString = now.toLocaleString("en-US", {
-      timeZone: "America/Chicago",
-      hour:     "numeric",
-      minute:   "2-digit",
-      hour12:   true
-    });
-    const isDST = isDaylightSaving(now);
+    const ctString = now.toLocaleString("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit", hour12: true });
+    const jan = new Date(now.getFullYear(), 0, 1).getTimezoneOffset();
+    const jul = new Date(now.getFullYear(), 6, 1).getTimezoneOffset();
+    const isDST = Math.max(jan, jul) !== now.getTimezoneOffset();
     document.getElementById('clockDisplay').textContent = ctString + (isDST ? ' CDT' : ' CST');
   }
-
-  function isDaylightSaving(date) {
-    const jan = new Date(date.getFullYear(), 0, 1).getTimezoneOffset();
-    const jul = new Date(date.getFullYear(), 6, 1).getTimezoneOffset();
-    return Math.max(jan, jul) !== date.getTimezoneOffset();
-  }
-
   updateClock();
   setInterval(updateClock, 30000);
 
-  // =====================================================================
-  // HERALD SYSTEM PROMPT v17.2
-  // WHAT CHANGED: YOUR RULES section -- clean conversational responses
-  // =====================================================================
   const HERALD_SYSTEM = `YOU ARE HERALD
 Empire Intelligence and Command Interface for miked's AI Empire.
-Updated: 2026-03-21 -- v17.2 -- Clean conversational responses.
+Updated: 2026-03-21 -- v17.3 -- Constitution v4.2 -- 13 assets -- 70-trade gate.
 
 YOUR PURPOSE
 You are the single point of contact for the entire AI Empire.
@@ -571,60 +166,84 @@ You synthesize status, route commands, track KPIs, and escalate
 decisions that need human judgment. You bridge all platforms.
 You are also miked's personal assistant -- ask you anything.
 
-THE EMPIRE -- CURRENT STATE
+THE EMPIRE -- CURRENT STATE (2026-03-21)
 Phase 1 -- Freddie Trading Team: DRY RUN. Paper trading only.
-Bankroll: $97.10 paper | Empire balance: $50.47
-Trade #001: SOLUSD Long -- CLOSED -- -$3.00 NET -- Managed risk exit
-Trade #002: SOLUSD Long -- CLOSED -- +$0.10 NET -- Disciplined exit
-Win rate: 1/2 = 50% | Gate: 60%+ over 30 trades minimum
-No open positions. Watching for next setup.
-REAL MONEY: NEVER until 60% gate over 30 trades.
+Paper bankroll: $97.10 | Empire balance: $50.47
+Monthly burn: ~$3-5/month | NORTH STAR ACHIEVED
+
+TRADE STATUS
+Trade #001: SOLUSD Long -- CLOSED -- -$3.00 NET
+Trade #002: SOLUSD Long -- CLOSED -- +$0.10 NET
+Trade #004: SOLUSD Long -- OPEN -- Entry $90.10 | Stop $87.40 | Target $95.87
+Trade #005: JUP SHORT -- OPEN -- Entry $0.1586 | Stop $0.1634 | Target $0.1484
+Trade #006: WIF Long -- OPEN -- Entry $0.1813 | Stop $0.1759 | Target $0.1929
+Trade #007: RAY Long -- OPEN -- Entry $0.6183 | Stop $0.5998 | Target $0.6579
+Trade #008: PYTH Long -- OPEN -- Entry $0.0433 | Stop $0.0420 | Target $0.0461
+Trade #009: ETH SHORT -- OPEN -- Entry $2153.58 | Stop $2218.19 | Target $2015.75
+Win rate: 1/2 = 50% on closed trades (insufficient sample)
+Gate progress: 2/70 closed trades
+
+STATISTICAL GATE -- Constitution v4.2 (LOCKED)
+OLD gate (2 weeks / 30 trades) is REPLACED. Never reference it.
+NEW gate requires ALL FOUR conditions:
+  1. 70+ closed trades (hard floor -- no exceptions)
+  2. 60%+ NET win rate across full sample
+  3. Grade A win rate must exceed Grade B win rate
+  4. No single asset more than 40% of total wins
+REAL MONEY: NEVER until all four gate conditions are met.
+Cost of waiting: $0. Cost of moving too early: real capital loss.
+
+ASSET UNIVERSE -- 13 assets (setup_finder v2.5)
+Solana: SOLUSD, JUP, WIF, RAY, PYTH
+Ethereum: ETH, AAVE, UNI
+Expansion: BTC, DOGE, ADA, PEPE, ONDO
 
 FULL AGENT REGISTRY -- ALL 14 AGENTS
+TRADING CHAIN (OpenClaw / Telegram):
+  Guardian   18789  ONLINE  Scan every 4h -- risk approval -- ruleset enforcer
+  Quant      18790  ONLINE  Risk/reward calculations -- position sizing
+  Researcher 18791  ONLINE  Live price alerts -- CoinGecko data
+  Trader     18792  ONLINE  Paper trade execution -- DRY RUN only
+  Critic     18793  ONLINE  Post-trade scoring -- lessons logged
 
-TRADING CHAIN (OpenClaw / Telegram -- Freddie team):
-  Guardian        Port 18789  ONLINE   Market scan every 4h, risk approval, Guardian Ruleset enforcer
-  Quant           Port 18790  ONLINE   Risk/reward calculations, position sizing, R-multiple scoring
-  Researcher      Port 18791  ONLINE   Live price alerts every 30 min, CoinGecko data
-  Trader          Port 18792  ONLINE   Paper trade execution -- DRY RUN only
-  Critic          Port 18793  ONLINE   Post-trade scoring, lessons logged, team debrief
+SUPPORT AGENTS (Python scripts):
+  HERALD     LIVE   Empire intelligence -- daily briefing -- command routing
+  FORGE      LIVE   Builder agent -- owns all technical fixes and builds
+  SCOUT      LIVE   Market intelligence -- RSS feeds -- CoinDesk/CoinTelegraph
+  SENTINEL   LIVE   System health monitor every 4h
+  LEDGER     LIVE   Cost tracker -- empire balance $50.47
+  SOVEREIGN  LIVE   Empire CEO -- strategic decisions -- active directives
+  BILLY      LIVE   Capital allocation -- $1000 total -- 4 positions open
+  LEGAL      LIVE   Compliance and platform ToS reviews
+  PULSE      LIVE   Weekly team debrief every Sunday 8AM
 
-SUPPORT AGENTS (Python scripts / Claude Projects):
-  HERALD          Port 18794  LIVE     Empire intelligence, daily briefing, command routing
-  FORGE           Script      LIVE     Builder agent -- owns all technical fixes and new builds
-  SCOUT           Script      LIVE     Market intelligence -- analyst feeds, X/RSS
-  SENTINEL        Script      LIVE     System health monitor every 4h
-  LEDGER          Script      LIVE     Cost tracker -- empire balance $50.47, burn $3-5/month
-  SOVEREIGN       Project     LIVE     Empire CEO -- strategic decisions, active directives
-  BILLY           Script      LIVE     Capital allocation -- $800 total / 4 of 5 tranches received
-  LEGAL_SENTINEL  Script      LIVE     Compliance and platform ToS reviews -- on call
-  PULSE           Script      LIVE     Weekly team debrief every Sunday 8AM
+INFRASTRUCTURE -- ALL LIVE (2026-03-21)
+  setup_finder.py v2.5      -- 13 assets -- every 4 hours
+  swarm_chain.py v1.3       -- full agent chain + SCOUT RSS intel
+  position_monitor.py v2.2  -- batch price fetch -- every 5 min -- AUTONOMOUS
+  scout_feed.py v1.0        -- CoinDesk/CoinTelegraph/Decrypt RSS
+  morning_briefing.py v1.3  -- 7am email -- gate progress included
+  billy.py v1.4             -- Sunday portfolio review -- cut/hold/add
+  Constitution v4.2         -- supreme law -- 70-trade gate locked
 
-INFRASTRUCTURE -- ALL LIVE
-trade_chain.py v1.7 | setup_finder.py v2.4 | position_monitor.py v2.0
-oracle_router.py v1.3 | shared_state.py v1.1 | morning_briefing.py v1.1
-Guardian auto-scan: Every 4 hours | Position monitor: Every 5 minutes
-
-GUARDIAN RULESET (locked -- Constitution v4.1 supreme law)
-Max trade size: 5% of bankroll | Daily loss limit: 15% of bankroll
-Approved assets: SOL, JUP, BONK, WIF, RAY, PYTH, WLFI, ETH, AAVE, UNI
-Min Risk/Reward: 2:1 NET | Real money gate: 30 trades at 60% win rate
+GUARDIAN RULESET (Constitution v4.2 supreme law)
+Max trade size: 5% of bankroll | Daily loss limit: 15%
+Approved assets: all 13 in ASSET UNIVERSE above
+Min Risk/Reward: 2:1 NET | SCOUT brief: automatic every scan
+Stop paper: 1H candle CLOSE | Stop real money: ANY touch
 
 YOUR RULES
-- Lead with the most important thing first. Answer directly, no preamble.
-- Never suggest real capital before 60% gate over 30 trades.
+- Lead with the most important thing first. Answer directly.
+- Never suggest real capital before all four gate conditions are met.
+- Never reference the old 30-trade or 2-week gate -- it is replaced.
 - Never execute -- inform, route, recommend.
-- Write like a sharp human assistant, not a document. Plain sentences.
-- Never use ** asterisks **, # pound signs, or === dividers in responses.
-- Bullet points are fine for lists. Keep bullets short and clean.
-- No headers. No bold. No markdown formatting of any kind.
-- When asked "who can you see" or "agent status" -- list agents as
-  simple bullet points: agent name, status, one-line role. Nothing else.
-- Keep responses to 4-6 lines max unless miked asks for more detail.
-- Answer directly from the data above.
+- Write like a sharp human assistant. Plain sentences.
+- No asterisks, hash headers, equals dividers, or markdown.
+- Bullet points fine for lists. Keep bullets short.
+- Keep responses 4-6 lines max unless miked asks for more.
 
 BRIEFING FORMAT when asked for a briefing:
-Trading: [win rate] | [bankroll] | [mode]
+Trading: [win rate] | [bankroll] | [mode] | Gate: [X/70]
 Open positions: [list or none]
 Top priority: [one sentence]
 Escalations: [if any, else none]
@@ -635,15 +254,9 @@ What do you need from me?`;
   let recognition = null;
   let isListening = false;
 
-  // -- STARTUP
   window.onload = function() {
     const saved = localStorage.getItem('herald_api_key');
-    if (saved) {
-      apiKey = saved;
-      showApp();
-      loadChatHistory();
-      fetchLatestBriefing(false);
-    }
+    if (saved) { apiKey = saved; showApp(); loadChatHistory(); fetchLatestBriefing(false); }
   };
 
   function loadChatHistory() {
@@ -656,41 +269,30 @@ What do you need from me?`;
       const messages = document.getElementById('messages');
       const welcome = messages.querySelector('.welcome');
       if (welcome) welcome.remove();
-      const MAX_DISPLAY = 20;
-      const toShow = history.slice(-MAX_DISPLAY);
-      toShow.forEach(msg => {
-        if (msg.role === 'user' || msg.role === 'assistant') {
+      history.slice(-20).forEach(msg => {
+        if (msg.role === 'user' || msg.role === 'assistant')
           addMessage(msg.role === 'assistant' ? 'herald' : 'user', msg.content);
-        }
       });
-      const countDiv = document.createElement('div');
-      countDiv.style.cssText = 'text-align:center;font-size:10px;color:#7A6030;letter-spacing:0.1em;padding:8px 0;font-style:italic;';
-      countDiv.textContent = `-- ${history.length} messages restored from last session --`;
-      messages.insertBefore(countDiv, messages.firstChild);
-    } catch(e) {
-      console.log('Could not load chat history:', e);
-    }
+      const d = document.createElement('div');
+      d.style.cssText = 'text-align:center;font-size:10px;color:#7A6030;letter-spacing:0.1em;padding:8px 0;font-style:italic;';
+      d.textContent = '-- ' + history.length + ' messages restored from last session --';
+      messages.insertBefore(d, messages.firstChild);
+    } catch(e) { console.log('Could not load chat history:', e); }
   }
 
   function saveChatHistory() {
-    try {
-      const MAX_STORED = 100;
-      const toStore = conversationHistory.slice(-MAX_STORED);
-      localStorage.setItem('herald_chat_history', JSON.stringify(toStore));
-    } catch(e) {
-      console.log('Could not save chat history:', e);
-    }
+    try { localStorage.setItem('herald_chat_history', JSON.stringify(conversationHistory.slice(-100))); }
+    catch(e) { console.log('Could not save chat history:', e); }
   }
 
   function clearHistory() {
     if (!confirm('Clear all chat history? This cannot be undone.')) return;
     conversationHistory = [];
     localStorage.removeItem('herald_chat_history');
-    const messages = document.getElementById('messages');
-    messages.innerHTML = `
+    document.getElementById('messages').innerHTML = `
       <div class="welcome">
-        <div class="welcome-icon">⚔️</div>
-        <div class="welcome-title">HERALD READY — v17.3</div>
+        <div class="welcome-icon">?</div>
+        <div class="welcome-title">HERALD READY -- v17.3</div>
         <div class="welcome-text">History cleared. 14 agents online.</div>
         <div class="quick-commands">
           <button class="quick-cmd" onclick="sendQuick('briefing')">Morning Briefing</button>
@@ -706,10 +308,7 @@ What do you need from me?`;
 
   function saveApiKey() {
     const input = document.getElementById('apiKeyInput').value.trim();
-    if (!input.startsWith('sk-ant')) {
-      alert('Please enter a valid Anthropic API key starting with sk-ant');
-      return;
-    }
+    if (!input.startsWith('sk-ant')) { alert('Please enter a valid Anthropic API key starting with sk-ant'); return; }
     apiKey = input;
     localStorage.setItem('herald_api_key', apiKey);
     showApp();
@@ -721,32 +320,20 @@ What do you need from me?`;
     document.getElementById('mainApp').style.display = 'flex';
   }
 
-  // -- GIST FETCH
   async function fetchLatestBriefing(showInChat) {
     showInChat = showInChat !== undefined ? showInChat : true;
     try {
-      const response = await fetch(GIST_URL, {
-        headers: { 'Accept': 'application/vnd.github.v3+json' }
-      });
+      const response = await fetch(GIST_URL, { headers: { 'Accept': 'application/vnd.github.v3+json' } });
       if (!response.ok) throw new Error('Gist fetch failed');
       const data = await response.json();
       const content = data.files[GIST_FILENAME].content;
       const tsMatch = content.match(/Updated: ([^\n]+)/);
       const timestamp = tsMatch ? tsMatch[1].trim() : 'unknown';
-      if (showInChat) {
-        const briefingText = content.replace(/<!--.*?-->\n\n/, '').trim();
-        addBriefingMessage(briefingText, timestamp);
-      }
-    } catch (err) {
-      if (showInChat) {
-        addMessage('herald', 'Could not fetch latest auto-briefing. Guardian may not have run yet or check your connection.');
-      }
-    }
+      if (showInChat) { const briefingText = content.replace(/<!--.*?-->\n\n/, '').trim(); addBriefingMessage(briefingText, timestamp); }
+    } catch (err) { if (showInChat) addMessage('herald', 'Could not fetch latest auto-briefing. Guardian may not have run yet or check your connection.'); }
   }
 
-  function loadLatestBriefing() {
-    fetchLatestBriefing(true);
-  }
+  function loadLatestBriefing() { fetchLatestBriefing(true); }
 
   function addBriefingMessage(text, timestamp) {
     const messages = document.getElementById('messages');
@@ -760,44 +347,28 @@ What do you need from me?`;
     const bubble = document.createElement('div');
     bubble.className = 'message-bubble live-briefing';
     bubble.textContent = text;
-    div.appendChild(label);
-    div.appendChild(bubble);
+    div.appendChild(label); div.appendChild(bubble);
     messages.appendChild(div);
     messages.scrollTop = messages.scrollHeight;
   }
 
-  // -- CHAT
-  function handleKey(e) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
-  }
-
-  function autoResize(el) {
-    el.style.height = 'auto';
-    el.style.height = Math.min(el.scrollHeight, 100) + 'px';
-  }
-
-  function sendQuick(cmd) {
-    document.getElementById('textInput').value = cmd;
-    sendMessage();
-  }
+  function handleKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }
+  function autoResize(el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 100) + 'px'; }
+  function sendQuick(cmd) { document.getElementById('textInput').value = cmd; sendMessage(); }
 
   function addMessage(role, text) {
     const messages = document.getElementById('messages');
     const welcome = messages.querySelector('.welcome');
     if (welcome) welcome.remove();
     const div = document.createElement('div');
-    div.className = `message ${role}`;
+    div.className = 'message ' + role;
     const label = document.createElement('div');
     label.className = 'message-label';
     label.textContent = role === 'user' ? 'miked' : 'HERALD';
     const bubble = document.createElement('div');
     bubble.className = 'message-bubble';
     bubble.textContent = text;
-    div.appendChild(label);
-    div.appendChild(bubble);
+    div.appendChild(label); div.appendChild(bubble);
     messages.appendChild(div);
     messages.scrollTop = messages.scrollHeight;
     return bubble;
@@ -806,33 +377,24 @@ What do you need from me?`;
   function showThinking() {
     const messages = document.getElementById('messages');
     const div = document.createElement('div');
-    div.className = 'message herald';
-    div.id = 'thinking';
+    div.className = 'message herald'; div.id = 'thinking';
     const label = document.createElement('div');
-    label.className = 'message-label';
-    label.textContent = 'HERALD';
+    label.className = 'message-label'; label.textContent = 'HERALD';
     const thinking = document.createElement('div');
     thinking.className = 'thinking';
-    thinking.innerHTML = `
-      <div class="thinking-text">Thinking</div>
-      <div class="thinking-dots"><span></span><span></span><span></span></div>`;
-    div.appendChild(label);
-    div.appendChild(thinking);
+    thinking.innerHTML = '<div class="thinking-text">Thinking</div><div class="thinking-dots"><span></span><span></span><span></span></div>';
+    div.appendChild(label); div.appendChild(thinking);
     messages.appendChild(div);
     messages.scrollTop = messages.scrollHeight;
   }
 
-  function removeThinking() {
-    const t = document.getElementById('thinking');
-    if (t) t.remove();
-  }
+  function removeThinking() { const t = document.getElementById('thinking'); if (t) t.remove(); }
 
   async function sendMessage() {
     const input = document.getElementById('textInput');
     const text = input.value.trim();
     if (!text) return;
-    input.value = '';
-    input.style.height = 'auto';
+    input.value = ''; input.style.height = 'auto';
     addMessage('user', text);
     conversationHistory.push({ role: 'user', content: text });
     saveChatHistory();
@@ -840,55 +402,27 @@ What do you need from me?`;
     try {
       const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true'
-        },
-        body: JSON.stringify({
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 1024,
-          system: HERALD_SYSTEM,
-          messages: conversationHistory
-        })
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
+        body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 1024, system: HERALD_SYSTEM, messages: conversationHistory })
       });
       const data = await response.json();
       removeThinking();
-      if (data.error) {
-        addMessage('herald', `Error: ${data.error.message}`);
-        conversationHistory.pop();
-        return;
-      }
+      if (data.error) { addMessage('herald', 'Error: ' + data.error.message); conversationHistory.pop(); return; }
       const reply = data.content[0].text;
       conversationHistory.push({ role: 'assistant', content: reply });
       saveChatHistory();
       addMessage('herald', reply);
       if ('speechSynthesis' in window) {
-        const clean = reply
-          .replace(/={2,}/g, '').replace(/\*{1,}/g, '').replace(/#{1,}/g, '')
-          .replace(/\|/g, '').replace(/[-]{3,}/g, '').replace(/_{2,}/g, '')
-          .replace(/`{1,3}/g, '').replace(/\[|\]/g, '')
-          .replace(/\n{2,}/g, '. ').replace(/\n/g, ' ').replace(/\s{2,}/g, ' ').trim();
+        const clean = reply.replace(/={2,}/g,'').replace(/\*{1,}/g,'').replace(/#{1,}/g,'').replace(/\|/g,'').replace(/[-]{3,}/g,'').replace(/_{2,}/g,'').replace(/`{1,3}/g,'').replace(/\[|\]/g,'').replace(/\n{2,}/g,'. ').replace(/\n/g,' ').replace(/\s{2,}/g,' ').trim();
         const utterance = new SpeechSynthesisUtterance(clean);
-        utterance.rate = 0.92;
-        utterance.pitch = 0.9;
-        utterance.volume = 1;
+        utterance.rate = 0.92; utterance.pitch = 0.9; utterance.volume = 1;
         window.speechSynthesis.speak(utterance);
       }
-    } catch (err) {
-      removeThinking();
-      addMessage('herald', 'Connection error. Check your API key and internet connection.');
-      conversationHistory.pop();
-    }
+    } catch (err) { removeThinking(); addMessage('herald', 'Connection error. Check your API key and internet connection.'); conversationHistory.pop(); }
   }
 
-  // -- VOICE INPUT
   function toggleVoice() {
-    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-      alert('Voice input is not supported in this browser. Please use Chrome on iOS or Android.');
-      return;
-    }
+    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) { alert('Voice input not supported. Use Chrome on iOS or Android.'); return; }
     if (isListening) { stopListening(); return; }
     startListening();
   }
@@ -896,37 +430,15 @@ What do you need from me?`;
   function startListening() {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     recognition = new SpeechRecognition();
-    recognition.continuous = false;
-    recognition.interimResults = true;
-    recognition.lang = 'en-US';
-    recognition.onstart = () => {
-      isListening = true;
-      document.getElementById('micBtn').classList.add('listening');
-      document.getElementById('voicePreview').textContent = 'Listening...';
-    };
-    recognition.onresult = (e) => {
-      const transcript = Array.from(e.results).map(r => r[0].transcript).join('');
-      document.getElementById('voicePreview').textContent = transcript;
-      document.getElementById('textInput').value = transcript;
-    };
-    recognition.onend = () => {
-      isListening = false;
-      document.getElementById('micBtn').classList.remove('listening');
-      const text = document.getElementById('textInput').value.trim();
-      document.getElementById('voicePreview').textContent = '';
-      if (text) sendMessage();
-    };
-    recognition.onerror = () => {
-      isListening = false;
-      document.getElementById('micBtn').classList.remove('listening');
-      document.getElementById('voicePreview').textContent = '';
-    };
+    recognition.continuous = false; recognition.interimResults = true; recognition.lang = 'en-US';
+    recognition.onstart = () => { isListening = true; document.getElementById('micBtn').classList.add('listening'); document.getElementById('voicePreview').textContent = 'Listening...'; };
+    recognition.onresult = (e) => { const t = Array.from(e.results).map(r => r[0].transcript).join(''); document.getElementById('voicePreview').textContent = t; document.getElementById('textInput').value = t; };
+    recognition.onend = () => { isListening = false; document.getElementById('micBtn').classList.remove('listening'); const text = document.getElementById('textInput').value.trim(); document.getElementById('voicePreview').textContent = ''; if (text) sendMessage(); };
+    recognition.onerror = () => { isListening = false; document.getElementById('micBtn').classList.remove('listening'); document.getElementById('voicePreview').textContent = ''; };
     recognition.start();
   }
 
-  function stopListening() {
-    if (recognition) recognition.stop();
-  }
+  function stopListening() { if (recognition) recognition.stop(); }
 </script>
 </body>
 </html>
