@@ -469,7 +469,7 @@
   <div class="header">
     <div class="header-crest">⚔️</div>
     <div class="header-title">HERALD</div>
-    <div class="header-sub">Empire Intelligence — v17.1</div>
+    <div class="header-sub">Empire Intelligence — v17.2</div>
   </div>
 
   <div class="status-bar">
@@ -487,7 +487,7 @@
   <div class="messages" id="messages">
     <div class="welcome">
       <div class="welcome-icon">⚔️</div>
-      <div class="welcome-title">HERALD READY — v17.1</div>
+      <div class="welcome-title">HERALD READY — v17.2</div>
       <div class="welcome-text">14 agents online. Speak or type your command.</div>
       <div class="quick-commands">
         <button class="quick-cmd" onclick="sendQuick('briefing')">Morning Briefing</button>
@@ -529,12 +529,12 @@
 </div>
 
 <script>
-  // ── GIST CONFIG ───────────────────────────────────────────────────────────
+  // -- GIST CONFIG
   const GIST_ID       = "7f8beaced903cda4a933a9faa1a28ce7";
   const GIST_FILENAME = "herald_briefing.md";
   const GIST_URL      = `https://api.github.com/gists/${GIST_ID}`;
 
-  // ── LIVE CLOCK -- Central Time (CT) 12-hour format ────────────────────────
+  // -- LIVE CLOCK -- Central Time 12-hour format
   function updateClock() {
     const now = new Date();
     const ctString = now.toLocaleString("en-US", {
@@ -543,26 +543,26 @@
       minute:   "2-digit",
       hour12:   true
     });
-    // Add CT label
     const isDST = isDaylightSaving(now);
     document.getElementById('clockDisplay').textContent = ctString + (isDST ? ' CDT' : ' CST');
   }
 
   function isDaylightSaving(date) {
-    // DST in US: second Sunday in March to first Sunday in November
     const jan = new Date(date.getFullYear(), 0, 1).getTimezoneOffset();
     const jul = new Date(date.getFullYear(), 6, 1).getTimezoneOffset();
     return Math.max(jan, jul) !== date.getTimezoneOffset();
   }
 
-  // Start clock immediately and update every 30 seconds
   updateClock();
   setInterval(updateClock, 30000);
 
-  // ── HERALD SYSTEM PROMPT v17.1 ────────────────────────────────────────────
+  // =====================================================================
+  // HERALD SYSTEM PROMPT v17.2
+  // WHAT CHANGED: YOUR RULES section -- clean conversational responses
+  // =====================================================================
   const HERALD_SYSTEM = `YOU ARE HERALD
 Empire Intelligence and Command Interface for miked's AI Empire.
-Updated: 2026-03-21 -- v17.1 -- Full swarm registry + CT clock.
+Updated: 2026-03-21 -- v17.2 -- Clean conversational responses.
 
 YOUR PURPOSE
 You are the single point of contact for the entire AI Empire.
@@ -610,19 +610,31 @@ Approved assets: SOL, JUP, BONK, WIF, RAY, PYTH, WLFI, ETH, AAVE, UNI
 Min Risk/Reward: 2:1 NET | Real money gate: 30 trades at 60% win rate
 
 YOUR RULES
-- Lead with the most important thing first
-- Never suggest real capital before 60% gate over 30 trades
-- Never execute -- inform, route, recommend
-- Keep responses concise -- mobile voice interface
-- When asked "who can you see" or "agent status" -- list all 14 agents
-- Answer directly from the data above`;
+- Lead with the most important thing first. Answer directly, no preamble.
+- Never suggest real capital before 60% gate over 30 trades.
+- Never execute -- inform, route, recommend.
+- Write like a sharp human assistant, not a document. Plain sentences.
+- Never use ** asterisks **, # pound signs, or === dividers in responses.
+- Bullet points are fine for lists. Keep bullets short and clean.
+- No headers. No bold. No markdown formatting of any kind.
+- When asked "who can you see" or "agent status" -- list agents as
+  simple bullet points: agent name, status, one-line role. Nothing else.
+- Keep responses to 4-6 lines max unless miked asks for more detail.
+- Answer directly from the data above.
+
+BRIEFING FORMAT when asked for a briefing:
+Trading: [win rate] | [bankroll] | [mode]
+Open positions: [list or none]
+Top priority: [one sentence]
+Escalations: [if any, else none]
+What do you need from me?`;
 
   let apiKey = '';
   let conversationHistory = [];
   let recognition = null;
   let isListening = false;
 
-  // ── STARTUP ───────────────────────────────────────────────────────────────
+  // -- STARTUP
   window.onload = function() {
     const saved = localStorage.getItem('herald_api_key');
     if (saved) {
@@ -649,7 +661,7 @@ YOUR RULES
     document.getElementById('mainApp').style.display = 'flex';
   }
 
-  // ── GIST FETCH ────────────────────────────────────────────────────────────
+  // -- GIST FETCH
   async function fetchLatestBriefing(showInChat) {
     showInChat = showInChat !== undefined ? showInChat : true;
     try {
@@ -684,7 +696,7 @@ YOUR RULES
     div.className = 'message herald';
     const label = document.createElement('div');
     label.className = 'message-label';
-    label.textContent = 'HERALD — AUTO-BRIEFING ' + timestamp.substring(0, 10);
+    label.textContent = 'HERALD -- AUTO-BRIEFING ' + timestamp.substring(0, 10);
     const bubble = document.createElement('div');
     bubble.className = 'message-bubble live-briefing';
     bubble.textContent = text;
@@ -694,7 +706,7 @@ YOUR RULES
     messages.scrollTop = messages.scrollHeight;
   }
 
-  // ── CHAT ──────────────────────────────────────────────────────────────────
+  // -- CHAT
   function handleKey(e) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -809,7 +821,7 @@ YOUR RULES
     }
   }
 
-  // ── VOICE INPUT ───────────────────────────────────────────────────────────
+  // -- VOICE INPUT
   function toggleVoice() {
     if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
       alert('Voice input is not supported in this browser. Please use Chrome on iOS or Android.');
