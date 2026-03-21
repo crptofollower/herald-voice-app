@@ -439,16 +439,6 @@
 
     .quick-cmd:active { background: rgba(201,168,76,0.1); color: var(--gold); }
 
-    .sync-banner {
-      font-size: 10px;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-      color: var(--green);
-      text-align: center;
-      padding: 4px;
-      opacity: 0.7;
-    }
-
     .disclaimer {
       text-align: center;
       padding: 8px 24px;
@@ -479,7 +469,7 @@
   <div class="header">
     <div class="header-crest">⚔️</div>
     <div class="header-title">HERALD</div>
-    <div class="header-sub">Empire Intelligence</div>
+    <div class="header-sub">Empire Intelligence — v17.1</div>
   </div>
 
   <div class="status-bar">
@@ -488,22 +478,23 @@
       Online
     </div>
     <div class="status-item" id="statusPhase1">Phase 1: DRY RUN</div>
-    <div class="status-item" id="statusSync">
-      <div class="status-dot" id="syncDot"></div>
-      <span id="syncLabel">Syncing...</span>
+    <div class="status-item">
+      <div class="status-dot synced"></div>
+      <span id="clockDisplay">--:-- CT</span>
     </div>
   </div>
 
   <div class="messages" id="messages">
     <div class="welcome">
       <div class="welcome-icon">⚔️</div>
-      <div class="welcome-title">HERALD READY</div>
-      <div class="welcome-text">Your empire intelligence interface.<br>Speak or type your command.</div>
+      <div class="welcome-title">HERALD READY — v17.1</div>
+      <div class="welcome-text">14 agents online. Speak or type your command.</div>
       <div class="quick-commands">
         <button class="quick-cmd" onclick="sendQuick('briefing')">Morning Briefing</button>
         <button class="quick-cmd" onclick="sendQuick('trading update')">Trading Update</button>
         <button class="quick-cmd" onclick="sendQuick('empire overview')">Empire Overview</button>
-        <button class="quick-cmd" onclick="sendQuick('what is the status of Trade 002 SOL')">Trade #002 Status</button>
+        <button class="quick-cmd" onclick="sendQuick('who can you see')">Agent Status</button>
+        <button class="quick-cmd" onclick="sendQuick('what is my win rate')">Win Rate</button>
         <button class="quick-cmd" onclick="loadLatestBriefing()">Latest Auto-Briefing</button>
       </div>
     </div>
@@ -535,7 +526,6 @@
     This is an AI-generated briefing tool. Information may be inaccurate.
     Not professional advice of any kind.
   </div>
-
 </div>
 
 <script>
@@ -544,10 +534,35 @@
   const GIST_FILENAME = "herald_briefing.md";
   const GIST_URL      = `https://api.github.com/gists/${GIST_ID}`;
 
-  // ── HERALD SYSTEM PROMPT ──────────────────────────────────────────────────
+  // ── LIVE CLOCK -- Central Time (CT) 12-hour format ────────────────────────
+  function updateClock() {
+    const now = new Date();
+    const ctString = now.toLocaleString("en-US", {
+      timeZone: "America/Chicago",
+      hour:     "numeric",
+      minute:   "2-digit",
+      hour12:   true
+    });
+    // Add CT label
+    const isDST = isDaylightSaving(now);
+    document.getElementById('clockDisplay').textContent = ctString + (isDST ? ' CDT' : ' CST');
+  }
+
+  function isDaylightSaving(date) {
+    // DST in US: second Sunday in March to first Sunday in November
+    const jan = new Date(date.getFullYear(), 0, 1).getTimezoneOffset();
+    const jul = new Date(date.getFullYear(), 6, 1).getTimezoneOffset();
+    return Math.max(jan, jul) !== date.getTimezoneOffset();
+  }
+
+  // Start clock immediately and update every 30 seconds
+  updateClock();
+  setInterval(updateClock, 30000);
+
+  // ── HERALD SYSTEM PROMPT v17.1 ────────────────────────────────────────────
   const HERALD_SYSTEM = `YOU ARE HERALD
 Empire Intelligence and Command Interface for miked's AI Empire.
-Updated: 2026-03-20 -- v16.0 -- Major build day complete.
+Updated: 2026-03-21 -- v17.1 -- Full swarm registry + CT clock.
 
 YOUR PURPOSE
 You are the single point of contact for the entire AI Empire.
@@ -564,39 +579,43 @@ Win rate: 1/2 = 50% | Gate: 60%+ over 30 trades minimum
 No open positions. Watching for next setup.
 REAL MONEY: NEVER until 60% gate over 30 trades.
 
-INFRASTRUCTURE -- ALL LIVE
-trade_chain.py v1.7: LONG + SHORT + auto entry journal
-setup_finder.py v2.4: Guardian cap + candles + RSI/EMA/Bollinger
-position_monitor.py v2.0: Trailing stop -- 3 auto-trail levels
-oracle_router.py v1.2: Direct API server on trading laptop
-morning_briefing.py v1.0: 7am daily email to miked.durand@gmail.com
-Guardian auto-scan: Every 4 hours
-Position monitor: Every 5 minutes
-All 5 Freddie agents: ONLINE
+FULL AGENT REGISTRY -- ALL 14 AGENTS
 
-GUARDIAN RULESET
-Max trade size: 5% of bankroll
-Daily loss limit: 15% of bankroll
-Stop loss: 3-5% from entry -- LONG and SHORT supported
-Trailing stop: Auto-moves at break-even, 50%, and 75% to target
+TRADING CHAIN (OpenClaw / Telegram -- Freddie team):
+  Guardian        Port 18789  ONLINE   Market scan every 4h, risk approval, Guardian Ruleset enforcer
+  Quant           Port 18790  ONLINE   Risk/reward calculations, position sizing, R-multiple scoring
+  Researcher      Port 18791  ONLINE   Live price alerts every 30 min, CoinGecko data
+  Trader          Port 18792  ONLINE   Paper trade execution -- DRY RUN only
+  Critic          Port 18793  ONLINE   Post-trade scoring, lessons logged, team debrief
+
+SUPPORT AGENTS (Python scripts / Claude Projects):
+  HERALD          Port 18794  LIVE     Empire intelligence, daily briefing, command routing
+  FORGE           Script      LIVE     Builder agent -- owns all technical fixes and new builds
+  SCOUT           Script      LIVE     Market intelligence -- analyst feeds, X/RSS
+  SENTINEL        Script      LIVE     System health monitor every 4h
+  LEDGER          Script      LIVE     Cost tracker -- empire balance $50.47, burn $3-5/month
+  SOVEREIGN       Project     LIVE     Empire CEO -- strategic decisions, active directives
+  BILLY           Script      LIVE     Capital allocation -- $800 total / 4 of 5 tranches received
+  LEGAL_SENTINEL  Script      LIVE     Compliance and platform ToS reviews -- on call
+  PULSE           Script      LIVE     Weekly team debrief every Sunday 8AM
+
+INFRASTRUCTURE -- ALL LIVE
+trade_chain.py v1.7 | setup_finder.py v2.4 | position_monitor.py v2.0
+oracle_router.py v1.3 | shared_state.py v1.1 | morning_briefing.py v1.1
+Guardian auto-scan: Every 4 hours | Position monitor: Every 5 minutes
+
+GUARDIAN RULESET (locked -- Constitution v4.1 supreme law)
+Max trade size: 5% of bankroll | Daily loss limit: 15% of bankroll
 Approved assets: SOL, JUP, BONK, WIF, RAY, PYTH, WLFI, ETH, AAVE, UNI
-Min Risk/Reward: 2:1 NET
+Min Risk/Reward: 2:1 NET | Real money gate: 30 trades at 60% win rate
 
 YOUR RULES
 - Lead with the most important thing first
 - Never suggest real capital before 60% gate over 30 trades
 - Never execute -- inform, route, recommend
 - Keep responses concise -- mobile voice interface
-- Answer directly from the data above
-- You are also a personal assistant -- help with anything miked asks
-
-BRIEFING FORMAT when asked:
-=== HERALD BRIEFING -- [DATE] ===
-TRADING: Win rate | Bankroll | Mode
-OPEN POSITIONS: [list or NONE]
-TOP PRIORITY: [one thing]
-ESCALATIONS: [if any]
-What do you need from me?`;
+- When asked "who can you see" or "agent status" -- list all 14 agents
+- Answer directly from the data above`;
 
   let apiKey = '';
   let conversationHistory = [];
@@ -642,14 +661,11 @@ What do you need from me?`;
       const content = data.files[GIST_FILENAME].content;
       const tsMatch = content.match(/Updated: ([^\n]+)/);
       const timestamp = tsMatch ? tsMatch[1].trim() : 'unknown';
-      document.getElementById('syncDot').classList.add('synced');
-      document.getElementById('syncLabel').textContent = 'Live ' + timestamp.substring(11, 16);
       if (showInChat) {
         const briefingText = content.replace(/<!--.*?-->\n\n/, '').trim();
         addBriefingMessage(briefingText, timestamp);
       }
     } catch (err) {
-      document.getElementById('syncLabel').textContent = 'Offline';
       if (showInChat) {
         addMessage('herald', 'Could not fetch latest auto-briefing. Guardian may not have run yet or check your connection.');
       }
