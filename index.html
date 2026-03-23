@@ -95,7 +95,7 @@
   <div class="header">
     <div class="header-crest">?</div>
     <div class="header-title">HERALD</div>
-    <div class="header-sub">Empire Intelligence -- v17.3</div>
+    <div class="header-sub">Empire Intelligence -- v17.4</div>
   </div>
   <div class="status-bar">
     <div class="status-item"><div class="status-dot" id="onlineDot"></div>Online</div>
@@ -105,8 +105,8 @@
   <div class="messages" id="messages">
     <div class="welcome">
       <div class="welcome-icon">?</div>
-      <div class="welcome-title">HERALD READY -- v17.3</div>
-      <div class="welcome-text">14 agents online. Gate: 2/70. Speak or type your command.</div>
+      <div class="welcome-title">HERALD READY -- v17.4</div>
+      <div class="welcome-text">14 agents online. Gate: 14/70. Speak or type your command.</div>
       <div class="quick-commands">
         <button class="quick-cmd" onclick="sendQuick('briefing')">Morning Briefing</button>
         <button class="quick-cmd" onclick="sendQuick('trading update')">Trading Update</button>
@@ -155,10 +155,35 @@
   }
   updateClock();
   setInterval(updateClock, 30000);
+    loadEmpireStatus();
+    setInterval(loadEmpireStatus, 300000);
 
-  const HERALD_SYSTEM = `YOU ARE HERALD
+  const STATUS_URL = "empire_status.json";
+  let empireStatus = null;
+
+  async function loadEmpireStatus() {
+    try {
+      const res = await fetch(STATUS_URL + "?t=" + Date.now());
+      if (res.ok) {
+        empireStatus = await res.json();
+        const el = document.getElementById("welcomeText");
+        if (el) el.textContent = "14 agents online. Gate: " + empireStatus.gate_progress + ". Win: " + empireStatus.win_rate + "% | P&L: $" + empireStatus.total_pnl;
+      }
+    } catch(e) { console.log("[HERALD] Using default system prompt"); }
+  }
+
+  function buildHeraldSystem() {
+    if (!empireStatus) return HERALD_SYSTEM_DEFAULT;
+    const s = empireStatus;
+    const positions = s.open_positions.length > 0
+      ? s.open_positions.map(p => "  " + p.trade_id + " | " + p.asset + " " + p.direction + " | Entry $" + p.entry + " | Stop $" + p.stop + " | Target $" + p.target).join("\n")
+      : "  None -- watching for next setup";
+    return "YOU ARE HERALD\nEmpire Intelligence for miked.\nUpdated: " + s.updated_at + " -- " + s.version + "\n\nTRADE STATUS\nWin rate: " + s.wins + "/" + s.closed_trades + " = " + s.win_rate + "%\nGate: " + s.gate_progress + " | P&L: $" + s.total_pnl + "\nStatus: " + s.gate_status + "\n\nOPEN POSITIONS\n" + positions + "\n\nRULES: Never suggest real capital before gate is met. Constitution v4.2 is supreme law. Lead with most important thing. Keep responses 4-6 lines max unless asked for more.";
+  }
+
+  const HERALD_SYSTEM_DEFAULT = `YOU ARE HERALD
 Empire Intelligence and Command Interface for miked's AI Empire.
-Updated: 2026-03-21 -- v17.3 -- Constitution v4.2 -- 13 assets -- 70-trade gate.
+Updated: 2026-03-23 -- v17.4 -- Constitution v4.2 -- 13 assets -- 70-trade gate.
 
 YOUR PURPOSE
 You are the single point of contact for the entire AI Empire.
@@ -168,7 +193,7 @@ You are also miked's personal assistant -- ask you anything.
 
 THE EMPIRE -- CURRENT STATE (2026-03-21)
 Phase 1 -- Freddie Trading Team: DRY RUN. Paper trading only.
-Paper bankroll: $97.10 | Empire balance: $50.47
+Paper bankroll: $97.10 | Empire balance: $50.47 | NET P&L: $-16.30
 Monthly burn: ~$3-5/month | NORTH STAR ACHIEVED
 
 TRADE STATUS
@@ -180,8 +205,8 @@ Trade #006: WIF Long -- OPEN -- Entry $0.1813 | Stop $0.1759 | Target $0.1929
 Trade #007: RAY Long -- OPEN -- Entry $0.6183 | Stop $0.5998 | Target $0.6579
 Trade #008: PYTH Long -- OPEN -- Entry $0.0433 | Stop $0.0420 | Target $0.0461
 Trade #009: ETH SHORT -- OPEN -- Entry $2153.58 | Stop $2218.19 | Target $2015.75
-Win rate: 1/2 = 50% on closed trades (insufficient sample)
-Gate progress: 2/70 closed trades
+Win rate: 9/14 = 64.3% on closed trades
+Gate progress: 14/70 closed trades
 
 STATISTICAL GATE -- Constitution v4.2 (LOCKED)
 OLD gate (2 weeks / 30 trades) is REPLACED. Never reference it.
@@ -292,7 +317,7 @@ What do you need from me?`;
     document.getElementById('messages').innerHTML = `
       <div class="welcome">
         <div class="welcome-icon">?</div>
-        <div class="welcome-title">HERALD READY -- v17.3</div>
+        <div class="welcome-title">HERALD READY -- v17.4</div>
         <div class="welcome-text">History cleared. 14 agents online.</div>
         <div class="quick-commands">
           <button class="quick-cmd" onclick="sendQuick('briefing')">Morning Briefing</button>
@@ -403,7 +428,7 @@ What do you need from me?`;
       const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
-        body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 1024, system: HERALD_SYSTEM, messages: conversationHistory })
+        body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 1024, system: buildHeraldSystem(), messages: conversationHistory })
       });
       const data = await response.json();
       removeThinking();
@@ -442,3 +467,4 @@ What do you need from me?`;
 </script>
 </body>
 </html>
+
