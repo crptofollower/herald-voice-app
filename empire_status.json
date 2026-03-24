@@ -1,15 +1,15 @@
 {
-  "updated_at": "2026-03-23 19:04:11",
+  "updated_at": "2026-03-23 23:05:06",
   "version": "v17.4",
   "mode": "DRY RUN",
   "bankroll": 97.1,
-  "win_rate": 64.3,
-  "wins": 9,
-  "closed_trades": 14,
-  "total_pnl": -16.3,
-  "gate_progress": "14/70",
+  "win_rate": 68.8,
+  "wins": 11,
+  "closed_trades": 16,
+  "total_pnl": -13.92,
+  "gate_progress": "16/70",
   "gate_met": false,
-  "gate_status": "IN PROGRESS -- 14/70 trades",
+  "gate_status": "IN PROGRESS -- 16/70 trades",
   "open_positions": [
     {
       "trade_id": "#007",
@@ -68,15 +68,15 @@
       "target": 2290.59
     },
     {
-      "trade_id": "#023",
-      "asset": "DOGE",
+      "trade_id": "#025",
+      "asset": "AAVE",
       "direction": "SHORT",
-      "entry": 0.094185,
-      "stop": 0.097011,
-      "target": 0.088156
+      "entry": 110.18,
+      "stop": 113.4854,
+      "target": 103.12848
     },
     {
-      "trade_id": "#024",
+      "trade_id": "#026",
       "asset": "UNI",
       "direction": "SHORT",
       "entry": 3.59,
@@ -85,6 +85,6 @@
     }
   ],
   "setup_cards": 2,
-  "last_scan": "2026-03-23 19:03",
+  "last_scan": "2026-03-23 23:04",
   "all_agents": "ONLINE"
 }
