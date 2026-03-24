@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-03-23 16:27:22",
+  "updated_at": "2026-03-23 19:04:11",
   "version": "v17.4",
   "mode": "DRY RUN",
   "bankroll": 97.1,
@@ -66,9 +66,25 @@
       "entry": 2152.81,
       "stop": 2152.81,
       "target": 2290.59
+    },
+    {
+      "trade_id": "#023",
+      "asset": "DOGE",
+      "direction": "SHORT",
+      "entry": 0.094185,
+      "stop": 0.097011,
+      "target": 0.088156
+    },
+    {
+      "trade_id": "#024",
+      "asset": "UNI",
+      "direction": "SHORT",
+      "entry": 3.59,
+      "stop": 3.6977,
+      "target": 3.36024
     }
   ],
   "setup_cards": 2,
-  "last_scan": "2026-03-23 16:00",
+  "last_scan": "2026-03-23 19:03",
   "all_agents": "ONLINE"
 }
