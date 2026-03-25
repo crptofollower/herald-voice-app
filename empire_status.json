@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-03-24 19:04:33",
+  "updated_at": "2026-03-24 23:05:38",
   "version": "v17.4",
   "mode": "DRY RUN",
   "bankroll": 97.1,
@@ -88,7 +88,7 @@
       "asset": "ONDO",
       "direction": "SHORT",
       "entry": 0.25614,
-      "stop": 0.263824,
+      "stop": 0.25614,
       "target": 0.239747
     },
     {
@@ -96,11 +96,19 @@
       "asset": "DOGE",
       "direction": "SHORT",
       "entry": 0.095131,
-      "stop": 0.097985,
+      "stop": 0.095131,
       "target": 0.089042
+    },
+    {
+      "trade_id": "#036",
+      "asset": "ADA",
+      "direction": "SHORT",
+      "entry": 0.267689,
+      "stop": 0.27572,
+      "target": 0.250556
     }
   ],
-  "setup_cards": 2,
-  "last_scan": "2026-03-24 19:03",
+  "setup_cards": 1,
+  "last_scan": "2026-03-24 23:03",
   "all_agents": "ONLINE"
 }
