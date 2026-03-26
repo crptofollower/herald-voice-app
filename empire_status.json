@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-03-25 15:03:41",
+  "updated_at": "2026-03-25 19:04:06",
   "version": "v17.4",
   "mode": "DRY RUN",
   "bankroll": 97.1,
@@ -69,6 +69,6 @@
     }
   ],
   "setup_cards": 0,
-  "last_scan": "2026-03-25 15:03",
+  "last_scan": "2026-03-25 19:03",
   "all_agents": "ONLINE"
 }
