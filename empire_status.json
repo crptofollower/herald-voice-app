@@ -1,15 +1,20 @@
 {
-  "updated_at": "2026-03-28 15:09:00",
-  "version": "v17.4",
+  "updated_at": "2026-03-28 16:12:57",
+  "version": "v28.0",
+  "constitution": "v4.3",
   "mode": "DRY RUN",
   "bankroll": 350.0,
-  "win_rate": 54.3,
-  "wins": 19,
-  "closed_trades": 35,
-  "total_pnl": -79.92,
-  "gate_progress": "35/70",
+  "regime": "BEAR",
+  "clean_trades": 0,
+  "total_trades": 37,
+  "win_rate": 0,
+  "wins": 0,
+  "losses": 0,
+  "closed_trades": 0,
+  "total_pnl": 0,
+  "gate_progress": "0/70",
   "gate_met": false,
-  "gate_status": "IN PROGRESS -- 35/70 trades",
+  "gate_status": "IN PROGRESS -- 0/70 clean trades",
   "open_positions": [
     {
       "trade_id": "#037",
@@ -17,10 +22,15 @@
       "direction": "SHORT",
       "entry": 97.96,
       "stop": 100.8988,
-      "target": 0
+      "target": 88.7518,
+      "grade": "A",
+      "mfe": 97.77,
+      "mae": 98.52
     }
   ],
+  "open_count": 1,
   "setup_cards": 0,
   "last_scan": "2026-03-28 15:08",
-  "all_agents": "ONLINE"
+  "all_agents": "ONLINE",
+  "github_commit": "3cc63d0"
 }
