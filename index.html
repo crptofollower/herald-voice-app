@@ -86,16 +86,16 @@
 <div class="setup-overlay" id="setupOverlay">
   <div class="setup-crest">?</div>
   <div class="setup-title">HERALD</div>
-  <div class="setup-sub">Empire Intelligence Interface<br>Enter your Anthropic API key to begin</div>
-  <input class="setup-input" type="password" id="apiKeyInput" placeholder="sk-ant-api03-..." autocomplete="off" />
+  <div class="setup-sub">Empire Intelligence Interface<br>Enter your OpenRouter API key to begin</div>
+  <input class="setup-input" type="password" id="apiKeyInput" placeholder="sk-or-v1-..." autocomplete="off" />
   <button class="setup-btn" onclick="saveApiKey()">ACTIVATE HERALD</button>
-  <div class="setup-note">Your key is stored only on this device in localStorage. Never sent anywhere except Anthropic API. Get your key at console.anthropic.com</div>
+  <div class="setup-note">Your key is stored only on this device in localStorage. Never sent anywhere except OpenRouter API. Get your key at openrouter.ai/keys</div>
 </div>
 <div class="app" id="mainApp" style="display:none;">
   <div class="header">
     <div class="header-crest">?</div>
     <div class="header-title">HERALD</div>
-    <div class="header-sub">Empire Intelligence -- v17.4</div>
+    <div class="header-sub">Empire Intelligence -- v28.0</div>
   </div>
   <div class="status-bar">
     <div class="status-item"><div class="status-dot" id="onlineDot"></div>Online</div>
@@ -105,8 +105,8 @@
   <div class="messages" id="messages">
     <div class="welcome">
       <div class="welcome-icon">?</div>
-      <div class="welcome-title">HERALD READY -- v17.4</div>
-      <div class="welcome-text">14 agents online. Gate: 14/70. Speak or type your command.</div>
+      <div class="welcome-title">HERALD READY -- v28.0</div>
+      <div class="welcome-text">5 Freddie agents online. Gate: 0/70 clean trades. Speak or type.</div>
       <div class="quick-commands">
         <button class="quick-cmd" onclick="sendQuick('briefing')">Morning Briefing</button>
         <button class="quick-cmd" onclick="sendQuick('trading update')">Trading Update</button>
@@ -167,7 +167,7 @@
       if (res.ok) {
         empireStatus = await res.json();
         const el = document.getElementById("welcomeText");
-        if (el) el.textContent = "14 agents online. Gate: " + empireStatus.gate_progress + ". Win: " + empireStatus.win_rate + "% | P&L: $" + empireStatus.total_pnl;
+        if (el) el.textContent = "5 Freddie agents online. Gate: " + empireStatus.gate_progress + ". Win: " + empireStatus.win_rate + "% | P&L: $" + empireStatus.total_pnl;
       }
     } catch(e) { console.log("[HERALD] Using default system prompt"); }
   }
@@ -183,7 +183,7 @@
 
   const HERALD_SYSTEM_DEFAULT = `YOU ARE HERALD
 Empire Intelligence and Command Interface for miked's AI Empire.
-Updated: 2026-03-23 -- v17.4 -- Constitution v4.2 -- 13 assets -- 70-trade gate.
+Updated: 2026-03-28 -- v28.0 -- Constitution v4.3 -- 9 assets -- 70 clean trade gate.
 
 YOUR PURPOSE
 You are the single point of contact for the entire AI Empire.
@@ -317,8 +317,8 @@ What do you need from me?`;
     document.getElementById('messages').innerHTML = `
       <div class="welcome">
         <div class="welcome-icon">?</div>
-        <div class="welcome-title">HERALD READY -- v17.4</div>
-        <div class="welcome-text">History cleared. 14 agents online.</div>
+        <div class="welcome-title">HERALD READY -- v28.0</div>
+        <div class="welcome-text">History cleared. 5 Freddie agents online.</div>
         <div class="quick-commands">
           <button class="quick-cmd" onclick="sendQuick('briefing')">Morning Briefing</button>
           <button class="quick-cmd" onclick="sendQuick('trading update')">Trading Update</button>
@@ -333,7 +333,7 @@ What do you need from me?`;
 
   function saveApiKey() {
     const input = document.getElementById('apiKeyInput').value.trim();
-    if (!input.startsWith('sk-ant')) { alert('Please enter a valid Anthropic API key starting with sk-ant'); return; }
+    if (!input.startsWith('sk-or')) { alert('Please enter a valid OpenRouter API key starting with sk-or'); return; }
     apiKey = input;
     localStorage.setItem('herald_api_key', apiKey);
     showApp();
@@ -425,15 +425,16 @@ What do you need from me?`;
     saveChatHistory();
     showThinking();
     try {
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'anthropic-dangerous-direct-browser-access': 'true' },
-        body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 1024, system: buildHeraldSystem(), messages: conversationHistory })
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
+        body: JSON.stringify({ model: 'anthropic/claude-haiku-4-5', max_tokens: 1024,
+          messages: [{ role: 'system', content: buildHeraldSystem() }].concat(conversationHistory) })
       });
       const data = await response.json();
       removeThinking();
-      if (data.error) { addMessage('herald', 'Error: ' + data.error.message); conversationHistory.pop(); return; }
-      const reply = data.content[0].text;
+      if (data.error) { addMessage('herald', 'Error: ' + (data.error.message || JSON.stringify(data.error))); conversationHistory.pop(); return; }
+      const reply = data.choices[0].message.content;
       conversationHistory.push({ role: 'assistant', content: reply });
       saveChatHistory();
       addMessage('herald', reply);
