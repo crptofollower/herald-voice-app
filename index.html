@@ -276,6 +276,12 @@ What do you need from me?`;
   let isListening = false;
 
   window.onload = function() {
+    if (window.location.search.includes('reset=1')) {
+      localStorage.removeItem('herald_api_key');
+      localStorage.removeItem('herald_chat_history');
+      window.location.href = window.location.pathname;
+      return;
+    }
     const saved = localStorage.getItem('herald_api_key');
     if (saved) { apiKey = saved; showApp(); loadChatHistory(); fetchLatestBriefing(false); }
   };
