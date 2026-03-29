@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-03-29 16:59:02",
+  "updated_at": "2026-03-29 18:22:11",
   "version": "v31.0",
   "constitution": "v4.3",
   "mode": "DRY RUN",
@@ -30,7 +30,7 @@
       "asset": "ADA",
       "direction": "SHORT",
       "entry": 0.240351,
-      "stop": 0.2476,
+      "stop": 0.2404,
       "target": 0.217757,
       "grade": "A"
     },
@@ -39,13 +39,13 @@
       "asset": "SOLUSD",
       "direction": "SHORT",
       "entry": 81.28,
-      "stop": 83.7184,
+      "stop": 81.28,
       "target": 73.63968,
       "grade": "A"
     }
   ],
   "open_count": 3,
   "setup_cards": 0,
-  "last_scan": "2026-03-29 16:59",
+  "last_scan": "2026-03-29 18:22",
   "all_agents": "ONLINE"
 }
