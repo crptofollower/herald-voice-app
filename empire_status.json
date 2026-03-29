@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-03-29 16:01:49",
+  "updated_at": "2026-03-29 16:14:41",
   "version": "v31.0",
   "constitution": "v4.3",
   "mode": "DRY RUN",
@@ -46,6 +46,6 @@
   ],
   "open_count": 3,
   "setup_cards": 0,
-  "last_scan": "2026-03-29 16:01",
+  "last_scan": "2026-03-29 16:14",
   "all_agents": "ONLINE"
 }
