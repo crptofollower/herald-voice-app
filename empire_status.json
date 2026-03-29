@@ -1,12 +1,12 @@
 {
-  "updated_at": "2026-03-29 10:49:28",
-  "version": "v28.0",
+  "updated_at": "2026-03-29 14:46:27",
+  "version": "v31.0",
   "constitution": "v4.3",
   "mode": "DRY RUN",
   "bankroll": 350.0,
   "regime": "BEAR",
   "clean_trades": 0,
-  "total_trades": 37,
+  "total_trades": 39,
   "win_rate": 0,
   "wins": 0,
   "losses": 0,
@@ -23,14 +23,29 @@
       "entry": 97.96,
       "stop": 97.96,
       "target": 88.7518,
-      "grade": "A",
-      "mfe": 95.13,
-      "mae": 98.52
+      "grade": "A"
+    },
+    {
+      "trade_id": "#038",
+      "asset": "ADA",
+      "direction": "SHORT",
+      "entry": 0.240351,
+      "stop": 0.2476,
+      "target": 0.217757,
+      "grade": "A"
+    },
+    {
+      "trade_id": "#039",
+      "asset": "SOLUSD",
+      "direction": "SHORT",
+      "entry": 81.28,
+      "stop": 83.7184,
+      "target": 73.63968,
+      "grade": "A"
     }
   ],
-  "open_count": 1,
+  "open_count": 3,
   "setup_cards": 0,
-  "last_scan": "2026-03-29 10:47",
-  "all_agents": "ONLINE",
-  "github_commit": "3cc63d0"
+  "last_scan": "2026-03-29 14:46",
+  "all_agents": "ONLINE"
 }
