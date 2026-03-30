@@ -1,20 +1,20 @@
 {
-  "updated_at": "2026-03-29 18:22:11",
-  "version": "v31.0",
+  "updated_at": "2026-03-29 19:09:18",
+  "version": "v28.0",
   "constitution": "v4.3",
   "mode": "DRY RUN",
   "bankroll": 350.0,
   "regime": "BEAR",
-  "clean_trades": 0,
-  "total_trades": 39,
-  "win_rate": 0,
+  "clean_trades": 1,
+  "total_trades": 40,
+  "win_rate": 0.0,
   "wins": 0,
-  "losses": 0,
-  "closed_trades": 0,
-  "total_pnl": 0,
-  "gate_progress": "0/70",
+  "losses": 1,
+  "closed_trades": 1,
+  "total_pnl": -0.26,
+  "gate_progress": "1/70",
   "gate_met": false,
-  "gate_status": "IN PROGRESS -- 0/70 clean trades",
+  "gate_status": "IN PROGRESS -- 1/70 clean trades",
   "open_positions": [
     {
       "trade_id": "#037",
@@ -23,29 +23,36 @@
       "entry": 97.96,
       "stop": 97.96,
       "target": 88.7518,
-      "grade": "A"
+      "grade": "A",
+      "mfe": 93.7,
+      "mae": 98.52
     },
     {
       "trade_id": "#038",
       "asset": "ADA",
       "direction": "SHORT",
       "entry": 0.240351,
-      "stop": 0.2404,
+      "stop": 0.240351,
       "target": 0.217757,
-      "grade": "A"
+      "grade": "A",
+      "mfe": 0.235243,
+      "mae": 0.241557
     },
     {
-      "trade_id": "#039",
-      "asset": "SOLUSD",
+      "trade_id": "#040",
+      "asset": "JUP",
       "direction": "SHORT",
-      "entry": 81.28,
-      "stop": 81.28,
-      "target": 73.63968,
-      "grade": "A"
+      "entry": 0.141718,
+      "stop": 0.14597,
+      "target": 0.128395,
+      "grade": "A",
+      "mfe": null,
+      "mae": null
     }
   ],
   "open_count": 3,
-  "setup_cards": 0,
-  "last_scan": "2026-03-29 18:22",
-  "all_agents": "ONLINE"
+  "setup_cards": 1,
+  "last_scan": "2026-03-29 19:07",
+  "all_agents": "ONLINE",
+  "github_commit": "3cc63d0"
 }
