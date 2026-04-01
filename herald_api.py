@@ -133,8 +133,8 @@ class HeraldHandler(BaseHTTPRequestHandler):
                 empire  = fetch_empire_status()
                 prompt  = f"the user ran command: '{command}'. empire status: {json.dumps(empire)}. confirm what action this triggers and summarize current empire state in 2-3 sentences."
                 response = ask_herald(prompt, empire)
-                self._json({"response": response, "command": command, "ok": true})
-            except exception as e:
+                self._json({"response": response, "command": command, "ok": True})
+            except Exception as e:
                 self._json({"error": str(e)}, 500)
         else:
             self._json({"error": "not found"}, 404)
