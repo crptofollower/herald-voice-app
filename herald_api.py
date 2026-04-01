@@ -124,6 +124,18 @@ class HeraldHandler(BaseHTTPRequestHandler):
                 self._json({"response": response, "ok": True})
             except Exception as e:
                 self._json({"error": str(e)}, 500)
+        elif self.path == "/command":
+            length = int(self.headers.get("content-length", 0))
+            body   = self.rfile.read(length)
+            try:
+                data    = json.loads(body.decode("utf-8"))
+                command = data.get("command", "").strip().lower()
+                empire  = fetch_empire_status()
+                prompt  = f"the user ran command: '{command}'. empire status: {json.dumps(empire)}. confirm what action this triggers and summarize current empire state in 2-3 sentences."
+                response = ask_herald(prompt, empire)
+                self._json({"response": response, "command": command, "ok": true})
+            except exception as e:
+                self._json({"error": str(e)}, 500)
         else:
             self._json({"error": "not found"}, 404)
 
