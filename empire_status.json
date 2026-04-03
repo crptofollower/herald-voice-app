@@ -1,12 +1,12 @@
 {
-  "updated_at": "2026-04-03 06:05:01",
+  "updated_at": "2026-04-03 06:31:05",
   "version": "v31.0",
   "constitution": "v4.3",
   "mode": "DRY RUN",
   "bankroll": 350.0,
   "regime": "BEAR",
   "clean_trades": 6,
-  "total_trades": 42,
+  "total_trades": 43,
   "win_rate": 0.0,
   "wins": 0,
   "losses": 6,
@@ -15,12 +15,22 @@
   "gate_progress": "6/70",
   "gate_met": false,
   "gate_status": "IN PROGRESS -- 6/70 clean trades",
-  "open_positions": [],
-  "open_count": 0,
+  "open_positions": [
+    {
+      "trade_id": "#043",
+      "asset": "JUP",
+      "direction": "SHORT",
+      "entry": 0.160021,
+      "stop": 0.168,
+      "target": 0.135378,
+      "grade": "A"
+    }
+  ],
+  "open_count": 1,
   "setup_cards": 0,
   "last_scan": "[2026-04-03 06:00:5",
   "all_agents": "ONLINE",
-  "last_chain_run": "[2026-03-31 12:42 P",
+  "last_chain_run": "[2026-04-03 01:31 A",
   "vm_health": "OK",
   "sync_age_note": "Data updated hourly -- may be up to 60 min old"
 }
