@@ -815,7 +815,7 @@ async function send() {
 
 function speak(text) {
   if (!window.speechSynthesis) return;
-  const clean = text.replace(/[=*#|`\[\]]/g,'').replace(/\n+/g,' ').replace(/\s+/g,' ').trim();
+  const clean = text.replace(/[=*#|`\[\]]/g,'').replace(/\*\*/g,'').replace(/\bhttps?:\/\/\S+/g,'').replace(/\[([^\]]+)\]\([^)]+\)/g,'$1').replace(/\n+/g,' ').replace(/\s+/g,' ').trim();
   const u = new SpeechSynthesisUtterance(clean);
   u.rate = 0.92; u.pitch = 0.9; u.volume = 1;
   window.speechSynthesis.speak(u);
