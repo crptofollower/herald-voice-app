@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-04 06:05:01",
+  "updated_at": "2026-04-04 06:30:12",
   "version": "v31.0",
   "constitution": "v4.3",
   "mode": "DRY RUN",
@@ -30,7 +30,7 @@
   "setup_cards": 0,
   "last_scan": "[2026-04-04 06:00:4",
   "all_agents": "ONLINE",
-  "last_chain_run": "[2026-04-03 01:31 A",
+  "last_chain_run": "[2026-04-04 01:30 A",
   "vm_health": "OK",
   "sync_age_note": "Data updated hourly -- may be up to 60 min old"
 }
