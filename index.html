@@ -690,7 +690,9 @@ function showApp() {
   document.getElementById('app').style.display   = 'flex';
   loadHistory();
 }
-
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./service-worker.js');
+}
 // ── INIT ────────────────────────────────────────────────────────
 window.onload = function() {
   if (location.search.includes('reset=1')) {
