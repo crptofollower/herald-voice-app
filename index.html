@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="HERALD">
+  <link rel="apple-touch-icon" href="herald_icon_180.png">
+<link rel="manifest" href="manifest.json">
   <title>HERALD — Personal AI Agent</title>
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&family=Crimson+Pro:ital,wght@0,300;0,400;1,300&display=swap" rel="stylesheet">
   <style>
@@ -594,7 +595,7 @@
 // ── CONFIG ──────────────────────────────────────────────────────
 const STATUS_URL  = "empire_status.json";
 const OR_URL      = "https://openrouter.ai/api/v1/chat/completions";
-const MODEL       = "anthropic/claude-haiku-4-5";
+const MODEL       = "anthropic/claude-haiku-4-5:online";
 
 // ── STATE ───────────────────────────────────────────────────────
 let apiKey  = '';
@@ -656,12 +657,14 @@ Data freshness: ${s.sync_age_note || "updated hourly"}
 
 IMPORTANT — be honest about what you know:
 - Trade state is from last hourly sync — may be up to 60 min old
-- You cannot see live prices or confirm swarm is running right now
+- You can search for live prices, hours, news when asked
 - Say "as of my last sync" when discussing live data
 - For general questions (weather, travel, etc) use your knowledge and help
 
-Keep responses concise — 3-5 sentences unless more detail is requested.
-No markdown formatting. Plain conversational sentences.
+Keep responses to 2-4 plain sentences. Speak like a friend giving a quick update.
+NEVER use asterisks, stars, markdown, bullet points, or URLs in your response.
+NEVER say "as of my sync" or technical phrases. Just give the answer naturally.
+If asked about positions, report exactly what the empire status shows and nothing else.
 Current time: ${now}`;
 }
 
@@ -751,7 +754,7 @@ function addBubble(role, text, extra='') {
   lbl.textContent = role === 'user' ? 'miked' : 'HERALD';
   const bub  = document.createElement('div');
   bub.className = 'msg-bubble' + extra;
-  bub.textContent = text;
+  bub.textContent = text.replace(/\*\*/g,'').replace(/\*/g,'').replace(/\bhttps?:\/\/\S+/g,'').replace(/\[([^\]]+)\]\([^)]+\)/g,'$1').replace(/#+\s/g,'').trim();
   div.appendChild(lbl);
   div.appendChild(bub);
   msgs.appendChild(div);
@@ -815,7 +818,7 @@ async function send() {
 
 function speak(text) {
   if (!window.speechSynthesis) return;
-  const clean = text.replace(/[=*#|`\[\]]/g,'').replace(/\n+/g,' ').replace(/\s+/g,' ').trim();
+  const clean = text.replace(/[=*#|`\[\]]/g,'').replace(/\*\*/g,'').replace(/\bhttps?:\/\/\S+/g,'').replace(/\[([^\]]+)\]\([^)]+\)/g,'$1').replace(/\n+/g,' ').replace(/\s+/g,' ').trim();
   const u = new SpeechSynthesisUtterance(clean);
   u.rate = 0.92; u.pitch = 0.9; u.volume = 1;
   window.speechSynthesis.speak(u);
