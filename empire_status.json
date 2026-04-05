@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-05 17:05:01",
+  "updated_at": "2026-04-05 18:05:02",
   "version": "v31.0",
   "constitution": "v4.3",
   "mode": "DRY RUN",
@@ -37,7 +37,7 @@
   ],
   "open_count": 2,
   "setup_cards": 0,
-  "last_scan": "[2026-04-05 17:00:4",
+  "last_scan": "[2026-04-05 18:00:4",
   "all_agents": "ONLINE",
   "last_chain_run": "[2026-04-05 01:30 A",
   "vm_health": "OK",
