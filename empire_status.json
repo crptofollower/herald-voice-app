@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-04-05 05:05:01",
+  "updated_at": "2026-04-05 06:05:01",
   "version": "v31.0",
   "constitution": "v4.3",
   "mode": "DRY RUN",
@@ -21,14 +21,14 @@
       "asset": "JUP",
       "direction": "SHORT",
       "entry": 0.160021,
-      "stop": 0.168,
+      "stop": 0.16,
       "target": 0.135378,
       "grade": "A"
     }
   ],
   "open_count": 1,
   "setup_cards": 0,
-  "last_scan": "[2026-04-05 05:00:4",
+  "last_scan": "[2026-04-05 06:01:5",
   "all_agents": "ONLINE",
   "last_chain_run": "[2026-04-04 01:30 A",
   "vm_health": "OK",
