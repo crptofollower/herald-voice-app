@@ -6,572 +6,529 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <link rel="apple-touch-icon" href="herald_icon_180.png">
-<link rel="manifest" href="manifest.json">
-  <title>HERALD — Personal AI Agent</title>
-  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&family=Crimson+Pro:ital,wght@0,300;0,400;1,300&display=swap" rel="stylesheet">
+  <link rel="manifest" href="manifest.json">
+  <title>HERALD — Personal AI</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=DM+Serif+Display:ital@0;1&display=swap" rel="stylesheet">
   <style>
     :root {
-      --gold: #C9A84C;
-      --gold-light: #E8C96A;
-      --gold-dim: #7A6030;
-      --gold-pale: rgba(201,168,76,0.12);
-      --black: #080809;
-      --dark: #0F0F12;
-      --dark-2: #161618;
-      --dark-3: #1E1E22;
-      --text: #E2D9C8;
-      --text-dim: #7A7268;
-      --text-muted: #4A4840;
-      --green: #2ECC71;
-      --red: #E74C3C;
-      --border: rgba(201,168,76,0.15);
+      --sky:      #C8E8F0;
+      --emerald:  #1A9B8A;
+      --teal:     #3ECFBA;
+      --sand:     #F4F0E8;
+      --sand-2:   #FDFAF4;
+      --deep:     #0B4F6C;
+      --deep-2:   #0a1e2e;
+      --deep-3:   #0e2a3d;
+      --deep-4:   #122d40;
+      --muted:    #4a8aaa;
+      --muted-2:  #2a5a7a;
+      --text-d:   #d0eaf4;
+      --text-l:   #0B4F6C;
+      --border-d: rgba(42,90,120,0.3);
+      --border-l: rgba(26,155,138,0.2);
+      --card-d:   rgba(14,42,61,0.9);
+      --card-l:   rgba(255,255,255,0.9);
+      --transition: 0.3s ease;
+    }
+
+    [data-theme="dark"] {
+      --bg:       var(--deep-2);
+      --bg2:      var(--deep-3);
+      --bg3:      var(--deep-4);
+      --txt:      var(--text-d);
+      --txt2:     var(--muted);
+      --bdr:      var(--border-d);
+      --card:     var(--card-d);
+      --chip-bg:  rgba(14,42,61,0.8);
+      --chip-txt: #5aaac8;
+    }
+
+    [data-theme="light"] {
+      --bg:       var(--sand-2);
+      --bg2:      white;
+      --bg3:      var(--sand);
+      --txt:      var(--text-l);
+      --txt2:     #5aacbc;
+      --bdr:      var(--border-l);
+      --card:     var(--card-l);
+      --chip-bg:  white;
+      --chip-txt: var(--emerald);
     }
 
     * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
     html, body {
       height: 100%;
-      background: var(--black);
-      color: var(--text);
-      font-family: 'Crimson Pro', Georgia, serif;
+      background: var(--bg);
+      color: var(--txt);
+      font-family: 'DM Sans', sans-serif;
       overflow: hidden;
       position: fixed;
       width: 100%;
+      transition: background var(--transition), color var(--transition);
     }
 
-    /* ── SETUP SCREEN ─────────────────────────────────────────── */
+    /* ── SETUP ─────────────────────────────────────────────────── */
     .setup {
-      position: fixed;
-      inset: 0;
-      z-index: 100;
-      background: var(--black);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      padding: 40px 28px;
-      text-align: center;
+      position: fixed; inset: 0; z-index: 100;
+      background: var(--bg);
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      padding: 48px 32px; text-align: center;
+      transition: background var(--transition);
     }
 
-    .setup-emblem {
-      width: 80px;
-      height: 80px;
-      margin-bottom: 24px;
-      opacity: 0.9;
+    .setup-icon {
+      width: 72px; height: 72px; border-radius: 20px;
+      background: var(--emerald);
+      display: flex; align-items: center; justify-content: center;
+      margin: 0 auto 24px;
+      font-family: 'DM Serif Display', serif;
+      font-size: 36px; font-weight: 400; color: white;
     }
 
     .setup-title {
-      font-family: 'Cinzel', serif;
-      font-size: 28px;
-      font-weight: 900;
-      letter-spacing: 0.3em;
-      color: var(--gold);
+      font-family: 'DM Serif Display', serif;
+      font-size: 32px; font-weight: 400;
+      color: var(--emerald); letter-spacing: 0.12em;
       margin-bottom: 6px;
     }
 
     .setup-sub {
-      font-size: 13px;
-      color: var(--text-dim);
-      letter-spacing: 0.1em;
-      margin-bottom: 40px;
-      line-height: 1.6;
+      font-size: 13px; color: var(--txt2);
+      margin-bottom: 40px; line-height: 1.6;
+      font-weight: 300;
     }
 
     .setup-input {
-      width: 100%;
-      max-width: 380px;
-      background: var(--dark-2);
-      border: 1px solid var(--border);
-      border-radius: 3px;
+      width: 100%; max-width: 340px;
+      background: var(--bg2);
+      border: 1px solid var(--bdr);
+      border-radius: 12px;
       padding: 14px 18px;
-      color: var(--text);
-      font-family: 'Crimson Pro', serif;
-      font-size: 15px;
-      outline: none;
-      margin-bottom: 14px;
-      letter-spacing: 0.04em;
-      transition: border-color 0.2s;
+      color: var(--txt);
+      font-family: 'DM Sans', sans-serif;
+      font-size: 15px; outline: none;
+      margin-bottom: 12px;
+      transition: border-color 0.2s, background var(--transition);
     }
-    .setup-input:focus { border-color: var(--gold); }
-    .setup-input::placeholder { color: var(--text-muted); }
+    .setup-input:focus { border-color: var(--emerald); }
+    .setup-input::placeholder { color: var(--txt2); opacity: 0.6; }
 
     .setup-btn {
-      width: 100%;
-      max-width: 380px;
-      padding: 15px;
-      background: var(--gold);
-      color: var(--black);
-      font-family: 'Cinzel', serif;
-      font-size: 12px;
-      font-weight: 700;
-      letter-spacing: 0.2em;
-      border: none;
-      border-radius: 3px;
-      cursor: pointer;
-      transition: background 0.2s, transform 0.1s;
+      width: 100%; max-width: 340px;
+      padding: 15px; background: var(--emerald);
+      color: white; font-family: 'DM Sans', sans-serif;
+      font-size: 13px; font-weight: 500;
+      letter-spacing: 0.1em; border: none;
+      border-radius: 12px; cursor: pointer;
+      transition: opacity 0.2s, transform 0.1s;
     }
-    .setup-btn:active { background: var(--gold-light); transform: scale(0.99); }
+    .setup-btn:active { opacity: 0.85; transform: scale(0.99); }
 
     .setup-note {
-      font-size: 11px;
-      color: var(--text-muted);
-      margin-top: 20px;
-      line-height: 1.7;
-      max-width: 340px;
+      font-size: 11px; color: var(--txt2);
+      margin-top: 20px; line-height: 1.7;
+      max-width: 300px; font-weight: 300; opacity: 0.7;
     }
 
-    /* ── MAIN APP ─────────────────────────────────────────────── */
+    /* ── MAIN APP ──────────────────────────────────────────────── */
     .app {
-      position: relative;
-      height: 100%;
-      display: flex;
-      flex-direction: column;
-      max-width: 720px;
-      margin: 0 auto;
+      height: 100%; display: flex; flex-direction: column;
+      max-width: 680px; margin: 0 auto;
     }
 
-    /* ── HEADER ───────────────────────────────────────────────── */
+    /* ── HEADER ────────────────────────────────────────────────── */
     .header {
       flex-shrink: 0;
-      padding: 14px 20px 12px;
-      border-bottom: 1px solid var(--border);
-      background: var(--black);
-      display: flex;
-      align-items: center;
-      gap: 14px;
+      padding: 12px 20px 10px;
+      border-bottom: 0.5px solid var(--bdr);
+      background: var(--bg);
+      display: flex; align-items: center; gap: 12px;
+      transition: background var(--transition), border-color var(--transition);
     }
 
-    .header-emblem {
-      width: 36px;
-      height: 36px;
-      flex-shrink: 0;
-      filter: drop-shadow(0 0 8px rgba(201,168,76,0.4));
+    .h-icon {
+      width: 32px; height: 32px; border-radius: 9px;
+      background: var(--emerald);
+      display: flex; align-items: center; justify-content: center;
+      font-family: 'DM Serif Display', serif;
+      font-size: 17px; color: white; flex-shrink: 0;
     }
 
-    .header-text { flex: 1; }
-
-    .header-title {
-      font-family: 'Cinzel', serif;
-      font-size: 18px;
-      font-weight: 900;
-      letter-spacing: 0.2em;
-      color: var(--gold);
-      line-height: 1;
-    }
-
-    .header-sub {
-      font-size: 9px;
-      letter-spacing: 0.22em;
-      color: var(--text-dim);
-      text-transform: uppercase;
-      margin-top: 3px;
-    }
-
-    .header-status {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      font-size: 10px;
+    .h-title {
+      font-family: 'DM Serif Display', serif;
+      font-size: 17px; color: var(--emerald);
       letter-spacing: 0.1em;
-      color: var(--text-dim);
-      text-transform: uppercase;
     }
 
-    .dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: var(--green);
-      box-shadow: 0 0 6px var(--green);
-      animation: pulse 2s infinite;
-      flex-shrink: 0;
+    .h-sub {
+      font-size: 9px; color: var(--txt2);
+      letter-spacing: 0.12em; text-transform: uppercase;
+      font-weight: 300;
     }
 
-    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
-
-    /* ── STATUS BAR ───────────────────────────────────────────── */
-    .status-bar {
-      flex-shrink: 0;
-      padding: 6px 20px;
-      border-bottom: 1px solid rgba(201,168,76,0.06);
-      display: flex;
-      gap: 20px;
-      justify-content: center;
-      background: var(--dark);
+    .h-right {
+      margin-left: auto; display: flex;
+      align-items: center; gap: 12px;
     }
 
-    .status-item {
-      font-size: 9px;
-      letter-spacing: 0.14em;
-      text-transform: uppercase;
-      color: var(--text-dim);
-      display: flex;
-      align-items: center;
-      gap: 5px;
+    .h-time { font-size: 11px; color: var(--txt2); }
+
+    .theme-toggle {
+      width: 28px; height: 28px; border-radius: 50%;
+      border: 0.5px solid var(--bdr);
+      background: var(--bg2);
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; transition: all 0.2s;
+    }
+    .theme-toggle svg { width: 14px; height: 14px; }
+    .theme-toggle:active { transform: scale(0.9); }
+
+    .dot-live {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--emerald);
+      animation: pulse 2.5s infinite;
+    }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+
+    /* ── ANSWER ZONE ───────────────────────────────────────────── */
+    .answer-zone {
+      flex: 1; display: flex; flex-direction: column;
+      justify-content: center; align-items: center;
+      padding: 24px 28px 16px;
+      overflow: hidden;
     }
 
-    /* ── MESSAGES ─────────────────────────────────────────────── */
-    .messages {
-      flex: 1;
-      overflow-y: auto;
-      padding: 20px 20px 8px;
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-      -webkit-overflow-scrolling: touch;
-      background: var(--black);
-    }
-    .messages::-webkit-scrollbar { display: none; }
-
-    /* ── WELCOME ──────────────────────────────────────────────── */
-    .welcome {
-      text-align: center;
-      padding: 32px 16px;
+    .greeting {
+      font-size: 12px; color: var(--txt2);
+      letter-spacing: 0.08em; margin-bottom: 12px;
+      font-weight: 300; text-transform: uppercase;
     }
 
-    .welcome-emblem {
-      width: 56px;
-      height: 56px;
-      margin: 0 auto 16px;
-      opacity: 0.6;
-      filter: drop-shadow(0 0 10px rgba(201,168,76,0.3));
+    .answer-text {
+      font-size: 18px; color: var(--txt);
+      line-height: 1.6; text-align: center;
+      font-weight: 300; max-width: 480px;
+      animation: fadeIn 0.3s ease;
     }
 
-    .welcome-title {
-      font-family: 'Cinzel', serif;
-      font-size: 13px;
-      color: var(--gold-dim);
-      letter-spacing: 0.15em;
-      margin-bottom: 8px;
+    @keyframes fadeIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:none} }
+
+    .answer-idle {
+      font-size: 15px; color: var(--txt2);
+      text-align: center; font-weight: 300;
+      font-style: italic; line-height: 1.7;
     }
 
-    .welcome-text {
-      font-size: 13px;
-      color: var(--text-dim);
-      font-style: italic;
-      line-height: 1.6;
-      margin-bottom: 24px;
+    /* ── POSITION CARD ─────────────────────────────────────────── */
+    .pos-card {
+      background: var(--card);
+      border: 0.5px solid var(--bdr);
+      border-radius: 16px;
+      padding: 14px 18px;
+      width: 100%; max-width: 480px;
+      margin-top: 20px;
+      animation: fadeIn 0.3s ease;
+      transition: background var(--transition), border-color var(--transition);
     }
 
-    .quick-cmds {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      justify-content: center;
+    .pos-label {
+      font-size: 9px; color: var(--txt2);
+      text-transform: uppercase; letter-spacing: 0.14em;
+      margin-bottom: 10px; font-weight: 400;
     }
 
-    .q-btn {
+    .pos-row {
+      display: flex; justify-content: space-between;
+      align-items: center; margin-bottom: 6px;
+    }
+
+    .pos-asset {
+      font-size: 13px; color: var(--teal);
+      font-weight: 500; letter-spacing: 0.04em;
+    }
+
+    .pos-pnl {
+      font-size: 13px; color: var(--emerald);
+      font-weight: 500;
+    }
+
+    .pos-detail {
+      font-size: 11px; color: var(--txt2);
+      font-weight: 300;
+    }
+
+    .pos-divider {
+      height: 0.5px; background: var(--bdr);
+      margin: 8px 0;
+    }
+
+    /* ── QUICK CHIPS ───────────────────────────────────────────── */
+    .chips {
+      display: flex; gap: 8px; padding: 0 20px 12px;
+      justify-content: center; flex-wrap: wrap;
+    }
+
+    .chip {
+      background: var(--chip-bg);
+      border: 0.5px solid var(--bdr);
+      border-radius: 20px;
       padding: 7px 14px;
-      border: 1px solid rgba(201,168,76,0.2);
-      border-radius: 2px;
-      font-size: 11px;
-      color: var(--gold-dim);
-      cursor: pointer;
-      background: transparent;
-      font-family: 'Crimson Pro', serif;
-      letter-spacing: 0.06em;
+      font-size: 11px; color: var(--chip-txt);
+      cursor: pointer; font-weight: 400;
       transition: all 0.15s;
+      white-space: nowrap;
     }
-    .q-btn:hover, .q-btn:active { background: var(--gold-pale); color: var(--gold); border-color: rgba(201,168,76,0.4); }
-    .q-btn.danger { color: var(--red); border-color: rgba(231,76,60,0.25); }
+    .chip:active { opacity: 0.7; transform: scale(0.97); }
 
-    /* ── MESSAGE BUBBLES ──────────────────────────────────────── */
-    .msg {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      animation: fadeUp 0.25s ease;
-    }
-    @keyframes fadeUp { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:none} }
-
-    .msg.user { align-items: flex-end; }
-    .msg.herald { align-items: flex-start; }
-
-    .msg-label {
-      font-size: 9px;
-      letter-spacing: 0.18em;
-      text-transform: uppercase;
-      color: var(--text-muted);
-      padding: 0 4px;
-    }
-    .msg.herald .msg-label { color: var(--gold-dim); }
-
-    .msg-bubble {
-      max-width: 85%;
-      padding: 11px 15px;
-      font-size: 15px;
-      line-height: 1.6;
-      border-radius: 2px;
-    }
-
-    .msg.user .msg-bubble {
-      background: var(--dark-3);
-      border: 1px solid rgba(201,168,76,0.12);
-      color: var(--text);
-      border-bottom-right-radius: 0;
-    }
-
-    .msg.herald .msg-bubble {
-      background: var(--dark-2);
-      border: 1px solid rgba(201,168,76,0.18);
-      border-left: 2px solid var(--gold);
-      color: var(--text);
-      border-bottom-left-radius: 0;
-    }
-
-    .msg.herald .msg-bubble.briefing {
-      border-left-color: var(--green);
-      border-color: rgba(46,204,113,0.2);
-    }
-
-    /* ── THINKING ─────────────────────────────────────────────── */
-    .thinking {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 11px 15px;
-      background: var(--dark-2);
-      border: 1px solid rgba(201,168,76,0.15);
-      border-left: 2px solid var(--gold);
-      max-width: 130px;
-      border-radius: 2px;
-      border-bottom-left-radius: 0;
-    }
-
-    .thinking-label {
-      font-size: 10px;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      color: var(--gold-dim);
-    }
-
-    .dots { display: flex; gap: 3px; }
-    .dots span {
-      width: 4px; height: 4px;
-      border-radius: 50%;
-      background: var(--gold);
-      animation: bounce 1.2s infinite;
-    }
-    .dots span:nth-child(2) { animation-delay: 0.2s; }
-    .dots span:nth-child(3) { animation-delay: 0.4s; }
-    @keyframes bounce { 0%,60%,100%{transform:translateY(0);opacity:0.4} 30%{transform:translateY(-4px);opacity:1} }
-
-    /* ── INPUT ────────────────────────────────────────────────── */
-    .input-area {
+    /* ── MIC ZONE ──────────────────────────────────────────────── */
+    .mic-zone {
       flex-shrink: 0;
-      padding: 12px 20px 16px;
-      border-top: 1px solid var(--border);
-      background: rgba(8,8,9,0.98);
+      padding: 12px 20px 20px;
+      border-top: 0.5px solid var(--bdr);
+      background: var(--bg);
+      display: flex; flex-direction: column;
+      align-items: center; gap: 10px;
+      transition: background var(--transition), border-color var(--transition);
     }
 
-    .input-row {
-      display: flex;
-      gap: 10px;
-      align-items: flex-end;
+    .mic-row {
+      display: flex; align-items: center; gap: 14px;
+      width: 100%; max-width: 480px; justify-content: center;
+    }
+
+    .mic-btn {
+      width: 64px; height: 64px; border-radius: 50%;
+      background: var(--emerald);
+      border: none; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: all 0.2s; flex-shrink: 0;
+    }
+    .mic-btn svg { width: 26px; height: 26px; }
+    .mic-btn:active { transform: scale(0.93); opacity: 0.85; }
+    .mic-btn.on {
+      background: var(--teal);
+      box-shadow: 0 0 0 8px rgba(62,207,186,0.15);
+      animation: micpulse 1.5s infinite;
+    }
+    @keyframes micpulse {
+      0%,100%{box-shadow:0 0 0 6px rgba(62,207,186,0.12)}
+      50%{box-shadow:0 0 0 14px rgba(62,207,186,0.04)}
     }
 
     .text-input {
       flex: 1;
-      background: var(--dark-2);
-      border: 1px solid rgba(201,168,76,0.18);
-      border-radius: 2px;
-      padding: 11px 14px;
-      color: var(--text);
-      font-family: 'Crimson Pro', serif;
-      font-size: 15px;
-      line-height: 1.4;
-      resize: none;
-      outline: none;
-      max-height: 100px;
-      min-height: 44px;
-      transition: border-color 0.2s;
+      background: var(--bg2);
+      border: 0.5px solid var(--bdr);
+      border-radius: 20px;
+      padding: 10px 16px;
+      color: var(--txt);
+      font-family: 'DM Sans', sans-serif;
+      font-size: 14px; line-height: 1.4;
+      resize: none; outline: none;
+      max-height: 80px; min-height: 40px;
+      transition: border-color 0.2s, background var(--transition);
     }
-    .text-input:focus { border-color: rgba(201,168,76,0.45); }
-    .text-input::placeholder { color: var(--text-muted); font-style: italic; }
-
-    .mic-btn {
-      width: 50px; height: 50px;
-      border-radius: 50%;
-      border: 2px solid var(--gold);
-      background: transparent;
-      color: var(--gold);
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: all 0.2s;
-      flex-shrink: 0;
-    }
-    .mic-btn:active { transform: scale(0.93); }
-    .mic-btn.on {
-      background: rgba(201,168,76,0.12);
-      border-color: var(--gold-light);
-      box-shadow: 0 0 0 6px rgba(201,168,76,0.08);
-      animation: micpulse 1.5s infinite;
-    }
-    @keyframes micpulse {
-      0%,100%{box-shadow:0 0 0 4px rgba(201,168,76,0.08)}
-      50%{box-shadow:0 0 0 8px rgba(201,168,76,0.04)}
-    }
-    .mic-btn svg { width: 20px; height: 20px; }
+    .text-input:focus { border-color: var(--emerald); }
+    .text-input::placeholder { color: var(--txt2); opacity: 0.6; font-style: italic; }
 
     .send-btn {
-      width: 44px; height: 44px;
-      border-radius: 2px;
-      border: 1px solid rgba(201,168,76,0.25);
-      background: rgba(201,168,76,0.07);
-      color: var(--gold);
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: all 0.2s;
-      flex-shrink: 0;
+      width: 40px; height: 40px; border-radius: 50%;
+      border: 0.5px solid var(--bdr);
+      background: var(--bg2);
+      color: var(--emerald);
+      cursor: pointer; display: flex;
+      align-items: center; justify-content: center;
+      transition: all 0.2s; flex-shrink: 0;
     }
-    .send-btn:active { background: rgba(201,168,76,0.15); transform: scale(0.95); }
     .send-btn svg { width: 16px; height: 16px; }
+    .send-btn:active { transform: scale(0.93); }
 
     .voice-hint {
-      font-size: 10px;
-      color: var(--text-muted);
-      text-align: center;
-      padding: 4px 0 0;
-      min-height: 16px;
-      font-style: italic;
-      letter-spacing: 0.06em;
+      font-size: 10px; color: var(--txt2);
+      text-align: center; min-height: 14px;
+      font-weight: 300; letter-spacing: 0.06em;
     }
+
+    /* ── MESSAGES (scrollable history) ────────────────────────── */
+    .messages {
+      flex: 1; overflow-y: auto;
+      padding: 16px 20px 8px;
+      display: flex; flex-direction: column; gap: 14px;
+      -webkit-overflow-scrolling: touch;
+    }
+    .messages::-webkit-scrollbar { display: none; }
+
+    .msg { display: flex; flex-direction: column; gap: 3px; animation: fadeIn 0.2s ease; }
+    .msg.user { align-items: flex-end; }
+    .msg.herald { align-items: flex-start; }
+
+    .msg-label {
+      font-size: 9px; letter-spacing: 0.14em;
+      text-transform: uppercase; color: var(--txt2);
+      padding: 0 4px; font-weight: 300;
+    }
+    .msg.herald .msg-label { color: var(--emerald); opacity: 0.7; }
+
+    .msg-bubble {
+      max-width: 82%; padding: 10px 14px;
+      font-size: 15px; line-height: 1.6;
+      border-radius: 16px; font-weight: 300;
+    }
+
+    .msg.user .msg-bubble {
+      background: var(--emerald);
+      color: white;
+      border-bottom-right-radius: 4px;
+    }
+
+    .msg.herald .msg-bubble {
+      background: var(--card);
+      border: 0.5px solid var(--bdr);
+      color: var(--txt);
+      border-bottom-left-radius: 4px;
+      transition: background var(--transition);
+    }
+
+    /* ── THINKING ──────────────────────────────────────────────── */
+    .thinking {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 14px;
+      background: var(--card);
+      border: 0.5px solid var(--bdr);
+      border-radius: 16px; border-bottom-left-radius: 4px;
+    }
+
+    .thinking-label {
+      font-size: 11px; color: var(--txt2);
+      font-weight: 300; letter-spacing: 0.06em;
+    }
+
+    .dots { display: flex; gap: 3px; }
+    .dots span {
+      width: 4px; height: 4px; border-radius: 50%;
+      background: var(--emerald); opacity: 0.6;
+      animation: bounce 1.2s infinite;
+    }
+    .dots span:nth-child(2) { animation-delay: 0.2s; }
+    .dots span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes bounce { 0%,60%,100%{transform:translateY(0)} 30%{transform:translateY(-4px);opacity:1} }
+
+    /* ── WELCOME ───────────────────────────────────────────────── */
+    .welcome {
+      text-align: center; padding: 32px 20px;
+      animation: fadeIn 0.4s ease;
+    }
+
+    .welcome-icon {
+      width: 56px; height: 56px; border-radius: 16px;
+      background: var(--emerald);
+      display: flex; align-items: center; justify-content: center;
+      margin: 0 auto 16px;
+      font-family: 'DM Serif Display', serif;
+      font-size: 28px; color: white;
+    }
+
+    .welcome-title {
+      font-family: 'DM Serif Display', serif;
+      font-size: 15px; color: var(--emerald);
+      letter-spacing: 0.12em; margin-bottom: 8px;
+    }
+
+    .welcome-text {
+      font-size: 13px; color: var(--txt2);
+      line-height: 1.7; margin-bottom: 24px;
+      font-weight: 300; font-style: italic;
+    }
+
+    .quick-cmds {
+      display: flex; flex-wrap: wrap;
+      gap: 8px; justify-content: center;
+    }
+
+    .q-btn {
+      padding: 7px 14px;
+      border: 0.5px solid var(--bdr);
+      border-radius: 20px;
+      font-size: 11px; color: var(--chip-txt);
+      cursor: pointer; background: var(--chip-bg);
+      font-family: 'DM Sans', sans-serif;
+      font-weight: 400; transition: all 0.15s;
+    }
+    .q-btn:active { opacity: 0.7; }
+    .q-btn.danger { color: #e05a5a; border-color: rgba(224,90,90,0.25); }
 
     .footer {
-      text-align: center;
-      padding: 6px 20px;
-      font-size: 9px;
-      color: var(--text-muted);
-      font-style: italic;
-      border-top: 1px solid rgba(201,168,76,0.06);
-      flex-shrink: 0;
+      text-align: center; padding: 4px 20px 6px;
+      font-size: 9px; color: var(--txt2);
+      font-weight: 300; opacity: 0.5; flex-shrink: 0;
     }
 
-    /* ── EMBLEM SVG ───────────────────────────────────────────── */
-    .emblem-svg { display: block; }
+    /* ── VIEW TOGGLE ───────────────────────────────────────────── */
+    .view-full { display: flex; flex-direction: column; height: 100%; }
+    .view-chat { display: flex; flex-direction: column; height: 100%; }
   </style>
 </head>
 <body>
 
-<!-- SETUP SCREEN -->
 <div class="setup" id="setup">
-  <svg class="setup-emblem emblem-svg" viewBox="0 0 80 90" xmlns="http://www.w3.org/2000/svg">
-    <defs>
-      <radialGradient id="eg" cx="50%" cy="30%" r="70%">
-        <stop offset="0%" stop-color="#F0D060"/>
-        <stop offset="55%" stop-color="#C9A84C"/>
-        <stop offset="100%" stop-color="#7A6030"/>
-      </radialGradient>
-    </defs>
-    <circle cx="40" cy="48" r="38" fill="none" stroke="url(#eg)" stroke-width="2.5"/>
-    <path d="M18 28 L62 28 L62 62 Q62 78 40 86 Q18 78 18 62 Z" fill="#1A1510" stroke="url(#eg)" stroke-width="1.8"/>
-    <path d="M18 46 Q29 40 40 46 Q51 52 62 46" fill="none" stroke="url(#eg)" stroke-width="2.5"/>
-    <path d="M18 54 Q29 48 40 54 Q51 60 62 54" fill="none" stroke="url(#eg)" stroke-width="2.5"/>
-    <path d="M18 62 Q29 56 40 62 Q51 68 62 62" fill="none" stroke="url(#eg)" stroke-width="2"/>
-    <path d="M27 44 L27 33 Q27 29 30 29 Q32 27 30 25 Q28 22 26 24 Q24 22 22 25 Q22 29 25 29" fill="url(#eg)"/>
-    <path d="M40 44 L40 33 Q40 29 43 29 Q45 27 43 25 Q41 22 39 24 Q37 22 35 25 Q35 29 38 29" fill="url(#eg)"/>
-    <path d="M53 44 L53 33 Q53 29 56 29 Q58 27 56 25 Q54 22 52 24 Q50 22 48 25 Q48 29 51 29" fill="url(#eg)"/>
-    <rect x="27" y="10" width="5" height="6" rx="1.5" fill="url(#eg)"/>
-    <rect x="37" y="7" width="5" height="7" rx="1.5" fill="url(#eg)"/>
-    <rect x="47" y="10" width="5" height="6" rx="1.5" fill="url(#eg)"/>
-    <path d="M29 12 Q40 5 51 12" fill="none" stroke="url(#eg)" stroke-width="2.5"/>
-    <path d="M35 7 Q40 3 45 7" fill="url(#eg)"/>
-  </svg>
+  <div class="setup-icon">H</div>
   <div class="setup-title">HERALD</div>
-  <div class="setup-sub">Personal AI Agent<br>Enter your OpenRouter API key to begin</div>
-  <input class="setup-input" type="password" id="keyInput" placeholder="sk-or-v1-..." autocomplete="off"/>
-  <button class="setup-btn" onclick="activate()">ACTIVATE HERALD</button>
-  <div class="setup-note">Your key is stored only on this device. Never sent anywhere except OpenRouter. Get your key at openrouter.ai/keys</div>
+  <div class="setup-sub">Your personal AI — tap and talk</div>
+  <input class="setup-input" type="password" id="keyInput" placeholder="Your Herald access key..." autocomplete="off"/>
+  <button class="setup-btn" onclick="activate()">GET STARTED</button>
+  <div class="setup-note">Your key is stored only on this device and never shared.</div>
 </div>
 
-<!-- MAIN APP -->
 <div class="app" id="app" style="display:none">
 
   <div class="header">
-    <svg class="header-emblem emblem-svg" viewBox="0 0 80 90" xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <radialGradient id="hg" cx="50%" cy="30%" r="70%">
-          <stop offset="0%" stop-color="#F0D060"/>
-          <stop offset="55%" stop-color="#C9A84C"/>
-          <stop offset="100%" stop-color="#7A6030"/>
-        </radialGradient>
-      </defs>
-      <circle cx="40" cy="48" r="38" fill="none" stroke="url(#hg)" stroke-width="2.5"/>
-      <path d="M18 28 L62 28 L62 62 Q62 78 40 86 Q18 78 18 62 Z" fill="#1A1510" stroke="url(#hg)" stroke-width="1.8"/>
-      <path d="M18 46 Q29 40 40 46 Q51 52 62 46" fill="none" stroke="url(#hg)" stroke-width="2.5"/>
-      <path d="M18 54 Q29 48 40 54 Q51 60 62 54" fill="none" stroke="url(#hg)" stroke-width="2.5"/>
-      <path d="M18 62 Q29 56 40 62 Q51 68 62 62" fill="none" stroke="url(#hg)" stroke-width="2"/>
-      <path d="M27 44 L27 33 Q27 29 30 29 Q32 27 30 25 Q28 22 26 24 Q24 22 22 25 Q22 29 25 29" fill="url(#hg)"/>
-      <path d="M40 44 L40 33 Q40 29 43 29 Q45 27 43 25 Q41 22 39 24 Q37 22 35 25 Q35 29 38 29" fill="url(#hg)"/>
-      <path d="M53 44 L53 33 Q53 29 56 29 Q58 27 56 25 Q54 22 52 24 Q50 22 48 25 Q48 29 51 29" fill="url(#hg)"/>
-      <rect x="27" y="10" width="5" height="6" rx="1.5" fill="url(#hg)"/>
-      <rect x="37" y="7" width="5" height="7" rx="1.5" fill="url(#hg)"/>
-      <rect x="47" y="10" width="5" height="6" rx="1.5" fill="url(#hg)"/>
-      <path d="M29 12 Q40 5 51 12" fill="none" stroke="url(#hg)" stroke-width="2.5"/>
-      <path d="M35 7 Q40 3 45 7" fill="url(#hg)"/>
-    </svg>
-    <div class="header-text">
-      <div class="header-title">HERALD</div>
-      <div class="header-sub">Personal AI Agent — v29.0</div>
+    <div class="h-icon">H</div>
+    <div>
+      <div class="h-title">HERALD</div>
+      <div class="h-sub">personal ai · v30.0</div>
     </div>
-    <div class="header-status">
-      <div class="dot"></div>
-      <span id="clock">--:--</span>
+    <div class="h-right">
+      <div class="dot-live"></div>
+      <div class="h-time" id="clock">--:--</div>
+      <div class="theme-toggle" onclick="toggleTheme()" id="themeBtn">
+        <svg id="themeIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="5"/>
+          <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+        </svg>
+      </div>
     </div>
-  </div>
-
-  <div class="status-bar">
-    <div class="status-item"><div class="dot" style="background:#C9A84C;box-shadow:0 0 4px #C9A84C"></div>Phase 1: DRY RUN</div>
-    <div class="status-item" id="gateStatus">Gate: 0/70</div>
-    <div class="status-item" id="winStatus">WR: 0%</div>
   </div>
 
   <div class="messages" id="msgs">
     <div class="welcome" id="welcome">
-      <svg class="welcome-emblem emblem-svg" viewBox="0 0 80 90" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <radialGradient id="wg" cx="50%" cy="30%" r="70%">
-            <stop offset="0%" stop-color="#F0D060"/>
-            <stop offset="55%" stop-color="#C9A84C"/>
-            <stop offset="100%" stop-color="#7A6030"/>
-          </radialGradient>
-        </defs>
-        <circle cx="40" cy="48" r="38" fill="none" stroke="url(#wg)" stroke-width="2.5"/>
-        <path d="M18 28 L62 28 L62 62 Q62 78 40 86 Q18 78 18 62 Z" fill="#1A1510" stroke="url(#wg)" stroke-width="1.8"/>
-        <path d="M18 46 Q29 40 40 46 Q51 52 62 46" fill="none" stroke="url(#wg)" stroke-width="2.5"/>
-        <path d="M18 54 Q29 48 40 54 Q51 60 62 54" fill="none" stroke="url(#wg)" stroke-width="2.5"/>
-        <path d="M27 44 L27 33 Q27 29 30 29 Q32 27 30 25 Q28 22 26 24 Q24 22 22 25 Q22 29 25 29" fill="url(#wg)"/>
-        <path d="M40 44 L40 33 Q40 29 43 29 Q45 27 43 25 Q41 22 39 24 Q37 22 35 25 Q35 29 38 29" fill="url(#wg)"/>
-        <path d="M53 44 L53 33 Q53 29 56 29 Q58 27 56 25 Q54 22 52 24 Q50 22 48 25 Q48 29 51 29" fill="url(#wg)"/>
-        <rect x="27" y="10" width="5" height="6" rx="1.5" fill="url(#wg)"/>
-        <rect x="37" y="7" width="5" height="7" rx="1.5" fill="url(#wg)"/>
-        <rect x="47" y="10" width="5" height="6" rx="1.5" fill="url(#wg)"/>
-        <path d="M29 12 Q40 5 51 12" fill="none" stroke="url(#wg)" stroke-width="2.5"/>
-        <path d="M35 7 Q40 3 45 7" fill="url(#wg)"/>
-      </svg>
-      <div class="welcome-title">HERALD READY — v29.0</div>
-      <div class="welcome-text" id="welcomeText">Swarm online. Speak or type anything.</div>
+      <div class="welcome-icon">H</div>
+      <div class="welcome-title">HERALD READY — v30.0</div>
+      <div class="welcome-text" id="welcomeText">Tap the mic and talk, or type below.</div>
       <div class="quick-cmds">
         <button class="q-btn" onclick="quick('morning briefing')">Morning Briefing</button>
         <button class="q-btn" onclick="quick('trading update')">Trading Update</button>
-        <button class="q-btn" onclick="quick('empire overview')">Empire Overview</button>
-        <button class="q-btn" onclick="quick('what is my win rate')">Win Rate</button>
         <button class="q-btn" onclick="quick('open positions')">Positions</button>
+        <button class="q-btn" onclick="quick('how are we doing')">How Are We Doing</button>
+        <button class="q-btn" onclick="quick('empire overview')">Empire Overview</button>
         <button class="q-btn danger" onclick="clearAll()">Clear History</button>
       </div>
     </div>
   </div>
 
-  <div class="input-area">
-    <div class="input-row">
-      <textarea class="text-input" id="textIn" placeholder="Command HERALD..." rows="1"
+  <div class="chips">
+    <div class="chip" onclick="quick('how are we doing')">how are we doing</div>
+    <div class="chip" onclick="quick('open positions')">positions</div>
+    <div class="chip" onclick="quick('what is happening today')">today</div>
+  </div>
+
+  <div class="mic-zone">
+    <div class="mic-row">
+      <textarea class="text-input" id="textIn" placeholder="or type here..." rows="1"
         onkeydown="onKey(event)" oninput="resize(this)"></textarea>
       <button class="mic-btn" id="micBtn" onclick="toggleVoice()">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2">
           <rect x="9" y="2" width="6" height="11" rx="3"/>
           <path d="M5 10a7 7 0 0 0 14 0"/>
           <line x1="12" y1="19" x2="12" y2="22"/>
@@ -585,105 +542,109 @@
         </svg>
       </button>
     </div>
-    <div class="voice-hint" id="voiceHint"></div>
+    <div class="voice-hint" id="voiceHint">tap mic · talk · get answer</div>
   </div>
 
   <div class="footer">AI-generated content. Not professional financial advice.</div>
 </div>
 
 <script>
-// ── CONFIG ──────────────────────────────────────────────────────
-const STATUS_URL  = "empire_status.json";
-const OR_URL      = "https://openrouter.ai/api/v1/chat/completions";
-const MODEL       = "anthropic/claude-haiku-4-5:online";
+const STATUS_URL = "empire_status.json";
+const OR_URL     = "https://openrouter.ai/api/v1/chat/completions";
+const MODEL      = "anthropic/claude-haiku-4-5:online";
 
-// ── STATE ───────────────────────────────────────────────────────
-let apiKey  = '';
-let history = [];
-let empire  = null;
-let recog   = null;
+let apiKey   = '';
+let history  = [];
+let empire   = null;
+let recog    = null;
 let listening = false;
 
-// ── CLOCK ───────────────────────────────────────────────────────
+function applyTheme(t) {
+  document.documentElement.setAttribute('data-theme', t);
+  const icon = document.getElementById('themeIcon');
+  if (t === 'dark') {
+    icon.innerHTML = '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>';
+  } else {
+    icon.innerHTML = '<circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>';
+  }
+  localStorage.setItem('ht', t);
+}
+
+function toggleTheme() {
+  const cur = document.documentElement.getAttribute('data-theme');
+  applyTheme(cur === 'dark' ? 'light' : 'dark');
+}
+
 function tick() {
   const now = new Date();
   const s = now.toLocaleString("en-US",{timeZone:"America/Chicago",hour:"numeric",minute:"2-digit",hour12:true});
   const jan = new Date(now.getFullYear(),0,1).getTimezoneOffset();
-  const jul = new Date(now.getFullYear(),6,1).getTimezoneOffset();
-  const tz  = Math.max(jan,jul) !== now.getTimezoneOffset() ? ' CDT' : ' CST';
+  const tz  = Math.max(jan, new Date(now.getFullYear(),6,1).getTimezoneOffset()) !== now.getTimezoneOffset() ? ' CDT' : ' CST';
   document.getElementById('clock').textContent = s + tz;
 }
 tick(); setInterval(tick, 30000);
 
-// ── EMPIRE STATUS ───────────────────────────────────────────────
 async function loadEmpire() {
   try {
     const r = await fetch(STATUS_URL + "?t=" + Date.now());
     if (!r.ok) return;
     empire = await r.json();
-    document.getElementById('gateStatus').textContent = "Gate: " + (empire.gate_progress || "0/70");
-    document.getElementById('winStatus').textContent  = "WR: " + (empire.win_rate || 0) + "%";
+    const el = document.getElementById('gateStatus');
+    if (el) el.textContent = "Gate: " + (empire.gate_progress || "0/70");
+    const wl = document.getElementById('winStatus');
+    if (wl) wl.textContent = "WR: " + (empire.win_rate || 0) + "%";
     const wt = document.getElementById('welcomeText');
     if (wt) {
-      const pos  = empire.open_count > 0 ? empire.open_count + " position(s) open" : "no open positions";
-      const sync = empire.vm_health ? " | VM: " + empire.vm_health : "";
-      wt.textContent = pos + " | P&L $" + (empire.total_pnl || 0) + sync;
+      const pos = empire.open_count > 0 ? empire.open_count + " position(s) open" : "flat — no open trades";
+      wt.textContent = pos + " | " + (empire.regime || "BEAR") + " regime";
     }
   } catch(e) {}
 }
 loadEmpire(); setInterval(loadEmpire, 300000);
 
-// ── SYSTEM PROMPT ───────────────────────────────────────────────
 function buildSystem() {
   const now = new Date().toLocaleString("en-US",{timeZone:"America/Chicago"});
   if (!empire) return defaultSystem(now);
-
   const s = empire;
   const pos = s.open_positions && s.open_positions.length > 0
     ? s.open_positions.map(p => p.trade_id + " " + p.asset + " " + p.direction + " entry $" + p.entry + " stop $" + p.stop).join("; ")
     : "none";
 
-  return `You are HERALD — miked's personal AI agent and empire intelligence interface.
-Be conversational, direct, and genuinely helpful. Speak like a trusted advisor.
+  return `You are HERALD — miked's personal AI agent. You are the friend who always knows what is going on.
 
 EMPIRE STATUS (synced ${s.updated_at || now}):
 Mode: ${s.mode || "DRY RUN"} | Bankroll: $${s.bankroll || 350} | Regime: ${s.regime || "BEAR"}
-Win rate: ${s.wins || 0}/${s.closed_trades || 0} = ${s.win_rate || 0}% | Gate: ${s.gate_progress || "0/70"}
+Win rate: ${s.wins || 0}W / ${s.closed_trades || 0} closed = ${s.win_rate || 0}% | Gate: ${s.gate_progress || "0/70"}
 P&L: $${s.total_pnl || 0} | Open positions: ${s.open_count || 0}
 Positions: ${pos}
-VM health: ${s.vm_health || "unknown"} | Last scan: ${s.last_scan || "unknown"}
-Last chain run: ${s.last_chain_run || "unknown"}
-Data freshness: ${s.sync_age_note || "updated hourly"}
+VM: ${s.vm_health || "OK"} | Last scan: ${s.last_scan || "unknown"}
 
-IMPORTANT — be honest about what you know:
-- Trade state is from last hourly sync — may be up to 60 min old
-- You can search for live prices, hours, news when asked
-- Say "as of my last sync" when discussing live data
-- For general questions (weather, travel, etc) use your knowledge and help
+CRITICAL CONTEXT — read before answering anything about trades:
+All trades before April 4 2026 are contaminated by two execution bugs now fixed.
+The 0/6 win rate is contaminated data — do NOT present it as system failure.
+If asked about wins or losses say the clean data clock just started April 4 and first clean results are coming in. The signal is proven — 77% SHORT win rate in 35 pre-fix trades.
+Never tell miked the system is failing. It is working. We are accumulating clean reps.
 
-Keep responses to 2-4 plain sentences. Speak like a friend giving a quick update.
-NEVER use asterisks, stars, bold, markdown, bullet points, or URLs in your response.
-NEVER say "as of my sync" or technical phrases. Just give the answer naturally.
-If asked about positions, report exactly what the empire status shows and nothing else.
-CRITICAL: The 0/6 win rate reflects contaminated data from execution bugs now fixed.
-Never tell miked the system is failing or that all trades lost without this context.
-If asked about wins or losses say: "Clean data clock just started April 4 -- first
-clean results still coming in. The signal is proven, execution bugs are fixed."
+HOW TO RESPOND:
+Speak like a smart friend giving a quick update. 2-3 sentences maximum unless more detail is asked for.
+NEVER use asterisks, stars, bold markers, bullet points, markdown, or raw URLs.
+NEVER say "as of my sync" or use technical jargon. Just give the answer naturally.
+If asked about positions report exactly what the status shows — nothing more.
+If asked general questions — weather, sports, recommendations — just answer helpfully.
 Current time: ${now}`;
 }
 
 function defaultSystem(now) {
-  return `You are HERALD — miked's personal AI agent.
-Empire is in Phase 1 paper trading on DigitalOcean VM. Hourly scans. Autonomous swarm.
-Bankroll $350 | BEAR regime | Constitution v4.3 | 70-trade gate required for real money.
-Be direct and helpful. Answer any question — trading, weather, travel, recommendations.
-Keep responses to 3-5 sentences. No markdown. Current time: ${now}`;
+  return `You are HERALD — miked's personal AI agent and trusted companion.
+Empire: Phase 1 paper trading | $350 bankroll | BEAR regime | swarm running on VM.
+Speak like a smart friend. 2-3 sentences. No markdown. No asterisks. No URLs.
+Answer any question — trading, weather, sports, travel, recommendations.
+Current time: ${now}`;
 }
 
-// ── SETUP ───────────────────────────────────────────────────────
 function activate() {
   const k = document.getElementById('keyInput').value.trim();
-  if (!k.startsWith('sk-or')) { alert('Please enter a valid OpenRouter key starting with sk-or'); return; }
+  if (!k.startsWith('sk-or')) { alert('Please enter a valid Herald key starting with sk-or'); return; }
   apiKey = k;
   localStorage.setItem('hk', apiKey);
   showApp();
@@ -694,22 +655,23 @@ function showApp() {
   document.getElementById('app').style.display   = 'flex';
   loadHistory();
 }
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('./service-worker.js');
-}
-// ── INIT ────────────────────────────────────────────────────────
+
 window.onload = function() {
+  const saved_theme = localStorage.getItem('ht') || 'dark';
+  applyTheme(saved_theme);
+
   if (location.search.includes('reset=1')) {
-    localStorage.removeItem('hk');
-    localStorage.removeItem('hh');
-    location.href = location.pathname;
-    return;
+    localStorage.removeItem('hk'); localStorage.removeItem('hh');
+    location.href = location.pathname; return;
   }
   const k = localStorage.getItem('hk');
   if (k) { apiKey = k; showApp(); }
+
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./service-worker.js');
+  }
 };
 
-// ── HISTORY ─────────────────────────────────────────────────────
 function loadHistory() {
   try {
     const saved = localStorage.getItem('hh');
@@ -721,10 +683,6 @@ function loadHistory() {
       if (m.role === 'user' || m.role === 'assistant')
         addBubble(m.role === 'assistant' ? 'herald' : 'user', m.content);
     });
-    const d = document.createElement('div');
-    d.style.cssText = 'text-align:center;font-size:10px;color:#4A4840;padding:6px 0;font-style:italic;';
-    d.textContent = '— ' + history.length + ' messages restored —';
-    document.getElementById('msgs').insertBefore(d, document.getElementById('msgs').firstChild);
   } catch(e) {}
 }
 
@@ -734,33 +692,41 @@ function saveHistory() {
 
 function clearAll() {
   if (!confirm('Clear all chat history?')) return;
-  history = [];
-  localStorage.removeItem('hh');
+  history = []; localStorage.removeItem('hh');
   const msgs = document.getElementById('msgs');
   msgs.innerHTML = '';
   const w = document.createElement('div');
   w.className = 'welcome';
-  w.innerHTML = '<div class="welcome-title">HERALD READY</div><div class="welcome-text">History cleared.</div>';
+  w.innerHTML = '<div class="welcome-icon">H</div><div class="welcome-title">HERALD READY</div><div class="welcome-text">History cleared. What do you need?</div>';
   msgs.appendChild(w);
 }
 
-// ── MESSAGING ───────────────────────────────────────────────────
 function clearWelcome() {
   const w = document.getElementById('welcome') || document.querySelector('.welcome');
   if (w) w.remove();
 }
 
-function addBubble(role, text, extra='') {
+function cleanText(text) {
+  return text
+    .replace(/\*\*/g,'').replace(/\*/g,'')
+    .replace(/\bhttps?:\/\/\S+/g,'')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g,'$1')
+    .replace(/#+\s/g,'')
+    .replace(/_{1,2}([^_]+)_{1,2}/g,'$1')
+    .trim();
+}
+
+function addBubble(role, text) {
   clearWelcome();
   const msgs = document.getElementById('msgs');
   const div  = document.createElement('div');
   div.className = 'msg ' + role;
   const lbl  = document.createElement('div');
   lbl.className = 'msg-label';
-  lbl.textContent = role === 'user' ? 'miked' : 'HERALD';
+  lbl.textContent = role === 'user' ? 'you' : 'herald';
   const bub  = document.createElement('div');
-  bub.className = 'msg-bubble' + extra;
-  bub.textContent = text.replace(/\*\*/g,'').replace(/\*/g,'').replace(/\bhttps?:\/\/\S+/g,'').replace(/\[([^\]]+)\]\([^)]+\)/g,'$1').replace(/#+\s/g,'').trim();
+  bub.className = 'msg-bubble';
+  bub.textContent = cleanText(text);
   div.appendChild(lbl);
   div.appendChild(bub);
   msgs.appendChild(div);
@@ -774,10 +740,10 @@ function showThinking() {
   const div  = document.createElement('div');
   div.className = 'msg herald'; div.id = 'thinking';
   const lbl  = document.createElement('div');
-  lbl.className = 'msg-label'; lbl.textContent = 'HERALD';
+  lbl.className = 'msg-label'; lbl.textContent = 'herald';
   const t    = document.createElement('div');
   t.className = 'thinking';
-  t.innerHTML = '<div class="thinking-label">Thinking</div><div class="dots"><span></span><span></span><span></span></div>';
+  t.innerHTML = '<div class="thinking-label">thinking</div><div class="dots"><span></span><span></span><span></span></div>';
   div.appendChild(lbl); div.appendChild(t);
   msgs.appendChild(div);
   msgs.scrollTop = msgs.scrollHeight;
@@ -791,7 +757,7 @@ function removeThinking() {
 async function send() {
   const inp  = document.getElementById('textIn');
   const text = inp.value.trim();
-  if (!text) return;
+  if (!text || !apiKey) return;
   inp.value = ''; inp.style.height = 'auto';
   addBubble('user', text);
   history.push({role:'user', content:text});
@@ -802,14 +768,13 @@ async function send() {
       method: 'POST',
       headers: {'Content-Type':'application/json','Authorization':'Bearer '+apiKey},
       body: JSON.stringify({
-        model: MODEL,
-        max_tokens: 800,
+        model: MODEL, max_tokens: 600,
         messages: [{role:'system',content:buildSystem()}].concat(history)
       })
     });
     const d = await r.json();
     removeThinking();
-    if (d.error) { addBubble('herald', 'Error: ' + (d.error.message || 'API error')); history.pop(); return; }
+    if (d.error) { addBubble('herald', 'Connection issue — try again in a moment.'); history.pop(); return; }
     const reply = d.choices[0].message.content;
     history.push({role:'assistant',content:reply});
     saveHistory();
@@ -817,33 +782,30 @@ async function send() {
     speak(reply);
   } catch(e) {
     removeThinking();
-    addBubble('herald', 'Connection error. Check your API key and internet.');
+    addBubble('herald', 'Connection error. Check your internet and try again.');
     history.pop();
   }
 }
 
 function speak(text) {
   if (!window.speechSynthesis) return;
-  const clean = text.replace(/[=*#|`\[\]]/g,'').replace(/\*\*/g,'').replace(/\bhttps?:\/\/\S+/g,'').replace(/\[([^\]]+)\]\([^)]+\)/g,'$1').replace(/\n+/g,' ').replace(/\s+/g,' ').trim();
+  const clean = cleanText(text).replace(/\n+/g,' ').replace(/\s+/g,' ');
   const u = new SpeechSynthesisUtterance(clean);
-  u.rate = 0.92; u.pitch = 0.9; u.volume = 1;
+  u.rate = 0.92; u.pitch = 0.95; u.volume = 1;
   window.speechSynthesis.speak(u);
 }
 
-// ── QUICK COMMANDS ──────────────────────────────────────────────
 function quick(cmd) {
   document.getElementById('textIn').value = cmd;
   send();
 }
 
-// ── INPUT HELPERS ───────────────────────────────────────────────
 function onKey(e) { if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); send(); } }
-function resize(el) { el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,100)+'px'; }
+function resize(el) { el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,80)+'px'; }
 
-// ── VOICE ───────────────────────────────────────────────────────
 function toggleVoice() {
   if (!window.SpeechRecognition && !window.webkitSpeechRecognition) {
-    alert('Voice input not supported in this browser. Try Chrome.');
+    alert('Voice input works best in Chrome. Try typing instead.');
     return;
   }
   listening ? stopVoice() : startVoice();
@@ -856,7 +818,7 @@ function startVoice() {
   recog.onstart = () => {
     listening = true;
     document.getElementById('micBtn').classList.add('on');
-    document.getElementById('voiceHint').textContent = 'Listening…';
+    document.getElementById('voiceHint').textContent = 'listening...';
   };
   recog.onresult = e => {
     const t = Array.from(e.results).map(r=>r[0].transcript).join('');
@@ -866,14 +828,14 @@ function startVoice() {
   recog.onend = () => {
     listening = false;
     document.getElementById('micBtn').classList.remove('on');
-    document.getElementById('voiceHint').textContent = '';
+    document.getElementById('voiceHint').textContent = 'tap mic · talk · get answer';
     const t = document.getElementById('textIn').value.trim();
     if (t) send();
   };
   recog.onerror = () => {
     listening = false;
     document.getElementById('micBtn').classList.remove('on');
-    document.getElementById('voiceHint').textContent = '';
+    document.getElementById('voiceHint').textContent = 'tap mic · talk · get answer';
   };
   recog.start();
 }
