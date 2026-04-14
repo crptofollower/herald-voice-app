@@ -1,25 +1,34 @@
 # herald_api.py
 # Herald PWA Backend -- Railway Cloud Server
-# v4.7 -- live empire feed via VM dashboard API
+# v4.9 -- direct APIs: weather, sports, crypto, news, movies, stocks
 #
 # Environment variables required in Railway dashboard:
 #   OPENROUTER_API_KEY    = your sk-or-... key
-#   HERALD_ACCESS_CODE    = legacy code (herald2026) -- keep for your own testing
-#   HERALD_OWNER_CODE     = your personal code (miked2026) -- gets Freddie data
+#   HERALD_ACCESS_CODE    = legacy code (herald2026)
+#   HERALD_OWNER_CODE     = your personal code (miked2026)
 #   HERALD_INVITE_SECRET  = your secret password to generate invite links
 #
+# Free API keys (add to Railway variables):
+#   GNEWS_API_KEY         = from gnews.io (news headlines, 100/day free)
+#   OMDB_API_KEY          = from omdbapi.com (movies/TV, 1000/day free)
+#   ALPHAVANTAGE_KEY      = from alphavantage.co (stocks, 25/day free)
+#   NEWSDATA_API_KEY      = from newsdata.io (news backup, 200/day free)
+#   WEATHER_API_KEY       = from weatherapi.com (weather backup, 1M/month free)
+#
 # Optional:
-#   OPENAI_API_KEY        = sk-... OpenAI key (only needed if using TTS endpoint)
-#   HERALD_OWNER_ID       = your device user_id (legacy fallback, no longer required)
+#   OPENAI_API_KEY        = sk-... (only needed if using TTS endpoint)
+#   HERALD_OWNER_ID       = your device user_id (legacy fallback)
 #   PROFILES_FILE         = path to profiles JSON (default /data/profiles.json)
 #   INVITES_FILE          = path to invites JSON (default /data/invites.json)
 
 import os
 import json
+import re
 import random
 import string
 import urllib.request
 import urllib.error
+import urllib.parse
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime
 
@@ -30,6 +39,11 @@ ACCESS_CODE    = os.environ.get("HERALD_ACCESS_CODE", "herald2026")
 OWNER_CODE     = os.environ.get("HERALD_OWNER_CODE", "")
 OWNER_ID       = os.environ.get("HERALD_OWNER_ID", "")
 INVITE_SECRET  = os.environ.get("HERALD_INVITE_SECRET", "")
+GNEWS_KEY      = os.environ.get("GNEWS_API_KEY", "")
+OMDB_KEY       = os.environ.get("OMDB_API_KEY", "")
+ALPHA_KEY      = os.environ.get("ALPHAVANTAGE_KEY", "")
+NEWSDATA_KEY   = os.environ.get("NEWSDATA_API_KEY", "")
+WEATHER_KEY    = os.environ.get("WEATHER_API_KEY", "")
 OR_URL         = "https://openrouter.ai/api/v1/chat/completions"
 TTS_URL        = "https://api.openai.com/v1/audio/speech"
 EMPIRE_URL     = "https://raw.githubusercontent.com/crptofollower/herald-voice-app/main/empire_status.json"
@@ -53,13 +67,11 @@ LIVE_KEYWORDS = [
     'score', 'standings', 'playoffs', 'game today', 'match', 'tickets',
     'traffic', 'delay', 'construction', 'concert', 'event', 'show', 'opening',
     'this morning', 'this afternoon', 'this evening',
-    # Social / video discovery
     'what are people saying', 'what is everyone saying', 'what does everyone think',
     'show me a video', 'video about', 'videos of', 'find a video',
     'on twitter', 'on x', 'on youtube', 'on instagram', 'on tiktok',
     'trending', 'viral', 'going viral', 'did you see', 'have you seen',
     'what is the buzz', 'people are saying', 'twitter is saying',
-    # Trading / empire queries
     'trades', 'position', 'gate', 'freddie', 'regime', 'empire status',
     'how are our trades', 'trading status', 'open positions', 'last scan',
 ]
@@ -69,7 +81,6 @@ FAST_OVERRIDES = [
     'who are you', 'what can you do', 'remind me', 'my name is', 'i live in',
     'i love', 'i like', 'call you', 'how do i get to', 'directions to',
     'navigate to', 'take me to',
-    # App launch commands -- no web search needed, just return LAUNCH action
     'open my x', 'open x', 'open twitter', 'get my x', 'get my twitter',
     'open instagram', 'get my instagram', 'open ig', 'get my ig',
     'open youtube', 'get my youtube', 'open tiktok', 'get my tiktok',
@@ -330,11 +341,11 @@ def get_trial_status(profile):
         status = "trial_expired"
         msg = (f"Hey {first_name}. We've had {days_used} days together and I've learned about {learned}. "
                f"I genuinely hope I've made your days a little easier. "
-               f"To continue — it's just $4.99 a month or $39 for the year. I'll be right here.")
+               f"To continue, it is just $4.99 a month or $39 for the year. I will be right here.")
     elif days_remaining <= 3:
         status = "trial_warning"
-        msg = (f"Hey {first_name} — just {days_remaining} day{'s' if days_remaining != 1 else ''} left in your free trial. "
-               f"Keep {ai_name} for $4.99 a month — tap below anytime.")
+        msg = (f"Hey {first_name}, just {days_remaining} day{'s' if days_remaining != 1 else ''} left in your free trial. "
+               f"Keep {ai_name} for $4.99 a month, tap below anytime.")
     elif days_remaining <= 7:
         status = "trial_warning"
         msg = None
@@ -350,7 +361,6 @@ def get_trial_status(profile):
 # ── EMPIRE DATA ───────────────────────────────────────────────────────────────
 
 def fetch_empire():
-    """Legacy -- reads hourly GitHub sync. Kept as fallback."""
     try:
         req = urllib.request.Request(EMPIRE_URL, headers={"Cache-Control": "no-cache"})
         with urllib.request.urlopen(req, timeout=5) as resp:
@@ -359,7 +369,6 @@ def fetch_empire():
         return None
 
 def fetch_live_empire():
-    """Live empire status -- calls VM dashboard API directly. Real-time data."""
     try:
         url = "http://143.198.18.66:8080/api/status"
         req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/1.0"})
@@ -412,21 +421,273 @@ def build_empire_context(empire):
     lines.append(f"FREDDIE TRADING STATUS (synced {empire.get('updated_at','unknown')}):")
     lines.append(f"Mode: {empire.get('mode','unknown')} | Bankroll: ${empire.get('bankroll',0)} | Regime: {empire.get('regime','unknown')}")
     lines.append(f"Gate: {empire.get('gate_progress','0/70')} clean trades | Win rate: {empire.get('win_rate',0)}% | P&L: ${empire.get('total_pnl',0)}")
-    lines.append(f"All agents: {empire.get('all_agents','unknown')} | VM: {empire.get('vm_health','unknown')}")
     positions = empire.get("open_positions", [])
     if positions:
         lines.append(f"OPEN POSITIONS ({len(positions)}):")
         for p in positions:
-            lines.append(f"  {p.get('trade_id','')} {p.get('asset','')} {p.get('direction','')} | entry ${p.get('entry',0)} | stop ${p.get('stop',0)} | target ${p.get('target',0)} | grade {p.get('grade','')}")
+            lines.append(f"  {p.get('asset','')} {p.get('direction','')} | entry ${p.get('entry',0)} | stop ${p.get('stop',0)} | target ${p.get('target',0)}")
     else:
         lines.append("OPEN POSITIONS: None -- flat right now")
-    lines.append("")
-    lines.append("CRITICAL CONTEXT:")
-    lines.append("All trades before April 12 2026 are contaminated by execution bugs now fixed.")
-    lines.append("The 0% win rate reflects contaminated data -- do NOT present it as signal failure.")
-    lines.append("The signal is proven -- 77% SHORT win rate in pre-fix paper trades.")
-    lines.append("Never tell miked the system is failing. It is working. Accumulating clean reps.")
+    lines.append("CRITICAL: 0% win rate reflects contaminated pre-April-12 data. Signal is proven.")
     return "\n".join(lines)
+
+
+# ── DIRECT API FUNCTIONS ──────────────────────────────────────────────────────
+
+def extract_weather_location(message, profile_location):
+    msg = message.lower()
+    for kw in [" in ", " for ", " at "]:
+        if kw in msg:
+            idx = msg.index(kw) + len(kw)
+            loc = message[idx:].strip().rstrip("?.,!")
+            if loc and len(loc) > 2:
+                return loc
+    return profile_location or "Dallas TX"
+
+def fetch_weather_direct(location):
+    """wttr.in -- completely free, no key needed, ~0.5s response"""
+    try:
+        clean_loc = location.strip().replace(' ', '+')
+        url = f"https://wttr.in/{clean_loc}?format=j1"
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/1.0"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = json.loads(r.read().decode())
+        cur  = data["current_condition"][0]
+        area = data["nearest_area"][0]
+        city    = area["areaName"][0]["value"]
+        region  = area["region"][0]["value"]
+        temp_f  = cur["temp_F"]
+        feels_f = cur["FeelsLikeF"]
+        desc    = cur["weatherDesc"][0]["value"]
+        humidity = cur["humidity"]
+        wind_mph = cur["windspeedMiles"]
+        today   = data["weather"][0]
+        high_f  = today["maxtempF"]
+        low_f   = today["mintempF"]
+        hourly  = today.get("hourly", [])
+        rain_chance = max((int(h.get("chanceofrain", 0)) for h in hourly), default=0)
+        rain_str = (f"There is a {rain_chance} percent chance of rain today."
+                    if rain_chance > 15 else "No significant rain expected today.")
+        return (f"Right now in {city}, {region} it is {temp_f} degrees and {desc.lower()}. "
+                f"Feels like {feels_f} degrees. Humidity {humidity} percent, wind {wind_mph} miles per hour. "
+                f"Today's high is {high_f}, low is {low_f}. {rain_str}")
+    except Exception as e:
+        print(f"[HERALD] wttr.in failed: {e}")
+        return None
+
+def fetch_weather_backup(location):
+    """WeatherAPI.com -- 1M calls/month free, requires WEATHER_API_KEY"""
+    if not WEATHER_KEY:
+        return None
+    try:
+        encoded = urllib.parse.quote(location)
+        url = f"https://api.weatherapi.com/v1/forecast.json?key={WEATHER_KEY}&q={encoded}&days=1&aqi=no"
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/1.0"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = json.loads(r.read().decode())
+        cur  = data["current"]
+        fore = data["forecast"]["forecastday"][0]["day"]
+        city    = data["location"]["name"]
+        region  = data["location"]["region"]
+        temp_f  = cur["temp_f"]
+        feels_f = cur["feelslike_f"]
+        desc    = cur["condition"]["text"]
+        humidity = cur["humidity"]
+        wind_mph = cur["wind_mph"]
+        high_f  = fore["maxtemp_f"]
+        low_f   = fore["mintemp_f"]
+        rain_pct = fore["daily_chance_of_rain"]
+        rain_str = (f"There is a {rain_pct} percent chance of rain today."
+                    if rain_pct > 15 else "No significant rain expected today.")
+        return (f"Right now in {city}, {region} it is {temp_f:.0f} degrees and {desc.lower()}. "
+                f"Feels like {feels_f:.0f} degrees. Humidity {humidity} percent, wind {wind_mph:.0f} miles per hour. "
+                f"Today's high is {high_f:.0f}, low is {low_f:.0f}. {rain_str}")
+    except Exception as e:
+        print(f"[HERALD] WeatherAPI backup failed: {e}")
+        return None
+
+def fetch_sports_direct(msg_lower):
+    """ESPN unofficial API -- completely free, no key needed, ~0.5s"""
+    try:
+        sport_map = {
+            'cowboys':   ('football',   'nfl'),
+            'rangers':   ('baseball',   'mlb'),
+            'mavs':      ('basketball', 'nba'),
+            'mavericks': ('basketball', 'nba'),
+            'stars':     ('hockey',     'nhl'),
+            'nfl':       ('football',   'nfl'),
+            'nba':       ('basketball', 'nba'),
+            'mlb':       ('baseball',   'mlb'),
+            'nhl':       ('hockey',     'nhl'),
+        }
+        sport, league = 'football', 'nfl'
+        for key, val in sport_map.items():
+            if key in msg_lower:
+                sport, league = val
+                break
+        url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard"
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/1.0"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = json.loads(r.read().decode())
+        events = data.get("events", [])
+        if not events:
+            return f"No {league.upper()} games scheduled right now."
+        lines = []
+        for e in events[:3]:
+            comps       = e.get("competitions", [{}])[0]
+            competitors = comps.get("competitors", [])
+            if len(competitors) >= 2:
+                t1 = competitors[0]
+                t2 = competitors[1]
+                n1 = t1["team"]["shortDisplayName"]
+                n2 = t2["team"]["shortDisplayName"]
+                s1 = t1.get("score", "0")
+                s2 = t2.get("score", "0")
+                status = e.get("status", {}).get("type", {}).get("description", "")
+                lines.append(f"{n1} {s1}, {n2} {s2}, {status}")
+        if lines:
+            return f"Here are the latest {league.upper()} scores: " + ". ".join(lines) + "."
+        return f"No {league.upper()} scores available right now."
+    except Exception as e:
+        print(f"[HERALD] ESPN API failed: {e}")
+        return None
+
+def fetch_crypto_direct():
+    """CoinGecko -- completely free, no key needed, ~0.5s"""
+    try:
+        url = ("https://api.coingecko.com/api/v3/simple/price"
+               "?ids=bitcoin,ethereum,solana&vs_currencies=usd&include_24hr_change=true")
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/1.0"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = json.loads(r.read().decode())
+        parts = []
+        for coin, label in [("bitcoin","Bitcoin"),("ethereum","Ethereum"),("solana","Solana")]:
+            if coin in data:
+                price  = data[coin]["usd"]
+                change = data[coin].get("usd_24h_change", 0)
+                direc  = "up" if change >= 0 else "down"
+                parts.append(f"{label} is at {price:,.0f} dollars, {direc} {abs(change):.1f} percent today")
+        return ". ".join(parts) + "." if parts else None
+    except Exception as e:
+        print(f"[HERALD] CoinGecko failed: {e}")
+        return None
+
+def fetch_news_direct(query=None):
+    """GNews.io primary -- 100/day free, requires GNEWS_API_KEY"""
+    if not GNEWS_KEY:
+        return fetch_news_backup(query)
+    try:
+        if query:
+            encoded = urllib.parse.quote(query)
+            url = f"https://gnews.io/api/v4/search?q={encoded}&lang=en&max=5&token={GNEWS_KEY}"
+        else:
+            url = f"https://gnews.io/api/v4/top-headlines?lang=en&country=us&max=5&token={GNEWS_KEY}"
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/1.0"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = json.loads(r.read().decode())
+        articles = data.get("articles", [])
+        if not articles:
+            return fetch_news_backup(query)
+        titles = [a["title"] for a in articles[:3]]
+        return "Here are the top stories right now: " + ". Next, ".join(titles) + "."
+    except Exception as e:
+        print(f"[HERALD] GNews failed: {e}")
+        return fetch_news_backup(query)
+
+def fetch_news_backup(query=None):
+    """NewsData.io backup -- 200/day free, requires NEWSDATA_API_KEY"""
+    if not NEWSDATA_KEY:
+        return None
+    try:
+        if query:
+            encoded = urllib.parse.quote(query)
+            url = f"https://newsdata.io/api/1/latest?apikey={NEWSDATA_KEY}&q={encoded}&language=en"
+        else:
+            url = f"https://newsdata.io/api/1/latest?apikey={NEWSDATA_KEY}&language=en&country=us"
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/1.0"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = json.loads(r.read().decode())
+        results = data.get("results", [])
+        if not results:
+            return None
+        titles = [a["title"] for a in results[:3] if a.get("title")]
+        return "Here are the top stories: " + ". Next, ".join(titles) + "."
+    except Exception as e:
+        print(f"[HERALD] NewsData backup failed: {e}")
+        return None
+
+def fetch_movie_direct(query):
+    """OMDb API -- 1000/day free, requires OMDB_API_KEY"""
+    if not OMDB_KEY:
+        return None
+    try:
+        encoded = urllib.parse.quote(query)
+        url = f"https://www.omdbapi.com/?t={encoded}&apikey={OMDB_KEY}"
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/1.0"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            d = json.loads(r.read().decode())
+        if d.get("Response") == "False":
+            url2 = f"https://www.omdbapi.com/?s={encoded}&apikey={OMDB_KEY}"
+            req2 = urllib.request.Request(url2, headers={"User-Agent": "HeraldAI/1.0"})
+            with urllib.request.urlopen(req2, timeout=5) as r2:
+                d2 = json.loads(r2.read().decode())
+            results = d2.get("Search", [])
+            if results:
+                titles = [f"{r['Title']} ({r['Year']})" for r in results[:3]]
+                return "Here are some matches: " + ", ".join(titles) + "."
+            return None
+        title  = d.get("Title", "")
+        year   = d.get("Year", "")
+        rating = d.get("imdbRating", "N/A")
+        plot   = d.get("Plot", "")
+        genre  = d.get("Genre", "")
+        rt     = next((r["Value"] for r in d.get("Ratings", []) if r["Source"] == "Rotten Tomatoes"), None)
+        rt_str = f" Rotten Tomatoes: {rt}." if rt else ""
+        return f"{title} ({year}) is a {genre} film rated {rating} out of 10 on IMDb.{rt_str} {plot}"
+    except Exception as e:
+        print(f"[HERALD] OMDb failed: {e}")
+        return None
+
+def extract_stock_symbol(message):
+    known = {
+        'APPLE': 'AAPL', 'MICROSOFT': 'MSFT', 'GOOGLE': 'GOOGL', 'ALPHABET': 'GOOGL',
+        'AMAZON': 'AMZN', 'TESLA': 'TSLA', 'META': 'META', 'FACEBOOK': 'META',
+        'NVIDIA': 'NVDA', 'NETFLIX': 'NFLX', 'DISNEY': 'DIS', 'WALMART': 'WMT',
+        'COCA COLA': 'KO', 'COKE': 'KO', 'FORD': 'F', 'JPMORGAN': 'JPM', 'CHASE': 'JPM',
+    }
+    msg_upper = message.upper()
+    for name, ticker in known.items():
+        if name in msg_upper:
+            return ticker
+    words = message.split()
+    for w in words:
+        clean = re.sub(r'[^A-Z]', '', w.upper())
+        if 2 <= len(clean) <= 5 and clean.isalpha():
+            return clean
+    return None
+
+def fetch_stock_direct(symbol):
+    """Alpha Vantage -- 25/day free, requires ALPHAVANTAGE_KEY"""
+    if not ALPHA_KEY:
+        return None
+    try:
+        url = (f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE"
+               f"&symbol={symbol.upper()}&apikey={ALPHA_KEY}")
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/1.0"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = json.loads(r.read().decode())
+        q = data.get("Global Quote", {})
+        if not q or not q.get("05. price"):
+            return None
+        price  = float(q.get("05. price", 0))
+        change = float(q.get("09. change", 0))
+        pct    = q.get("10. change percent", "0%").replace("%","").strip()
+        direc  = "up" if change >= 0 else "down"
+        return (f"{symbol.upper()} is trading at {price:.2f} dollars, "
+                f"{direc} {abs(change):.2f} dollars or {abs(float(pct)):.2f} percent today.")
+    except Exception as e:
+        print(f"[HERALD] Alpha Vantage failed: {e}")
+        return None
 
 
 # ── SYSTEM PROMPT ─────────────────────────────────────────────────────────────
@@ -441,7 +702,7 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
     if lat and lng:
         city_hint = f" in {location}" if location else ""
         loc_line = (f"User is currently located{city_hint} (GPS: {lat}, {lng}). "
-                    f"For local searches use the city name. Always include a MAPS action tag on local business recommendations.")
+                    f"Always include a MAPS action tag on local business recommendations.")
     elif location:
         loc_line = f"User is located in {location}. For local searches use '{location} [thing]'."
     else:
@@ -465,62 +726,29 @@ YOUR RULES:
 - Never use asterisks, markdown, bullet points, or raw URLs in responses.
 - NEVER list sources or citations. If asked where you got info, then you can say.
 - Answer anything -- weather, sports, restaurants, travel, health, general knowledge.
-- For local business queries (restaurants, mechanics, car wash, locksmith, etc):
-  * Search using city name: '{location} burger restaurants' style
-  * Give ONE confident recommendation with the rating/reason why it's good
-  * ALWAYS append a MAPS action tag so user can navigate directly
-  * If user has known food preferences, lead with those first
+- For local business queries give ONE confident recommendation and always include a MAPS tag.
 - When you learn something new about the user, note it naturally in conversation.
 - Be honest. Never make things up. Never mention Claude or any AI model.
 - You are {ai_name}. That is your identity.
 
 ACTION TAGS -- append silently, never explain:
-- Local business recommendation or directions: MAPS: [business name and city]
-- Phone number in response: PHONE: [digits only]
-- User asks to play music, a song, an artist, or a genre: MUSIC: [search query e.g. "country 90s" or "Johnny Cash"]
-- User asks to play a radio station by name or call letters: RADIO: [station name e.g. "99.5 The Wolf"]
-- User asks to set a reminder, add something to calendar, or mentions a date/event: CALENDAR: [event title]|[YYYY-MM-DD]|[HH:MM or blank for all-day]
-- User asks to set an alarm or wake-up call: ALARM: [HH:MM]|[label e.g. "Wake up" or "Take medication"]
-- User wants to find videos, see what people are saying on social media, find trending content, or search for someone or something online: SEARCH: [concise search query e.g. "Tony Romo" or "viral cat video" or "Taylor Swift new album"]
-- User asks to open, launch, or get a specific social app (X, Instagram, YouTube, TikTok, Facebook): LAUNCH: [app name e.g. "x" or "instagram" or "youtube"]
-- One action tag maximum per response.
-
-# ── NATIVE APP ROADMAP (read before building Phase 3) ─────────────────────────
-# Herald is a PWA today. Chips require one tap due to browser security rules.
-# Here is exactly what changes when Herald becomes a native iOS/Android app:
-#
-# ALARMS: PWA opens Android clock via intent (iOS requires manual setup).
-#   Native: request SCHEDULE_EXACT_ALARM (Android) / UNUserNotificationCenter
-#   (iOS). Herald sets the alarm directly. Zero taps required.
-#
-# CALENDAR: PWA opens Google Calendar URL with event pre-filled.
-#   Native: request WRITE_CALENDAR / EventKit. Write directly to device
-#   calendar. Zero taps. Can also read calendar to avoid conflicts.
-#
-# MUSIC: PWA opens YouTube Music search in new tab.
-#   Native: YouTube Music API or Spotify SDK. Start playback directly.
-#   Can resume last session without asking. Zero taps.
-#
-# RADIO: PWA opens iHeartRadio search in new tab.
-#   Native: Stream direct URL via MediaPlayer/AVPlayer. Zero taps.
-#
-# PROACTIVE ALERTS: PWA cannot initiate -- Herald only responds today.
-#   Native: FCM (Android) / APNs (iOS) push notifications. Herald sends
-#   morning briefings, trading alerts, reminders without being asked.
-#   This is the core of the Alexa replacement vision.
-#
-# MAPS/NAVIGATION: PWA opens Google Maps URL.
-#   Native: Launch Maps app directly, start navigation without confirmation.
-#
-# The chip-tap pattern is correct for PWA. Each chip documents exactly
-# what the native equivalent will do. Build the chip now, go native in Phase 3.
-# ─────────────────────────────────────────────────────────────────────────────"""
+- Local business or directions: MAPS: [business name and city]
+- Phone number: PHONE: [digits only]
+- Play music/song/artist/genre: MUSIC: [search query]
+- Play radio station: RADIO: [station name]
+- Set reminder/calendar event: CALENDAR: [event title]|[YYYY-MM-DD]|[HH:MM or blank]
+- Set alarm: ALARM: [HH:MM]|[label]
+- Find videos or social content: SEARCH: [search query]
+- Open social app: LAUNCH: [app name]
+- One action tag maximum per response."""
 
 
 # ── LLM CALL ─────────────────────────────────────────────────────────────────
 
 def parse_action(reply):
-    for tag, atype in [('MAPS:', 'maps'), ('PHONE:', 'phone'), ('MUSIC:', 'music'), ('RADIO:', 'radio'), ('CALENDAR:', 'calendar'), ('ALARM:', 'alarm'), ('SEARCH:', 'search'), ('LAUNCH:', 'launch')]:
+    for tag, atype in [('MAPS:', 'maps'), ('PHONE:', 'phone'), ('MUSIC:', 'music'),
+                       ('RADIO:', 'radio'), ('CALENDAR:', 'calendar'), ('ALARM:', 'alarm'),
+                       ('SEARCH:', 'search'), ('LAUNCH:', 'launch')]:
         if tag in reply:
             parts = reply.split(tag, 1)
             clean = parts[0].strip()
@@ -544,15 +772,18 @@ def call_openrouter(messages, use_search=True):
             data = json.loads(resp.read().decode("utf-8"))
             return data["choices"][0]["message"]["content"]
     except urllib.error.HTTPError:
-        return "I ran into a snag on that one — try asking me again in a moment."
+        return "I ran into a snag on that one, try asking me again in a moment."
     except Exception:
-        return "I didn't get a response in time — try again in a second."
+        return "I did not get a response in time, try again in a second."
 
 def text_to_speech(text):
     if not OPENAI_KEY:
         return None
-    payload = json.dumps({"model": "tts-1", "input": text[:4096], "voice": "nova", "response_format": "mp3"}).encode("utf-8")
-    req = urllib.request.Request(TTS_URL, data=payload, headers={"Content-Type": "application/json", "Authorization": f"Bearer {OPENAI_KEY}"}, method="POST")
+    payload = json.dumps({"model": "tts-1", "input": text[:4096], "voice": "nova",
+                          "response_format": "mp3"}).encode("utf-8")
+    req = urllib.request.Request(TTS_URL, data=payload, headers={
+        "Content-Type": "application/json", "Authorization": f"Bearer {OPENAI_KEY}"
+    }, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=8) as resp:
             return resp.read()
@@ -579,7 +810,20 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path.startswith("/health"):
-            self._json({"status": "ok", "server": "herald-api", "version": "4.7", "time": datetime.now().isoformat()})
+            self._json({
+                "status": "ok", "server": "herald-api", "version": "4.9",
+                "apis": {
+                    "weather":  "wttr.in + weatherapi backup",
+                    "sports":   "ESPN unofficial (no key)",
+                    "crypto":   "CoinGecko (no key)",
+                    "news":     "GNews" if GNEWS_KEY else "not configured",
+                    "news_bak": "NewsData" if NEWSDATA_KEY else "not configured",
+                    "movies":   "OMDb" if OMDB_KEY else "not configured",
+                    "stocks":   "Alpha Vantage" if ALPHA_KEY else "not configured",
+                    "weather_bak": "WeatherAPI" if WEATHER_KEY else "not configured",
+                },
+                "time": datetime.now().isoformat()
+            })
         elif self.path.startswith("/empire"):
             self._json(fetch_empire() or {"error": "empire data unavailable"})
         else:
@@ -600,11 +844,9 @@ class Handler(BaseHTTPRequestHandler):
             if not user_id:
                 self._json({"error": "user_id required"}, 400)
                 return
-
             valid_codes = [ACCESS_CODE]
             if OWNER_CODE:
                 valid_codes.append(OWNER_CODE)
-
             if code in valid_codes:
                 if OWNER_CODE and code == OWNER_CODE:
                     owner_user_ids.add(user_id)
@@ -621,7 +863,6 @@ class Handler(BaseHTTPRequestHandler):
                     "onboarded": bool(profile.get("name")),
                     "is_owner": is_owner(user_id, code)
                 })
-
             elif code in invites:
                 invite = invites[code]
                 if not invite["used"]:
@@ -646,7 +887,6 @@ class Handler(BaseHTTPRequestHandler):
                     "is_owner": False,
                     "invite_label": invite.get("label", "")
                 })
-
             else:
                 self._json({"error": "invalid code"}, 401)
                 return
@@ -668,7 +908,7 @@ class Handler(BaseHTTPRequestHandler):
             empire  = fetch_live_empire() if owner else None
             profile = get_profile(user_id)
 
-            profile = detect_preferences(message, profile)
+            profile  = detect_preferences(message, profile)
             category = tag_query_category(message)
             profile  = increment_query_count(category, profile)
 
@@ -718,8 +958,60 @@ class Handler(BaseHTTPRequestHandler):
                 })
                 return
 
-            use_search = needs_web_search(message)
-            raw_reply  = call_openrouter(messages, use_search=use_search)
+            # ── DIRECT API ROUTING ────────────────────────────────────────────
+            # Bypass OpenRouter for common queries -- much faster and free
+            direct_reply = None
+
+            # Weather -- wttr.in primary, WeatherAPI backup
+            if any(w in msg_lower for w in ['weather','forecast','temperature','rain',
+                                             'snow','wind','sunny','humid','hot outside',
+                                             'cold outside','umbrella']):
+                loc = extract_weather_location(message, profile.get('location','Dallas TX'))
+                direct_reply = fetch_weather_direct(loc)
+                if not direct_reply:
+                    direct_reply = fetch_weather_backup(loc)
+
+            # Sports scores -- ESPN unofficial, no key needed
+            elif any(w in msg_lower for w in ['score','scores','game today','cowboys',
+                                               'rangers','mavs','mavericks','stars',
+                                               'nfl','nba','mlb','nhl','playoffs','standings']):
+                direct_reply = fetch_sports_direct(msg_lower)
+
+            # Crypto prices -- CoinGecko, no key needed
+            elif any(w in msg_lower for w in ['bitcoin','ethereum','solana','crypto',
+                                               'btc','eth','sol price','crypto price']):
+                direct_reply = fetch_crypto_direct()
+
+            # News -- GNews primary, NewsData backup
+            elif any(w in msg_lower for w in ['news','headlines','top stories',
+                                               'what is happening','what happened today']):
+                direct_reply = fetch_news_direct()
+
+            # Movies and TV -- OMDb
+            elif any(w in msg_lower for w in ['movie','film','imdb','rotten tomatoes',
+                                               'what to watch','watch tonight']):
+                for kw in ['about ','review of ','tell me about ']:
+                    if kw in msg_lower:
+                        idx = msg_lower.index(kw) + len(kw)
+                        query = message[idx:].strip().rstrip('?.,!')
+                        if query:
+                            direct_reply = fetch_movie_direct(query)
+                            break
+
+            # Stock prices -- Alpha Vantage
+            elif any(w in msg_lower for w in ['stock','share price','trading at','stock price']):
+                symbol = extract_stock_symbol(message)
+                if symbol:
+                    direct_reply = fetch_stock_direct(symbol)
+
+            # Fall through to OpenRouter for everything else
+            if direct_reply:
+                raw_reply  = direct_reply
+                use_search = False
+            else:
+                use_search = needs_web_search(message)
+                raw_reply  = call_openrouter(messages, use_search=use_search)
+
             reply, action = parse_action(raw_reply)
             trial = get_trial_status(profile)
             self._json({
@@ -757,7 +1049,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": "user_id required"}, 400)
                 return
             profile = get_profile(user_id)
-            for field in ["name", "ai_name", "location"]:
+            for field in ["name", "ai_name", "location", "app_prefs"]:
                 if field in data:
                     profile[field] = data[field]
             save_profile(user_id, profile)
@@ -777,7 +1069,8 @@ class Handler(BaseHTTPRequestHandler):
             }
             persist_invites()
             base_url = data.get("base_url", "https://crptofollower.github.io/herald-voice-app/herald.html")
-            self._json({"ok": True, "code": code, "label": label, "link": f"{base_url}?invite={code}"})
+            self._json({"ok": True, "code": code, "label": label,
+                        "link": f"{base_url}?invite={code}"})
 
         elif self.path == "/invite/list":
             secret = data.get("secret", "").strip()
@@ -803,10 +1096,14 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     load_profiles()
     load_invites()
-    print(f"[HERALD API v4.7] Starting on port {PORT}")
-    print(f"[HERALD API] OpenRouter:    {'YES' if OPENROUTER_KEY else 'MISSING'}")
+    print(f"[HERALD API v4.9] Starting on port {PORT}")
+    print(f"[HERALD API] OpenRouter:    {'YES' if OPENROUTER_KEY else 'MISSING -- required'}")
+    print(f"[HERALD API] GNews:         {'YES' if GNEWS_KEY else 'not set'}")
+    print(f"[HERALD API] OMDb:          {'YES' if OMDB_KEY else 'not set'}")
+    print(f"[HERALD API] AlphaVantage:  {'YES' if ALPHA_KEY else 'not set'}")
+    print(f"[HERALD API] NewsData:      {'YES' if NEWSDATA_KEY else 'not set'}")
+    print(f"[HERALD API] WeatherAPI:    {'YES' if WEATHER_KEY else 'not set'}")
     print(f"[HERALD API] Profiles:      {PROFILES_FILE}")
-    print(f"[HERALD API] Invites:       {INVITES_FILE}")
     print(f"[HERALD API] Owner code:    {'SET' if OWNER_CODE else 'NOT SET'}")
     print(f"[HERALD API] Invite secret: {'SET' if INVITE_SECRET else 'NOT SET'}")
     server = HTTPServer(("0.0.0.0", PORT), Handler)
