@@ -878,7 +878,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/health"):
             self._json({
-                "status": "ok", "server": "herald-api", "version": "4.9",
+                "status": "ok", "server": "herald-api", "version": "5.0",
                 "apis": {
                     "weather":  "wttr.in + weatherapi backup",
                     "sports":   "ESPN unofficial (no key)",
