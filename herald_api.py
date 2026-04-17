@@ -468,7 +468,17 @@ SYSTEM:
 
 CONTEXT FOR ANSWERING QUESTIONS:
   - Gate lowered to 20 clean trades (sim confirmed edge on 208 trades)
-  - Win rate will be 0% until first clean WIN -- this is co
+  - Win rate will be 0% until first clean WIN -- this is correct, not a failure
+  - CHOP window means score gate is blocking correctly -- system working as designed
+  - 13 assets in universe, OP is star at 54.8% WR sim
+  - Grade-based sizing: TREND A=5%, SWING A=3%, SWING B=1.5%, SCALP=1%
+"""
+    except Exception as e:
+        empire = fetch_empire()
+        if empire:
+            return build_empire_context(empire) + "\n[Live feed unavailable -- using hourly snapshot]"
+        return f"\nFreddie status unavailable right now ({e}). Try again in a moment.\n"
+
 
 def build_empire_context(empire):
     if not empire:
@@ -1045,7 +1055,7 @@ class Handler(BaseHTTPRequestHandler):
                 direct_reply = call_openrouter(freddie_prompt, use_search=False)
 
             # Weather -- wttr.in primary, WeatherAPI backup
-            elelif any(w in msg_lower for w in ['weather','forecast','temperature','rain',
+            elif any(w in msg_lower for w in ['weather','forecast','temperature','rain',
                                               'snow','wind','sunny','humid','hot outside',
                                               'cold outside','umbrella']):
                 loc = extract_weather_location(message, profile.get('location','Dallas TX'))
