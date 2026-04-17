@@ -1,5 +1,6 @@
 # herald_api.py
 # Herald PWA Backend -- Railway Cloud Server
+# v5.0 -- Freddie natural language intelligence + rich empire data
 # v4.9 -- direct APIs: weather, sports, crypto, news, movies, stocks
 #
 # Environment variables required in Railway dashboard:
@@ -371,13 +372,35 @@ def fetch_empire():
 def fetch_live_empire():
     try:
         url = "http://143.198.18.66:8080/api/status"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/1.0"})
-        with urllib.request.urlopen(req, timeout=5) as r:
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/5.0"})
+        with urllib.request.urlopen(req, timeout=8) as r:
             data = json.loads(r.read().decode())
-        positions = data.get("positions", [])
-        gate      = data.get("gate", {})
-        macro     = data.get("macro", {})
-        sim       = data.get("sim", {})
+
+        positions     = data.get("positions", [])
+        gate          = data.get("gate", {})
+        macro         = data.get("macro", {})
+        sim           = data.get("sim", {})
+        active_setups = data.get("active_setups", [])
+        near_miss     = data.get("near_miss", [])
+        sovereign     = data.get("sovereign_last", [])
+        clean_trades  = data.get("clean_trades", gate.get("clean_trades", 0))
+        clean_wr      = data.get("clean_win_rate", 0)
+        total_pnl     = data.get("total_pnl", 0)
+        expectancy    = data.get("expectancy", 0)
+        avg_win       = data.get("avg_win", 0)
+        avg_loss      = data.get("avg_loss", 0)
+        last_scan     = data.get("last_scan", "unknown")
+        forge_done    = data.get("forge_completed", [])
+
+        stage   = gate.get("stage", "STAGE_0_PAPER")
+        regime  = macro.get("regime", "UNKNOWN")
+        fg      = macro.get("fear_greed", "?")
+        window  = macro.get("window_type", "UNKNOWN")
+        llama   = macro.get("defillama_tvl") or {}
+        tvl_sig = llama.get("signal", "N/A")
+        tvl_b   = llama.get("tvl_usd", 0)
+
+        # Positions
         pos_lines = []
         for p in positions:
             asset     = p.get("asset","?").replace("USD","")
@@ -385,34 +408,67 @@ def fetch_live_empire():
             entry     = p.get("entry", 0)
             price     = p.get("price")
             pnl       = p.get("unreal_pnl")
-            pnl_str   = f"+${pnl:.2f}" if pnl and pnl > 0 else (f"-${abs(pnl):.2f}" if pnl and pnl < 0 else "at breakeven")
-            live_str  = f"live ${price:.4f}" if price else ""
-            pos_lines.append(f"  {asset} {direction}: entry ${entry:.4f} {live_str} | P&L {pnl_str}")
-        clean_trades = gate.get("clean_trades", 0)
-        gate_pct     = round(clean_trades / 70 * 100, 1)
-        stage        = gate.get("stage", "STAGE_0_PAPER")
-        wr           = data.get("win_rate", 0)
-        regime       = macro.get("regime", "UNKNOWN")
-        fg           = macro.get("fear_greed", "?")
-        window       = macro.get("window_type", "UNKNOWN")
-        updated      = macro.get("updated_at", "")[:16].replace("T", " ")
-        sim_exp      = sim.get("expectancy", "--")
-        pos_section  = "\n".join(pos_lines) if pos_lines else "  No open positions"
-        return f"""
-FREDDIE EMPIRE -- LIVE STATUS (real-time from swarm):
-  Open positions ({len(positions)}):
+            grade     = p.get("grade","?")
+            ttype     = p.get("trade_type","SCALP")
+            pnl_str   = f"+${pnl:.2f}" if pnl and pnl > 0 else (f"-${abs(pnl):.2f}" if pnl and pnl < 0 else "even")
+            live_str  = f"now ${price:.4f}" if price else ""
+            pos_lines.append(f"  {asset} {direction} [{ttype} Grade:{grade}]: entry ${entry:.4f} {live_str} | P&L {pnl_str}")
+
+        # Active setups from last scan
+        setup_lines = []
+        for s in active_setups:
+            asset    = s.get("asset","?").replace("USD","")
+            direction= s.get("direction","?")
+            grade    = s.get("grade","?")
+            confirm  = s.get("confirm_15m","N/A")
+            entry    = s.get("entry",0)
+            setup_lines.append(f"  {direction} {asset} Grade:{grade} 15m:{confirm} entry:${entry:.4f}")
+
+        # Near miss
+        nm_lines = []
+        for n in near_miss[-3:]:
+            asset = n.get("asset","?")
+            score = n.get("score","?")
+            bdir  = n.get("best_dir","?")
+            nm_lines.append(f"  {asset} {bdir} scored {score}/100 -- just below threshold")
+
+        # Forge completed
+        forge_names = [f.get("id","?") for f in forge_done] if forge_done else []
+
+        pos_section   = "\n".join(pos_lines)   if pos_lines   else "  None -- flat"
+        setup_section = "\n".join(setup_lines) if setup_lines else "  None this scan"
+        nm_section    = "\n".join(nm_lines)    if nm_lines    else "  None today"
+        forge_section = ", ".join(forge_names) if forge_names else "none recorded"
+
+        gate_pct = round(clean_trades / 20 * 100, 1)
+
+        return f"""FREDDIE EMPIRE -- LIVE INTELLIGENCE (real-time):
+
+POSITIONS ({len(positions)} open):
 {pos_section}
-  Gate: {clean_trades}/70 clean trades ({gate_pct}%) | Stage: {stage}
-  Win rate: {wr:.1f}% | Simulator edge: {sim_exp} exp/trade
-  Regime: {regime} | Fear & Greed: {fg} | Window: {window}
-  Last scan: {updated} UTC
-  NOTE: 0% win rate is correct -- gate clock started April 12. Signal is proven.
-"""
-    except Exception as e:
-        empire = fetch_empire()
-        if empire:
-            return build_empire_context(empire) + "\n[Live feed unavailable -- hourly snapshot]"
-        return f"\n[Empire status unavailable: {e}]\n"
+
+ACTIVE SETUPS (last scan):
+{setup_section}
+
+NEAR MISS SETUPS (just below threshold):
+{nm_section}
+
+PERFORMANCE (clean trades since April 15 baseline):
+  Clean trades: {clean_trades}/20 gate ({gate_pct}%) | Stage: {stage}
+  Win rate: {clean_wr:.1f}% | Total P&L: ${total_pnl:+.2f}
+  Expectancy: ${expectancy:+.2f}/trade | Avg win: ${avg_win:.2f} | Avg loss: ${avg_loss:.2f}
+
+MARKET CONTEXT:
+  Regime: {regime} | Window: {window} | Fear & Greed: {fg}
+  Solana TVL: ${tvl_b/1e9:.1f}B | Signal: {tvl_sig}
+
+SYSTEM:
+  Last scan: {last_scan}
+  Forges built: {forge_section}
+
+CONTEXT FOR ANSWERING QUESTIONS:
+  - Gate lowered to 20 clean trades (sim confirmed edge on 208 trades)
+  - Win rate will be 0% until first clean WIN -- this is co
 
 def build_empire_context(empire):
     if not empire:
@@ -963,10 +1019,35 @@ class Handler(BaseHTTPRequestHandler):
             # Bypass OpenRouter for common queries -- much faster and free
             direct_reply = None
 
+            # Freddie trading queries -- owner only, instant answer from live data
+            FREDDIE_TRIGGERS = [
+                'freddie','how are our trades','trading status','open positions',
+                'gate progress','win rate','what did freddie','how is freddie',
+                'empire status','regime','last scan','any setups','near miss',
+                'what is freddie doing','how many trades','expectancy','p&l',
+                'portfolio','bankroll','sovereign','forge','signal',
+            ]
+            if owner and any(t in msg_lower for t in FREDDIE_TRIGGERS) and empire:
+                # Generate natural language answer from empire data
+                freddie_prompt = [
+                    {"role": "system", "content": (
+                        "You are Herald, a personal AI. The user is asking about their "
+                        "Freddie autonomous trading system. Answer in 2-4 sentences, "
+                        "conversationally, like a smart friend explaining a complex system simply. "
+                        "No bullet points. No markdown. Speak naturally. "
+                        "If they ask about win rate being 0%, explain the gate clock reset "
+                        "and that it means no closed wins yet, not that the signal failed. "
+                        "If they ask about no trades, explain CHOP window and score gate correctly. "
+                        f"\n\nLIVE FREDDIE DATA:\n{empire}"
+                    )},
+                    {"role": "user", "content": message}
+                ]
+                direct_reply = call_openrouter(freddie_prompt, use_search=False)
+
             # Weather -- wttr.in primary, WeatherAPI backup
-            if any(w in msg_lower for w in ['weather','forecast','temperature','rain',
-                                             'snow','wind','sunny','humid','hot outside',
-                                             'cold outside','umbrella']):
+            elelif any(w in msg_lower for w in ['weather','forecast','temperature','rain',
+                                              'snow','wind','sunny','humid','hot outside',
+                                              'cold outside','umbrella']):
                 loc = extract_weather_location(message, profile.get('location','Dallas TX'))
                 direct_reply = fetch_weather_direct(loc)
                 if not direct_reply:
