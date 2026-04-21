@@ -1,5 +1,6 @@
 # herald_api.py
 # Herald PWA Backend -- Railway Cloud Server
+# v5.1 -- Added /geocode endpoint (Google Geocoding via Railway env var)
 # v5.0 -- Freddie natural language intelligence + rich empire data
 # v4.9 -- direct APIs: weather, sports, crypto, news, movies, stocks
 #
@@ -8,6 +9,7 @@
 #   HERALD_ACCESS_CODE    = legacy code (herald2026)
 #   HERALD_OWNER_CODE     = your personal code (miked2026)
 #   HERALD_INVITE_SECRET  = your secret password to generate invite links
+#   GOOGLE_GEOCODING_KEY  = Google Geocoding API key (never in HTML)
 #
 # Free API keys (add to Railway variables):
 #   GNEWS_API_KEY         = from gnews.io (news headlines, 100/day free)
@@ -45,6 +47,7 @@ OMDB_KEY       = os.environ.get("OMDB_API_KEY", "")
 ALPHA_KEY      = os.environ.get("ALPHAVANTAGE_KEY", "")
 NEWSDATA_KEY   = os.environ.get("NEWSDATA_API_KEY", "")
 WEATHER_KEY    = os.environ.get("WEATHER_API_KEY", "")
+GEOCODING_KEY  = os.environ.get("GOOGLE_GEOCODING_KEY", "")
 OR_URL         = "https://openrouter.ai/api/v1/chat/completions"
 TTS_URL        = "https://api.openai.com/v1/audio/speech"
 EMPIRE_URL     = "https://raw.githubusercontent.com/crptofollower/herald-voice-app/main/empire_status.json"
@@ -375,14 +378,11 @@ def fetch_live_empire():
         req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/5.0"})
         with urllib.request.urlopen(req, timeout=8) as r:
             data = json.loads(r.read().decode())
-
         positions     = data.get("positions", [])
         gate          = data.get("gate", {})
         macro         = data.get("macro", {})
-        sim           = data.get("sim", {})
         active_setups = data.get("active_setups", [])
         near_miss     = data.get("near_miss", [])
-        sovereign     = data.get("sovereign_last", [])
         clean_trades  = data.get("clean_trades", gate.get("clean_trades", 0))
         clean_wr      = data.get("clean_win_rate", 0)
         total_pnl     = data.get("total_pnl", 0)
@@ -391,7 +391,6 @@ def fetch_live_empire():
         avg_loss      = data.get("avg_loss", 0)
         last_scan     = data.get("last_scan", "unknown")
         forge_done    = data.get("forge_completed", [])
-
         stage   = gate.get("stage", "STAGE_0_PAPER")
         regime  = macro.get("regime", "UNKNOWN")
         fg      = macro.get("fear_greed", "?")
@@ -399,8 +398,6 @@ def fetch_live_empire():
         llama   = macro.get("defillama_tvl") or {}
         tvl_sig = llama.get("signal", "N/A")
         tvl_b   = llama.get("tvl_usd", 0)
-
-        # Positions
         pos_lines = []
         for p in positions:
             asset     = p.get("asset","?").replace("USD","")
@@ -413,35 +410,26 @@ def fetch_live_empire():
             pnl_str   = f"+${pnl:.2f}" if pnl and pnl > 0 else (f"-${abs(pnl):.2f}" if pnl and pnl < 0 else "even")
             live_str  = f"now ${price:.4f}" if price else ""
             pos_lines.append(f"  {asset} {direction} [{ttype} Grade:{grade}]: entry ${entry:.4f} {live_str} | P&L {pnl_str}")
-
-        # Active setups from last scan
         setup_lines = []
         for s in active_setups:
-            asset    = s.get("asset","?").replace("USD","")
-            direction= s.get("direction","?")
-            grade    = s.get("grade","?")
-            confirm  = s.get("confirm_15m","N/A")
-            entry    = s.get("entry",0)
+            asset     = s.get("asset","?").replace("USD","")
+            direction = s.get("direction","?")
+            grade     = s.get("grade","?")
+            confirm   = s.get("confirm_15m","N/A")
+            entry     = s.get("entry",0)
             setup_lines.append(f"  {direction} {asset} Grade:{grade} 15m:{confirm} entry:${entry:.4f}")
-
-        # Near miss
         nm_lines = []
         for n in near_miss[-3:]:
             asset = n.get("asset","?")
             score = n.get("score","?")
             bdir  = n.get("best_dir","?")
             nm_lines.append(f"  {asset} {bdir} scored {score}/100 -- just below threshold")
-
-        # Forge completed
-        forge_names = [f.get("id","?") for f in forge_done] if forge_done else []
-
+        forge_names   = [f.get("id","?") for f in forge_done] if forge_done else []
         pos_section   = "\n".join(pos_lines)   if pos_lines   else "  None -- flat"
         setup_section = "\n".join(setup_lines) if setup_lines else "  None this scan"
         nm_section    = "\n".join(nm_lines)    if nm_lines    else "  None today"
         forge_section = ", ".join(forge_names) if forge_names else "none recorded"
-
-        gate_pct = round(clean_trades / 20 * 100, 1)
-
+        gate_pct      = round(clean_trades / 20 * 100, 1)
         return f"""FREDDIE EMPIRE -- LIVE INTELLIGENCE (real-time):
 
 POSITIONS ({len(positions)} open):
@@ -466,7 +454,7 @@ SYSTEM:
   Last scan: {last_scan}
   Forges built: {forge_section}
 
-CONTEXT FOR ANSWERING QUESTIONS:
+CONTEXT:
   - Gate lowered to 20 clean trades (sim confirmed edge on 208 trades)
   - Win rate will be 0% until first clean WIN -- this is correct, not a failure
   - CHOP window means score gate is blocking correctly -- system working as designed
@@ -478,7 +466,6 @@ CONTEXT FOR ANSWERING QUESTIONS:
         if empire:
             return build_empire_context(empire) + "\n[Live feed unavailable -- using hourly snapshot]"
         return f"\nFreddie status unavailable right now ({e}). Try again in a moment.\n"
-
 
 def build_empire_context(empire):
     if not empire:
@@ -498,6 +485,30 @@ def build_empire_context(empire):
     return "\n".join(lines)
 
 
+# ── GEOCODING (key in Railway env var -- never in HTML) ───────────────────────
+
+def geocode_reverse(lat, lng):
+    if not GEOCODING_KEY:
+        return None
+    try:
+        url = (f"https://maps.googleapis.com/maps/api/geocode/json"
+               f"?latlng={lat},{lng}&result_type=locality|administrative_area_level_1"
+               f"&key={GEOCODING_KEY}")
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/5.1"})
+        with urllib.request.urlopen(req, timeout=4) as r:
+            data = json.loads(r.read().decode())
+        if data.get("results"):
+            components = data["results"][0]["address_components"]
+            city  = next((c["long_name"]  for c in components if "locality" in c["types"]), None)
+            state = next((c["short_name"] for c in components if "administrative_area_level_1" in c["types"]), None)
+            if city and state:
+                return f"{city}, {state}"
+            return data["results"][0].get("formatted_address")
+    except Exception as e:
+        print(f"[HERALD] Geocode failed: {e}")
+    return None
+
+
 # ── DIRECT API FUNCTIONS ──────────────────────────────────────────────────────
 
 def extract_weather_location(message, profile_location):
@@ -511,7 +522,6 @@ def extract_weather_location(message, profile_location):
     return profile_location or "Dallas TX"
 
 def fetch_weather_direct(location):
-    """wttr.in -- completely free, no key needed, ~0.5s response"""
     try:
         clean_loc = location.strip().replace(' ', '+')
         url = f"https://wttr.in/{clean_loc}?format=j1"
@@ -520,17 +530,17 @@ def fetch_weather_direct(location):
             data = json.loads(r.read().decode())
         cur  = data["current_condition"][0]
         area = data["nearest_area"][0]
-        city    = area["areaName"][0]["value"]
-        region  = area["region"][0]["value"]
-        temp_f  = cur["temp_F"]
-        feels_f = cur["FeelsLikeF"]
-        desc    = cur["weatherDesc"][0]["value"]
+        city     = area["areaName"][0]["value"]
+        region   = area["region"][0]["value"]
+        temp_f   = cur["temp_F"]
+        feels_f  = cur["FeelsLikeF"]
+        desc     = cur["weatherDesc"][0]["value"]
         humidity = cur["humidity"]
         wind_mph = cur["windspeedMiles"]
-        today   = data["weather"][0]
-        high_f  = today["maxtempF"]
-        low_f   = today["mintempF"]
-        hourly  = today.get("hourly", [])
+        today    = data["weather"][0]
+        high_f   = today["maxtempF"]
+        low_f    = today["mintempF"]
+        hourly   = today.get("hourly", [])
         rain_chance = max((int(h.get("chanceofrain", 0)) for h in hourly), default=0)
         rain_str = (f"There is a {rain_chance} percent chance of rain today."
                     if rain_chance > 15 else "No significant rain expected today.")
@@ -542,7 +552,6 @@ def fetch_weather_direct(location):
         return None
 
 def fetch_weather_backup(location):
-    """WeatherAPI.com -- 1M calls/month free, requires WEATHER_API_KEY"""
     if not WEATHER_KEY:
         return None
     try:
@@ -553,15 +562,15 @@ def fetch_weather_backup(location):
             data = json.loads(r.read().decode())
         cur  = data["current"]
         fore = data["forecast"]["forecastday"][0]["day"]
-        city    = data["location"]["name"]
-        region  = data["location"]["region"]
-        temp_f  = cur["temp_f"]
-        feels_f = cur["feelslike_f"]
-        desc    = cur["condition"]["text"]
+        city     = data["location"]["name"]
+        region   = data["location"]["region"]
+        temp_f   = cur["temp_f"]
+        feels_f  = cur["feelslike_f"]
+        desc     = cur["condition"]["text"]
         humidity = cur["humidity"]
         wind_mph = cur["wind_mph"]
-        high_f  = fore["maxtemp_f"]
-        low_f   = fore["mintemp_f"]
+        high_f   = fore["maxtemp_f"]
+        low_f    = fore["mintemp_f"]
         rain_pct = fore["daily_chance_of_rain"]
         rain_str = (f"There is a {rain_pct} percent chance of rain today."
                     if rain_pct > 15 else "No significant rain expected today.")
@@ -573,7 +582,6 @@ def fetch_weather_backup(location):
         return None
 
 def fetch_sports_direct(msg_lower):
-    """ESPN unofficial API -- completely free, no key needed, ~0.5s"""
     try:
         sport_map = {
             'cowboys':   ('football',   'nfl'),
@@ -603,12 +611,9 @@ def fetch_sports_direct(msg_lower):
             comps       = e.get("competitions", [{}])[0]
             competitors = comps.get("competitors", [])
             if len(competitors) >= 2:
-                t1 = competitors[0]
-                t2 = competitors[1]
-                n1 = t1["team"]["shortDisplayName"]
-                n2 = t2["team"]["shortDisplayName"]
-                s1 = t1.get("score", "0")
-                s2 = t2.get("score", "0")
+                t1 = competitors[0]; t2 = competitors[1]
+                n1 = t1["team"]["shortDisplayName"]; n2 = t2["team"]["shortDisplayName"]
+                s1 = t1.get("score", "0");           s2 = t2.get("score", "0")
                 status = e.get("status", {}).get("type", {}).get("description", "")
                 lines.append(f"{n1} {s1}, {n2} {s2}, {status}")
         if lines:
@@ -619,7 +624,6 @@ def fetch_sports_direct(msg_lower):
         return None
 
 def fetch_crypto_direct():
-    """CoinGecko -- completely free, no key needed, ~0.5s"""
     try:
         url = ("https://api.coingecko.com/api/v3/simple/price"
                "?ids=bitcoin,ethereum,solana&vs_currencies=usd&include_24hr_change=true")
@@ -639,7 +643,6 @@ def fetch_crypto_direct():
         return None
 
 def fetch_news_direct(query=None):
-    """GNews.io primary -- 100/day free, requires GNEWS_API_KEY"""
     if not GNEWS_KEY:
         return fetch_news_backup(query)
     try:
@@ -661,7 +664,6 @@ def fetch_news_direct(query=None):
         return fetch_news_backup(query)
 
 def fetch_news_backup(query=None):
-    """NewsData.io backup -- 200/day free, requires NEWSDATA_API_KEY"""
     if not NEWSDATA_KEY:
         return None
     try:
@@ -683,7 +685,6 @@ def fetch_news_backup(query=None):
         return None
 
 def fetch_movie_direct(query):
-    """OMDb API -- 1000/day free, requires OMDB_API_KEY"""
     if not OMDB_KEY:
         return None
     try:
@@ -733,7 +734,6 @@ def extract_stock_symbol(message):
     return None
 
 def fetch_stock_direct(symbol):
-    """Alpha Vantage -- 25/day free, requires ALPHAVANTAGE_KEY"""
     if not ALPHA_KEY:
         return None
     try:
@@ -758,7 +758,7 @@ def fetch_stock_direct(symbol):
 
 # ── SYSTEM PROMPT ─────────────────────────────────────────────────────────────
 
-def build_system(profile, local_time=None, owner=False, empire=None, lat=None, lng=None):
+def build_system(profile, local_time=None, owner=False, empire=None, lat=None, lng=None, location_label=None):
     now      = local_time or datetime.now().strftime("%A, %B %d %Y %I:%M %p")
     name     = profile.get("name", "")
     ai_name  = profile.get("ai_name", "Herald")
@@ -766,8 +766,8 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
     notes    = profile.get("notes", [])
     user_line = f"User's name: {name}." if name else "User name not yet learned."
     if lat and lng:
-        city_hint = f" in {location}" if location else ""
-        loc_line = (f"User is currently located{city_hint} (GPS: {lat}, {lng}). "
+        city_hint = f" near {location_label}" if location_label else (f" in {location}" if location else "")
+        loc_line = (f"User's current GPS location{city_hint} ({lat}, {lng}). "
                     f"Always include a MAPS action tag on local business recommendations.")
     elif location:
         loc_line = f"User is located in {location}. For local searches use '{location} [thing]'."
@@ -878,19 +878,30 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/health"):
             self._json({
-                "status": "ok", "server": "herald-api", "version": "5.0",
+                "status": "ok", "server": "herald-api", "version": "5.1",
                 "apis": {
-                    "weather":  "wttr.in + weatherapi backup",
-                    "sports":   "ESPN unofficial (no key)",
-                    "crypto":   "CoinGecko (no key)",
-                    "news":     "GNews" if GNEWS_KEY else "not configured",
-                    "news_bak": "NewsData" if NEWSDATA_KEY else "not configured",
-                    "movies":   "OMDb" if OMDB_KEY else "not configured",
-                    "stocks":   "Alpha Vantage" if ALPHA_KEY else "not configured",
+                    "weather":     "wttr.in + weatherapi backup",
+                    "sports":      "ESPN unofficial (no key)",
+                    "crypto":      "CoinGecko (no key)",
+                    "news":        "GNews" if GNEWS_KEY else "not configured",
+                    "news_bak":    "NewsData" if NEWSDATA_KEY else "not configured",
+                    "movies":      "OMDb" if OMDB_KEY else "not configured",
+                    "stocks":      "Alpha Vantage" if ALPHA_KEY else "not configured",
                     "weather_bak": "WeatherAPI" if WEATHER_KEY else "not configured",
+                    "geocoding":   "Google Geocoding" if GEOCODING_KEY else "not configured",
                 },
                 "time": datetime.now().isoformat()
             })
+        elif self.path.startswith("/geocode"):
+            parsed = urllib.parse.urlparse(self.path)
+            params = urllib.parse.parse_qs(parsed.query)
+            lat = params.get("lat", [None])[0]
+            lng = params.get("lng", [None])[0]
+            if not lat or not lng:
+                self._json({"label": None, "error": "lat and lng required"}, 400)
+                return
+            label = geocode_reverse(lat, lng)
+            self._json({"label": label})
         elif self.path.startswith("/empire"):
             self._json(fetch_empire() or {"error": "empire data unavailable"})
         else:
@@ -959,13 +970,14 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
         elif self.path == "/ask":
-            user_id    = data.get("user_id", "").strip()
-            message    = data.get("message", "").strip()
-            history    = data.get("history", [])
-            local_time = data.get("local_time", None)
-            lat        = data.get("lat", None)
-            lng        = data.get("lng", None)
-            auth_code  = data.get("auth_code", "").strip()
+            user_id        = data.get("user_id", "").strip()
+            message        = data.get("message", "").strip()
+            history        = data.get("history", [])
+            local_time     = data.get("local_time", None)
+            lat            = data.get("lat", None)
+            lng            = data.get("lng", None)
+            location_label = data.get("location_label", None)
+            auth_code      = data.get("auth_code", "").strip()
 
             if not user_id or not message:
                 self._json({"error": "user_id and message required"}, 400)
@@ -1004,7 +1016,7 @@ class Handler(BaseHTTPRequestHandler):
 
             save_profile(user_id, profile)
 
-            system   = build_system(profile, local_time, owner, empire, lat, lng)
+            system   = build_system(profile, local_time, owner, empire, lat, lng, location_label)
             messages = [{"role": "system", "content": system}]
             messages += history[-20:]
             messages.append({"role": "user", "content": message})
@@ -1025,11 +1037,8 @@ class Handler(BaseHTTPRequestHandler):
                 })
                 return
 
-            # ── DIRECT API ROUTING ────────────────────────────────────────────
-            # Bypass OpenRouter for common queries -- much faster and free
             direct_reply = None
 
-            # Freddie trading queries -- owner only, instant answer from live data
             FREDDIE_TRIGGERS = [
                 'freddie','how are our trades','trading status','open positions',
                 'gate progress','win rate','what did freddie','how is freddie',
@@ -1038,7 +1047,6 @@ class Handler(BaseHTTPRequestHandler):
                 'portfolio','bankroll','sovereign','forge','signal',
             ]
             if owner and any(t in msg_lower for t in FREDDIE_TRIGGERS) and empire:
-                # Generate natural language answer from empire data
                 freddie_prompt = [
                     {"role": "system", "content": (
                         "You are Herald, a personal AI. The user is asking about their "
@@ -1053,8 +1061,6 @@ class Handler(BaseHTTPRequestHandler):
                     {"role": "user", "content": message}
                 ]
                 direct_reply = call_openrouter(freddie_prompt, use_search=False)
-
-            # Weather -- wttr.in primary, WeatherAPI backup
             elif any(w in msg_lower for w in ['weather','forecast','temperature','rain',
                                               'snow','wind','sunny','humid','hot outside',
                                               'cold outside','umbrella']):
@@ -1062,24 +1068,16 @@ class Handler(BaseHTTPRequestHandler):
                 direct_reply = fetch_weather_direct(loc)
                 if not direct_reply:
                     direct_reply = fetch_weather_backup(loc)
-
-            # Sports scores -- ESPN unofficial, no key needed
             elif any(w in msg_lower for w in ['score','scores','game today','cowboys',
                                                'rangers','mavs','mavericks','stars',
                                                'nfl','nba','mlb','nhl','playoffs','standings']):
                 direct_reply = fetch_sports_direct(msg_lower)
-
-            # Crypto prices -- CoinGecko, no key needed
             elif any(w in msg_lower for w in ['bitcoin','ethereum','solana','crypto',
                                                'btc','eth','sol price','crypto price']):
                 direct_reply = fetch_crypto_direct()
-
-            # News -- GNews primary, NewsData backup
             elif any(w in msg_lower for w in ['news','headlines','top stories',
                                                'what is happening','what happened today']):
                 direct_reply = fetch_news_direct()
-
-            # Movies and TV -- OMDb
             elif any(w in msg_lower for w in ['movie','film','imdb','rotten tomatoes',
                                                'what to watch','watch tonight']):
                 for kw in ['about ','review of ','tell me about ']:
@@ -1089,14 +1087,11 @@ class Handler(BaseHTTPRequestHandler):
                         if query:
                             direct_reply = fetch_movie_direct(query)
                             break
-
-            # Stock prices -- Alpha Vantage
             elif any(w in msg_lower for w in ['stock','share price','trading at','stock price']):
                 symbol = extract_stock_symbol(message)
                 if symbol:
                     direct_reply = fetch_stock_direct(symbol)
 
-            # Fall through to OpenRouter for everything else
             if direct_reply:
                 raw_reply  = direct_reply
                 use_search = False
@@ -1188,8 +1183,9 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     load_profiles()
     load_invites()
-    print(f"[HERALD API v4.9] Starting on port {PORT}")
+    print(f"[HERALD API v5.1] Starting on port {PORT}")
     print(f"[HERALD API] OpenRouter:    {'YES' if OPENROUTER_KEY else 'MISSING -- required'}")
+    print(f"[HERALD API] Geocoding:     {'YES' if GEOCODING_KEY else 'not set -- city labels disabled'}")
     print(f"[HERALD API] GNews:         {'YES' if GNEWS_KEY else 'not set'}")
     print(f"[HERALD API] OMDb:          {'YES' if OMDB_KEY else 'not set'}")
     print(f"[HERALD API] AlphaVantage:  {'YES' if ALPHA_KEY else 'not set'}")
