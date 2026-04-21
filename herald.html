@@ -247,23 +247,15 @@ function initLocationWatcher(){
   );
 }
 
-// Reverse geocode: device calls Google, sets currentLocationLabel (e.g. "Waco, TX")
-// Only fires when position actually changes. Costs fractions of a cent.
-// IMPORTANT: replace YOUR_GOOGLE_API_KEY below with your actual key.
-// Enable "Geocoding API" in Google Cloud Console on the same project as your Maps key.
+// Reverse geocode: calls Railway /geocode endpoint -- key never in HTML file.
+// GOOGLE_GEOCODING_KEY lives in Railway environment variables only.
+// Non-fatal: coordinates still sent to API even if label lookup fails.
 async function reverseGeocode(lat,lng){
   try{
-    const apiKey='YOUR_GOOGLE_API_KEY'; // <-- replace with your key
-    const url=`https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&result_type=locality|administrative_area_level_1&key=${apiKey}`;
-    const res=await fetch(url);
+    const res=await fetch(RAILWAY_URL+'/geocode?lat='+lat+'&lng='+lng);
     const data=await res.json();
-    if(data.results&&data.results.length>0){
-      const c=data.results[0].address_components;
-      const city=c.find(x=>x.types.includes('locality'))?.long_name;
-      const state=c.find(x=>x.types.includes('administrative_area_level_1'))?.short_name;
-      currentLocationLabel=(city&&state)?`${city}, ${state}`:data.results[0].formatted_address;
-    }
-  }catch(e){/* non-fatal — coordinates still sent even if label fails */}
+    if(data.label)currentLocationLabel=data.label;
+  }catch(e){/* non-fatal */}
 }
 
 // Helper: returns GPS object for API body (backward-compatible with existing backend)
