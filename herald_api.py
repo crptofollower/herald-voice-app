@@ -1,28 +1,9 @@
 # herald_api.py
 # Herald PWA Backend -- Railway Cloud Server
+# v5.2 -- FORGE-002: Herald <-> Freddie on-demand sync webhook
 # v5.1 -- Added /geocode endpoint (Google Geocoding via Railway env var)
 # v5.0 -- Freddie natural language intelligence + rich empire data
 # v4.9 -- direct APIs: weather, sports, crypto, news, movies, stocks
-#
-# Environment variables required in Railway dashboard:
-#   OPENROUTER_API_KEY    = your sk-or-... key
-#   HERALD_ACCESS_CODE    = legacy code (herald2026)
-#   HERALD_OWNER_CODE     = your personal code (miked2026)
-#   HERALD_INVITE_SECRET  = your secret password to generate invite links
-#   GOOGLE_GEOCODING_KEY  = Google Geocoding API key (never in HTML)
-#
-# Free API keys (add to Railway variables):
-#   GNEWS_API_KEY         = from gnews.io (news headlines, 100/day free)
-#   OMDB_API_KEY          = from omdbapi.com (movies/TV, 1000/day free)
-#   ALPHAVANTAGE_KEY      = from alphavantage.co (stocks, 25/day free)
-#   NEWSDATA_API_KEY      = from newsdata.io (news backup, 200/day free)
-#   WEATHER_API_KEY       = from weatherapi.com (weather backup, 1M/month free)
-#
-# Optional:
-#   OPENAI_API_KEY        = sk-... (only needed if using TTS endpoint)
-#   HERALD_OWNER_ID       = your device user_id (legacy fallback)
-#   PROFILES_FILE         = path to profiles JSON (default /data/profiles.json)
-#   INVITES_FILE          = path to invites JSON (default /data/invites.json)
 
 import os
 import json
@@ -49,6 +30,8 @@ NEWSDATA_KEY   = os.environ.get("NEWSDATA_API_KEY", "")
 WEATHER_KEY    = os.environ.get("WEATHER_API_KEY", "")
 GEOCODING_KEY  = os.environ.get("GOOGLE_GEOCODING_KEY", "")
 OR_URL         = "https://openrouter.ai/api/v1/chat/completions"
+VM_WEBHOOK_URL = "http://143.198.18.66:8082/webhook/sync"
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 TTS_URL        = "https://api.openai.com/v1/audio/speech"
 EMPIRE_URL     = "https://raw.githubusercontent.com/crptofollower/herald-voice-app/main/empire_status.json"
 PROFILES_FILE  = os.environ.get("PROFILES_FILE", "/data/profiles.json")
@@ -485,7 +468,7 @@ def build_empire_context(empire):
     return "\n".join(lines)
 
 
-# ── GEOCODING (key in Railway env var -- never in HTML) ───────────────────────
+# ── GEOCODING ─────────────────────────────────────────────────────────────────
 
 def geocode_reverse(lat, lng):
     if not GEOCODING_KEY:
@@ -878,7 +861,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/health"):
             self._json({
-                "status": "ok", "server": "herald-api", "version": "5.1",
+                "status": "ok", "server": "herald-api", "version": "5.2",
                 "apis": {
                     "weather":     "wttr.in + weatherapi backup",
                     "sports":      "ESPN unofficial (no key)",
@@ -889,6 +872,7 @@ class Handler(BaseHTTPRequestHandler):
                     "stocks":      "Alpha Vantage" if ALPHA_KEY else "not configured",
                     "weather_bak": "WeatherAPI" if WEATHER_KEY else "not configured",
                     "geocoding":   "Google Geocoding" if GEOCODING_KEY else "not configured",
+                    "sync":        "VM webhook configured" if WEBHOOK_SECRET else "WEBHOOK_SECRET not set",
                 },
                 "time": datetime.now().isoformat()
             })
@@ -1039,58 +1023,79 @@ class Handler(BaseHTTPRequestHandler):
 
             direct_reply = None
 
-            FREDDIE_TRIGGERS = [
-                'freddie','how are our trades','trading status','open positions',
-                'gate progress','win rate','what did freddie','how is freddie',
-                'empire status','regime','last scan','any setups','near miss',
-                'what is freddie doing','how many trades','expectancy','p&l',
-                'portfolio','bankroll','sovereign','forge','signal',
-            ]
-            if owner and any(t in msg_lower for t in FREDDIE_TRIGGERS) and empire:
-                freddie_prompt = [
-                    {"role": "system", "content": (
-                        "You are Herald, a personal AI. The user is asking about their "
-                        "Freddie autonomous trading system. Answer in 2-4 sentences, "
-                        "conversationally, like a smart friend explaining a complex system simply. "
-                        "No bullet points. No markdown. Speak naturally. "
-                        "If they ask about win rate being 0%, explain the gate clock reset "
-                        "and that it means no closed wins yet, not that the signal failed. "
-                        "If they ask about no trades, explain CHOP window and score gate correctly. "
-                        f"\n\nLIVE FREDDIE DATA:\n{empire}"
-                    )},
-                    {"role": "user", "content": message}
+            # FORGE-002: on-demand sync trigger
+            SYNC_TRIGGERS = ['sync', 'refresh', 'update freddie', 'sync empire', 'refresh data']
+            if owner and any(t in msg_lower for t in SYNC_TRIGGERS):
+                try:
+                    payload = json.dumps({"secret": WEBHOOK_SECRET}).encode("utf-8")
+                    req = urllib.request.Request(
+                        VM_WEBHOOK_URL, data=payload,
+                        headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/5.2"},
+                        method="POST"
+                    )
+                    with urllib.request.urlopen(req, timeout=35) as r:
+                        result = json.loads(r.read().decode())
+                    direct_reply = (
+                        "Done. Just pulled a fresh snapshot from Freddie. What do you want to know?"
+                        if result.get("ok")
+                        else "Sync ran but something went wrong on the VM."
+                    )
+                except Exception:
+                    direct_reply = "Could not reach the VM right now. Try again in a second."
+
+            if not direct_reply:
+                FREDDIE_TRIGGERS = [
+                    'freddie','how are our trades','trading status','open positions',
+                    'gate progress','win rate','what did freddie','how is freddie',
+                    'empire status','regime','last scan','any setups','near miss',
+                    'what is freddie doing','how many trades','expectancy','p&l',
+                    'portfolio','bankroll','sovereign','forge','signal',
                 ]
-                direct_reply = call_openrouter(freddie_prompt, use_search=False)
-            elif any(w in msg_lower for w in ['weather','forecast','temperature','rain',
-                                              'snow','wind','sunny','humid','hot outside',
-                                              'cold outside','umbrella']):
-                loc = extract_weather_location(message, profile.get('location','Dallas TX'))
-                direct_reply = fetch_weather_direct(loc)
-                if not direct_reply:
-                    direct_reply = fetch_weather_backup(loc)
-            elif any(w in msg_lower for w in ['score','scores','game today','cowboys',
-                                               'rangers','mavs','mavericks','stars',
-                                               'nfl','nba','mlb','nhl','playoffs','standings']):
-                direct_reply = fetch_sports_direct(msg_lower)
-            elif any(w in msg_lower for w in ['bitcoin','ethereum','solana','crypto',
-                                               'btc','eth','sol price','crypto price']):
-                direct_reply = fetch_crypto_direct()
-            elif any(w in msg_lower for w in ['news','headlines','top stories',
-                                               'what is happening','what happened today']):
-                direct_reply = fetch_news_direct()
-            elif any(w in msg_lower for w in ['movie','film','imdb','rotten tomatoes',
-                                               'what to watch','watch tonight']):
-                for kw in ['about ','review of ','tell me about ']:
-                    if kw in msg_lower:
-                        idx = msg_lower.index(kw) + len(kw)
-                        query = message[idx:].strip().rstrip('?.,!')
-                        if query:
-                            direct_reply = fetch_movie_direct(query)
-                            break
-            elif any(w in msg_lower for w in ['stock','share price','trading at','stock price']):
-                symbol = extract_stock_symbol(message)
-                if symbol:
-                    direct_reply = fetch_stock_direct(symbol)
+                if owner and any(t in msg_lower for t in FREDDIE_TRIGGERS) and empire:
+                    freddie_prompt = [
+                        {"role": "system", "content": (
+                            "You are Herald, a personal AI. The user is asking about their "
+                            "Freddie autonomous trading system. Answer in 2-4 sentences, "
+                            "conversationally, like a smart friend explaining a complex system simply. "
+                            "No bullet points. No markdown. Speak naturally. "
+                            "If they ask about win rate being 0%, explain the gate clock reset "
+                            "and that it means no closed wins yet, not that the signal failed. "
+                            "If they ask about no trades, explain CHOP window and score gate correctly. "
+                            f"\n\nLIVE FREDDIE DATA:\n{empire}"
+                        )},
+                        {"role": "user", "content": message}
+                    ]
+                    direct_reply = call_openrouter(freddie_prompt, use_search=False)
+                elif any(w in msg_lower for w in ['weather','forecast','temperature','rain',
+                                                  'snow','wind','sunny','humid','hot outside',
+                                                  'cold outside','umbrella']):
+                    loc = extract_weather_location(message, profile.get('location','Dallas TX'))
+                    direct_reply = fetch_weather_direct(loc)
+                    if not direct_reply:
+                        direct_reply = fetch_weather_backup(loc)
+                elif any(w in msg_lower for w in ['score','scores','game today','cowboys',
+                                                   'rangers','mavs','mavericks','stars',
+                                                   'nfl','nba','mlb','nhl','playoffs','standings']):
+                    direct_reply = fetch_sports_direct(msg_lower)
+                elif any(w in msg_lower for w in ['bitcoin','ethereum','solana','crypto',
+                                                   'btc','eth','sol price','crypto price']):
+                    direct_reply = fetch_crypto_direct()
+                elif any(w in msg_lower for w in ['news','headlines','top stories',
+                                                   'what is happening','what happened today']):
+                    direct_reply = fetch_news_direct()
+                elif any(w in msg_lower for w in ['movie','film','imdb','rotten tomatoes',
+                                                   'what to watch','watch tonight']):
+                    for kw in ['about ','review of ','tell me about ']:
+                        if kw in msg_lower:
+                            idx = msg_lower.index(kw) + len(kw)
+                            query = message[idx:].strip().rstrip('?.,!')
+                            if query:
+                                direct_reply = fetch_movie_direct(query)
+                                break
+                elif any(w in msg_lower for w in ['stock','share price','trading at','stock price']):
+                    symbol = extract_stock_symbol(message)
+                    if symbol:
+                        direct_reply = fetch_stock_direct(symbol)
 
             if direct_reply:
                 raw_reply  = direct_reply
@@ -1167,6 +1172,32 @@ class Handler(BaseHTTPRequestHandler):
             invite_list = sorted(invites.values(), key=lambda x: x.get("created_at",""), reverse=True)
             self._json({"ok": True, "invites": invite_list, "total": len(invite_list)})
 
+        elif self.path == "/sync":
+            user_id   = data.get("user_id", "").strip()
+            auth_code = data.get("auth_code", "").strip()
+            if not user_id:
+                self._json({"error": "user_id required"}, 400)
+                return
+            if not is_owner(user_id, auth_code):
+                self._json({"error": "owner only"}, 401)
+                return
+            try:
+                payload = json.dumps({"secret": WEBHOOK_SECRET}).encode("utf-8")
+                req = urllib.request.Request(
+                    VM_WEBHOOK_URL, data=payload,
+                    headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/5.2"},
+                    method="POST"
+                )
+                with urllib.request.urlopen(req, timeout=35) as r:
+                    result = json.loads(r.read().decode())
+                self._json({
+                    "ok":           result.get("ok", False),
+                    "triggered_at": result.get("triggered_at", ""),
+                    "message":      "Sync complete" if result.get("ok") else "Sync failed",
+                })
+            except Exception as e:
+                self._json({"ok": False, "error": f"VM unreachable: {str(e)[:100]}"}, 503)
+
         else:
             self._json({"error": "not found"}, 404)
 
@@ -1183,7 +1214,7 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     load_profiles()
     load_invites()
-    print(f"[HERALD API v5.1] Starting on port {PORT}")
+    print(f"[HERALD API v5.2] Starting on port {PORT}")
     print(f"[HERALD API] OpenRouter:    {'YES' if OPENROUTER_KEY else 'MISSING -- required'}")
     print(f"[HERALD API] Geocoding:     {'YES' if GEOCODING_KEY else 'not set -- city labels disabled'}")
     print(f"[HERALD API] GNews:         {'YES' if GNEWS_KEY else 'not set'}")
@@ -1194,5 +1225,6 @@ if __name__ == "__main__":
     print(f"[HERALD API] Profiles:      {PROFILES_FILE}")
     print(f"[HERALD API] Owner code:    {'SET' if OWNER_CODE else 'NOT SET'}")
     print(f"[HERALD API] Invite secret: {'SET' if INVITE_SECRET else 'NOT SET'}")
+    print(f"[HERALD API] Webhook:       {'SET' if WEBHOOK_SECRET else 'NOT SET -- add WEBHOOK_SECRET'}")
     server = HTTPServer(("0.0.0.0", PORT), Handler)
     server.serve_forever()
