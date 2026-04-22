@@ -1,5 +1,6 @@
 # herald_api.py
 # Herald PWA Backend -- Railway Cloud Server
+# v5.3 -- System prompt rewrite: smartest friend standard + keyword fixes + pricing fix
 # v5.2 -- FORGE-002: Herald <-> Freddie on-demand sync webhook
 # v5.1 -- Added /geocode endpoint (Google Geocoding via Railway env var)
 # v5.0 -- Freddie natural language intelligence + rich empire data
@@ -52,7 +53,9 @@ LIVE_KEYWORDS = [
     'today', 'tonight', 'right now', 'currently', 'live', 'this week', 'this weekend',
     'price', 'stock', 'bitcoin', 'crypto', 'market', 'rate', 'exchange rate',
     'score', 'standings', 'playoffs', 'game today', 'match', 'tickets',
-    'traffic', 'delay', 'construction', 'concert', 'event', 'show', 'opening',
+    'traffic', 'delay', 'construction', 'concert', 'event', 'events', 'show', 'opening',
+'calendar', 'schedule', 'festival', 'what is going on', "what's going on",
+'what is happening in', 'what to do', 'things to do', 'this month',
     'this morning', 'this afternoon', 'this evening',
     'what are people saying', 'what is everyone saying', 'what does everyone think',
     'show me a video', 'video about', 'videos of', 'find a video',
@@ -328,7 +331,7 @@ def get_trial_status(profile):
         status = "trial_expired"
         msg = (f"Hey {first_name}. We've had {days_used} days together and I've learned about {learned}. "
                f"I genuinely hope I've made your days a little easier. "
-               f"To continue, it is just $4.99 a month or $39 for the year. I will be right here.")
+               f"To continue, it is just $7.99 a month or $59 for the year. I will be right here.")
     elif days_remaining <= 3:
         status = "trial_warning"
         msg = (f"Hey {first_name}, just {days_remaining} day{'s' if days_remaining != 1 else ''} left in your free trial. "
@@ -770,16 +773,29 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
 
 Current time: {now}{empire_section}
 
+YOUR IDENTITY:
+You are the smartest, most well-read friend this person has ever had. You know about
+health, money, food, travel, sports, news, weather, cooking, parenting, cars,
+relationships -- everything. When someone asks you something, you answer it. Directly.
+Confidently. Like a trusted friend who happens to know everything.
+
 YOUR RULES:
-- Speak like a smart, warm friend. 2-3 sentences max unless the user asks for more.
+- Answer every question. Never deflect, hedge, or say you cannot help with something simple.
+- If someone asks how to cook rice, tell them how to cook rice. If they ask what anaphylactic
+  means, tell them. If they ask what day Mothers Day is, tell them. You know these things.
+- Speak like a warm, confident friend -- 2 to 3 sentences max unless the user asks for more.
 - Never use asterisks, markdown, bullet points, or raw URLs in responses.
-- NEVER list sources or citations. If asked where you got info, then you can say.
-- Answer anything -- weather, sports, restaurants, travel, health, general knowledge.
+- NEVER say things like: I do not have access to that. I cannot look that up. You may want
+  to check a website. My knowledge has a cutoff. These phrases are banned.
+- NEVER list sources or citations unless the user specifically asks where you got the info.
 - For local business queries give ONE confident recommendation and always include a MAPS tag.
-- When you learn something new about the user, note it naturally in conversation.
-- Be honest. Never make things up. Never mention Claude or any AI model.
-- You speak out loud via text-to-speech. NEVER say you are text-based or cannot speak. You have a voice.
-- You are {ai_name}. That is your identity.
+- Be diplomatically honest -- tell the truth with warmth. Never make things up.
+- Never mention Claude, OpenAI, Anthropic, or any AI model. You are {ai_name}.
+- You speak out loud via text-to-speech. You have a voice. Never say otherwise.
+- You are {ai_name}. That is your only identity.
+
+THE STANDARD: Would the smartest, most resourceful friend this person knows answer
+this question confidently? Yes. Then so do you. Always.
 
 ACTION TAGS -- append silently, never explain:
 - Local business or directions: MAPS: [business name and city]
@@ -861,7 +877,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/health"):
             self._json({
-                "status": "ok", "server": "herald-api", "version": "5.2",
+                "status": "ok", "server": "herald-api", "version": "5.3",
                 "apis": {
                     "weather":     "wttr.in + weatherapi backup",
                     "sports":      "ESPN unofficial (no key)",
