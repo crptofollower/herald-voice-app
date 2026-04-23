@@ -1,19 +1,16 @@
 # herald_api.py
 # Herald PWA Backend -- Railway Cloud Server
-# v5.3 -- System prompt rewrite: smartest friend standard + keyword fixes + pricing fix
+# v6.0 -- Streaming SSE / Brave Search / Yahoo Finance / Response Cache /
+#          Voice-Optimized Prompts / Morning Greeting / Explicit Memory Endpoint
+# v5.4 -- Never-comment-on-repeat-questions rule
+# v5.3 -- System prompt rewrite: smartest friend standard + keyword fixes
 # v5.2 -- FORGE-002: Herald <-> Freddie on-demand sync webhook
-# v5.1 -- Added /geocode endpoint (Google Geocoding via Railway env var)
-# v5.0 -- Freddie natural language intelligence + rich empire data
+# v5.1 -- Added /geocode endpoint
+# v5.0 -- Freddie natural language intelligence
 # v4.9 -- direct APIs: weather, sports, crypto, news, movies, stocks
 
-import os
-import json
-import re
-import random
-import string
-import urllib.request
-import urllib.error
-import urllib.parse
+import os, json, re, random, string, time, http.client, ssl
+import urllib.request, urllib.error, urllib.parse
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime
 
@@ -30,6 +27,7 @@ ALPHA_KEY      = os.environ.get("ALPHAVANTAGE_KEY", "")
 NEWSDATA_KEY   = os.environ.get("NEWSDATA_API_KEY", "")
 WEATHER_KEY    = os.environ.get("WEATHER_API_KEY", "")
 GEOCODING_KEY  = os.environ.get("GOOGLE_GEOCODING_KEY", "")
+BRAVE_KEY      = os.environ.get("BRAVE_SEARCH_KEY", "")   # NEW v6.0
 OR_URL         = "https://openrouter.ai/api/v1/chat/completions"
 VM_WEBHOOK_URL = "http://143.198.18.66:8082/webhook/sync"
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
@@ -40,6 +38,27 @@ INVITES_FILE   = os.environ.get("INVITES_FILE",  "/data/invites.json")
 
 MODEL_SEARCH = "anthropic/claude-haiku-4-5:online"
 MODEL_FAST   = "anthropic/claude-haiku-4-5"
+
+# ── RESPONSE CACHE (in-memory, TTL per category) ──────────────────────────────
+# Saves LLM + API cost on repeated common queries.
+# Weather: 15 min | News: 10 min | Crypto: 2 min | Stocks: 5 min
+_cache = {}
+CACHE_TTL = {'weather': 900, 'news': 600, 'crypto': 120, 'stock': 300}
+
+def cache_get(key, category='default'):
+    entry = _cache.get(key)
+    if not entry:
+        return None
+    ttl = CACHE_TTL.get(category, 600)
+    if time.time() - entry['ts'] > ttl:
+        del _cache[key]
+        return None
+    return entry['val']
+
+def cache_set(key, val, category='default'):
+    if val:
+        _cache[key] = {'val': val, 'ts': time.time()}
+
 
 LIVE_KEYWORDS = [
     'weather', 'forecast', 'temperature', 'rain', 'snow', 'sunny', 'humid', 'wind',
@@ -54,8 +73,8 @@ LIVE_KEYWORDS = [
     'price', 'stock', 'bitcoin', 'crypto', 'market', 'rate', 'exchange rate',
     'score', 'standings', 'playoffs', 'game today', 'match', 'tickets',
     'traffic', 'delay', 'construction', 'concert', 'event', 'events', 'show', 'opening',
-'calendar', 'schedule', 'festival', 'what is going on', "what's going on",
-'what is happening in', 'what to do', 'things to do', 'this month',
+    'calendar', 'schedule', 'festival', 'what is going on', "what's going on",
+    'what is happening in', 'what to do', 'things to do', 'this month',
     'this morning', 'this afternoon', 'this evening',
     'what are people saying', 'what is everyone saying', 'what does everyone think',
     'show me a video', 'video about', 'videos of', 'find a video',
@@ -76,6 +95,7 @@ FAST_OVERRIDES = [
     'open youtube', 'get my youtube', 'open tiktok', 'get my tiktok',
     'open facebook', 'get my facebook', 'open fb',
     'launch x', 'launch instagram', 'launch youtube', 'launch tiktok',
+    'remember that', 'remember this', "don't forget", 'make a note',
 ]
 
 PREFERENCE_SIGNALS = {
@@ -183,6 +203,7 @@ def persist_profiles():
 def get_profile(user_id):
     return user_profiles.get(user_id, {
         "name": "", "ai_name": "Herald", "location": "", "notes": [],
+        "memories": [],
         "preferences": {}, "query_counts": {},
         "created_at": datetime.now().isoformat(),
         "paid": False, "paid_until": None, "trial_days": 30,
@@ -248,6 +269,29 @@ def is_about_me_query(message):
     ]
     return any(t in message.lower() for t in triggers)
 
+def is_memory_trigger(message):
+    """Detect explicit memory save requests."""
+    triggers = [
+        'remember that', 'remember this', "don't forget", "dont forget",
+        'make a note', 'note that', 'keep in mind', 'take note',
+        'write this down', 'save this',
+    ]
+    return any(t in message.lower() for t in triggers)
+
+def extract_memory_fact(message):
+    """Pull the fact out of a memory request."""
+    msg = message.strip()
+    for prefix in ['remember that', 'remember this', "don't forget", "dont forget",
+                   'make a note that', 'make a note', 'note that', 'keep in mind that',
+                   'keep in mind', 'take note that', 'take note', 'write this down',
+                   'save this']:
+        if prefix in msg.lower():
+            idx = msg.lower().index(prefix) + len(prefix)
+            fact = msg[idx:].strip().lstrip(':').strip()
+            if fact:
+                return fact[:120]
+    return msg[:120]
+
 
 # ── PROFILE SUMMARY ───────────────────────────────────────────────────────────
 
@@ -272,6 +316,7 @@ def build_about_me(profile):
     ai_name  = profile.get("ai_name", "Herald")
     location = profile.get("location", "")
     notes    = profile.get("notes", [])
+    memories = profile.get("memories", [])
     prefs    = profile.get("preferences", {})
     counts   = profile.get("query_counts", {})
     created  = profile.get("created_at", "")
@@ -289,7 +334,8 @@ def build_about_me(profile):
     if sports: parts.append(f"Sports: you follow {', '.join(sorted(sports,key=sports.get,reverse=True)[:2])}.")
     music = {k:v for k,v in prefs.get("music",{}).items() if v >= 1}
     if music: parts.append(f"Music: you're into {', '.join(sorted(music,key=music.get,reverse=True)[:2])}.")
-    if notes: parts.append(f"Things you've mentioned: {'; '.join(notes[-3:])}.")
+    all_notes = list(dict.fromkeys((memories + notes)[-6:]))
+    if all_notes: parts.append(f"Things you've told me: {'; '.join(all_notes)}.")
     if counts:
         top_cats = [(c,n) for c,n in sorted(counts.items(),key=lambda x:-x[1])[:3] if n >= 2]
         if top_cats: parts.append(f"You ask me about {', '.join(f'{c} ({n}x)' for c,n in top_cats)} most often.")
@@ -331,11 +377,11 @@ def get_trial_status(profile):
         status = "trial_expired"
         msg = (f"Hey {first_name}. We've had {days_used} days together and I've learned about {learned}. "
                f"I genuinely hope I've made your days a little easier. "
-               f"To continue, it is just $7.99 a month or $59 for the year. I will be right here.")
+               f"To continue, it is just 7 dollars and 99 cents a month or 59 dollars for the year. I will be right here.")
     elif days_remaining <= 3:
         status = "trial_warning"
         msg = (f"Hey {first_name}, just {days_remaining} day{'s' if days_remaining != 1 else ''} left in your free trial. "
-               f"Keep {ai_name} for $4.99 a month, tap below anytime.")
+               f"Keep {ai_name} for 7 dollars and 99 cents a month, tap below anytime.")
     elif days_remaining <= 7:
         status = "trial_warning"
         msg = None
@@ -361,7 +407,7 @@ def fetch_empire():
 def fetch_live_empire():
     try:
         url = "http://143.198.18.66:8080/api/status"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/5.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/6.0"})
         with urllib.request.urlopen(req, timeout=8) as r:
             data = json.loads(r.read().decode())
         positions     = data.get("positions", [])
@@ -416,7 +462,7 @@ def fetch_live_empire():
         nm_section    = "\n".join(nm_lines)    if nm_lines    else "  None today"
         forge_section = ", ".join(forge_names) if forge_names else "none recorded"
         gate_pct      = round(clean_trades / 20 * 100, 1)
-        return f"""FREDDIE EMPIRE -- LIVE INTELLIGENCE (real-time):
+        return f"""FREDDIE EMPIRE -- LIVE INTELLIGENCE:
 
 POSITIONS ({len(positions)} open):
 {pos_section}
@@ -424,10 +470,10 @@ POSITIONS ({len(positions)} open):
 ACTIVE SETUPS (last scan):
 {setup_section}
 
-NEAR MISS SETUPS (just below threshold):
+NEAR MISS SETUPS:
 {nm_section}
 
-PERFORMANCE (clean trades since April 15 baseline):
+PERFORMANCE:
   Clean trades: {clean_trades}/20 gate ({gate_pct}%) | Stage: {stage}
   Win rate: {clean_wr:.1f}% | Total P&L: ${total_pnl:+.2f}
   Expectancy: ${expectancy:+.2f}/trade | Avg win: ${avg_win:.2f} | Avg loss: ${avg_loss:.2f}
@@ -437,15 +483,7 @@ MARKET CONTEXT:
   Solana TVL: ${tvl_b/1e9:.1f}B | Signal: {tvl_sig}
 
 SYSTEM:
-  Last scan: {last_scan}
-  Forges built: {forge_section}
-
-CONTEXT:
-  - Gate lowered to 20 clean trades (sim confirmed edge on 208 trades)
-  - Win rate will be 0% until first clean WIN -- this is correct, not a failure
-  - CHOP window means score gate is blocking correctly -- system working as designed
-  - 13 assets in universe, OP is star at 54.8% WR sim
-  - Grade-based sizing: TREND A=5%, SWING A=3%, SWING B=1.5%, SCALP=1%
+  Last scan: {last_scan} | Forges built: {forge_section}
 """
     except Exception as e:
         empire = fetch_empire()
@@ -467,7 +505,6 @@ def build_empire_context(empire):
             lines.append(f"  {p.get('asset','')} {p.get('direction','')} | entry ${p.get('entry',0)} | stop ${p.get('stop',0)} | target ${p.get('target',0)}")
     else:
         lines.append("OPEN POSITIONS: None -- flat right now")
-    lines.append("CRITICAL: 0% win rate reflects contaminated pre-April-12 data. Signal is proven.")
     return "\n".join(lines)
 
 
@@ -480,7 +517,7 @@ def geocode_reverse(lat, lng):
         url = (f"https://maps.googleapis.com/maps/api/geocode/json"
                f"?latlng={lat},{lng}&result_type=locality|administrative_area_level_1"
                f"&key={GEOCODING_KEY}")
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/5.1"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/6.0"})
         with urllib.request.urlopen(req, timeout=4) as r:
             data = json.loads(r.read().decode())
         if data.get("results"):
@@ -493,6 +530,39 @@ def geocode_reverse(lat, lng):
     except Exception as e:
         print(f"[HERALD] Geocode failed: {e}")
     return None
+
+
+# ── BRAVE SEARCH (NEW v6.0) ───────────────────────────────────────────────────
+# Free tier: 2,000 queries/month. No credit card. signup: search.brave.com/api
+# Replaces haiku:online for web queries -- saves ~75% per search call.
+
+def fetch_brave_search(query, count=5):
+    if not BRAVE_KEY:
+        return None
+    try:
+        encoded = urllib.parse.quote(query)
+        url = (f"https://api.search.brave.com/res/v1/web/search"
+               f"?q={encoded}&count={count}&search_lang=en&country=us&text_decorations=false")
+        req = urllib.request.Request(url, headers={
+            "Accept": "application/json",
+            "X-Subscription-Token": BRAVE_KEY,
+            "User-Agent": "HeraldAI/6.0"
+        })
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = json.loads(r.read().decode())
+        results = data.get("web", {}).get("results", [])
+        if not results:
+            return None
+        snippets = []
+        for result in results[:4]:
+            title = result.get("title", "")
+            desc  = result.get("description", "")
+            if desc:
+                snippets.append(f"{title}: {desc}")
+        return "\n".join(snippets) if snippets else None
+    except Exception as e:
+        print(f"[HERALD] Brave search failed: {e}")
+        return None
 
 
 # ── DIRECT API FUNCTIONS ──────────────────────────────────────────────────────
@@ -511,7 +581,7 @@ def fetch_weather_direct(location):
     try:
         clean_loc = location.strip().replace(' ', '+')
         url = f"https://wttr.in/{clean_loc}?format=j1"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.0"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         cur  = data["current_condition"][0]
@@ -543,7 +613,7 @@ def fetch_weather_backup(location):
     try:
         encoded = urllib.parse.quote(location)
         url = f"https://api.weatherapi.com/v1/forecast.json?key={WEATHER_KEY}&q={encoded}&days=1&aqi=no"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.0"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         cur  = data["current"]
@@ -586,7 +656,7 @@ def fetch_sports_direct(msg_lower):
                 sport, league = val
                 break
         url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.0"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         events = data.get("events", [])
@@ -613,7 +683,7 @@ def fetch_crypto_direct():
     try:
         url = ("https://api.coingecko.com/api/v3/simple/price"
                "?ids=bitcoin,ethereum,solana&vs_currencies=usd&include_24hr_change=true")
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.0"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         parts = []
@@ -622,7 +692,14 @@ def fetch_crypto_direct():
                 price  = data[coin]["usd"]
                 change = data[coin].get("usd_24h_change", 0)
                 direc  = "up" if change >= 0 else "down"
-                parts.append(f"{label} is at {price:,.0f} dollars, {direc} {abs(change):.1f} percent today")
+                # Format price for voice: no symbols, natural numbers
+                price_int   = int(price)
+                price_cents = round((price - price_int) * 100)
+                if price_cents > 0:
+                    price_str = f"{price_int:,} dollars and {price_cents} cents"
+                else:
+                    price_str = f"{price_int:,} dollars"
+                parts.append(f"{label} is at {price_str}, {direc} {abs(change):.1f} percent today")
         return ". ".join(parts) + "." if parts else None
     except Exception as e:
         print(f"[HERALD] CoinGecko failed: {e}")
@@ -637,7 +714,7 @@ def fetch_news_direct(query=None):
             url = f"https://gnews.io/api/v4/search?q={encoded}&lang=en&max=5&token={GNEWS_KEY}"
         else:
             url = f"https://gnews.io/api/v4/top-headlines?lang=en&country=us&max=5&token={GNEWS_KEY}"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.0"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         articles = data.get("articles", [])
@@ -658,7 +735,7 @@ def fetch_news_backup(query=None):
             url = f"https://newsdata.io/api/1/latest?apikey={NEWSDATA_KEY}&q={encoded}&language=en"
         else:
             url = f"https://newsdata.io/api/1/latest?apikey={NEWSDATA_KEY}&language=en&country=us"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.0"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         results = data.get("results", [])
@@ -676,17 +753,17 @@ def fetch_movie_direct(query):
     try:
         encoded = urllib.parse.quote(query)
         url = f"https://www.omdbapi.com/?t={encoded}&apikey={OMDB_KEY}"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.0"})
         with urllib.request.urlopen(req, timeout=5) as r:
             d = json.loads(r.read().decode())
         if d.get("Response") == "False":
             url2 = f"https://www.omdbapi.com/?s={encoded}&apikey={OMDB_KEY}"
-            req2 = urllib.request.Request(url2, headers={"User-Agent": "HeraldAI/1.0"})
+            req2 = urllib.request.Request(url2, headers={"User-Agent": "HeraldAI/6.0"})
             with urllib.request.urlopen(req2, timeout=5) as r2:
                 d2 = json.loads(r2.read().decode())
             results = d2.get("Search", [])
             if results:
-                titles = [f"{r['Title']} ({r['Year']})" for r in results[:3]]
+                titles = [f"{r['Title']} from {r['Year']}" for r in results[:3]]
                 return "Here are some matches: " + ", ".join(titles) + "."
             return None
         title  = d.get("Title", "")
@@ -696,7 +773,7 @@ def fetch_movie_direct(query):
         genre  = d.get("Genre", "")
         rt     = next((r["Value"] for r in d.get("Ratings", []) if r["Source"] == "Rotten Tomatoes"), None)
         rt_str = f" Rotten Tomatoes: {rt}." if rt else ""
-        return f"{title} ({year}) is a {genre} film rated {rating} out of 10 on IMDb.{rt_str} {plot}"
+        return f"{title} from {year} is a {genre} film rated {rating} out of 10 on IMDb.{rt_str} {plot}"
     except Exception as e:
         print(f"[HERALD] OMDb failed: {e}")
         return None
@@ -707,6 +784,8 @@ def extract_stock_symbol(message):
         'AMAZON': 'AMZN', 'TESLA': 'TSLA', 'META': 'META', 'FACEBOOK': 'META',
         'NVIDIA': 'NVDA', 'NETFLIX': 'NFLX', 'DISNEY': 'DIS', 'WALMART': 'WMT',
         'COCA COLA': 'KO', 'COKE': 'KO', 'FORD': 'F', 'JPMORGAN': 'JPM', 'CHASE': 'JPM',
+        'PALANTIR': 'PLTR', 'AMD': 'AMD', 'INTEL': 'INTC', 'UBER': 'UBER',
+        'AIRBNB': 'ABNB', 'COINBASE': 'COIN', 'ROBINHOOD': 'HOOD',
     }
     msg_upper = message.upper()
     for name, ticker in known.items():
@@ -719,13 +798,55 @@ def extract_stock_symbol(message):
             return clean
     return None
 
+def fetch_yahoo_stock(symbol):
+    """Primary stock source -- Yahoo Finance unofficial endpoint. Free, no key required."""
+    try:
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol.upper()}?interval=1d&range=1d"
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        })
+        with urllib.request.urlopen(req, timeout=6) as r:
+            data = json.loads(r.read().decode())
+        result = data['chart']['result'][0]
+        meta   = result['meta']
+        price      = meta.get('regularMarketPrice', 0)
+        prev_close = meta.get('previousClose') or meta.get('chartPreviousClose', 0)
+        change     = price - prev_close if prev_close else 0
+        change_pct = (change / prev_close * 100) if prev_close else 0
+        long_name  = meta.get('longName', symbol.upper())
+        direc = "up" if change >= 0 else "down"
+        # Format for voice: no dollar signs, natural speech
+        price_int   = int(price)
+        price_cents = round((price - price_int) * 100)
+        if price_cents > 0:
+            price_str = f"{price_int:,} dollars and {price_cents} cents"
+        else:
+            price_str = f"{price_int:,} dollars"
+        abs_change = abs(change)
+        chg_int    = int(abs_change)
+        chg_cents  = round((abs_change - chg_int) * 100)
+        if chg_cents > 0:
+            chg_str = f"{chg_int} dollars and {chg_cents} cents"
+        else:
+            chg_str = f"{chg_int} dollars"
+        return (f"{long_name} is trading at {price_str}, "
+                f"{direc} {chg_str} or {abs(change_pct):.1f} percent today.")
+    except Exception as e:
+        print(f"[HERALD] Yahoo Finance failed: {e}")
+        return None
+
 def fetch_stock_direct(symbol):
+    """Yahoo Finance first (free), Alpha Vantage as backup (rate limited)."""
+    result = fetch_yahoo_stock(symbol)
+    if result:
+        return result
+    # Backup: Alpha Vantage
     if not ALPHA_KEY:
         return None
     try:
         url = (f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE"
                f"&symbol={symbol.upper()}&apikey={ALPHA_KEY}")
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/1.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.0"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         q = data.get("Global Quote", {})
@@ -735,14 +856,17 @@ def fetch_stock_direct(symbol):
         change = float(q.get("09. change", 0))
         pct    = q.get("10. change percent", "0%").replace("%","").strip()
         direc  = "up" if change >= 0 else "down"
-        return (f"{symbol.upper()} is trading at {price:.2f} dollars, "
+        price_int   = int(price)
+        price_cents = round((price - price_int) * 100)
+        price_str   = f"{price_int} dollars and {price_cents} cents" if price_cents else f"{price_int} dollars"
+        return (f"{symbol.upper()} is trading at {price_str}, "
                 f"{direc} {abs(change):.2f} dollars or {abs(float(pct)):.2f} percent today.")
     except Exception as e:
-        print(f"[HERALD] Alpha Vantage failed: {e}")
+        print(f"[HERALD] Alpha Vantage backup failed: {e}")
         return None
 
 
-# ── SYSTEM PROMPT ─────────────────────────────────────────────────────────────
+# ── SYSTEM PROMPT (v6.0 -- voice-optimized) ───────────────────────────────────
 
 def build_system(profile, local_time=None, owner=False, empire=None, lat=None, lng=None, location_label=None):
     now      = local_time or datetime.now().strftime("%A, %B %d %Y %I:%M %p")
@@ -750,7 +874,11 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
     ai_name  = profile.get("ai_name", "Herald")
     location = profile.get("location", "")
     notes    = profile.get("notes", [])
-    user_line = f"User's name: {name}." if name else "User name not yet learned."
+    memories = profile.get("memories", [])
+    first_name = name if name else None
+
+    user_line = f"User's name: {name}. Use their name naturally and occasionally -- like a trusted friend would. Not every sentence. Just when it feels right." if name else "User name not yet learned."
+
     if lat and lng:
         city_hint = f" near {location_label}" if location_label else (f" in {location}" if location else "")
         loc_line = (f"User's current GPS location{city_hint} ({lat}, {lng}). "
@@ -759,12 +887,16 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
         loc_line = f"User is located in {location}. For local searches use '{location} [thing]'."
     else:
         loc_line = "Location not yet learned -- ask naturally when relevant."
-    notes_line    = ("What you know about this user: " + "; ".join(notes[-10:])) if notes else ""
+
+    # Combine notes and memories, deduplicated, most recent first
+    all_memory = list(dict.fromkeys((memories + notes)[-12:]))
+    notes_line = ("What this user has told you (remember and use naturally): " + "; ".join(all_memory)) if all_memory else ""
     prefs_summary = build_preferences_summary(profile)
-    prefs_line    = f"User preferences learned over time:\n{prefs_summary}" if prefs_summary else ""
+    prefs_line = f"Preferences learned over time:\n{prefs_summary}" if prefs_summary else ""
     context_parts = [p for p in [notes_line, prefs_line] if p]
     context_block = "\n".join(context_parts) if context_parts else "Still learning about this user."
     empire_section = f"\n\n{empire}" if owner and empire else ""
+
     return f"""You are {ai_name} -- a trusted personal AI companion.
 
 {user_line}
@@ -781,23 +913,35 @@ Confidently. Like a trusted friend who happens to know everything.
 
 YOUR RULES:
 - Answer every question. Never deflect, hedge, or say you cannot help with something simple.
-- If someone asks how to cook rice, tell them how to cook rice. If they ask what anaphylactic
-  means, tell them. If they ask what day Mothers Day is, tell them. You know these things.
 - Speak like a warm, confident friend -- 2 to 3 sentences max unless the user asks for more.
+- Match your response length to the question. Simple questions get one sentence.
+  Complex topics get a short paragraph. Never pad. Never summarize what you just said.
 - Never use asterisks, markdown, bullet points, or raw URLs in responses.
-- NEVER say things like: I do not have access to that. I cannot look that up. You may want
-  to check a website. My knowledge has a cutoff. These phrases are banned.
-- NEVER list sources or citations unless the user specifically asks where you got the info.
-- For local business queries give ONE confident recommendation and always include a MAPS tag.
+- NEVER say: I do not have access to that. I cannot look that up. My knowledge has a cutoff.
+  These phrases are banned.
+- NEVER list sources or citations unless the user specifically asks.
+- For local business queries give ONE confident recommendation with a MAPS tag.
 - Be diplomatically honest -- tell the truth with warmth. Never make things up.
 - Never mention Claude, OpenAI, Anthropic, or any AI model. You are {ai_name}.
-- You speak out loud via text-to-speech. You have a voice. Never say otherwise.
+- You speak out loud via text-to-speech. Format ALL responses for listening, not reading.
 - You are {ai_name}. That is your only identity.
+- Never comment on how many times something has been asked.
+
+VOICE FORMATTING -- CRITICAL:
+You speak through a text-to-speech engine. Follow these rules for every response:
+- Write prices in words: say "seventy-four dollars and two cents" not "$74.02"
+- Write large numbers in words: say "one point two million" not "1,200,000"
+- Write percentages in words: say "twelve and a half percent" not "12.5%"
+- Write temperatures in words: say "eighty-five degrees" not "85 degrees F" or "85°"
+- Write stock prices in words: say "one hundred forty two dollars" not "$142.00"
+- Never use symbols: no $, %, °, #, *, &, or @ in your responses
+- Spell out abbreviations when speaking: say "miles per hour" not "mph"
+- Never start a response with a number -- spell it out or rephrase
 
 THE STANDARD: Would the smartest, most resourceful friend this person knows answer
-this question confidently? Yes. Then so do you. Always.
+this question confidently and warmly? Yes. Then so do you. Always.
 
-ACTION TAGS -- append silently, never explain:
+ACTION TAGS -- append silently at end, never explain them:
 - Local business or directions: MAPS: [business name and city]
 - Phone number: PHONE: [digits only]
 - Play music/song/artist/genre: MUSIC: [search query]
@@ -809,7 +953,7 @@ ACTION TAGS -- append silently, never explain:
 - One action tag maximum per response."""
 
 
-# ── LLM CALL ─────────────────────────────────────────────────────────────────
+# ── LLM CALLS ─────────────────────────────────────────────────────────────────
 
 def parse_action(reply):
     for tag, atype in [('MAPS:', 'maps'), ('PHONE:', 'phone'), ('MUSIC:', 'music'),
@@ -842,6 +986,85 @@ def call_openrouter(messages, use_search=True):
     except Exception:
         return "I did not get a response in time, try again in a second."
 
+def call_openrouter_with_search(messages, query):
+    """
+    v6.0 search routing:
+    1. Try Brave Search (free) -> inject results -> use fast model (~$0.005)
+    2. Fall back to haiku:online (~$0.02) if Brave fails or not configured
+    Saves ~75% per web query vs always using haiku:online.
+    """
+    if BRAVE_KEY:
+        search_ctx = fetch_brave_search(query)
+        if search_ctx:
+            augmented = messages.copy()
+            # Inject search results into the user's message
+            augmented[-1] = {
+                "role": "user",
+                "content": f"{query}\n\n[Live web search results for context -- use these to give a current, accurate answer:\n{search_ctx}]"
+            }
+            result = call_openrouter(augmented, use_search=False)
+            print(f"[HERALD] Brave search hit -- used fast model (cost saved)")
+            return result, False  # (reply, used_haiku_online)
+    # Brave not available or failed -- use haiku:online
+    print(f"[HERALD] Brave search miss -- using haiku:online")
+    return call_openrouter(messages, use_search=True), True
+
+def stream_from_openrouter(messages, use_search=True):
+    """
+    Generator: yields text tokens streamed from OpenRouter.
+    Uses http.client directly for chunked SSE reading.
+    """
+    if not OPENROUTER_KEY:
+        yield "Configuration error: API key not set."
+        return
+    model   = MODEL_SEARCH if use_search else MODEL_FAST
+    payload = json.dumps({
+        "model": model,
+        "max_tokens": 600,
+        "messages": messages,
+        "stream": True
+    }).encode("utf-8")
+    ctx  = ssl.create_default_context()
+    conn = http.client.HTTPSConnection("openrouter.ai", context=ctx, timeout=25)
+    try:
+        conn.request("POST", "/api/v1/chat/completions", payload, {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {OPENROUTER_KEY}",
+            "HTTP-Referer": "https://apexempire.ai",
+            "X-Title": "Herald Personal AI",
+            "Content-Length": str(len(payload))
+        })
+        resp = conn.getresponse()
+        if resp.status != 200:
+            yield "I ran into a snag on that one, try asking me again in a moment."
+            return
+        buf = b""
+        while True:
+            chunk = resp.read(512)
+            if not chunk:
+                break
+            buf += chunk
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                line = line.decode("utf-8", errors="ignore").strip()
+                if not line.startswith("data: "):
+                    continue
+                data_str = line[6:]
+                if data_str == "[DONE]":
+                    return
+                try:
+                    data  = json.loads(data_str)
+                    token = data["choices"][0]["delta"].get("content", "")
+                    if token:
+                        yield token
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"[HERALD] Stream error: {e}")
+        yield "I did not get a response in time, try again in a second."
+    finally:
+        conn.close()
+
 def text_to_speech(text):
     if not OPENAI_KEY:
         return None
@@ -855,6 +1078,178 @@ def text_to_speech(text):
             return resp.read()
     except Exception:
         return None
+
+
+# ── SHARED REQUEST SETUP (used by both /ask and /ask/stream) ──────────────────
+
+def build_ask_context(data):
+    """
+    Extract, validate, and prepare everything needed to answer an /ask request.
+    Returns (ctx_dict, error_str). error_str is None on success.
+    """
+    user_id        = data.get("user_id", "").strip()
+    message        = data.get("message", "").strip()
+    if not user_id or not message:
+        return None, "user_id and message required"
+
+    history        = data.get("history", [])
+    local_time     = data.get("local_time", None)
+    lat            = data.get("lat", None)
+    lng            = data.get("lng", None)
+    location_label = data.get("location_label", None)
+    auth_code      = data.get("auth_code", "").strip()
+
+    owner   = is_owner(user_id, auth_code)
+    empire  = fetch_live_empire() if owner else None
+    profile = get_profile(user_id)
+    msg_lower = message.lower()
+
+    # Update profile from message
+    profile = detect_preferences(message, profile)
+    category = tag_query_category(message)
+    profile = increment_query_count(category, profile)
+
+    if "my name is" in msg_lower:
+        try: profile["name"] = message.split("my name is", 1)[1].strip().split()[0].rstrip(".,!?")
+        except Exception: pass
+    if "i live in" in msg_lower or "i'm in " in msg_lower or "i am in " in msg_lower:
+        try:
+            key = "i live in" if "i live in" in msg_lower else "i'm in" if "i'm in" in msg_lower else "i am in"
+            profile["location"] = message.split(key, 1)[1].strip().split(",")[0].strip().rstrip(".,!?")
+        except Exception: pass
+    if "i love" in msg_lower or "i like" in msg_lower or "i prefer" in msg_lower:
+        try:
+            key = next(k for k in ["i love","i like","i prefer"] if k in msg_lower)
+            note = message.split(key, 1)[1].strip().split(".")[0].strip()[:80]
+            if note and note not in profile.get("notes", []):
+                profile.setdefault("notes", []).append(note)
+                if len(profile["notes"]) > 20: profile["notes"] = profile["notes"][-20:]
+        except Exception: pass
+    if "call you" in msg_lower or "your name is" in msg_lower:
+        try:
+            key = "call you" if "call you" in msg_lower else "your name is"
+            profile["ai_name"] = message.split(key, 1)[1].strip().split()[0].rstrip(".,!?").title()
+        except Exception: pass
+
+    save_profile(user_id, profile)
+
+    system   = build_system(profile, local_time, owner, empire, lat, lng, location_label)
+    messages = [{"role": "system", "content": system}]
+    messages += history[-20:]
+    messages.append({"role": "user", "content": message})
+
+    return {
+        "user_id": user_id, "message": message, "msg_lower": msg_lower,
+        "history": history, "local_time": local_time,
+        "lat": lat, "lng": lng, "location_label": location_label,
+        "auth_code": auth_code, "owner": owner, "empire": empire,
+        "profile": profile, "messages": messages, "category": category,
+    }, None
+
+def get_direct_reply(ctx):
+    """
+    Try to answer without hitting the LLM (saves cost + is faster).
+    Returns (reply_str, used_search_bool) or (None, None) if no direct answer.
+    """
+    message   = ctx["message"]
+    msg_lower = ctx["msg_lower"]
+    profile   = ctx["profile"]
+    owner     = ctx["owner"]
+    empire    = ctx["empire"]
+
+    # FORGE-002: on-demand sync
+    SYNC_TRIGGERS = ['sync', 'refresh', 'update freddie', 'sync empire', 'refresh data']
+    if owner and any(t in msg_lower for t in SYNC_TRIGGERS):
+        try:
+            payload = json.dumps({"secret": WEBHOOK_SECRET}).encode("utf-8")
+            req = urllib.request.Request(VM_WEBHOOK_URL, data=payload,
+                headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/6.0"},
+                method="POST")
+            with urllib.request.urlopen(req, timeout=35) as r:
+                result = json.loads(r.read().decode())
+            return ("Done. Just pulled a fresh snapshot from Freddie. What do you want to know?"
+                    if result.get("ok") else "Sync ran but something went wrong on the VM."), False
+        except Exception:
+            return "Could not reach the VM right now. Try again in a second.", False
+
+    # Freddie queries via dedicated LLM call (not search)
+    FREDDIE_TRIGGERS = [
+        'freddie','how are our trades','trading status','open positions',
+        'gate progress','win rate','what did freddie','how is freddie',
+        'empire status','regime','last scan','any setups','near miss',
+        'expectancy','p&l','sovereign','forge','signal','bankroll',
+    ]
+    if owner and any(t in msg_lower for t in FREDDIE_TRIGGERS) and empire:
+        freddie_prompt = [
+            {"role": "system", "content": (
+                "You are Herald, a personal AI. Answer in 2-4 sentences, conversationally. "
+                "No bullet points. No markdown. Speak naturally. Format all numbers and prices "
+                "in words for text-to-speech. Say 'dollars' not '$'. Say 'percent' not '%'."
+                f"\n\nLIVE FREDDIE DATA:\n{empire}"
+            )},
+            {"role": "user", "content": message}
+        ]
+        return call_openrouter(freddie_prompt, use_search=False), False
+
+    # Weather (cached 15 min)
+    if any(w in msg_lower for w in ['weather','forecast','temperature','rain','snow',
+                                     'wind','sunny','humid','hot outside','cold outside','umbrella']):
+        loc = extract_weather_location(message, profile.get('location','Dallas TX'))
+        cached = cache_get(f'weather:{loc}', 'weather')
+        if cached:
+            return cached, False
+        result = fetch_weather_direct(loc) or fetch_weather_backup(loc)
+        cache_set(f'weather:{loc}', result, 'weather')
+        return result, False
+
+    # Sports
+    if any(w in msg_lower for w in ['score','scores','game today','cowboys','rangers',
+                                     'mavs','mavericks','stars','nfl','nba','mlb','nhl',
+                                     'playoffs','standings']):
+        return fetch_sports_direct(msg_lower), False
+
+    # Crypto (cached 2 min)
+    if any(w in msg_lower for w in ['bitcoin','ethereum','solana','crypto','btc','eth',
+                                     'sol price','crypto price']):
+        cached = cache_get('crypto', 'crypto')
+        if cached:
+            return cached, False
+        result = fetch_crypto_direct()
+        cache_set('crypto', result, 'crypto')
+        return result, False
+
+    # News (cached 10 min)
+    if any(w in msg_lower for w in ['news','headlines','top stories',
+                                     'what is happening','what happened today']):
+        cached = cache_get('news_top', 'news')
+        if cached:
+            return cached, False
+        result = fetch_news_direct()
+        cache_set('news_top', result, 'news')
+        return result, False
+
+    # Movies
+    if any(w in msg_lower for w in ['movie','film','imdb','rotten tomatoes','what to watch','watch tonight']):
+        for kw in ['about ','review of ','tell me about ']:
+            if kw in msg_lower:
+                idx = msg_lower.index(kw) + len(kw)
+                query = message[idx:].strip().rstrip('?.,!')
+                if query:
+                    return fetch_movie_direct(query), False
+
+    # Stocks (cached 5 min)
+    if any(w in msg_lower for w in ['stock','share price','trading at','stock price',
+                                     'how is','price of','how much is']):
+        symbol = extract_stock_symbol(message)
+        if symbol:
+            cached = cache_get(f'stock:{symbol}', 'stock')
+            if cached:
+                return cached, False
+            result = fetch_stock_direct(symbol)
+            cache_set(f'stock:{symbol}', result, 'stock')
+            return result, False
+
+    return None, None
 
 
 # ── HTTP HANDLER ──────────────────────────────────────────────────────────────
@@ -877,21 +1272,25 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/health"):
             self._json({
-                "status": "ok", "server": "herald-api", "version": "5.3",
+                "status": "ok", "server": "herald-api", "version": "6.0",
+                "streaming": "enabled (/ask/stream)",
+                "search": f"brave={'configured' if BRAVE_KEY else 'NOT SET -- add BRAVE_SEARCH_KEY'} | fallback=haiku:online",
+                "cache": f"{len(_cache)} entries active",
                 "apis": {
-                    "weather":     "wttr.in + weatherapi backup",
-                    "sports":      "ESPN unofficial (no key)",
-                    "crypto":      "CoinGecko (no key)",
+                    "weather":     "wttr.in (free) + weatherapi backup",
+                    "sports":      "ESPN (free, no key)",
+                    "crypto":      "CoinGecko (free, no key)",
+                    "stocks":      "Yahoo Finance (free) + Alpha Vantage backup",
                     "news":        "GNews" if GNEWS_KEY else "not configured",
                     "news_bak":    "NewsData" if NEWSDATA_KEY else "not configured",
                     "movies":      "OMDb" if OMDB_KEY else "not configured",
-                    "stocks":      "Alpha Vantage" if ALPHA_KEY else "not configured",
-                    "weather_bak": "WeatherAPI" if WEATHER_KEY else "not configured",
-                    "geocoding":   "Google Geocoding" if GEOCODING_KEY else "not configured",
-                    "sync":        "VM webhook configured" if WEBHOOK_SECRET else "WEBHOOK_SECRET not set",
+                    "geocoding":   "Google" if GEOCODING_KEY else "not configured",
+                    "tts":         "OpenAI nova" if OPENAI_KEY else "not configured",
+                    "sync":        "VM webhook" if WEBHOOK_SECRET else "WEBHOOK_SECRET not set",
                 },
                 "time": datetime.now().isoformat()
             })
+
         elif self.path.startswith("/geocode"):
             parsed = urllib.parse.urlparse(self.path)
             params = urllib.parse.parse_qs(parsed.query)
@@ -902,8 +1301,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
             label = geocode_reverse(lat, lng)
             self._json({"label": label})
+
         elif self.path.startswith("/empire"):
             self._json(fetch_empire() or {"error": "empire data unavailable"})
+
         else:
             self._json({"error": "not found"}, 404)
 
@@ -916,6 +1317,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": "invalid JSON"}, 400)
             return
 
+        # ── AUTH ──────────────────────────────────────────────────────────────
         if self.path == "/auth":
             code    = data.get("code", "").strip()
             user_id = data.get("user_id", "").strip()
@@ -967,59 +1369,17 @@ class Handler(BaseHTTPRequestHandler):
                 })
             else:
                 self._json({"error": "invalid code"}, 401)
-                return
 
+        # ── ASK (standard -- non-streaming, backward compatible) ──────────────
         elif self.path == "/ask":
-            user_id        = data.get("user_id", "").strip()
-            message        = data.get("message", "").strip()
-            history        = data.get("history", [])
-            local_time     = data.get("local_time", None)
-            lat            = data.get("lat", None)
-            lng            = data.get("lng", None)
-            location_label = data.get("location_label", None)
-            auth_code      = data.get("auth_code", "").strip()
-
-            if not user_id or not message:
-                self._json({"error": "user_id and message required"}, 400)
+            ctx, err = build_ask_context(data)
+            if err:
+                self._json({"error": err}, 400)
                 return
 
-            owner   = is_owner(user_id, auth_code)
-            empire  = fetch_live_empire() if owner else None
-            profile = get_profile(user_id)
-
-            profile  = detect_preferences(message, profile)
-            category = tag_query_category(message)
-            profile  = increment_query_count(category, profile)
-
-            msg_lower = message.lower()
-            if "my name is" in msg_lower:
-                try: profile["name"] = message.split("my name is", 1)[1].strip().split()[0].rstrip(".,!?")
-                except Exception: pass
-            if "i live in" in msg_lower or "i'm in " in msg_lower or "i am in " in msg_lower:
-                try:
-                    key = "i live in" if "i live in" in msg_lower else "i'm in" if "i'm in" in msg_lower else "i am in"
-                    profile["location"] = message.split(key, 1)[1].strip().split(",")[0].strip().rstrip(".,!?")
-                except Exception: pass
-            if "i love" in msg_lower or "i like" in msg_lower or "i prefer" in msg_lower:
-                try:
-                    key = next(k for k in ["i love","i like","i prefer"] if k in msg_lower)
-                    note = message.split(key, 1)[1].strip().split(".")[0].strip()[:80]
-                    if note and note not in profile.get("notes", []):
-                        profile.setdefault("notes", []).append(note)
-                        if len(profile["notes"]) > 20: profile["notes"] = profile["notes"][-20:]
-                except Exception: pass
-            if "call you" in msg_lower or "your name is" in msg_lower:
-                try:
-                    key = "call you" if "call you" in msg_lower else "your name is"
-                    profile["ai_name"] = message.split(key, 1)[1].strip().split()[0].rstrip(".,!?").title()
-                except Exception: pass
-
-            save_profile(user_id, profile)
-
-            system   = build_system(profile, local_time, owner, empire, lat, lng, location_label)
-            messages = [{"role": "system", "content": system}]
-            messages += history[-20:]
-            messages.append({"role": "user", "content": message})
+            profile  = ctx["profile"]
+            messages = ctx["messages"]
+            message  = ctx["message"]
 
             if is_about_me_query(message):
                 reply = build_about_me(profile)
@@ -1028,97 +1388,29 @@ class Handler(BaseHTTPRequestHandler):
                     "reply": reply, "action": None,
                     "ai_name": profile.get("ai_name", "Herald"),
                     "name": profile.get("name", ""),
-                    "used_search": False,
-                    "trial_status": trial["status"],
-                    "trial_days_remaining": trial["days_remaining"],
-                    "trial_show_wall": trial["show_wall"],
-                    "trial_show_warning": trial.get("show_warning", False),
-                    "trial_message": trial.get("message"),
+                    "used_search": False, **_trial_fields(trial)
                 })
                 return
 
-            direct_reply = None
-
-            # FORGE-002: on-demand sync trigger
-            SYNC_TRIGGERS = ['sync', 'refresh', 'update freddie', 'sync empire', 'refresh data']
-            if owner and any(t in msg_lower for t in SYNC_TRIGGERS):
-                try:
-                    payload = json.dumps({"secret": WEBHOOK_SECRET}).encode("utf-8")
-                    req = urllib.request.Request(
-                        VM_WEBHOOK_URL, data=payload,
-                        headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/5.2"},
-                        method="POST"
-                    )
-                    with urllib.request.urlopen(req, timeout=35) as r:
-                        result = json.loads(r.read().decode())
-                    direct_reply = (
-                        "Done. Just pulled a fresh snapshot from Freddie. What do you want to know?"
-                        if result.get("ok")
-                        else "Sync ran but something went wrong on the VM."
-                    )
-                except Exception:
-                    direct_reply = "Could not reach the VM right now. Try again in a second."
-
-            if not direct_reply:
-                FREDDIE_TRIGGERS = [
-                    'freddie','how are our trades','trading status','open positions',
-                    'gate progress','win rate','what did freddie','how is freddie',
-                    'empire status','regime','last scan','any setups','near miss',
-                    'what is freddie doing','how many trades','expectancy','p&l',
-                    'portfolio','bankroll','sovereign','forge','signal',
-                ]
-                if owner and any(t in msg_lower for t in FREDDIE_TRIGGERS) and empire:
-                    freddie_prompt = [
-                        {"role": "system", "content": (
-                            "You are Herald, a personal AI. The user is asking about their "
-                            "Freddie autonomous trading system. Answer in 2-4 sentences, "
-                            "conversationally, like a smart friend explaining a complex system simply. "
-                            "No bullet points. No markdown. Speak naturally. "
-                            "If they ask about win rate being 0%, explain the gate clock reset "
-                            "and that it means no closed wins yet, not that the signal failed. "
-                            "If they ask about no trades, explain CHOP window and score gate correctly. "
-                            f"\n\nLIVE FREDDIE DATA:\n{empire}"
-                        )},
-                        {"role": "user", "content": message}
-                    ]
-                    direct_reply = call_openrouter(freddie_prompt, use_search=False)
-                elif any(w in msg_lower for w in ['weather','forecast','temperature','rain',
-                                                  'snow','wind','sunny','humid','hot outside',
-                                                  'cold outside','umbrella']):
-                    loc = extract_weather_location(message, profile.get('location','Dallas TX'))
-                    direct_reply = fetch_weather_direct(loc)
-                    if not direct_reply:
-                        direct_reply = fetch_weather_backup(loc)
-                elif any(w in msg_lower for w in ['score','scores','game today','cowboys',
-                                                   'rangers','mavs','mavericks','stars',
-                                                   'nfl','nba','mlb','nhl','playoffs','standings']):
-                    direct_reply = fetch_sports_direct(msg_lower)
-                elif any(w in msg_lower for w in ['bitcoin','ethereum','solana','crypto',
-                                                   'btc','eth','sol price','crypto price']):
-                    direct_reply = fetch_crypto_direct()
-                elif any(w in msg_lower for w in ['news','headlines','top stories',
-                                                   'what is happening','what happened today']):
-                    direct_reply = fetch_news_direct()
-                elif any(w in msg_lower for w in ['movie','film','imdb','rotten tomatoes',
-                                                   'what to watch','watch tonight']):
-                    for kw in ['about ','review of ','tell me about ']:
-                        if kw in msg_lower:
-                            idx = msg_lower.index(kw) + len(kw)
-                            query = message[idx:].strip().rstrip('?.,!')
-                            if query:
-                                direct_reply = fetch_movie_direct(query)
-                                break
-                elif any(w in msg_lower for w in ['stock','share price','trading at','stock price']):
-                    symbol = extract_stock_symbol(message)
-                    if symbol:
-                        direct_reply = fetch_stock_direct(symbol)
+            direct_reply, _ = get_direct_reply(ctx)
 
             if direct_reply:
-                raw_reply  = direct_reply
-                use_search = False
+                reply, action = parse_action(direct_reply)
+                trial = get_trial_status(profile)
+                self._json({
+                    "reply": reply, "action": action,
+                    "ai_name": profile.get("ai_name", "Herald"),
+                    "name": profile.get("name", ""),
+                    "used_search": False, **_trial_fields(trial)
+                })
+                return
+
+            use_search = needs_web_search(message)
+            if use_search:
+                raw_reply, actually_used_online = call_openrouter_with_search(messages, message)
             else:
-                use_search = needs_web_search(message)
-                raw_reply  = call_openrouter(messages, use_search=use_search)
+                raw_reply = call_openrouter(messages, use_search=False)
+                actually_used_online = False
 
             reply, action = parse_action(raw_reply)
             trial = get_trial_status(profile)
@@ -1126,19 +1418,196 @@ class Handler(BaseHTTPRequestHandler):
                 "reply": reply, "action": action,
                 "ai_name": profile.get("ai_name", "Herald"),
                 "name": profile.get("name", ""),
-                "used_search": use_search,
-                "trial_status": trial["status"],
-                "trial_days_remaining": trial["days_remaining"],
-                "trial_show_wall": trial["show_wall"],
-                "trial_show_warning": trial.get("show_warning", False),
-                "trial_message": trial.get("message"),
+                "used_search": use_search, **_trial_fields(trial)
             })
 
-        elif self.path == "/tts":
+        # ── ASK/STREAM (NEW v6.0 -- Server-Sent Events streaming) ─────────────
+        elif self.path == "/ask/stream":
+            ctx, err = build_ask_context(data)
+            if err:
+                self._json({"error": err}, 400)
+                return
+
+            profile  = ctx["profile"]
+            messages = ctx["messages"]
+            message  = ctx["message"]
+            msg_lower = ctx["msg_lower"]
+
+            # Send SSE headers
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.send_header("X-Accel-Buffering", "no")
+            self.cors()
+            self.end_headers()
+
+            def sse(obj):
+                try:
+                    self.wfile.write(f"data: {json.dumps(obj)}\n\n".encode())
+                    self.wfile.flush()
+                except Exception:
+                    pass
+
+            trial = get_trial_status(profile)
+            base_done = {
+                "done": True,
+                "ai_name": profile.get("ai_name", "Herald"),
+                "name":    profile.get("name", ""),
+                **_trial_fields(trial)
+            }
+
+            # About-me query
+            if is_about_me_query(message):
+                reply = build_about_me(profile)
+                sse({"t": reply})
+                sse({**base_done, "full": reply, "action": None, "used_search": False})
+                return
+
+            # Direct reply (weather, sports, crypto, stocks, news, movies)
+            direct_reply, _ = get_direct_reply(ctx)
+            if direct_reply:
+                reply, action = parse_action(direct_reply)
+                sse({"t": reply})
+                sse({**base_done, "full": reply, "action": action, "used_search": False})
+                return
+
+            # LLM streaming
+            use_search = needs_web_search(message)
+            full_text  = ""
+            actually_used_online = False
+
+            try:
+                if use_search and BRAVE_KEY:
+                    search_ctx = fetch_brave_search(message)
+                    if search_ctx:
+                        augmented = messages.copy()
+                        augmented[-1] = {
+                            "role": "user",
+                            "content": f"{message}\n\n[Live web search results:\n{search_ctx}]"
+                        }
+                        for token in stream_from_openrouter(augmented, use_search=False):
+                            full_text += token
+                            sse({"t": token})
+                        actually_used_online = False
+                    else:
+                        for token in stream_from_openrouter(messages, use_search=True):
+                            full_text += token
+                            sse({"t": token})
+                        actually_used_online = True
+                elif use_search:
+                    for token in stream_from_openrouter(messages, use_search=True):
+                        full_text += token
+                        sse({"t": token})
+                    actually_used_online = True
+                else:
+                    for token in stream_from_openrouter(messages, use_search=False):
+                        full_text += token
+                        sse({"t": token})
+
+                reply, action = parse_action(full_text)
+                sse({**base_done, "full": reply, "action": action, "used_search": use_search})
+
+            except Exception as e:
+                print(f"[HERALD] /ask/stream error: {e}")
+                sse({"error": "Stream interrupted. Try again."})
+
+        # ── GREETING (NEW v6.0 -- morning/daily personalized greeting) ─────────
+        elif self.path == "/greeting":
+            user_id        = data.get("user_id", "").strip()
+            local_time     = data.get("local_time", "")
+            lat            = data.get("lat", None)
+            lng            = data.get("lng", None)
+            location_label = data.get("location_label", None)
+
+            if not user_id:
+                self._json({"error": "user_id required"}, 400)
+                return
+
+            profile = get_profile(user_id)
+            name    = profile.get("name", "")
+            ai_name = profile.get("ai_name", "Herald")
+
+            # Determine time of day
+            try:
+                hour = datetime.now().hour
+            except Exception:
+                hour = 9
+            if hour < 12:
+                salutation = "Good morning"
+            elif hour < 17:
+                salutation = "Good afternoon"
+            else:
+                salutation = "Good evening"
+
+            name_part = f", {name}" if name else ""
+
+            # Get weather for greeting location
+            location = location_label or profile.get("location", "")
+            weather_line = ""
+            if location:
+                cached = cache_get(f'weather:{location}', 'weather')
+                weather = cached or fetch_weather_direct(location)
+                if weather and not cached:
+                    cache_set(f'weather:{location}', weather, 'weather')
+                if weather:
+                    # Extract just the first sentence (temp and conditions)
+                    first = weather.split('.')[0].strip()
+                    weather_line = f" {first}."
+
+            # Personalized memory hook
+            memories = profile.get("memories", [])
+            notes    = profile.get("notes", [])
+            all_notes = (memories + notes)[-5:]
+            memory_hook = ""
+            if all_notes:
+                memory_hook = f" You mentioned {all_notes[-1]}."
+
+            greeting = f"{salutation}{name_part}.{weather_line}{memory_hook} What can I help you with today?"
+
+            self._json({
+                "ok": True,
+                "greeting": greeting,
+                "ai_name": ai_name,
+                "name": name,
+            })
+
+        # ── MEMORY (NEW v6.0 -- explicit memory save) ──────────────────────────
+        elif self.path == "/memory":
             user_id = data.get("user_id", "").strip()
-            text    = data.get("text", "").strip()
-            if not user_id or not text:
-                self._json({"error": "user_id and text required"}, 400)
+            message = data.get("message", "").strip()
+            fact    = data.get("fact", "").strip()   # Direct fact, or extract from message
+
+            if not user_id:
+                self._json({"error": "user_id required"}, 400)
+                return
+
+            profile = get_profile(user_id)
+
+            if not fact and message:
+                fact = extract_memory_fact(message)
+
+            if fact:
+                memories = profile.setdefault("memories", [])
+                if fact not in memories:
+                    memories.append(fact)
+                    if len(memories) > 30:
+                        memories = memories[-30:]
+                    profile["memories"] = memories
+                    save_profile(user_id, profile)
+                    name = profile.get("name", "")
+                    confirm = f"Got it{', ' + name if name else ''}. I will remember that."
+                    self._json({"ok": True, "fact": fact, "confirm": confirm})
+                else:
+                    self._json({"ok": True, "fact": fact, "confirm": "Already have that noted."})
+            else:
+                self._json({"error": "No fact to remember"}, 400)
+
+        # ── TTS ───────────────────────────────────────────────────────────────
+        elif self.path == "/tts":
+            text = data.get("text", "").strip()
+            if not text:
+                self._json({"error": "text required"}, 400)
                 return
             audio = text_to_speech(text)
             if not audio:
@@ -1151,6 +1620,7 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(audio)
 
+        # ── PROFILE ───────────────────────────────────────────────────────────
         elif self.path == "/profile":
             user_id = data.get("user_id", "").strip()
             if not user_id:
@@ -1163,6 +1633,7 @@ class Handler(BaseHTTPRequestHandler):
             save_profile(user_id, profile)
             self._json({"ok": True, "profile": profile})
 
+        # ── INVITE CREATE ─────────────────────────────────────────────────────
         elif self.path == "/invite/create":
             secret = data.get("secret", "").strip()
             label  = data.get("label", "").strip()
@@ -1180,6 +1651,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": True, "code": code, "label": label,
                         "link": f"{base_url}?invite={code}"})
 
+        # ── INVITE LIST ───────────────────────────────────────────────────────
         elif self.path == "/invite/list":
             secret = data.get("secret", "").strip()
             if not INVITE_SECRET or secret != INVITE_SECRET:
@@ -1188,6 +1660,7 @@ class Handler(BaseHTTPRequestHandler):
             invite_list = sorted(invites.values(), key=lambda x: x.get("created_at",""), reverse=True)
             self._json({"ok": True, "invites": invite_list, "total": len(invite_list)})
 
+        # ── SYNC ──────────────────────────────────────────────────────────────
         elif self.path == "/sync":
             user_id   = data.get("user_id", "").strip()
             auth_code = data.get("auth_code", "").strip()
@@ -1199,11 +1672,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             try:
                 payload = json.dumps({"secret": WEBHOOK_SECRET}).encode("utf-8")
-                req = urllib.request.Request(
-                    VM_WEBHOOK_URL, data=payload,
-                    headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/5.2"},
-                    method="POST"
-                )
+                req = urllib.request.Request(VM_WEBHOOK_URL, data=payload,
+                    headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/6.0"},
+                    method="POST")
                 with urllib.request.urlopen(req, timeout=35) as r:
                     result = json.loads(r.read().decode())
                 self._json({
@@ -1227,20 +1698,35 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+def _trial_fields(trial):
+    return {
+        "trial_status":       trial["status"],
+        "trial_days_remaining": trial["days_remaining"],
+        "trial_show_wall":    trial["show_wall"],
+        "trial_show_warning": trial.get("show_warning", False),
+        "trial_message":      trial.get("message"),
+    }
+
+
 if __name__ == "__main__":
     load_profiles()
     load_invites()
-    print(f"[HERALD API v5.2] Starting on port {PORT}")
+    print(f"[HERALD API v6.0] Starting on port {PORT}")
     print(f"[HERALD API] OpenRouter:    {'YES' if OPENROUTER_KEY else 'MISSING -- required'}")
+    print(f"[HERALD API] Brave Search:  {'YES -- free search active' if BRAVE_KEY else 'NOT SET -- add BRAVE_SEARCH_KEY (saves ~75% search cost)'}")
+    print(f"[HERALD API] OpenAI TTS:    {'YES' if OPENAI_KEY else 'not set -- TTS layer 1 disabled'}")
     print(f"[HERALD API] Geocoding:     {'YES' if GEOCODING_KEY else 'not set -- city labels disabled'}")
     print(f"[HERALD API] GNews:         {'YES' if GNEWS_KEY else 'not set'}")
     print(f"[HERALD API] OMDb:          {'YES' if OMDB_KEY else 'not set'}")
-    print(f"[HERALD API] AlphaVantage:  {'YES' if ALPHA_KEY else 'not set'}")
+    print(f"[HERALD API] AlphaVantage:  {'YES (backup only)' if ALPHA_KEY else 'not set -- Yahoo Finance is primary'}")
     print(f"[HERALD API] NewsData:      {'YES' if NEWSDATA_KEY else 'not set'}")
-    print(f"[HERALD API] WeatherAPI:    {'YES' if WEATHER_KEY else 'not set'}")
+    print(f"[HERALD API] WeatherAPI:    {'YES (backup)' if WEATHER_KEY else 'not set'}")
     print(f"[HERALD API] Profiles:      {PROFILES_FILE}")
     print(f"[HERALD API] Owner code:    {'SET' if OWNER_CODE else 'NOT SET'}")
     print(f"[HERALD API] Invite secret: {'SET' if INVITE_SECRET else 'NOT SET'}")
-    print(f"[HERALD API] Webhook:       {'SET' if WEBHOOK_SECRET else 'NOT SET -- add WEBHOOK_SECRET'}")
+    print(f"[HERALD API] Webhook:       {'SET' if WEBHOOK_SECRET else 'NOT SET'}")
+    print(f"[HERALD API] Streaming:     /ask/stream (SSE) -- LIVE")
+    print(f"[HERALD API] Greeting:      /greeting -- LIVE")
+    print(f"[HERALD API] Memory:        /memory -- LIVE")
     server = HTTPServer(("0.0.0.0", PORT), Handler)
     server.serve_forever()
