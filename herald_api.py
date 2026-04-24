@@ -950,7 +950,9 @@ ACTION TAGS -- append silently at end, never explain them:
 - Set alarm: ALARM: [HH:MM]|[label]
 - Find videos or social content: SEARCH: [search query]
 - Open social app: LAUNCH: [app name]
-- One action tag maximum per response."""
+- One action tag maximum per response.
+- When using an action tag, end your response with a short natural verbal offer to open it. Example: "Want me to open Maps?" or "Should I pull that up on Spotify?" One question only.
+- Never give a flat one-sentence answer to a personal or conversational question. Respond like a warm friend who actually knows this person — reference something specific, ask something back, make it feel like a real conversation."""
 
 
 # ── LLM CALLS ─────────────────────────────────────────────────────────────────
