@@ -1,13 +1,9 @@
 # herald_api.py
 # Herald PWA Backend -- Railway Cloud Server
+# v6.1 -- Commodity price fix (silver/gold/oil/etc) + TICKER_STOP_WORDS
+#          Fallback /ask timeout fix (20s AbortController in frontend)
 # v6.0 -- Streaming SSE / Brave Search / Yahoo Finance / Response Cache /
 #          Voice-Optimized Prompts / Morning Greeting / Explicit Memory Endpoint
-# v5.4 -- Never-comment-on-repeat-questions rule
-# v5.3 -- System prompt rewrite: smartest friend standard + keyword fixes
-# v5.2 -- FORGE-002: Herald <-> Freddie on-demand sync webhook
-# v5.1 -- Added /geocode endpoint
-# v5.0 -- Freddie natural language intelligence
-# v4.9 -- direct APIs: weather, sports, crypto, news, movies, stocks
 
 import os, json, re, random, string, time, http.client, ssl
 import urllib.request, urllib.error, urllib.parse
@@ -27,7 +23,7 @@ ALPHA_KEY      = os.environ.get("ALPHAVANTAGE_KEY", "")
 NEWSDATA_KEY   = os.environ.get("NEWSDATA_API_KEY", "")
 WEATHER_KEY    = os.environ.get("WEATHER_API_KEY", "")
 GEOCODING_KEY  = os.environ.get("GOOGLE_GEOCODING_KEY", "")
-BRAVE_KEY      = os.environ.get("BRAVE_SEARCH_KEY", "")   # NEW v6.0
+BRAVE_KEY      = os.environ.get("BRAVE_SEARCH_KEY", "")
 OR_URL         = "https://openrouter.ai/api/v1/chat/completions"
 VM_WEBHOOK_URL = "http://143.198.18.66:8082/webhook/sync"
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
@@ -39,11 +35,61 @@ INVITES_FILE   = os.environ.get("INVITES_FILE",  "/data/invites.json")
 MODEL_SEARCH = "anthropic/claude-haiku-4-5:online"
 MODEL_FAST   = "anthropic/claude-haiku-4-5"
 
-# ── RESPONSE CACHE (in-memory, TTL per category) ──────────────────────────────
-# Saves LLM + API cost on repeated common queries.
-# Weather: 15 min | News: 10 min | Crypto: 2 min | Stocks: 5 min
+# ── COMMODITY MAP (v6.1) ──────────────────────────────────────────────────────
+# Maps plain English commodity names to Yahoo Finance futures tickers.
+# Checked BEFORE stock extraction so "silver" never hits extract_stock_symbol().
+COMMODITY_MAP = {
+    'silver':       'SI=F',
+    'gold':         'GC=F',
+    'oil':          'CL=F',
+    'crude oil':    'CL=F',
+    'crude':        'CL=F',
+    'natural gas':  'NG=F',
+    'copper':       'HG=F',
+    'platinum':     'PL=F',
+    'palladium':    'PA=F',
+    'wheat':        'ZW=F',
+    'corn':         'ZC=F',
+    'soybeans':     'ZS=F',
+    'soybean':      'ZS=F',
+}
+
+# ── TICKER STOP WORDS (v6.1) ──────────────────────────────────────────────────
+# Common English words that are 2-5 letters and would otherwise match the
+# "scan all words" fallback in extract_stock_symbol().
+# "What IS THE price of silver" → "IS", "THE" must be blocked.
+TICKER_STOP_WORDS = {
+    'THE','AND','FOR','ARE','BUT','NOT','YOU','ALL','ANY','CAN','HAD',
+    'HER','WAS','ONE','OUR','OUT','DAY','GET','HAS','HIM','HIS','HOW',
+    'ITS','MAY','NEW','NOW','OLD','SEE','TWO','WHO','BOY','DID','LET',
+    'PUT','SAY','SHE','TOO','USE','DAD','MOM','MAN','MEN','WHY','YES',
+    'WHAT','WHEN','WITH','THIS','THAT','FROM','HAVE','BEEN','WILL',
+    'THEY','THEM','THEN','THAN','DOES','WERE','SAID','EACH','MUCH',
+    'WHICH','THEIR','THERE','THESE','THOSE','INTO','OVER','ALSO','BACK',
+    'COME','GIVE','JUST','KNOW','LIKE','LOOK','MAKE','MOST','SOME',
+    'TAKE','WELL','WENT','YOUR','ABOUT','AFTER','AGAIN','ALONG','BEING',
+    'BELOW','COULD','EVERY','FOUND','GOING','GREAT','GROUP','LARGE',
+    'NEVER','OFTEN','PLACE','RIGHT','SINCE','SMALL','STILL','THINK',
+    'THREE','UNDER','UNTIL','WATER','WHERE','WHILE','WORLD','WOULD',
+    'YEARS','PRICE','TRADE','TELL','SHOW','REAL','LIVE','COST','RATE',
+    'HIGH','LOWS','OPEN','NEXT','LAST','VERY','EVEN','ONLY','BOTH',
+    'LONG','LATE','NEAR','MUCH','GOOD','BEST','EVER','EACH','SAME',
+    'SUCH','KEEP','DONE','WENT','CALL','HOLD','SELL','STAY','RISE',
+    'FALL','TALK','WALK','WANT','NEED','FEEL','FIND','HELP','SEEM',
+    'TELL','TURN','MOVE','PLAY','MEAN','PLAN','STOP','PULL','PUSH',
+    'PASS','PAST','FAST','EASY','HARD','DARK','COLD','WARM','FULL',
+    'FREE','SAFE','SAFE','POOR','RICH','TRUE','FAKE','SURE','GLAD',
+    'ABLE','SOON','LESS','MORE','THAN','ONCE','ELSE','AWAY','DONE',
+    'GONE','CAME','WENT','TOLD','MADE','SAID','GAVE','TOOK','CAME',
+    'KNEW','GREW','FLEW','DREW','BLEW','CLEW',
+    # Finance words that look like tickers
+    'CASH','DEBT','LOAN','FUND','BOND','RISK','GAIN','LOSS','SELL',
+    'BULL','BEAR','CALL','PUTS','TOPS','LOWS','HOLD','LONG','SHORT',
+}
+
+# ── RESPONSE CACHE ────────────────────────────────────────────────────────────
 _cache = {}
-CACHE_TTL = {'weather': 900, 'news': 600, 'crypto': 120, 'stock': 300}
+CACHE_TTL = {'weather': 900, 'news': 600, 'crypto': 120, 'stock': 180, 'commodity': 180}
 
 def cache_get(key, category='default'):
     entry = _cache.get(key)
@@ -266,11 +312,13 @@ def is_about_me_query(message):
         'what do you remember about me','what do you know about',
         'tell me what you know','what have i told you',
         'my profile','my preferences','what you know',
+        'our conversations','about our conversation','what can you tell me about',
+        'what do you remember','tell me what you remember',
+        'previous conversations','past conversations','what have we talked',
     ]
     return any(t in message.lower() for t in triggers)
 
 def is_memory_trigger(message):
-    """Detect explicit memory save requests."""
     triggers = [
         'remember that', 'remember this', "don't forget", "dont forget",
         'make a note', 'note that', 'keep in mind', 'take note',
@@ -279,7 +327,6 @@ def is_memory_trigger(message):
     return any(t in message.lower() for t in triggers)
 
 def extract_memory_fact(message):
-    """Pull the fact out of a memory request."""
     msg = message.strip()
     for prefix in ['remember that', 'remember this', "don't forget", "dont forget",
                    'make a note that', 'make a note', 'note that', 'keep in mind that',
@@ -407,7 +454,7 @@ def fetch_empire():
 def fetch_live_empire():
     try:
         url = "http://143.198.18.66:8080/api/status"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/6.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/6.1"})
         with urllib.request.urlopen(req, timeout=8) as r:
             data = json.loads(r.read().decode())
         positions     = data.get("positions", [])
@@ -517,7 +564,7 @@ def geocode_reverse(lat, lng):
         url = (f"https://maps.googleapis.com/maps/api/geocode/json"
                f"?latlng={lat},{lng}&result_type=locality|administrative_area_level_1"
                f"&key={GEOCODING_KEY}")
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/6.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/6.1"})
         with urllib.request.urlopen(req, timeout=4) as r:
             data = json.loads(r.read().decode())
         if data.get("results"):
@@ -532,9 +579,7 @@ def geocode_reverse(lat, lng):
     return None
 
 
-# ── BRAVE SEARCH (NEW v6.0) ───────────────────────────────────────────────────
-# Free tier: 2,000 queries/month. No credit card. signup: search.brave.com/api
-# Replaces haiku:online for web queries -- saves ~75% per search call.
+# ── BRAVE SEARCH ──────────────────────────────────────────────────────────────
 
 def fetch_brave_search(query, count=5):
     if not BRAVE_KEY:
@@ -546,7 +591,7 @@ def fetch_brave_search(query, count=5):
         req = urllib.request.Request(url, headers={
             "Accept": "application/json",
             "X-Subscription-Token": BRAVE_KEY,
-            "User-Agent": "HeraldAI/6.0"
+            "User-Agent": "HeraldAI/6.1"
         })
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
@@ -581,7 +626,7 @@ def fetch_weather_direct(location):
     try:
         clean_loc = location.strip().replace(' ', '+')
         url = f"https://wttr.in/{clean_loc}?format=j1"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.1"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         cur  = data["current_condition"][0]
@@ -613,7 +658,7 @@ def fetch_weather_backup(location):
     try:
         encoded = urllib.parse.quote(location)
         url = f"https://api.weatherapi.com/v1/forecast.json?key={WEATHER_KEY}&q={encoded}&days=1&aqi=no"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.1"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         cur  = data["current"]
@@ -656,7 +701,7 @@ def fetch_sports_direct(msg_lower):
                 sport, league = val
                 break
         url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.1"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         events = data.get("events", [])
@@ -683,7 +728,7 @@ def fetch_crypto_direct():
     try:
         url = ("https://api.coingecko.com/api/v3/simple/price"
                "?ids=bitcoin,ethereum,solana&vs_currencies=usd&include_24hr_change=true")
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.1"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         parts = []
@@ -692,7 +737,6 @@ def fetch_crypto_direct():
                 price  = data[coin]["usd"]
                 change = data[coin].get("usd_24h_change", 0)
                 direc  = "up" if change >= 0 else "down"
-                # Format price for voice: no symbols, natural numbers
                 price_int   = int(price)
                 price_cents = round((price - price_int) * 100)
                 if price_cents > 0:
@@ -714,7 +758,7 @@ def fetch_news_direct(query=None):
             url = f"https://gnews.io/api/v4/search?q={encoded}&lang=en&max=5&token={GNEWS_KEY}"
         else:
             url = f"https://gnews.io/api/v4/top-headlines?lang=en&country=us&max=5&token={GNEWS_KEY}"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.1"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         articles = data.get("articles", [])
@@ -735,7 +779,7 @@ def fetch_news_backup(query=None):
             url = f"https://newsdata.io/api/1/latest?apikey={NEWSDATA_KEY}&q={encoded}&language=en"
         else:
             url = f"https://newsdata.io/api/1/latest?apikey={NEWSDATA_KEY}&language=en&country=us"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.1"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         results = data.get("results", [])
@@ -753,12 +797,12 @@ def fetch_movie_direct(query):
     try:
         encoded = urllib.parse.quote(query)
         url = f"https://www.omdbapi.com/?t={encoded}&apikey={OMDB_KEY}"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.1"})
         with urllib.request.urlopen(req, timeout=5) as r:
             d = json.loads(r.read().decode())
         if d.get("Response") == "False":
             url2 = f"https://www.omdbapi.com/?s={encoded}&apikey={OMDB_KEY}"
-            req2 = urllib.request.Request(url2, headers={"User-Agent": "HeraldAI/6.0"})
+            req2 = urllib.request.Request(url2, headers={"User-Agent": "HeraldAI/6.1"})
             with urllib.request.urlopen(req2, timeout=5) as r2:
                 d2 = json.loads(r2.read().decode())
             results = d2.get("Search", [])
@@ -778,7 +822,73 @@ def fetch_movie_direct(query):
         print(f"[HERALD] OMDb failed: {e}")
         return None
 
+
+# ── COMMODITY FUNCTIONS (v6.1) ────────────────────────────────────────────────
+
+def detect_commodity(message):
+    """
+    Returns the Yahoo futures ticker (e.g. 'SI=F') if the message contains
+    a commodity name, else None. Checks multi-word names first.
+    """
+    msg_lower = message.lower()
+    # Sort by length descending so "crude oil" matches before "oil"
+    for name in sorted(COMMODITY_MAP.keys(), key=len, reverse=True):
+        if name in msg_lower:
+            return COMMODITY_MAP[name]
+    return None
+
+def fetch_commodity_price(ticker, display_name):
+    """Fetch commodity futures price from Yahoo Finance (free, no key)."""
+    try:
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=1d"
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        })
+        with urllib.request.urlopen(req, timeout=6) as r:
+            data = json.loads(r.read().decode())
+        result = data['chart']['result'][0]
+        meta       = result['meta']
+        price      = meta.get('regularMarketPrice', 0)
+        prev_close = meta.get('previousClose') or meta.get('chartPreviousClose', 0)
+        change     = price - prev_close if prev_close else 0
+        change_pct = (change / prev_close * 100) if prev_close else 0
+        direc      = "up" if change >= 0 else "down"
+
+        price_int   = int(price)
+        price_cents = round((price - price_int) * 100)
+        price_str   = (f"{price_int:,} dollars and {price_cents} cents"
+                       if price_cents else f"{price_int:,} dollars")
+
+        abs_change = abs(change)
+        chg_int    = int(abs_change)
+        chg_cents  = round((abs_change - chg_int) * 100)
+        chg_str    = (f"{chg_int} dollars and {chg_cents} cents"
+                      if chg_cents else f"{chg_int} dollars")
+
+        return (f"{display_name.title()} is trading at {price_str} per ounce, "
+                f"{direc} {chg_str} or {abs(change_pct):.1f} percent today.")
+    except Exception as e:
+        print(f"[HERALD] Commodity fetch failed for {ticker}: {e}")
+        return None
+
+
+# ── STOCK SYMBOL EXTRACTION (v6.1 -- stop words + commodity guard) ────────────
+
 def extract_stock_symbol(message):
+    """
+    Returns a stock ticker string or None.
+
+    v6.1 changes:
+    1. Returns None immediately if the message is a commodity query.
+       Prevents 'silver' -> scans words -> grabs 'THE' -> $0 price.
+    2. The free-form word scan now only matches words the USER typed in
+       ALL-CAPS (e.g. 'What is AAPL doing') and never common English words
+       (blocked via TICKER_STOP_WORDS).
+    """
+    # Guard: commodity queries should never reach stock lookup
+    if detect_commodity(message):
+        return None
+
     known = {
         'APPLE': 'AAPL', 'MICROSOFT': 'MSFT', 'GOOGLE': 'GOOGL', 'ALPHABET': 'GOOGL',
         'AMAZON': 'AMZN', 'TESLA': 'TSLA', 'META': 'META', 'FACEBOOK': 'META',
@@ -791,15 +901,27 @@ def extract_stock_symbol(message):
     for name, ticker in known.items():
         if name in msg_upper:
             return ticker
+
+    # Only match words the user typed in ALL-CAPS (e.g. "AAPL", "NVDA")
+    # Never match sentence words like THE, IS, OF, FOR — those are stop words.
     words = message.split()
     for w in words:
-        clean = re.sub(r'[^A-Z]', '', w.upper())
-        if 2 <= len(clean) <= 5 and clean.isalpha():
-            return clean
+        # Strip punctuation, keep only letters
+        clean = re.sub(r'[^A-Za-z]', '', w)
+        if not clean:
+            continue
+        up = clean.upper()
+        # Must be 2-5 chars, all alpha, typed as ALL-CAPS by the user, not a stop word
+        if (2 <= len(up) <= 5
+                and up.isalpha()
+                and clean == clean.upper()   # user typed it in caps
+                and up not in TICKER_STOP_WORDS):
+            return up
+
     return None
 
 def fetch_yahoo_stock(symbol):
-    """Primary stock source -- Yahoo Finance unofficial endpoint. Free, no key required."""
+    """Primary stock source -- Yahoo Finance (free, no key)."""
     try:
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol.upper()}?interval=1d&range=1d"
         req = urllib.request.Request(url, headers={
@@ -815,38 +937,32 @@ def fetch_yahoo_stock(symbol):
         change_pct = (change / prev_close * 100) if prev_close else 0
         long_name  = meta.get('longName', symbol.upper())
         direc = "up" if change >= 0 else "down"
-        # Format for voice: no dollar signs, natural speech
         price_int   = int(price)
         price_cents = round((price - price_int) * 100)
-        if price_cents > 0:
-            price_str = f"{price_int:,} dollars and {price_cents} cents"
-        else:
-            price_str = f"{price_int:,} dollars"
+        price_str   = (f"{price_int:,} dollars and {price_cents} cents"
+                       if price_cents else f"{price_int:,} dollars")
         abs_change = abs(change)
         chg_int    = int(abs_change)
         chg_cents  = round((abs_change - chg_int) * 100)
-        if chg_cents > 0:
-            chg_str = f"{chg_int} dollars and {chg_cents} cents"
-        else:
-            chg_str = f"{chg_int} dollars"
+        chg_str    = (f"{chg_int} dollars and {chg_cents} cents"
+                      if chg_cents else f"{chg_int} dollars")
         return (f"{long_name} is trading at {price_str}, "
                 f"{direc} {chg_str} or {abs(change_pct):.1f} percent today.")
     except Exception as e:
-        print(f"[HERALD] Yahoo Finance failed: {e}")
+        print(f"[HERALD] Yahoo Finance failed for {symbol}: {e}")
         return None
 
 def fetch_stock_direct(symbol):
-    """Yahoo Finance first (free), Alpha Vantage as backup (rate limited)."""
+    """Yahoo Finance first (free), Alpha Vantage as backup."""
     result = fetch_yahoo_stock(symbol)
     if result:
         return result
-    # Backup: Alpha Vantage
     if not ALPHA_KEY:
         return None
     try:
         url = (f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE"
                f"&symbol={symbol.upper()}&apikey={ALPHA_KEY}")
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.1"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         q = data.get("Global Quote", {})
@@ -858,7 +974,8 @@ def fetch_stock_direct(symbol):
         direc  = "up" if change >= 0 else "down"
         price_int   = int(price)
         price_cents = round((price - price_int) * 100)
-        price_str   = f"{price_int} dollars and {price_cents} cents" if price_cents else f"{price_int} dollars"
+        price_str   = (f"{price_int} dollars and {price_cents} cents"
+                       if price_cents else f"{price_int} dollars")
         return (f"{symbol.upper()} is trading at {price_str}, "
                 f"{direc} {abs(change):.2f} dollars or {abs(float(pct)):.2f} percent today.")
     except Exception as e:
@@ -866,7 +983,7 @@ def fetch_stock_direct(symbol):
         return None
 
 
-# ── SYSTEM PROMPT (v6.0 -- voice-optimized) ───────────────────────────────────
+# ── SYSTEM PROMPT ─────────────────────────────────────────────────────────────
 
 def build_system(profile, local_time=None, owner=False, empire=None, lat=None, lng=None, location_label=None):
     now      = local_time or datetime.now().strftime("%A, %B %d %Y %I:%M %p")
@@ -875,9 +992,10 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
     location = profile.get("location", "")
     notes    = profile.get("notes", [])
     memories = profile.get("memories", [])
-    first_name = name if name else None
 
-    user_line = f"User's name: {name}. Use their name naturally and occasionally -- like a trusted friend would. Not every sentence. Just when it feels right." if name else "User name not yet learned."
+    user_line = (f"User's name: {name}. Use their name naturally and occasionally -- "
+                 f"like a trusted friend would. Not every sentence. Just when it feels right."
+                 if name else "User name not yet learned.")
 
     if lat and lng:
         city_hint = f" near {location_label}" if location_label else (f" in {location}" if location else "")
@@ -888,9 +1006,9 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
     else:
         loc_line = "Location not yet learned -- ask naturally when relevant."
 
-    # Combine notes and memories, deduplicated, most recent first
     all_memory = list(dict.fromkeys((memories + notes)[-12:]))
-    notes_line = ("What this user has told you (remember and use naturally): " + "; ".join(all_memory)) if all_memory else ""
+    notes_line = ("What this user has told you (remember and use naturally): "
+                  + "; ".join(all_memory)) if all_memory else ""
     prefs_summary = build_preferences_summary(profile)
     prefs_line = f"Preferences learned over time:\n{prefs_summary}" if prefs_summary else ""
     context_parts = [p for p in [notes_line, prefs_line] if p]
@@ -918,7 +1036,8 @@ YOUR RULES:
   Complex topics get a short paragraph. Never pad. Never summarize what you just said.
 - Never use asterisks, markdown, bullet points, or raw URLs in responses.
 - NEVER say: I do not have access to that. I cannot look that up. My knowledge has a cutoff.
-  These phrases are banned.
+  I don't have memory of our conversations. I can't remember previous sessions.
+  These phrases are BANNED. You have the user's profile, memories, and notes — use them.
 - NEVER list sources or citations unless the user specifically asks.
 - For local business queries give ONE confident recommendation with a MAPS tag.
 - Be diplomatically honest -- tell the truth with warmth. Never make things up.
@@ -932,10 +1051,10 @@ You speak through a text-to-speech engine. Follow these rules for every response
 - Write prices in words: say "seventy-four dollars and two cents" not "$74.02"
 - Write large numbers in words: say "one point two million" not "1,200,000"
 - Write percentages in words: say "twelve and a half percent" not "12.5%"
-- Write temperatures in words: say "eighty-five degrees" not "85 degrees F" or "85°"
+- Write temperatures in words: say "eighty-five degrees" not "85 degrees F" or "85 degrees"
 - Write stock prices in words: say "one hundred forty two dollars" not "$142.00"
-- Never use symbols: no $, %, °, #, *, &, or @ in your responses
-- Spell out abbreviations when speaking: say "miles per hour" not "mph"
+- Never use symbols: no $, %, degrees symbol, #, *, &, or @ in your responses
+- Spell out abbreviations: say "miles per hour" not "mph"
 - Never start a response with a number -- spell it out or rephrase
 
 THE STANDARD: Would the smartest, most resourceful friend this person knows answer
@@ -951,8 +1070,9 @@ ACTION TAGS -- append silently at end, never explain them:
 - Find videos or social content: SEARCH: [search query]
 - Open social app: LAUNCH: [app name]
 - One action tag maximum per response.
-- When using an action tag, end your response with a short natural verbal offer to open it. Example: "Want me to open Maps?" or "Should I pull that up on Spotify?" One question only.
-- Never give a flat one-sentence answer to a personal or conversational question. Respond like a warm friend who actually knows this person — reference something specific, ask something back, make it feel like a real conversation."""
+- When using an action tag, end your response with a short natural verbal offer to open it.
+  Example: "Want me to open Maps?" or "Should I pull that up on Spotify?" One question only.
+- Never give a flat one-sentence answer to a personal or conversational question."""
 
 
 # ── LLM CALLS ─────────────────────────────────────────────────────────────────
@@ -989,33 +1109,19 @@ def call_openrouter(messages, use_search=True):
         return "I did not get a response in time, try again in a second."
 
 def call_openrouter_with_search(messages, query):
-    """
-    v6.0 search routing:
-    1. Try Brave Search (free) -> inject results -> use fast model (~$0.005)
-    2. Fall back to haiku:online (~$0.02) if Brave fails or not configured
-    Saves ~75% per web query vs always using haiku:online.
-    """
     if BRAVE_KEY:
         search_ctx = fetch_brave_search(query)
         if search_ctx:
             augmented = messages.copy()
-            # Inject search results into the user's message
             augmented[-1] = {
                 "role": "user",
-                "content": f"{query}\n\n[Live web search results for context -- use these to give a current, accurate answer:\n{search_ctx}]"
+                "content": f"{query}\n\n[Live web search results:\n{search_ctx}]"
             }
             result = call_openrouter(augmented, use_search=False)
-            print(f"[HERALD] Brave search hit -- used fast model (cost saved)")
-            return result, False  # (reply, used_haiku_online)
-    # Brave not available or failed -- use haiku:online
-    print(f"[HERALD] Brave search miss -- using haiku:online")
+            return result, False
     return call_openrouter(messages, use_search=True), True
 
 def stream_from_openrouter(messages, use_search=True):
-    """
-    Generator: yields text tokens streamed from OpenRouter.
-    Uses http.client directly for chunked SSE reading.
-    """
     if not OPENROUTER_KEY:
         yield "Configuration error: API key not set."
         return
@@ -1082,13 +1188,9 @@ def text_to_speech(text):
         return None
 
 
-# ── SHARED REQUEST SETUP (used by both /ask and /ask/stream) ──────────────────
+# ── SHARED REQUEST SETUP ──────────────────────────────────────────────────────
 
 def build_ask_context(data):
-    """
-    Extract, validate, and prepare everything needed to answer an /ask request.
-    Returns (ctx_dict, error_str). error_str is None on success.
-    """
     user_id        = data.get("user_id", "").strip()
     message        = data.get("message", "").strip()
     if not user_id or not message:
@@ -1106,7 +1208,6 @@ def build_ask_context(data):
     profile = get_profile(user_id)
     msg_lower = message.lower()
 
-    # Update profile from message
     profile = detect_preferences(message, profile)
     category = tag_query_category(message)
     profile = increment_query_count(category, profile)
@@ -1150,8 +1251,10 @@ def build_ask_context(data):
 
 def get_direct_reply(ctx):
     """
-    Try to answer without hitting the LLM (saves cost + is faster).
-    Returns (reply_str, used_search_bool) or (None, None) if no direct answer.
+    Try to answer without hitting the LLM.
+    Returns (reply_str, used_search_bool) or (None, None).
+
+    v6.1: COMMODITY block added BEFORE stock block.
     """
     message   = ctx["message"]
     msg_lower = ctx["msg_lower"]
@@ -1165,7 +1268,7 @@ def get_direct_reply(ctx):
         try:
             payload = json.dumps({"secret": WEBHOOK_SECRET}).encode("utf-8")
             req = urllib.request.Request(VM_WEBHOOK_URL, data=payload,
-                headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/6.0"},
+                headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/6.1"},
                 method="POST")
             with urllib.request.urlopen(req, timeout=35) as r:
                 result = json.loads(r.read().decode())
@@ -1174,7 +1277,7 @@ def get_direct_reply(ctx):
         except Exception:
             return "Could not reach the VM right now. Try again in a second.", False
 
-    # Freddie queries via dedicated LLM call (not search)
+    # Freddie queries
     FREDDIE_TRIGGERS = [
         'freddie','how are our trades','trading status','open positions',
         'gate progress','win rate','what did freddie','how is freddie',
@@ -1193,7 +1296,7 @@ def get_direct_reply(ctx):
         ]
         return call_openrouter(freddie_prompt, use_search=False), False
 
-    # Weather (cached 15 min)
+    # Weather
     if any(w in msg_lower for w in ['weather','forecast','temperature','rain','snow',
                                      'wind','sunny','humid','hot outside','cold outside','umbrella']):
         loc = extract_weather_location(message, profile.get('location','Dallas TX'))
@@ -1210,7 +1313,7 @@ def get_direct_reply(ctx):
                                      'playoffs','standings']):
         return fetch_sports_direct(msg_lower), False
 
-    # Crypto (cached 2 min)
+    # Crypto
     if any(w in msg_lower for w in ['bitcoin','ethereum','solana','crypto','btc','eth',
                                      'sol price','crypto price']):
         cached = cache_get('crypto', 'crypto')
@@ -1220,7 +1323,7 @@ def get_direct_reply(ctx):
         cache_set('crypto', result, 'crypto')
         return result, False
 
-    # News (cached 10 min)
+    # News
     if any(w in msg_lower for w in ['news','headlines','top stories',
                                      'what is happening','what happened today']):
         cached = cache_get('news_top', 'news')
@@ -1239,7 +1342,27 @@ def get_direct_reply(ctx):
                 if query:
                     return fetch_movie_direct(query), False
 
-    # Stocks (cached 5 min)
+    # ── COMMODITIES (v6.1 -- checked BEFORE stocks) ───────────────────────────
+    # Must come before the stock block so "price of silver" never hits
+    # extract_stock_symbol() and accidentally returns "THE" or similar.
+    commodity_ticker = detect_commodity(message)
+    if commodity_ticker:
+        # Find the display name (longest matching key for this ticker)
+        display_name = next(
+            (k for k in sorted(COMMODITY_MAP.keys(), key=len, reverse=True)
+             if COMMODITY_MAP[k] == commodity_ticker),
+            commodity_ticker
+        )
+        cache_key = f'commodity:{commodity_ticker}'
+        cached = cache_get(cache_key, 'commodity')
+        if cached:
+            return cached, False
+        result = fetch_commodity_price(commodity_ticker, display_name)
+        if result:
+            cache_set(cache_key, result, 'commodity')
+        return result, False
+
+    # Stocks
     if any(w in msg_lower for w in ['stock','share price','trading at','stock price',
                                      'how is','price of','how much is']):
         symbol = extract_stock_symbol(message)
@@ -1274,15 +1397,16 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/health"):
             self._json({
-                "status": "ok", "server": "herald-api", "version": "6.0",
+                "status": "ok", "server": "herald-api", "version": "6.1",
                 "streaming": "enabled (/ask/stream)",
-                "search": f"brave={'configured' if BRAVE_KEY else 'NOT SET -- add BRAVE_SEARCH_KEY'} | fallback=haiku:online",
+                "search": f"brave={'configured' if BRAVE_KEY else 'NOT SET'} | fallback=haiku:online",
                 "cache": f"{len(_cache)} entries active",
                 "apis": {
                     "weather":     "wttr.in (free) + weatherapi backup",
                     "sports":      "ESPN (free, no key)",
                     "crypto":      "CoinGecko (free, no key)",
                     "stocks":      "Yahoo Finance (free) + Alpha Vantage backup",
+                    "commodities": "Yahoo Finance futures (free, no key) -- v6.1",
                     "news":        "GNews" if GNEWS_KEY else "not configured",
                     "news_bak":    "NewsData" if NEWSDATA_KEY else "not configured",
                     "movies":      "OMDb" if OMDB_KEY else "not configured",
@@ -1372,7 +1496,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._json({"error": "invalid code"}, 401)
 
-        # ── ASK (standard -- non-streaming, backward compatible) ──────────────
+        # ── ASK (standard) ────────────────────────────────────────────────────
         elif self.path == "/ask":
             ctx, err = build_ask_context(data)
             if err:
@@ -1395,7 +1519,6 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             direct_reply, _ = get_direct_reply(ctx)
-
             if direct_reply:
                 reply, action = parse_action(direct_reply)
                 trial = get_trial_status(profile)
@@ -1409,10 +1532,9 @@ class Handler(BaseHTTPRequestHandler):
 
             use_search = needs_web_search(message)
             if use_search:
-                raw_reply, actually_used_online = call_openrouter_with_search(messages, message)
+                raw_reply, _ = call_openrouter_with_search(messages, message)
             else:
                 raw_reply = call_openrouter(messages, use_search=False)
-                actually_used_online = False
 
             reply, action = parse_action(raw_reply)
             trial = get_trial_status(profile)
@@ -1423,7 +1545,7 @@ class Handler(BaseHTTPRequestHandler):
                 "used_search": use_search, **_trial_fields(trial)
             })
 
-        # ── ASK/STREAM (NEW v6.0 -- Server-Sent Events streaming) ─────────────
+        # ── ASK/STREAM ────────────────────────────────────────────────────────
         elif self.path == "/ask/stream":
             ctx, err = build_ask_context(data)
             if err:
@@ -1433,9 +1555,7 @@ class Handler(BaseHTTPRequestHandler):
             profile  = ctx["profile"]
             messages = ctx["messages"]
             message  = ctx["message"]
-            msg_lower = ctx["msg_lower"]
 
-            # Send SSE headers
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
@@ -1459,14 +1579,12 @@ class Handler(BaseHTTPRequestHandler):
                 **_trial_fields(trial)
             }
 
-            # About-me query
             if is_about_me_query(message):
                 reply = build_about_me(profile)
                 sse({"t": reply})
                 sse({**base_done, "full": reply, "action": None, "used_search": False})
                 return
 
-            # Direct reply (weather, sports, crypto, stocks, news, movies)
             direct_reply, _ = get_direct_reply(ctx)
             if direct_reply:
                 reply, action = parse_action(direct_reply)
@@ -1474,10 +1592,8 @@ class Handler(BaseHTTPRequestHandler):
                 sse({**base_done, "full": reply, "action": action, "used_search": False})
                 return
 
-            # LLM streaming
             use_search = needs_web_search(message)
             full_text  = ""
-            actually_used_online = False
 
             try:
                 if use_search and BRAVE_KEY:
@@ -1491,17 +1607,14 @@ class Handler(BaseHTTPRequestHandler):
                         for token in stream_from_openrouter(augmented, use_search=False):
                             full_text += token
                             sse({"t": token})
-                        actually_used_online = False
                     else:
                         for token in stream_from_openrouter(messages, use_search=True):
                             full_text += token
                             sse({"t": token})
-                        actually_used_online = True
                 elif use_search:
                     for token in stream_from_openrouter(messages, use_search=True):
                         full_text += token
                         sse({"t": token})
-                    actually_used_online = True
                 else:
                     for token in stream_from_openrouter(messages, use_search=False):
                         full_text += token
@@ -1514,7 +1627,7 @@ class Handler(BaseHTTPRequestHandler):
                 print(f"[HERALD] /ask/stream error: {e}")
                 sse({"error": "Stream interrupted. Try again."})
 
-        # ── GREETING (NEW v6.0 -- morning/daily personalized greeting) ─────────
+        # ── GREETING ──────────────────────────────────────────────────────────
         elif self.path == "/greeting":
             user_id        = data.get("user_id", "").strip()
             local_time     = data.get("local_time", "")
@@ -1530,7 +1643,6 @@ class Handler(BaseHTTPRequestHandler):
             name    = profile.get("name", "")
             ai_name = profile.get("ai_name", "Herald")
 
-            # Determine time of day
             try:
                 hour = datetime.now().hour
             except Exception:
@@ -1543,8 +1655,6 @@ class Handler(BaseHTTPRequestHandler):
                 salutation = "Good evening"
 
             name_part = f", {name}" if name else ""
-
-            # Get weather for greeting location
             location = location_label or profile.get("location", "")
             weather_line = ""
             if location:
@@ -1553,11 +1663,9 @@ class Handler(BaseHTTPRequestHandler):
                 if weather and not cached:
                     cache_set(f'weather:{location}', weather, 'weather')
                 if weather:
-                    # Extract just the first sentence (temp and conditions)
                     first = weather.split('.')[0].strip()
                     weather_line = f" {first}."
 
-            # Personalized memory hook
             memories = profile.get("memories", [])
             notes    = profile.get("notes", [])
             all_notes = (memories + notes)[-5:]
@@ -1574,11 +1682,11 @@ class Handler(BaseHTTPRequestHandler):
                 "name": name,
             })
 
-        # ── MEMORY (NEW v6.0 -- explicit memory save) ──────────────────────────
+        # ── MEMORY ────────────────────────────────────────────────────────────
         elif self.path == "/memory":
             user_id = data.get("user_id", "").strip()
             message = data.get("message", "").strip()
-            fact    = data.get("fact", "").strip()   # Direct fact, or extract from message
+            fact    = data.get("fact", "").strip()
 
             if not user_id:
                 self._json({"error": "user_id required"}, 400)
@@ -1675,7 +1783,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 payload = json.dumps({"secret": WEBHOOK_SECRET}).encode("utf-8")
                 req = urllib.request.Request(VM_WEBHOOK_URL, data=payload,
-                    headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/6.0"},
+                    headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/6.1"},
                     method="POST")
                 with urllib.request.urlopen(req, timeout=35) as r:
                     result = json.loads(r.read().decode())
@@ -1702,33 +1810,32 @@ class Handler(BaseHTTPRequestHandler):
 
 def _trial_fields(trial):
     return {
-        "trial_status":       trial["status"],
+        "trial_status":         trial["status"],
         "trial_days_remaining": trial["days_remaining"],
-        "trial_show_wall":    trial["show_wall"],
-        "trial_show_warning": trial.get("show_warning", False),
-        "trial_message":      trial.get("message"),
+        "trial_show_wall":      trial["show_wall"],
+        "trial_show_warning":   trial.get("show_warning", False),
+        "trial_message":        trial.get("message"),
     }
 
 
 if __name__ == "__main__":
     load_profiles()
     load_invites()
-    print(f"[HERALD API v6.0] Starting on port {PORT}")
+    print(f"[HERALD API v6.1] Starting on port {PORT}")
     print(f"[HERALD API] OpenRouter:    {'YES' if OPENROUTER_KEY else 'MISSING -- required'}")
-    print(f"[HERALD API] Brave Search:  {'YES -- free search active' if BRAVE_KEY else 'NOT SET -- add BRAVE_SEARCH_KEY (saves ~75% search cost)'}")
-    print(f"[HERALD API] OpenAI TTS:    {'YES' if OPENAI_KEY else 'not set -- TTS layer 1 disabled'}")
-    print(f"[HERALD API] Geocoding:     {'YES' if GEOCODING_KEY else 'not set -- city labels disabled'}")
+    print(f"[HERALD API] Brave Search:  {'YES' if BRAVE_KEY else 'NOT SET -- add BRAVE_SEARCH_KEY'}")
+    print(f"[HERALD API] OpenAI TTS:    {'YES' if OPENAI_KEY else 'not set'}")
+    print(f"[HERALD API] Geocoding:     {'YES' if GEOCODING_KEY else 'not set'}")
     print(f"[HERALD API] GNews:         {'YES' if GNEWS_KEY else 'not set'}")
     print(f"[HERALD API] OMDb:          {'YES' if OMDB_KEY else 'not set'}")
-    print(f"[HERALD API] AlphaVantage:  {'YES (backup only)' if ALPHA_KEY else 'not set -- Yahoo Finance is primary'}")
+    print(f"[HERALD API] AlphaVantage:  {'YES (backup only)' if ALPHA_KEY else 'not set'}")
     print(f"[HERALD API] NewsData:      {'YES' if NEWSDATA_KEY else 'not set'}")
     print(f"[HERALD API] WeatherAPI:    {'YES (backup)' if WEATHER_KEY else 'not set'}")
+    print(f"[HERALD API] Commodities:   Yahoo Finance futures -- silver/gold/oil/gas/copper (v6.1)")
     print(f"[HERALD API] Profiles:      {PROFILES_FILE}")
     print(f"[HERALD API] Owner code:    {'SET' if OWNER_CODE else 'NOT SET'}")
     print(f"[HERALD API] Invite secret: {'SET' if INVITE_SECRET else 'NOT SET'}")
     print(f"[HERALD API] Webhook:       {'SET' if WEBHOOK_SECRET else 'NOT SET'}")
     print(f"[HERALD API] Streaming:     /ask/stream (SSE) -- LIVE")
-    print(f"[HERALD API] Greeting:      /greeting -- LIVE")
-    print(f"[HERALD API] Memory:        /memory -- LIVE")
     server = HTTPServer(("0.0.0.0", PORT), Handler)
     server.serve_forever()
