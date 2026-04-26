@@ -20,8 +20,6 @@
     [data-theme="light"]{--bg:var(--sand-2);--bg2:white;--txt:var(--text-l);--txt2:#5aacbc;--bdr:var(--border-l);--card:var(--card-l);--chip-bg:white;--chip-txt:var(--emerald);}
     *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
     html,body{height:100%;height:100dvh;background:var(--bg);color:var(--txt);font-family:'DM Sans',sans-serif;overflow:hidden;position:fixed;width:100%;transition:background var(--transition),color var(--transition);}
-
-    /* SETUP */
     .setup{position:fixed;inset:0;z-index:100;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 32px;text-align:center;}
     .setup-icon{width:72px;height:72px;border-radius:20px;background:var(--emerald);display:flex;align-items:center;justify-content:center;margin:0 auto 24px;font-family:'DM Serif Display',serif;font-size:36px;color:white;}
     .setup-title{font-family:'DM Serif Display',serif;font-size:32px;color:var(--emerald);letter-spacing:0.12em;margin-bottom:6px;}
@@ -32,8 +30,6 @@
     .setup-btn{width:100%;max-width:340px;padding:15px;background:var(--emerald);color:white;font-family:'DM Sans',sans-serif;font-size:13px;font-weight:500;letter-spacing:0.1em;border:none;border-radius:12px;cursor:pointer;}
     .setup-error{font-size:12px;color:#e05a5a;margin-top:12px;min-height:16px;font-weight:300;}
     .setup-note{font-size:11px;color:var(--txt2);margin-top:20px;line-height:1.7;max-width:300px;font-weight:300;opacity:0.7;}
-
-    /* ONBOARDING */
     .onboard{position:fixed;inset:0;z-index:90;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 28px;text-align:center;overflow-y:auto;}
     .onboard-msg{font-size:20px;color:var(--txt);line-height:1.7;max-width:320px;margin-bottom:8px;font-weight:300;font-style:italic;}
     .onboard-sub{font-size:12px;color:var(--txt2);line-height:1.6;max-width:300px;margin-bottom:24px;font-weight:300;min-height:18px;}
@@ -48,8 +44,6 @@
     .onboard-dot{width:6px;height:6px;border-radius:50%;background:var(--bdr);transition:background 0.2s;}
     .onboard-dot.active{background:var(--emerald);}
     .onboard-dot.done{background:var(--emerald);opacity:0.4;}
-
-    /* MAIN APP */
     .app{height:100%;height:100dvh;display:flex;flex-direction:column;max-width:680px;margin:0 auto;}
     .header{flex-shrink:0;padding:12px 20px 10px;border-bottom:0.5px solid var(--bdr);background:var(--bg);display:flex;align-items:center;gap:12px;}
     .h-icon{width:32px;height:32px;border-radius:9px;background:var(--emerald);display:flex;align-items:center;justify-content:center;font-family:'DM Serif Display',serif;font-size:17px;color:white;flex-shrink:0;}
@@ -64,8 +58,6 @@
     .dot-live{width:6px;height:6px;border-radius:50%;background:var(--emerald);animation:pulse 2.5s infinite;transition:background 0.4s;}
     .dot-live.cold{background:#c8a84b;animation:pulse 0.8s infinite;}
     @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
-
-    /* MESSAGES */
     .messages{flex:1;overflow-y:auto;padding:20px 20px 8px;display:flex;flex-direction:column;gap:18px;-webkit-overflow-scrolling:touch;}
     .messages::-webkit-scrollbar{display:none;}
     .msg{display:flex;flex-direction:column;gap:4px;animation:fadeIn 0.25s ease;}
@@ -76,12 +68,8 @@
     .msg.user .msg-bubble{max-width:78%;padding:10px 14px;font-size:14px;line-height:1.6;border-radius:16px;border-bottom-right-radius:4px;font-weight:400;background:var(--emerald);color:white;}
     .msg.herald .msg-bubble{background:transparent;border:none;padding:2px 0;color:var(--txt);font-size:15px;line-height:1.7;font-weight:300;width:100%;max-width:100%;letter-spacing:0.01em;}
     @keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
-
-    /* STREAMING CURSOR */
     .stream-cursor{display:inline-block;width:2px;height:14px;background:var(--emerald);margin-left:2px;animation:blink 0.8s infinite;vertical-align:middle;}
     @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
-
-    /* ACTION CARDS */
     .action-card{display:flex;align-items:center;gap:14px;margin-top:14px;padding:13px 16px;background:var(--bg2);border:0.5px solid var(--bdr);border-radius:16px;cursor:pointer;text-decoration:none;transition:transform 0.12s,opacity 0.12s;width:100%;max-width:300px;-webkit-tap-highlight-color:transparent;box-shadow:0 1px 8px rgba(0,0,0,0.12);}
     .action-card:active{transform:scale(0.97);opacity:0.8;}
     .action-card-icon{width:42px;height:42px;border-radius:11px;display:flex;align-items:center;justify-content:center;font-size:21px;flex-shrink:0;}
@@ -92,16 +80,12 @@
     .search-cards{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;}
     .search-card{display:inline-flex;align-items:center;gap:6px;padding:9px 14px;border-radius:12px;font-size:12px;font-weight:500;color:white;cursor:pointer;text-decoration:none;border:none;transition:opacity 0.12s;}
     .search-card:active{opacity:0.75;}
-
-    /* THINKING */
     .thinking{display:flex;align-items:center;gap:8px;padding:6px 0;}
     .thinking-label{font-size:11px;color:var(--txt2);font-weight:300;font-style:italic;}
     .dots{display:flex;gap:3px;}
     .dots span{width:4px;height:4px;border-radius:50%;background:var(--emerald);opacity:0.6;animation:bounce 1.2s infinite;}
     .dots span:nth-child(2){animation-delay:0.2s;}.dots span:nth-child(3){animation-delay:0.4s;}
     @keyframes bounce{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-4px);opacity:1}}
-
-    /* WELCOME */
     .welcome{text-align:center;padding:32px 20px;animation:fadeIn 0.4s ease;}
     .welcome-icon{width:56px;height:56px;border-radius:16px;background:var(--emerald);display:flex;align-items:center;justify-content:center;margin:0 auto 16px;font-family:'DM Serif Display',serif;font-size:28px;color:white;}
     .welcome-title{font-family:'DM Serif Display',serif;font-size:15px;color:var(--emerald);letter-spacing:0.12em;margin-bottom:8px;}
@@ -110,8 +94,6 @@
     .q-btn{padding:7px 14px;border:0.5px solid var(--bdr);border-radius:20px;font-size:11px;color:var(--chip-txt);cursor:pointer;background:var(--chip-bg);font-family:'DM Sans',sans-serif;}
     .chips{display:flex;gap:8px;padding:0 20px 12px;justify-content:center;flex-wrap:wrap;}
     .chip{background:var(--chip-bg);border:0.5px solid var(--bdr);border-radius:20px;padding:7px 14px;font-size:11px;color:var(--chip-txt);cursor:pointer;font-weight:400;white-space:nowrap;}
-
-    /* MIC ZONE */
     .mic-zone{flex-shrink:0;padding:10px 20px 16px;border-top:0.5px solid var(--bdr);background:var(--bg);display:flex;flex-direction:column;align-items:stretch;gap:8px;}
     .mic-row{display:flex;align-items:center;gap:14px;justify-content:center;}
     .mic-btn{width:64px;height:64px;border-radius:50%;background:var(--emerald);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
@@ -124,36 +106,22 @@
     .text-input::placeholder{color:var(--txt2);opacity:0.6;font-style:italic;}
     .send-btn{width:40px;height:40px;border-radius:50%;border:0.5px solid var(--bdr);background:var(--bg2);color:var(--emerald);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
     .send-btn svg{width:16px;height:16px;}
-    /* Voice hint is tappable to toggle wake word */
     .voice-hint{font-size:10px;color:var(--txt2);text-align:center;min-height:14px;font-weight:300;letter-spacing:0.06em;cursor:pointer;padding:4px 0;}
     .voice-hint.wake-active{color:var(--teal);}
     .footer{text-align:center;padding:4px 20px 6px;font-size:9px;color:var(--txt2);font-weight:300;opacity:0.5;flex-shrink:0;}
-
-    /* TRIAL WALL */
     .trial-wall{position:fixed;inset:0;z-index:300;background:rgba(10,30,46,0.97);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 32px;text-align:center;animation:fadeIn 0.4s ease;}
     .trial-icon{width:64px;height:64px;border-radius:18px;background:var(--emerald);display:flex;align-items:center;justify-content:center;font-family:'DM Serif Display',serif;font-size:32px;color:white;margin:0 auto 24px;}
     .trial-msg{font-size:16px;color:var(--txt);line-height:1.8;max-width:320px;margin-bottom:28px;font-weight:300;font-style:italic;}
     .trial-btn{width:100%;max-width:320px;padding:16px;background:var(--emerald);color:white;border:none;border-radius:12px;font-family:'DM Sans',sans-serif;font-size:14px;font-weight:500;cursor:pointer;margin-bottom:10px;letter-spacing:0.05em;}
     .trial-secondary{font-size:12px;color:var(--txt2);max-width:300px;line-height:1.6;font-weight:300;margin-top:8px;}
     .trial-warning{background:rgba(26,155,138,0.12);border-top:0.5px solid rgba(26,155,138,0.3);padding:10px 20px;text-align:center;font-size:12px;color:#3ECFBA;flex-shrink:0;cursor:pointer;}
-
-    /* INSTALL BANNER */
-    .install-banner{position:fixed;bottom:0;left:0;right:0;z-index:200;background:var(--bg2);border-top:0.5px solid var(--bdr);padding:14px 20px 20px;display:flex;flex-direction:column;gap:10px;animation:slideUp 0.3s ease;max-width:680px;margin:0 auto;}
-    @keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
-    .install-banner-title{font-size:13px;font-weight:500;color:var(--txt);}
-    .install-banner-steps{font-size:12px;color:var(--txt2);line-height:1.8;font-weight:300;}
-    .install-banner-steps span{color:var(--emerald);font-weight:500;}
-    .install-banner-row{display:flex;gap:10px;align-items:center;}
-    .install-btn{flex:1;padding:11px;background:var(--emerald);color:white;border:none;border-radius:10px;font-family:'DM Sans',sans-serif;font-size:13px;font-weight:500;cursor:pointer;}
-    .install-dismiss{padding:11px 16px;background:transparent;color:var(--txt2);border:0.5px solid var(--bdr);border-radius:10px;font-family:'DM Sans',sans-serif;font-size:12px;cursor:pointer;}
-
-    /* WEB PANEL */
     .web-panel-backdrop{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,0.72);backdrop-filter:blur(6px);animation:fadeIn 0.2s ease;}
     .web-panel{position:fixed;bottom:0;left:0;right:0;z-index:201;background:var(--bg2);border-radius:24px 24px 0 0;border-top:0.5px solid var(--bdr);display:flex;flex-direction:column;animation:slideUp 0.28s ease;max-width:680px;margin:0 auto;}
+    @keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
     .web-panel-handle{width:36px;height:4px;background:var(--bdr);border-radius:2px;margin:12px auto 0;flex-shrink:0;}
     .web-panel-header{display:flex;align-items:center;justify-content:space-between;padding:14px 20px 10px;flex-shrink:0;}
     .web-panel-title{font-size:11px;color:var(--emerald);letter-spacing:0.14em;text-transform:uppercase;font-weight:500;}
-    .web-panel-close{width:28px;height:28px;border-radius:50%;border:0.5px solid var(--bdr);background:transparent;color:var(--txt2);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:16px;line-height:1;font-family:'DM Sans',sans-serif;}
+    .web-panel-close{width:28px;height:28px;border-radius:50%;border:0.5px solid var(--bdr);background:transparent;color:var(--txt2);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:16px;line-height:1;}
     .web-panel-body{padding:0 20px 0;flex-shrink:0;display:flex;flex-direction:column;}
     .web-panel-scroll{max-height:110px;overflow-y:auto;padding-bottom:12px;}
     .web-panel-answer{font-size:12px;color:var(--txt);line-height:1.6;font-weight:300;padding:0 0 12px;}
@@ -166,7 +134,6 @@
 </head>
 <body data-theme="dark">
 
-<!-- ═══ SETUP SCREEN ═══ -->
 <div class="setup" id="setupScreen">
   <div class="setup-icon">H</div>
   <div class="setup-title">HERALD</div>
@@ -179,7 +146,6 @@
   <div class="setup-note">Herald works on any device with a browser.<br>Add to Home Screen for the full app experience.</div>
 </div>
 
-<!-- ═══ ONBOARDING ═══ -->
 <div class="onboard" id="onboardScreen" style="display:none;">
   <div class="onboard-dots" id="onboardDots"></div>
   <div class="onboard-msg" id="onboardMsg"></div>
@@ -189,9 +155,7 @@
   <div class="onboard-skip" id="onboardSkip" onclick="skipOnboard()">skip for now</div>
 </div>
 
-<!-- ═══ MAIN APP ═══ -->
 <div class="app" id="appScreen" style="display:none;">
-
   <div class="header">
     <div class="h-icon">H</div>
     <div>
@@ -199,15 +163,15 @@
       <div class="h-sub" id="headerSub">PERSONAL AI V55.4</div>
     </div>
     <div class="h-right">
-      <div class="dot-live" id="statusDot" title="Live"></div>
+      <div class="dot-live" id="statusDot"></div>
       <div class="h-time" id="headerTime"></div>
-      <div class="icon-btn" id="volumeBtn" onclick="toggleMute()" title="Mute/unmute">
+      <div class="icon-btn" id="volumeBtn" onclick="toggleMute()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
           <path id="volWave" d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
         </svg>
       </div>
-      <div class="icon-btn" id="themeBtn" onclick="toggleTheme()" title="Toggle theme">
+      <div class="icon-btn" onclick="toggleTheme()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
         </svg>
@@ -235,7 +199,6 @@
     <div class="chip" onclick="sendQuick('What time is it?')">time</div>
   </div>
 
-  <!-- Trial warning bar (shown when ≤3 days left) -->
   <div class="trial-warning" id="trialWarningBar" style="display:none;" onclick="showTrialWall()"></div>
 
   <div class="mic-zone">
@@ -257,14 +220,11 @@
         </svg>
       </button>
     </div>
-    <!-- ── v55.4: tap voice hint to toggle "Hey [AI Name]" wake word ── -->
-    <div class="voice-hint" id="voiceHint" onclick="toggleHeyHerald()" title="Tap to enable always-listening wake word">tap mic · talk · get answer</div>
+    <div class="voice-hint" id="voiceHint" onclick="toggleHeyHerald()">tap mic · talk · get answer</div>
   </div>
-
   <div class="footer">Your AI, your data — just between you and me.</div>
 </div>
 
-<!-- ═══ TRIAL WALL ═══ -->
 <div class="trial-wall" id="trialWall" style="display:none;">
   <div class="trial-icon">H</div>
   <div class="trial-msg" id="trialWallMsg"></div>
@@ -275,15 +235,10 @@
 
 <script>
 // ═══════════════════════════════════════════════════════
-// HERALD v55.4
-// Added over v54.4:
-//   1. Watchdog timer — auto-clears isStreaming if stuck > 20s
-//   2. "Hey [AI Name]" wake word — tap voice hint to toggle
-//      always-listening mode. Wake phrase uses aiName dynamically.
-//      Mic button turns gold when wake word is active.
-// All v54.4 fixes retained:
-//   commodity price bug, fallback 20s timeout, cold-start message,
-//   "our conversations" memory query fix (backend v6.1)
+// HERALD v55.4 — Capacitor Native Android App
+// GPS:   Capacitor.Plugins.Geolocation → navigator fallback
+// SOUND: Railway/OpenAI → Capacitor TTS → WebSpeech+resume()
+// NEW:   Watchdog timer + Hey [AI Name] wake word
 // ═══════════════════════════════════════════════════════
 
 const RAILWAY_URL    = 'https://web-production-b4083.up.railway.app';
@@ -291,67 +246,51 @@ const STRIPE_MONTHLY = 'PLACEHOLDER_MONTHLY';
 const STRIPE_ANNUAL  = 'PLACEHOLDER_ANNUAL';
 const VERSION        = 'V55.4';
 
-// ── STATE ──
-let userId          = localStorage.getItem('herald_uid') || '';
-let authCode        = localStorage.getItem('herald_auth') || '';
-let aiName          = localStorage.getItem('herald_ai_name') || 'Herald';
-let userName        = localStorage.getItem('herald_name') || '';
-let isOwner         = localStorage.getItem('herald_owner') === 'true';
-let history         = [];
-let isStreaming      = false;
-let muted           = localStorage.getItem('herald_muted') === 'true';
-let recognition     = null;
-let micActive       = false;
-let currentAudio    = null;
-let onboardStep     = 0;
-let onboardData     = {};
-let currentTheme    = localStorage.getItem('herald_theme') || 'dark';
-// ── v55.4 NEW STATE ──
-let watchdogTimer   = null;   // prevents isStreaming from freezing forever
-let heyHeraldEnabled = false; // "Hey [AI Name]" always-listening toggle
-let wakeRecognition  = null;  // separate recognition instance for wake word
+let userId           = localStorage.getItem('herald_uid') || '';
+let authCode         = localStorage.getItem('herald_auth') || '';
+let aiName           = localStorage.getItem('herald_ai_name') || 'Herald';
+let userName         = localStorage.getItem('herald_name') || '';
+let isOwner          = localStorage.getItem('herald_owner') === 'true';
+let history          = [];
+let isStreaming       = false;
+let muted            = localStorage.getItem('herald_muted') === 'true';
+let recognition      = null;
+let micActive        = false;
+let currentAudio     = null;
+let onboardStep      = 0;
+let onboardData      = {};
+let currentTheme     = localStorage.getItem('herald_theme') || 'dark';
+let watchdogTimer    = null;
+let heyHeraldEnabled = false;
+let wakeRecognition  = null;
 
-// ── INIT ──
 document.body.setAttribute('data-theme', currentTheme);
 updateTime();
 setInterval(updateTime, 30000);
-// Keep-alive ping every 3 minutes
 setInterval(() => fetch(RAILWAY_URL + '/health').catch(()=>{}), 180000);
 
 if (userId && authCode) {
   showApp();
 } else {
-  const urlParams = new URLSearchParams(window.location.search);
-  const inviteCode = urlParams.get('invite');
-  if (inviteCode) {
-    document.getElementById('codeInput').value = inviteCode;
-  }
+  const inviteCode = new URLSearchParams(window.location.search).get('invite');
+  if (inviteCode) document.getElementById('codeInput').value = inviteCode;
 }
 
-// ── TIME ──
 function updateTime() {
-  const now = new Date();
-  const t = now.toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit', hour12:true});
   const el = document.getElementById('headerTime');
-  if (el) el.textContent = t;
+  if (el) el.textContent = new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',hour12:true});
 }
 
 function getLocalTimeStr() {
-  return new Date().toLocaleString('en-US', {
-    weekday:'long', year:'numeric', month:'long', day:'numeric',
-    hour:'numeric', minute:'2-digit', hour12:true,
-    timeZoneName:'short'
-  });
+  return new Date().toLocaleString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric',hour:'numeric',minute:'2-digit',hour12:true,timeZoneName:'short'});
 }
 
-// ── THEME ──
 function toggleTheme() {
   currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
   document.body.setAttribute('data-theme', currentTheme);
   localStorage.setItem('herald_theme', currentTheme);
 }
 
-// ── MUTE ──
 function toggleMute() {
   muted = !muted;
   localStorage.setItem('herald_muted', muted);
@@ -359,7 +298,6 @@ function toggleMute() {
   if (muted && currentAudio) { currentAudio.pause(); currentAudio = null; }
 }
 
-// ── AUTH ──
 async function submitCode() {
   const code = document.getElementById('codeInput').value.trim();
   if (!code) { showError('Enter your access code.'); return; }
@@ -379,18 +317,16 @@ async function submitCode() {
     authCode = code; isOwner = d.is_owner;
     if (d.name) { userName = d.name; localStorage.setItem('herald_name', d.name); }
     if (d.ai_name) { aiName = d.ai_name; localStorage.setItem('herald_ai_name', d.ai_name); }
-    if (d.onboarded || d.name) { showApp(); }
-    else { startOnboarding(); }
+    if (d.onboarded || d.name) showApp(); else startOnboarding();
   } catch(e) { errEl.textContent = 'Connection error. Is your internet on?'; }
 }
 
 function showError(msg) { document.getElementById('setupError').textContent = msg; }
 
-// ── ONBOARDING ──
 const ONBOARD_STEPS = [
-  { msg: "What should I call you?", sub: "Just your first name is fine.", type: 'input', placeholder: 'Your name...', key: 'name' },
-  { msg: "Where are you based?", sub: "I'll use this for weather and local recommendations.", type: 'input', placeholder: 'City, State...', key: 'location' },
-  { msg: "What's your go-to music app?", sub: "I'll open it when you ask to play something.", type: 'options', options: ['Spotify','Apple Music','YouTube Music','Amazon Music'], key: 'music_app' },
+  { msg:"What should I call you?", sub:"Just your first name is fine.", type:'input', placeholder:'Your name...', key:'name' },
+  { msg:"Where are you based?", sub:"I'll use this for weather and local recommendations.", type:'input', placeholder:'City, State...', key:'location' },
+  { msg:"What's your go-to music app?", sub:"I'll open it when you ask to play something.", type:'options', options:['Spotify','Apple Music','YouTube Music','Amazon Music'], key:'music_app' },
 ];
 
 function startOnboarding() {
@@ -402,10 +338,8 @@ function startOnboarding() {
 
 function renderOnboardStep() {
   const step = ONBOARD_STEPS[onboardStep];
-  const dots = document.getElementById('onboardDots');
-  dots.innerHTML = ONBOARD_STEPS.map((_, i) =>
-    `<div class="onboard-dot ${i < onboardStep ? 'done' : i === onboardStep ? 'active' : ''}"></div>`
-  ).join('');
+  document.getElementById('onboardDots').innerHTML = ONBOARD_STEPS.map((_,i)=>
+    `<div class="onboard-dot ${i<onboardStep?'done':i===onboardStep?'active':''}"></div>`).join('');
   document.getElementById('onboardMsg').textContent = step.msg;
   document.getElementById('onboardSub').textContent = step.sub;
   const area = document.getElementById('onboardInputArea');
@@ -415,85 +349,52 @@ function renderOnboardStep() {
     inp.addEventListener('keydown', e => { if (e.key==='Enter') nextOnboard(); });
     setTimeout(() => inp.focus(), 100);
   } else {
-    area.innerHTML = `<div class="onboard-options">${
-      step.options.map(o =>
-        `<div class="onboard-opt" onclick="selectOpt(this,'${o}')">${o}</div>`
-      ).join('')
-    }</div>`;
+    area.innerHTML = `<div class="onboard-options">${step.options.map(o=>`<div class="onboard-opt" onclick="selectOpt(this,'${o}')">${o}</div>`).join('')}</div>`;
   }
-  document.getElementById('onboardSkip').style.display = onboardStep < ONBOARD_STEPS.length - 1 ? 'block' : 'none';
+  document.getElementById('onboardSkip').style.display = onboardStep < ONBOARD_STEPS.length-1 ? 'block' : 'none';
 }
 
 function selectOpt(el, val) {
-  el.closest('.onboard-options').querySelectorAll('.onboard-opt').forEach(o => o.classList.remove('selected'));
+  el.closest('.onboard-options').querySelectorAll('.onboard-opt').forEach(o=>o.classList.remove('selected'));
   el.classList.add('selected');
   onboardData[ONBOARD_STEPS[onboardStep].key] = val;
 }
 
 async function nextOnboard() {
   const step = ONBOARD_STEPS[onboardStep];
-  if (step.type === 'input') {
-    const val = document.getElementById('onboardInput').value.trim();
-    if (val) onboardData[step.key] = val;
-  }
-  if (onboardStep < ONBOARD_STEPS.length - 1) {
-    onboardStep++;
-    renderOnboardStep();
-  } else {
-    await finishOnboarding();
-  }
+  if (step.type === 'input') { const val = document.getElementById('onboardInput').value.trim(); if (val) onboardData[step.key] = val; }
+  if (onboardStep < ONBOARD_STEPS.length-1) { onboardStep++; renderOnboardStep(); }
+  else await finishOnboarding();
 }
 
 function skipOnboard() {
-  if (onboardStep < ONBOARD_STEPS.length - 1) { onboardStep++; renderOnboardStep(); }
-  else finishOnboarding();
+  if (onboardStep < ONBOARD_STEPS.length-1) { onboardStep++; renderOnboardStep(); } else finishOnboarding();
 }
 
 async function finishOnboarding() {
   if (onboardData.name) { userName = onboardData.name; localStorage.setItem('herald_name', onboardData.name); }
   if (onboardData.ai_name) { aiName = onboardData.ai_name; localStorage.setItem('herald_ai_name', onboardData.ai_name); }
   try {
-    await fetch(RAILWAY_URL + '/profile', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({user_id: userId, ...onboardData})
-    });
+    await fetch(RAILWAY_URL+'/profile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user_id:userId,...onboardData})});
   } catch(e) {}
   document.getElementById('onboardScreen').style.display = 'none';
   showApp();
 }
 
-// ── SHOW APP ──
 async function showApp() {
   document.getElementById('setupScreen').style.display = 'none';
   document.getElementById('onboardScreen').style.display = 'none';
   document.getElementById('appScreen').style.display = 'flex';
   document.getElementById('headerSub').textContent = `PERSONAL AI ${VERSION}`;
   if (userName) document.getElementById('welcomeText').textContent = `Good to see you, ${userName}. What can I help with?`;
-
-  checkInstallPrompt();
   await fetchGreeting();
 }
 
 async function fetchGreeting() {
   try {
-    let lat = null, lng = null, locationLabel = null;
-    if (navigator.geolocation) {
-      await new Promise(resolve => navigator.geolocation.getCurrentPosition(
-        pos => { lat = pos.coords.latitude; lng = pos.coords.longitude; resolve(); },
-        () => resolve(), { timeout: 3000 }
-      ));
-    }
-    if (lat && lng) {
-      try {
-        const gr = await fetch(`${RAILWAY_URL}/geocode?lat=${lat}&lng=${lng}`);
-        const gd = await gr.json();
-        if (gd.label) locationLabel = gd.label;
-      } catch(e) {}
-    }
-    const r = await fetch(RAILWAY_URL + '/greeting', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ user_id: userId, local_time: getLocalTimeStr(), lat, lng, location_label: locationLabel })
-    });
+    const { lat, lng, locationLabel } = await getLocation();
+    const r = await fetch(RAILWAY_URL+'/greeting',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({user_id:userId,local_time:getLocalTimeStr(),lat,lng,location_label:locationLabel})});
     const d = await r.json();
     if (d.greeting) {
       if (d.ai_name) { aiName = d.ai_name; localStorage.setItem('herald_ai_name', d.ai_name); }
@@ -504,83 +405,84 @@ async function fetchGreeting() {
   } catch(e) {}
 }
 
-// ── QUICK SENDS ──
+// ══════════════════════════════════════════════════════
+// GPS — Capacitor native primary, navigator fallback
+// Fixes: "I don't have real-time GPS data" in native app
+// ══════════════════════════════════════════════════════
+async function getLocation() {
+  let lat = null, lng = null, locationLabel = null;
+
+  // Layer 1: Capacitor Geolocation (native Android — works in WebView)
+  try {
+    if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Geolocation) {
+      const pos = await window.Capacitor.Plugins.Geolocation.getCurrentPosition({
+        enableHighAccuracy: true, timeout: 5000
+      });
+      lat = pos.coords.latitude;
+      lng = pos.coords.longitude;
+    }
+  } catch(e) {}
+
+  // Layer 2: Standard browser geolocation (PWA / browser fallback)
+  if (!lat) {
+    try {
+      await new Promise(resolve => navigator.geolocation.getCurrentPosition(
+        pos => { lat = pos.coords.latitude; lng = pos.coords.longitude; resolve(); },
+        () => resolve(), { timeout: 4000, enableHighAccuracy: true }
+      ));
+    } catch(e) {}
+  }
+
+  // Geocode to human-readable label
+  if (lat && lng) {
+    try {
+      const gr = await fetch(`${RAILWAY_URL}/geocode?lat=${lat}&lng=${lng}`);
+      const gd = await gr.json();
+      if (gd.label) locationLabel = gd.label;
+    } catch(e) {}
+  }
+
+  return { lat, lng, locationLabel };
+}
+
 function sendQuick(text) { sendToHerald(text); }
 
-// ── TEXT INPUT ──
-function handleTextKey(e) {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendFromInput(); }
-}
-function autoResize(el) {
-  el.style.height = 'auto';
-  el.style.height = Math.min(el.scrollHeight, 160) + 'px';
-}
+function handleTextKey(e) { if (e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendFromInput();} }
+function autoResize(el) { el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,160)+'px'; }
 function sendFromInput() {
   const inp = document.getElementById('textInput');
   const val = inp.value.trim();
   if (!val) return;
-  inp.value = ''; inp.style.height = 'auto';
+  inp.value=''; inp.style.height='auto';
   sendToHerald(val);
 }
 
-// ── MAIN SEND FUNCTION (v55.4: watchdog added) ──
 async function sendToHerald(messageText) {
   if (isStreaming) return;
   isStreaming = true;
   setStatusDot('streaming');
 
-  // ── WATCHDOG: if isStreaming gets stuck > 20s, auto-reset ──
+  // Watchdog: auto-reset if stuck > 20s
   if (watchdogTimer) clearTimeout(watchdogTimer);
-  watchdogTimer = setTimeout(() => {
-    if (isStreaming) {
-      isStreaming = false;
-      setStatusDot('live');
-    }
-  }, 20000);
+  watchdogTimer = setTimeout(() => { if (isStreaming) { isStreaming=false; setStatusDot('live'); } }, 20000);
 
-  // Hide welcome card
   const wc = document.getElementById('welcomeCard');
   if (wc) wc.style.display = 'none';
   document.getElementById('suggestChips').style.display = 'none';
-
-  // Stop any playing audio
   if (currentAudio) { currentAudio.pause(); currentAudio = null; }
 
-  // User bubble
   addUserMsg(messageText);
-  history.push({ role: 'user', content: messageText });
-
-  // Thinking indicator
+  history.push({ role:'user', content:messageText });
   const thinkingEl = addThinking();
 
-  // Geolocation
-  let lat = null, lng = null, locationLabel = null;
-  try {
-    if (navigator.geolocation) {
-      await new Promise(resolve => navigator.geolocation.getCurrentPosition(
-        pos => { lat = pos.coords.latitude; lng = pos.coords.longitude; resolve(); },
-        () => resolve(), { timeout: 2000 }
-      ));
-    }
-    if (lat && lng) {
-      try {
-        const gr = await fetch(`${RAILWAY_URL}/geocode?lat=${lat}&lng=${lng}`);
-        const gd = await gr.json();
-        if (gd.label) locationLabel = gd.label;
-      } catch(e) {}
-    }
-  } catch(e) {}
+  const { lat, lng, locationLabel } = await getLocation();
 
   const body = {
-    user_id: userId,
-    auth_code: authCode,
-    message: messageText,
-    history: history.slice(-20),
-    local_time: getLocalTimeStr(),
-    lat, lng, location_label: locationLabel
+    user_id:userId, auth_code:authCode, message:messageText,
+    history:history.slice(-20), local_time:getLocalTimeStr(),
+    lat, lng, location_label:locationLabel
   };
 
-  // Herald response bubble
   const heraldMsgEl = document.createElement('div');
   heraldMsgEl.className = 'msg herald';
   const labelEl = document.createElement('div');
@@ -591,59 +493,38 @@ async function sendToHerald(messageText) {
   heraldMsgEl.appendChild(labelEl);
   heraldMsgEl.appendChild(bubbleEl);
 
-  let fullText = '';
-  let actionData = null;
-  let revealed = false;
+  let fullText='', actionData=null, revealed=false;
 
   function revealBubble() {
-    if (!revealed) {
-      thinkingEl.remove();
-      document.getElementById('messages').appendChild(heraldMsgEl);
-      scrollBottom();
-      revealed = true;
-    }
+    if (!revealed) { thinkingEl.remove(); document.getElementById('messages').appendChild(heraldMsgEl); scrollBottom(); revealed=true; }
   }
 
-  // ── SSE STREAM ──
   try {
     const controller = new AbortController();
-    const streamTimeout = setTimeout(() => controller.abort(), 30000);
-
-    const response = await fetch(RAILWAY_URL + '/ask/stream', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: controller.signal
-    });
-
+    const streamTimeout = setTimeout(()=>controller.abort(), 30000);
+    const response = await fetch(RAILWAY_URL+'/ask/stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:controller.signal});
     clearTimeout(streamTimeout);
-
-    if (!response.ok) throw new Error('Stream response not ok');
+    if (!response.ok) throw new Error('stream not ok');
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
-    let buffer = '';
-    let cursor = null;
+    let buffer='', cursor=null;
 
     while (true) {
-      const { done, value } = await reader.read();
+      const {done,value} = await reader.read();
       if (done) break;
-      buffer += decoder.decode(value, { stream: true });
+      buffer += decoder.decode(value,{stream:true});
       const lines = buffer.split('\n');
       buffer = lines.pop();
       for (const line of lines) {
         if (!line.startsWith('data: ')) continue;
         const dataStr = line.slice(6).trim();
-        if (dataStr === '[DONE]') break;
+        if (dataStr==='[DONE]') break;
         try {
           const data = JSON.parse(dataStr);
           if (data.t) {
             revealBubble();
-            if (!cursor) {
-              cursor = document.createElement('span');
-              cursor.className = 'stream-cursor';
-              bubbleEl.appendChild(cursor);
-            }
+            if (!cursor) { cursor=document.createElement('span'); cursor.className='stream-cursor'; bubbleEl.appendChild(cursor); }
             fullText += data.t;
             bubbleEl.insertBefore(document.createTextNode(data.t), cursor);
             scrollBottom();
@@ -653,98 +534,71 @@ async function sendToHerald(messageText) {
             if (data.full) fullText = data.full;
             if (data.action) actionData = data.action;
             handleTrialData(data);
-            if (data.ai_name) { aiName = data.ai_name; localStorage.setItem('herald_ai_name', data.ai_name); }
-            if (data.name) { userName = data.name; localStorage.setItem('herald_name', data.name); }
+            if (data.ai_name) { aiName=data.ai_name; localStorage.setItem('herald_ai_name',data.ai_name); }
+            if (data.name) { userName=data.name; localStorage.setItem('herald_name',data.name); }
           }
         } catch(e) {}
       }
     }
-
     revealBubble();
     if (cursor) cursor.remove();
-
-    // Render action card
-    if (actionData) {
-      const card = buildActionCard(actionData, fullText);
-      if (card) heraldMsgEl.appendChild(card);
-    }
-
-    history.push({ role: 'assistant', content: fullText });
+    if (actionData) { const card=buildActionCard(actionData,fullText); if (card) heraldMsgEl.appendChild(card); }
+    history.push({role:'assistant',content:fullText});
     if (!muted && fullText) speakText(fullText);
 
-  } catch (streamErr) {
-    // ── FALLBACK /ask WITH 20s TIMEOUT ──
+  } catch(streamErr) {
     try {
-      const fallbackController = new AbortController();
-      const fallbackTimeout = setTimeout(() => fallbackController.abort(), 20000);
-
-      const r = await fetch(RAILWAY_URL + '/ask', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: fallbackController.signal
-      });
-      clearTimeout(fallbackTimeout);
-
+      const fc = new AbortController();
+      const ft = setTimeout(()=>fc.abort(), 20000);
+      const r = await fetch(RAILWAY_URL+'/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:fc.signal});
+      clearTimeout(ft);
       const d = await r.json();
       revealBubble();
       const reply = d.reply || "I didn't quite get that — try again?";
       bubbleEl.textContent = reply;
-      if (d.action) {
-        const card = buildActionCard(d.action, reply);
-        if (card) heraldMsgEl.appendChild(card);
-      }
+      if (d.action) { const card=buildActionCard(d.action,reply); if (card) heraldMsgEl.appendChild(card); }
       handleTrialData(d);
-      if (d.ai_name) { aiName = d.ai_name; localStorage.setItem('herald_ai_name', d.ai_name); }
-      if (d.name) { userName = d.name; localStorage.setItem('herald_name', d.name); }
-      fullText = reply;
-      history.push({ role: 'assistant', content: reply });
+      if (d.ai_name) { aiName=d.ai_name; localStorage.setItem('herald_ai_name',d.ai_name); }
+      if (d.name) { userName=d.name; localStorage.setItem('herald_name',d.name); }
+      fullText=reply;
+      history.push({role:'assistant',content:reply});
       if (!muted && reply) speakText(reply);
-
-    } catch (fallbackErr) {
+    } catch(fe) {
       revealBubble();
-      if (fallbackErr.name === 'AbortError') {
+      if (fe.name==='AbortError') {
         bubbleEl.textContent = 'Server is waking up — please tap send again in a moment.';
-        setStatusDot('cold');
-        setTimeout(() => setStatusDot('live'), 8000);
+        setStatusDot('cold'); setTimeout(()=>setStatusDot('live'),8000);
       } else {
         bubbleEl.textContent = 'Connection error. Check your internet and try again.';
       }
       history.pop();
     }
   } finally {
-    isStreaming = false;
+    isStreaming=false;
     if (watchdogTimer) clearTimeout(watchdogTimer);
     setStatusDot('live');
     scrollBottom();
   }
 }
 
-// ── STATUS DOT ──
 function setStatusDot(state) {
   const dot = document.getElementById('statusDot');
-  if (!dot) return;
-  dot.classList.toggle('cold', state === 'cold');
+  if (dot) dot.classList.toggle('cold', state==='cold');
 }
 
-// ── DOM HELPERS ──
 function addUserMsg(text) {
   const el = document.createElement('div');
   el.className = 'msg user';
   el.innerHTML = `<div class="msg-bubble">${escHtml(text)}</div>`;
   document.getElementById('messages').appendChild(el);
-  scrollBottom();
-  return el;
+  scrollBottom(); return el;
 }
 
 function addHeraldMsg(text, action, speak) {
   const el = document.createElement('div');
   el.className = 'msg herald';
   el.innerHTML = `<div class="msg-label">${escHtml(aiName.toUpperCase())}</div><div class="msg-bubble">${escHtml(text)}</div>`;
-  if (action) {
-    const card = buildActionCard(action, text);
-    if (card) el.appendChild(card);
-  }
+  if (action) { const card=buildActionCard(action,text); if (card) el.appendChild(card); }
   document.getElementById('messages').appendChild(el);
   scrollBottom();
   if (speak && !muted) speakText(text);
@@ -755,236 +609,146 @@ function addThinking() {
   const el = document.createElement('div');
   el.className = 'msg herald';
   el.innerHTML = `<div class="msg-label">${escHtml(aiName.toUpperCase())}</div>
-    <div class="thinking">
-      <div class="dots"><span></span><span></span><span></span></div>
-      <div class="thinking-label">thinking...</div>
-    </div>`;
+    <div class="thinking"><div class="dots"><span></span><span></span><span></span></div>
+    <div class="thinking-label">thinking...</div></div>`;
   document.getElementById('messages').appendChild(el);
-  scrollBottom();
-  return el;
+  scrollBottom(); return el;
 }
 
-function scrollBottom() {
-  const m = document.getElementById('messages');
-  m.scrollTop = m.scrollHeight;
-}
+function scrollBottom() { const m=document.getElementById('messages'); m.scrollTop=m.scrollHeight; }
+function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
-function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-// ── ACTION CARDS ──
 function buildActionCard(action, replyText) {
-  if (!action || !action.type) return null;
-  const { type, value } = action;
-
-  if (type === 'maps') {
+  if (!action||!action.type) return null;
+  const {type,value} = action;
+  if (type==='maps') {
     const encoded = encodeURIComponent(value);
-    const url = /iPhone|iPad|iPod/.test(navigator.userAgent)
-      ? `maps://maps.apple.com/?q=${encoded}`
-      : `https://www.google.com/maps/search/?api=1&query=${encoded}`;
+    const url = /iPhone|iPad|iPod/.test(navigator.userAgent)?`maps://maps.apple.com/?q=${encoded}`:`https://www.google.com/maps/search/?api=1&query=${encoded}`;
     const card = document.createElement('a');
-    card.className = 'action-card'; card.href = url; card.target = '_blank';
-    card.innerHTML = `<div class="action-card-icon" style="background:rgba(26,155,138,0.15);">🗺️</div>
-      <div class="action-card-body">
-        <div class="action-card-title">${escHtml(value)}</div>
-        <div class="action-card-sub">Tap to open Maps</div>
-      </div><div class="action-card-arrow">›</div>`;
+    card.className='action-card'; card.href=url; card.target='_blank';
+    card.innerHTML=`<div class="action-card-icon" style="background:rgba(26,155,138,0.15);">🗺️</div><div class="action-card-body"><div class="action-card-title">${escHtml(value)}</div><div class="action-card-sub">Tap to open Maps</div></div><div class="action-card-arrow">›</div>`;
     return card;
   }
-  if (type === 'phone') {
+  if (type==='phone') {
     const card = document.createElement('a');
-    card.className = 'action-card'; card.href = `tel:${value.replace(/\D/g,'')}`;
-    card.innerHTML = `<div class="action-card-icon" style="background:rgba(26,155,138,0.15);">📞</div>
-      <div class="action-card-body">
-        <div class="action-card-title">${escHtml(value)}</div>
-        <div class="action-card-sub">Tap to call</div>
-      </div><div class="action-card-arrow">›</div>`;
+    card.className='action-card'; card.href=`tel:${value.replace(/\D/g,'')}`;
+    card.innerHTML=`<div class="action-card-icon" style="background:rgba(26,155,138,0.15);">📞</div><div class="action-card-body"><div class="action-card-title">${escHtml(value)}</div><div class="action-card-sub">Tap to call</div></div><div class="action-card-arrow">›</div>`;
     return card;
   }
-  if (type === 'music') {
-    const spotUrl  = `https://open.spotify.com/search/${encodeURIComponent(value)}`;
-    const ytUrl    = `https://music.youtube.com/search?q=${encodeURIComponent(value)}`;
-    const appleUrl = `https://music.apple.com/search?term=${encodeURIComponent(value)}`;
-    const wrap = document.createElement('div');
-    wrap.className = 'search-cards';
-    [[spotUrl,'#1DB954','♪ Spotify'],[ytUrl,'#FF0000','▶ YouTube'],[appleUrl,'#FC3C44','♫ Apple']].forEach(([url,bg,label])=>{
-      const btn = document.createElement('a');
-      btn.className='search-card'; btn.href=url; btn.target='_blank';
-      btn.style.background=bg; btn.textContent=label;
-      wrap.appendChild(btn);
-    });
-    return wrap;
+  if (type==='music') {
+    const wrap=document.createElement('div'); wrap.className='search-cards';
+    [[`https://open.spotify.com/search/${encodeURIComponent(value)}`,'#1DB954','♪ Spotify'],
+     [`https://music.youtube.com/search?q=${encodeURIComponent(value)}`,'#FF0000','▶ YouTube'],
+     [`https://music.apple.com/search?term=${encodeURIComponent(value)}`,'#FC3C44','♫ Apple']].forEach(([url,bg,label])=>{
+      const btn=document.createElement('a'); btn.className='search-card'; btn.href=url; btn.target='_blank'; btn.style.background=bg; btn.textContent=label; wrap.appendChild(btn);
+    }); return wrap;
   }
-  if (type === 'search') {
-    const gUrl = `https://www.google.com/search?q=${encodeURIComponent(value)}`;
-    const ytUrl= `https://www.youtube.com/results?search_query=${encodeURIComponent(value)}`;
-    const wrap = document.createElement('div');
-    wrap.className = 'search-cards';
-    [[gUrl,'#4285F4','🔍 Google'],[ytUrl,'#FF0000','▶ YouTube']].forEach(([url,bg,label])=>{
-      const btn = document.createElement('a');
-      btn.className='search-card'; btn.href=url; btn.target='_blank';
-      btn.style.background=bg; btn.textContent=label;
-      wrap.appendChild(btn);
-    });
-    return wrap;
+  if (type==='search') {
+    const wrap=document.createElement('div'); wrap.className='search-cards';
+    [[`https://www.google.com/search?q=${encodeURIComponent(value)}`,'#4285F4','🔍 Google'],
+     [`https://www.youtube.com/results?search_query=${encodeURIComponent(value)}`,'#FF0000','▶ YouTube']].forEach(([url,bg,label])=>{
+      const btn=document.createElement('a'); btn.className='search-card'; btn.href=url; btn.target='_blank'; btn.style.background=bg; btn.textContent=label; wrap.appendChild(btn);
+    }); return wrap;
   }
-  if (type === 'launch') {
-    const appMap = {
-      'x':        ['https://x.com',         '#000','✕ Open X'],
-      'twitter':  ['https://x.com',         '#000','✕ Open X'],
-      'instagram':['https://instagram.com', 'linear-gradient(45deg,#405DE6,#E1306C)','📷 Instagram'],
-      'youtube':  ['https://youtube.com',   '#FF0000','▶ YouTube'],
-      'tiktok':   ['https://tiktok.com',    '#010101','🎵 TikTok'],
-      'facebook': ['https://facebook.com',  '#1877F2','Facebook'],
-    };
-    const key = value.toLowerCase().replace(/\s+/g,'');
-    const info = appMap[key] || [`https://www.google.com/search?q=${encodeURIComponent(value)}`, '#333', `Open ${value}`];
-    const btn = document.createElement('a');
-    btn.className='search-card'; btn.href=info[0]; btn.target='_blank';
-    btn.style.background=info[1]; btn.textContent=info[2];
-    const wrap = document.createElement('div'); wrap.className='search-cards';
-    wrap.appendChild(btn);
-    return wrap;
+  if (type==='launch') {
+    const appMap={'x':['https://x.com','#000','✕ Open X'],'twitter':['https://x.com','#000','✕ Open X'],'instagram':['https://instagram.com','linear-gradient(45deg,#405DE6,#E1306C)','📷 Instagram'],'youtube':['https://youtube.com','#FF0000','▶ YouTube'],'tiktok':['https://tiktok.com','#010101','🎵 TikTok'],'facebook':['https://facebook.com','#1877F2','Facebook']};
+    const key=value.toLowerCase().replace(/\s+/g,'');
+    const info=appMap[key]||[`https://www.google.com/search?q=${encodeURIComponent(value)}`,'#333',`Open ${value}`];
+    const btn=document.createElement('a'); btn.className='search-card'; btn.href=info[0]; btn.target='_blank'; btn.style.background=info[1]; btn.textContent=info[2];
+    const wrap=document.createElement('div'); wrap.className='search-cards'; wrap.appendChild(btn); return wrap;
   }
-  if (type === 'alarm' || type === 'calendar') {
-    const card = document.createElement('div');
-    card.className = 'action-card';
-    card.innerHTML = `<div class="action-card-icon" style="background:rgba(26,155,138,0.15);">${type==='alarm'?'⏰':'📅'}</div>
-      <div class="action-card-body">
-        <div class="action-card-title">${escHtml(value.split('|')[0])}</div>
-        <div class="action-card-sub">${type === 'alarm' ? 'Set alarm' : 'Add to calendar'}</div>
-      </div>`;
+  if (type==='alarm'||type==='calendar') {
+    const card=document.createElement('div'); card.className='action-card';
+    card.innerHTML=`<div class="action-card-icon" style="background:rgba(26,155,138,0.15);">${type==='alarm'?'⏰':'📅'}</div><div class="action-card-body"><div class="action-card-title">${escHtml(value.split('|')[0])}</div><div class="action-card-sub">${type==='alarm'?'Set alarm':'Add to calendar'}</div></div>`;
     return card;
   }
   return null;
 }
 
-// ── TRIAL ──
 function handleTrialData(d) {
   if (!d) return;
-  if (d.trial_show_wall && d.trial_message) {
-    document.getElementById('trialWallMsg').textContent = d.trial_message;
-    document.getElementById('trialWall').style.display = 'flex';
-  } else if (d.trial_show_warning) {
-    const bar = document.getElementById('trialWarningBar');
-    bar.style.display = 'block';
-    bar.textContent = `${d.trial_days_remaining} day${d.trial_days_remaining===1?'':'s'} left in free trial — tap to subscribe`;
-  }
+  if (d.trial_show_wall&&d.trial_message) { document.getElementById('trialWallMsg').textContent=d.trial_message; document.getElementById('trialWall').style.display='flex'; }
+  else if (d.trial_show_warning) { const bar=document.getElementById('trialWarningBar'); bar.style.display='block'; bar.textContent=`${d.trial_days_remaining} day${d.trial_days_remaining===1?'':'s'} left in free trial — tap to subscribe`; }
 }
-function showTrialWall() { document.getElementById('trialWall').style.display = 'flex'; }
-function openStripe(plan) {
-  const url = plan === 'monthly' ? STRIPE_MONTHLY : STRIPE_ANNUAL;
-  if (url.startsWith('http')) window.open(url, '_blank');
-}
+function showTrialWall() { document.getElementById('trialWall').style.display='flex'; }
+function openStripe(plan) { const url=plan==='monthly'?STRIPE_MONTHLY:STRIPE_ANNUAL; if (url.startsWith('http')) window.open(url,'_blank'); }
 
-// ── SPEECH / TTS ──
+// ══════════════════════════════════════════════════════
+// TTS — 3-layer for Capacitor native Android
+// Layer 1: Railway / OpenAI (best quality, costs ~$0.003)
+// Layer 2: Capacitor TextToSpeech plugin (native, free, reliable)
+// Layer 3: WebSpeech + resume() (Android WebView fix)
+// ══════════════════════════════════════════════════════
 function cleanForSpeech(text) {
-  return text
-    .replace(/\$(\d)/g, '$1 dollars ')
-    .replace(/(\d+)%/g, '$1 percent')
-    .replace(/°[CF]/g, ' degrees')
-    .replace(/°/g, ' degrees')
-    .replace(/&/g, 'and')
-    .replace(/\*\*/g, '')
-    .replace(/\*/g, '')
-    .replace(/#/g, '')
-    .replace(/\n/g, '. ')
-    .trim();
+  return text.replace(/\$(\d)/g,'$1 dollars ').replace(/(\d+)%/g,'$1 percent').replace(/°[CF]/g,' degrees').replace(/°/g,' degrees').replace(/&/g,'and').replace(/\*\*/g,'').replace(/\*/g,'').replace(/#/g,'').replace(/\n/g,'. ').trim();
 }
 
 async function speakText(text) {
   if (muted) return;
   const clean = cleanForSpeech(text);
   if (!clean) return;
+
+  // Layer 1: Railway OpenAI TTS
   try {
-    const r = await fetch(RAILWAY_URL + '/tts', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({text: clean.slice(0,500)})
-    });
+    const r = await fetch(RAILWAY_URL+'/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:clean.slice(0,500)})});
     if (r.ok) {
       const blob = await r.blob();
       const url = URL.createObjectURL(blob);
       currentAudio = new Audio(url);
-      currentAudio.play();
+      await currentAudio.play();
       return;
     }
   } catch(e) {}
-  if ('speechSynthesis' in window) {
-    window.speechSynthesis.cancel();
-    const utt = new SpeechSynthesisUtterance(clean.slice(0,400));
-    utt.rate = 1.0; utt.pitch = 1.0;
-    window.speechSynthesis.speak(utt);
-  }
+
+  // Layer 2: Capacitor native Android TTS
+  try {
+    if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.TextToSpeech) {
+      await window.Capacitor.Plugins.TextToSpeech.speak({
+        text: clean.slice(0,500), lang:'en-US', rate:1.0, pitch:1.0, volume:1.0, category:'ambient'
+      });
+      return;
+    }
+  } catch(e) {}
+
+  // Layer 3: WebSpeech + resume() fix for Android WebView
+  try {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.resume(); // required for Android WebView
+      const utt = new SpeechSynthesisUtterance(clean.slice(0,400));
+      utt.rate=1.0; utt.pitch=1.0;
+      window.speechSynthesis.speak(utt);
+    }
+  } catch(e) {}
 }
 
-// ── MIC / VOICE ──
+// ── MIC ──
 function toggleMic() {
-  if (heyHeraldEnabled) {
-    // In wake word mode, tap mic to stop wake word listening
-    stopWakeWord();
-    return;
-  }
+  if (heyHeraldEnabled) { stopWakeWord(); return; }
   if (micActive) { stopMic(); return; }
   startMic();
 }
 
 function startMic() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) {
-    document.getElementById('voiceHint').textContent = 'Voice not supported — use keyboard';
-    return;
-  }
+  if (!SpeechRecognition) { document.getElementById('voiceHint').textContent='Voice not supported — use keyboard'; return; }
   recognition = new SpeechRecognition();
-  recognition.continuous = false;
-  recognition.interimResults = true;
-  recognition.lang = 'en-US';
-  recognition.onstart = () => {
-    micActive = true;
-    document.getElementById('micBtn').classList.add('on');
-    document.getElementById('voiceHint').textContent = 'listening...';
-  };
-  recognition.onresult = e => {
-    const transcript = Array.from(e.results).map(r => r[0].transcript).join('');
-    const inp = document.getElementById('textInput');
-    inp.value = transcript;
-    autoResize(inp);
-  };
-  recognition.onend = () => {
-    micActive = false;
-    document.getElementById('micBtn').classList.remove('on');
-    document.getElementById('voiceHint').textContent = 'tap mic · talk · get answer';
-    const val = document.getElementById('textInput').value.trim();
-    if (val) { sendFromInput(); }
-  };
-  recognition.onerror = () => {
-    micActive = false;
-    document.getElementById('micBtn').classList.remove('on');
-    document.getElementById('voiceHint').textContent = 'tap mic · talk · get answer';
-  };
+  recognition.continuous=false; recognition.interimResults=true; recognition.lang='en-US';
+  recognition.onstart = () => { micActive=true; document.getElementById('micBtn').classList.add('on'); document.getElementById('voiceHint').textContent='listening...'; };
+  recognition.onresult = e => { const t=Array.from(e.results).map(r=>r[0].transcript).join(''); const inp=document.getElementById('textInput'); inp.value=t; autoResize(inp); };
+  recognition.onend = () => { micActive=false; document.getElementById('micBtn').classList.remove('on'); document.getElementById('voiceHint').textContent='tap mic · talk · get answer'; const val=document.getElementById('textInput').value.trim(); if (val) sendFromInput(); };
+  recognition.onerror = () => { micActive=false; document.getElementById('micBtn').classList.remove('on'); document.getElementById('voiceHint').textContent='tap mic · talk · get answer'; };
   recognition.start();
 }
 
-function stopMic() {
-  if (recognition) recognition.stop();
-}
+function stopMic() { if (recognition) recognition.stop(); }
 
-// ── v55.4: HEY [AI NAME] WAKE WORD ──
-function toggleHeyHerald() {
-  if (heyHeraldEnabled) {
-    stopWakeWord();
-  } else {
-    startWakeWord();
-  }
-}
+// ── HEY [AI NAME] WAKE WORD ──
+function toggleHeyHerald() { if (heyHeraldEnabled) stopWakeWord(); else startWakeWord(); }
 
 function startWakeWord() {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) {
-    document.getElementById('voiceHint').textContent = 'Wake word not supported on this browser';
-    return;
-  }
+  if (!SpeechRecognition) { document.getElementById('voiceHint').textContent='Wake word not supported on this browser'; return; }
   heyHeraldEnabled = true;
   const hintEl = document.getElementById('voiceHint');
   const micEl = document.getElementById('micBtn');
@@ -993,127 +757,34 @@ function startWakeWord() {
   hintEl.textContent = `Hey ${aiName} — always listening · tap to stop`;
 
   wakeRecognition = new SpeechRecognition();
-  wakeRecognition.continuous = true;
-  wakeRecognition.interimResults = true;
-  wakeRecognition.lang = 'en-US';
-
-  let lastSent = '';
+  wakeRecognition.continuous=true; wakeRecognition.interimResults=true; wakeRecognition.lang='en-US';
+  let lastSent='';
 
   wakeRecognition.onresult = (e) => {
-    const transcript = Array.from(e.results)
-      .map(r => r[0].transcript)
-      .join('')
-      .toLowerCase()
-      .trim();
-
+    const transcript = Array.from(e.results).map(r=>r[0].transcript).join('').toLowerCase().trim();
     const wakePhrase = `hey ${aiName.toLowerCase()}`;
     const wakeIdx = transcript.indexOf(wakePhrase);
     const nameIdx = transcript.indexOf(aiName.toLowerCase());
-
-    // Find where the command starts (after wake phrase)
     let commandStart = -1;
-    if (wakeIdx !== -1) commandStart = wakeIdx + wakePhrase.length;
-    else if (nameIdx !== -1) commandStart = nameIdx + aiName.length;
-
-    if (commandStart !== -1) {
+    if (wakeIdx!==-1) commandStart = wakeIdx+wakePhrase.length;
+    else if (nameIdx!==-1) commandStart = nameIdx+aiName.length;
+    if (commandStart!==-1) {
       const command = transcript.slice(commandStart).trim();
-      // Only send if we have a real command and haven't sent this exact text already
-      if (command.length > 3 && command !== lastSent) {
-        // Check if the last result is final before sending
-        const lastResult = e.results[e.results.length - 1];
-        if (lastResult.isFinal) {
-          lastSent = command;
-          sendToHerald(command);
-        }
-      }
+      const lastResult = e.results[e.results.length-1];
+      if (command.length>3 && command!==lastSent && lastResult.isFinal) { lastSent=command; sendToHerald(command); }
     }
   };
-
-  wakeRecognition.onend = () => {
-    // Auto-restart if still supposed to be listening
-    if (heyHeraldEnabled) {
-      try { wakeRecognition.start(); } catch(e) {}
-    }
-  };
-
-  wakeRecognition.onerror = (e) => {
-    // Restart on recoverable errors (no-speech, audio-capture)
-    if (heyHeraldEnabled && (e.error === 'no-speech' || e.error === 'audio-capture')) {
-      setTimeout(() => {
-        if (heyHeraldEnabled) try { wakeRecognition.start(); } catch(err) {}
-      }, 1000);
-    }
-  };
-
-  try {
-    wakeRecognition.start();
-  } catch(e) {
-    stopWakeWord();
-  }
+  wakeRecognition.onend = () => { if (heyHeraldEnabled) try { wakeRecognition.start(); } catch(e) {} };
+  wakeRecognition.onerror = (e) => { if (heyHeraldEnabled&&(e.error==='no-speech'||e.error==='audio-capture')) setTimeout(()=>{ if (heyHeraldEnabled) try { wakeRecognition.start(); } catch(err){} },1000); };
+  try { wakeRecognition.start(); } catch(e) { stopWakeWord(); }
 }
 
 function stopWakeWord() {
-  heyHeraldEnabled = false;
-  if (wakeRecognition) { try { wakeRecognition.stop(); } catch(e) {} wakeRecognition = null; }
-  const hintEl = document.getElementById('voiceHint');
-  const micEl = document.getElementById('micBtn');
-  hintEl.classList.remove('wake-active');
-  micEl.classList.remove('wake');
-  hintEl.textContent = 'tap mic · talk · get answer';
-}
-
-// ── INSTALL PROMPT (Android) ──
-let deferredPrompt = null;
-window.addEventListener('beforeinstallprompt', e => {
-  e.preventDefault(); deferredPrompt = e;
-  if (!localStorage.getItem('herald_install_dismissed')) showInstallBanner('android');
-});
-
-function checkInstallPrompt() {
-  const isIOS = /iPhone|iPad|iPad|iPod/.test(navigator.userAgent);
-  const isStandalone = window.navigator.standalone || window.matchMedia('(display-mode: standalone)').matches;
-  if (isStandalone) return;
-  if (isIOS && !localStorage.getItem('herald_install_dismissed')) {
-    setTimeout(() => showInstallBanner('ios'), 3000);
-  }
-}
-
-function showInstallBanner(platform) {
-  if (document.getElementById('installBanner')) return;
-  const banner = document.createElement('div');
-  banner.className = 'install-banner';
-  banner.id = 'installBanner';
-  if (platform === 'ios') {
-    banner.innerHTML = `
-      <div class="install-banner-title">Add Herald to your Home Screen</div>
-      <div class="install-banner-steps">
-        <span>1.</span> Tap the Share button in Safari <br>
-        <span>2.</span> Tap "Add to Home Screen" <br>
-        <span>3.</span> Herald opens like a native app
-      </div>
-      <div class="install-banner-row">
-        <button class="install-dismiss" onclick="dismissInstall()">Not now</button>
-      </div>`;
-  } else {
-    banner.innerHTML = `
-      <div class="install-banner-title">Install Herald on your device</div>
-      <div class="install-banner-row">
-        <button class="install-btn" onclick="installApp()">Install App</button>
-        <button class="install-dismiss" onclick="dismissInstall()">Not now</button>
-      </div>`;
-  }
-  document.body.appendChild(banner);
-}
-
-function installApp() {
-  if (deferredPrompt) { deferredPrompt.prompt(); deferredPrompt = null; }
-  dismissInstall();
-}
-
-function dismissInstall() {
-  localStorage.setItem('herald_install_dismissed', '1');
-  const b = document.getElementById('installBanner');
-  if (b) b.remove();
+  heyHeraldEnabled=false;
+  if (wakeRecognition) { try { wakeRecognition.stop(); } catch(e){} wakeRecognition=null; }
+  document.getElementById('voiceHint').classList.remove('wake-active');
+  document.getElementById('micBtn').classList.remove('wake');
+  document.getElementById('voiceHint').textContent='tap mic · talk · get answer';
 }
 </script>
 </body>
