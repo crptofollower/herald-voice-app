@@ -263,6 +263,8 @@ let currentTheme     = localStorage.getItem('herald_theme') || 'dark';
 let watchdogTimer    = null;
 let heyHeraldEnabled = false;
 let wakeRecognition  = null;
+let locationCache    = null;
+let locationCacheTs  = 0;
 
 document.body.setAttribute('data-theme', currentTheme);
 updateTime();
@@ -410,6 +412,10 @@ async function fetchGreeting() {
 // Fixes: "I don't have real-time GPS data" in native app
 // ══════════════════════════════════════════════════════
 async function getLocation() {
+  // 5-minute cache -- prevents 4-second GPS delay on every message send
+  if (locationCache && (Date.now() - locationCacheTs) < 300000) {
+    return locationCache;
+  }
   let lat = null, lng = null, locationLabel = null;
 
   // Layer 1: Capacitor Geolocation (native Android — works in WebView)
@@ -442,7 +448,9 @@ async function getLocation() {
     } catch(e) {}
   }
 
-  return { lat, lng, locationLabel };
+  locationCache = { lat, lng, locationLabel };
+  locationCacheTs = Date.now();
+  return locationCache;
 }
 
 function sendQuick(text) { sendToHerald(text); }
