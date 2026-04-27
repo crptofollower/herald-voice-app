@@ -1,9 +1,8 @@
-// Herald Service Worker v2.0
-// Enables full PWA install -- removes globe badge from home screen icon
-const CACHE_NAME = 'herald-v2';
+// Herald Service Worker v3.0
+const CACHE_NAME = 'herald-v3';
 const ASSETS = [
   './',
-  './index.html',
+  './herald.html',
   './manifest.json',
   './herald_icon_192.png',
   './herald_icon_512.png',
