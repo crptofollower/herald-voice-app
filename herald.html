@@ -160,7 +160,7 @@
     <div class="h-icon">H</div>
     <div>
       <div class="h-title">HERALD</div>
-      <div class="h-sub" id="headerSub">PERSONAL AI V55.4</div>
+      <div class="h-sub" id="headerSub">PERSONAL AI V55.5</div>
     </div>
     <div class="h-right">
       <div class="dot-live" id="statusDot"></div>
@@ -620,9 +620,10 @@ async function sendToHerald(messageText) {
             }
             revealBubble();
             if (!cursor) { cursor=document.createElement('span'); cursor.className='stream-cursor'; bubbleEl.appendChild(cursor); }
-            fullText += data.t;
-            sentenceBuffer += data.t;
-            bubbleEl.insertBefore(document.createTextNode(data.t), cursor);
+            const cleanToken = data.t.replace('[S]', '');
+            fullText += cleanToken;
+            sentenceBuffer += cleanToken;
+            bubbleEl.insertBefore(document.createTextNode(cleanToken), cursor);
             scrollBottom();
           }
  
