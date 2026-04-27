@@ -1,28 +1,29 @@
 # herald_api.py
 # Herald PWA Backend -- Railway Cloud Server
-# v7.0 -- FastAPI + uvicorn migration (replaces single-threaded HTTPServer)
-#          Zero API surface change. Same endpoints, same env vars, same Railway deploy.
-#          All business logic functions are unchanged from v6.1.
-#          Sync def routes run in FastAPI's thread pool -> concurrent by default.
-#          SSE streaming uses StreamingResponse with sync generator.
+# v7.1 -- SQLite profile persistence (replaces /data/profiles.json + invites.json)
+#          Profiles and invites now survive Railway deploys and volume remounts.
+#          Memory IS the product. This is the most important missing feature.
 #
-# WHAT CHANGED vs v6.1:
-#   - Removed: http.server (HTTPServer, BaseHTTPRequestHandler)
-#   - Added:   fastapi, uvicorn
-#   - Removed: class Handler and all do_GET / do_POST / do_OPTIONS / _json / cors methods
-#   - Added:   @app.get / @app.post route functions, CORSMiddleware, JSONResponse
-#   - SSE:     was self.wfile.write() -> now StreamingResponse with sync generator
-#   - TTS:     was self.wfile.write(audio) -> now Response(content=audio, media_type="audio/mpeg")
-#   - Startup: was HTTPServer.serve_forever() -> uvicorn.run()
-#              Railway start command stays: python herald_api.py
+# WHAT CHANGED vs v7.0:
+#   - Added:   import sqlite3
+#   - Added:   DB_FILE = "/data/herald.db"
+#   - Added:   init_db() -- creates tables on first run, migrates JSON data if found
+#   - Replaced: load_profiles() -- now reads from SQLite
+#   - Replaced: load_invites()  -- now reads from SQLite
+#   - Replaced: save_profile()  -- now upserts one row directly (no full-file rewrite)
+#   - Replaced: persist_invites() -- now upserts one row directly
+#   - Removed:  persist_profiles() -- no longer needed
+#   - Updated:  startup() calls init_db() before load_profiles() / load_invites()
+#   - Version bump: 7.0 -> 7.1
 #
-# NEW DEPENDENCIES (add to requirements.txt):
-#   fastapi
-#   uvicorn[standard]
+# NO NEW DEPENDENCIES -- sqlite3 is Python stdlib.
+# requirements.txt does not need to change.
 #
-# Everything else (urllib, ssl, http.client, json, os, re, etc.) is unchanged.
+# RAILWAY VOLUME: /data must be mounted as a persistent volume in Railway.
+# If it is not mounted, SQLite still works but resets on redeploy (same as before).
+# The Railway volume is what makes this permanent.
 
-import os, json, re, random, string, time, http.client, ssl
+import os, json, re, random, string, time, http.client, ssl, sqlite3
 import urllib.request, urllib.error, urllib.parse
 from datetime import datetime
 
@@ -33,7 +34,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="7.0")
+app = FastAPI(title="Herald API", version="7.1")
 
 app.add_middleware(
     CORSMiddleware,
@@ -63,8 +64,9 @@ VM_WEBHOOK_URL = "http://143.198.18.66:8082/webhook/sync"
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 TTS_URL        = "https://api.openai.com/v1/audio/speech"
 EMPIRE_URL     = "https://raw.githubusercontent.com/crptofollower/herald-voice-app/main/empire_status.json"
-PROFILES_FILE  = os.environ.get("PROFILES_FILE", "/data/profiles.json")
-INVITES_FILE   = os.environ.get("INVITES_FILE",  "/data/invites.json")
+PROFILES_FILE  = os.environ.get("PROFILES_FILE", "/data/profiles.json")  # kept for migration only
+INVITES_FILE   = os.environ.get("INVITES_FILE",  "/data/invites.json")   # kept for migration only
+DB_FILE        = "/data/herald.db"  # single SQLite file -- replaces both JSON files
 
 MODEL_SEARCH = "anthropic/claude-haiku-4-5:online"
 MODEL_FAST   = "anthropic/claude-haiku-4-5"
@@ -220,29 +222,141 @@ invites        = {}
 # route functions at the bottom of this file.
 # ═════════════════════════════════════════════════════════════════════════════
 
-# ── PERSISTENCE ───────────────────────────────────────────────────────────────
+# ── PERSISTENCE (v7.1 -- SQLite) ──────────────────────────────────────────────
+#
+# Architecture:
+#   - Single SQLite file at /data/herald.db (Railway persistent volume)
+#   - In-memory dicts (user_profiles, invites) are the working cache
+#   - SQLite is written on every change, read once on startup
+#   - init_db() migrates existing JSON files on first run so no data is lost
+#   - Each save is a single row upsert -- no full-file rewrites
+#
+# Why this survives deploys:
+#   Railway volumes persist across deploys and restarts. SQLite is a single
+#   file on that volume. As long as /data is mounted, profiles are permanent.
+
+def init_db():
+    """Create tables and migrate any existing JSON data. Safe to call repeatedly."""
+    try:
+        os.makedirs("/data", exist_ok=True)
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS profiles (
+                user_id    TEXT PRIMARY KEY,
+                data       TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS invites (
+                code       TEXT PRIMARY KEY,
+                data       TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        conn.commit()
+
+        # ── ONE-TIME MIGRATION: JSON -> SQLite ────────────────────────────────
+        # If the old profiles.json exists and the SQLite table is empty,
+        # import it so existing users keep all their memories and preferences.
+        c.execute("SELECT COUNT(*) FROM profiles")
+        if c.fetchone()[0] == 0 and os.path.exists(PROFILES_FILE):
+            try:
+                with open(PROFILES_FILE, "r") as f:
+                    old_profiles = json.load(f)
+                now = datetime.now().isoformat()
+                for uid, profile in old_profiles.items():
+                    c.execute(
+                        "INSERT OR IGNORE INTO profiles (user_id, data, updated_at) VALUES (?, ?, ?)",
+                        (uid, json.dumps(profile, ensure_ascii=False), now)
+                    )
+                conn.commit()
+                print(f"[HERALD] Migrated {len(old_profiles)} profiles from JSON to SQLite")
+            except Exception as e:
+                print(f"[HERALD] JSON migration warning (non-fatal): {e}")
+
+        c.execute("SELECT COUNT(*) FROM invites")
+        if c.fetchone()[0] == 0 and os.path.exists(INVITES_FILE):
+            try:
+                with open(INVITES_FILE, "r") as f:
+                    old_invites = json.load(f)
+                for code, invite in old_invites.items():
+                    c.execute(
+                        "INSERT OR IGNORE INTO invites (code, data, created_at) VALUES (?, ?, ?)",
+                        (code, json.dumps(invite, ensure_ascii=False),
+                         invite.get("created_at", datetime.now().isoformat()))
+                    )
+                conn.commit()
+                print(f"[HERALD] Migrated {len(old_invites)} invites from JSON to SQLite")
+            except Exception as e:
+                print(f"[HERALD] Invite migration warning (non-fatal): {e}")
+
+        conn.close()
+        print(f"[HERALD] SQLite ready: {DB_FILE}")
+    except Exception as e:
+        print(f"[HERALD] Database init failed: {e} -- profiles will not persist this session")
+
+
+def load_profiles():
+    global user_profiles, owner_user_ids
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("SELECT user_id, data FROM profiles")
+        rows = c.fetchall()
+        conn.close()
+        restored = 0
+        for user_id, data in rows:
+            try:
+                profile = json.loads(data)
+                user_profiles[user_id] = profile
+                if profile.get("is_owner"):
+                    owner_user_ids.add(user_id)
+                    restored += 1
+            except Exception:
+                pass
+        print(f"[HERALD] Loaded {len(user_profiles)} profiles from SQLite ({restored} owner sessions)")
+    except Exception as e:
+        print(f"[HERALD] Could not load profiles: {e} -- starting fresh")
+        user_profiles = {}
+
 
 def load_invites():
     global invites
     try:
-        os.makedirs(os.path.dirname(INVITES_FILE), exist_ok=True)
-        if os.path.exists(INVITES_FILE):
-            with open(INVITES_FILE, "r") as f:
-                invites = json.load(f)
-            print(f"[HERALD] Loaded {len(invites)} invites")
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("SELECT code, data FROM invites")
+        rows = c.fetchall()
+        conn.close()
+        for code, data in rows:
+            try:
+                invites[code] = json.loads(data)
+            except Exception:
+                pass
+        print(f"[HERALD] Loaded {len(invites)} invites from SQLite")
     except Exception as e:
         print(f"[HERALD] Could not load invites: {e}")
         invites = {}
 
-def persist_invites():
+
+def _save_invite(code, invite):
+    """Upsert a single invite row. Replaces persist_invites()."""
     try:
-        os.makedirs(os.path.dirname(INVITES_FILE), exist_ok=True)
-        tmp = INVITES_FILE + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(invites, f, ensure_ascii=False)
-        os.replace(tmp, INVITES_FILE)
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute(
+            "INSERT OR REPLACE INTO invites (code, data, created_at) VALUES (?, ?, ?)",
+            (code, json.dumps(invite, ensure_ascii=False),
+             invite.get("created_at", datetime.now().isoformat()))
+        )
+        conn.commit()
+        conn.close()
     except Exception as e:
-        print(f"[HERALD] Could not save invites: {e}")
+        print(f"[HERALD] Could not save invite {code}: {e}")
+
 
 def make_invite_code():
     chars = string.ascii_lowercase + string.digits
@@ -250,35 +364,6 @@ def make_invite_code():
         code = "".join(random.choices(chars, k=8))
         if code not in invites:
             return code
-
-def load_profiles():
-    global user_profiles, owner_user_ids
-    try:
-        os.makedirs(os.path.dirname(PROFILES_FILE), exist_ok=True)
-        if os.path.exists(PROFILES_FILE):
-            with open(PROFILES_FILE, 'r') as f:
-                user_profiles = json.load(f)
-            restored = 0
-            for uid, profile in user_profiles.items():
-                if profile.get("is_owner"):
-                    owner_user_ids.add(uid)
-                    restored += 1
-            print(f"[HERALD] Loaded {len(user_profiles)} profiles, {restored} owner sessions restored")
-        else:
-            print(f"[HERALD] No profiles file yet -- will create at {PROFILES_FILE}")
-    except Exception as e:
-        print(f"[HERALD] Could not load profiles: {e} -- starting fresh")
-        user_profiles = {}
-
-def persist_profiles():
-    try:
-        os.makedirs(os.path.dirname(PROFILES_FILE), exist_ok=True)
-        tmp = PROFILES_FILE + ".tmp"
-        with open(tmp, 'w') as f:
-            json.dump(user_profiles, f, ensure_ascii=False)
-        os.replace(tmp, PROFILES_FILE)
-    except Exception as e:
-        print(f"[HERALD] Could not save profiles: {e}")
 
 
 # ── PROFILE HELPERS ───────────────────────────────────────────────────────────
@@ -294,8 +379,19 @@ def get_profile(user_id):
     })
 
 def save_profile(user_id, profile):
+    """Update in-memory cache and upsert to SQLite in one call."""
     user_profiles[user_id] = profile
-    persist_profiles()
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute(
+            "INSERT OR REPLACE INTO profiles (user_id, data, updated_at) VALUES (?, ?, ?)",
+            (user_id, json.dumps(profile, ensure_ascii=False), datetime.now().isoformat())
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[HERALD] Could not save profile for {user_id}: {e}")
 
 def is_owner(user_id, auth_code=None):
     if OWNER_CODE and auth_code and auth_code.strip() == OWNER_CODE:
@@ -1395,7 +1491,7 @@ def _trial_fields(trial):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "7.0",
+        "status": "ok", "server": "herald-api", "version": "7.1",
         "streaming": "enabled (/ask/stream)",
         "search": f"brave={'configured' if BRAVE_KEY else 'NOT SET'} | fallback=haiku:online",
         "cache": f"{len(_cache)} entries active",
@@ -1469,7 +1565,7 @@ async def auth(request: Request):
         elif invite["used_by"] != user_id:
             return JSONResponse({"error": "invite already used"}, status_code=401)
         invite["last_seen"] = datetime.now().isoformat()
-        persist_invites()
+        _save_invite(code, invite)
         profile = get_profile(user_id)
         if not profile.get("created_at"):
             profile["created_at"] = datetime.now().isoformat()
@@ -1729,12 +1825,13 @@ async def invite_create(request: Request):
     if not INVITE_SECRET or secret != INVITE_SECRET:
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     code = make_invite_code()
-    invites[code] = {
+    invite = {
         "code": code, "label": label or "unnamed",
         "created_at": datetime.now().isoformat(),
         "used": False, "used_by": None, "last_seen": None,
     }
-    persist_invites()
+    invites[code] = invite
+    _save_invite(code, invite)
     base_url = data.get("base_url", "https://crptofollower.github.io/herald-voice-app/herald.html")
     return {"ok": True, "code": code, "label": label,
             "link": f"{base_url}?invite={code}"}
@@ -1764,7 +1861,7 @@ async def sync(request: Request):
     try:
         payload = json.dumps({"secret": WEBHOOK_SECRET}).encode("utf-8")
         req = urllib.request.Request(VM_WEBHOOK_URL, data=payload,
-            headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/7.0"},
+            headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/7.1"},
             method="POST")
         with urllib.request.urlopen(req, timeout=35) as r:
             result = json.loads(r.read().decode())
@@ -1781,9 +1878,10 @@ async def sync(request: Request):
 
 @app.on_event("startup")
 def startup():
+    init_db()          # create tables + migrate JSON data on first run
     load_profiles()
     load_invites()
-    print(f"[HERALD API v7.0] FastAPI + uvicorn -- concurrent request handling enabled")
+    print(f"[HERALD API v7.1] FastAPI + uvicorn + SQLite persistence")
     print(f"[HERALD API] OpenRouter:    {'YES' if OPENROUTER_KEY else 'MISSING -- required'}")
     print(f"[HERALD API] Brave Search:  {'YES' if BRAVE_KEY else 'NOT SET -- add BRAVE_SEARCH_KEY'}")
     print(f"[HERALD API] OpenAI TTS:    {'YES' if OPENAI_KEY else 'not set'}")
@@ -1793,7 +1891,7 @@ def startup():
     print(f"[HERALD API] AlphaVantage:  {'YES (backup only)' if ALPHA_KEY else 'not set'}")
     print(f"[HERALD API] NewsData:      {'YES' if NEWSDATA_KEY else 'not set'}")
     print(f"[HERALD API] WeatherAPI:    {'YES (backup)' if WEATHER_KEY else 'not set'}")
-    print(f"[HERALD API] Profiles:      {PROFILES_FILE}")
+    print(f"[HERALD API] Database:      {DB_FILE}")
     print(f"[HERALD API] Owner code:    {'SET' if OWNER_CODE else 'NOT SET'}")
     print(f"[HERALD API] Invite secret: {'SET' if INVITE_SECRET else 'NOT SET'}")
     print(f"[HERALD API] Webhook:       {'SET' if WEBHOOK_SECRET else 'NOT SET'}")
