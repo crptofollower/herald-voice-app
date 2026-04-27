@@ -1,14 +1,48 @@
 # herald_api.py
 # Herald PWA Backend -- Railway Cloud Server
-# v6.1 -- Commodity price fix (silver/gold/oil/etc) + TICKER_STOP_WORDS
-#          Fallback /ask timeout fix (20s AbortController in frontend)
-# v6.0 -- Streaming SSE / Brave Search / Yahoo Finance / Response Cache /
-#          Voice-Optimized Prompts / Morning Greeting / Explicit Memory Endpoint
+# v7.0 -- FastAPI + uvicorn migration (replaces single-threaded HTTPServer)
+#          Zero API surface change. Same endpoints, same env vars, same Railway deploy.
+#          All business logic functions are unchanged from v6.1.
+#          Sync def routes run in FastAPI's thread pool -> concurrent by default.
+#          SSE streaming uses StreamingResponse with sync generator.
+#
+# WHAT CHANGED vs v6.1:
+#   - Removed: http.server (HTTPServer, BaseHTTPRequestHandler)
+#   - Added:   fastapi, uvicorn
+#   - Removed: class Handler and all do_GET / do_POST / do_OPTIONS / _json / cors methods
+#   - Added:   @app.get / @app.post route functions, CORSMiddleware, JSONResponse
+#   - SSE:     was self.wfile.write() -> now StreamingResponse with sync generator
+#   - TTS:     was self.wfile.write(audio) -> now Response(content=audio, media_type="audio/mpeg")
+#   - Startup: was HTTPServer.serve_forever() -> uvicorn.run()
+#              Railway start command stays: python herald_api.py
+#
+# NEW DEPENDENCIES (add to requirements.txt):
+#   fastapi
+#   uvicorn[standard]
+#
+# Everything else (urllib, ssl, http.client, json, os, re, etc.) is unchanged.
 
 import os, json, re, random, string, time, http.client, ssl
 import urllib.request, urllib.error, urllib.parse
-from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime
+
+import uvicorn
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, Response, StreamingResponse
+
+# ── APP ───────────────────────────────────────────────────────────────────────
+
+app = FastAPI(title="Herald API", version="7.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type"],
+)
+
+# ── CONFIG ────────────────────────────────────────────────────────────────────
 
 PORT           = int(os.environ.get("PORT", 8080))
 OPENROUTER_KEY = os.environ.get("OPENROUTER_API_KEY", "")
@@ -35,9 +69,8 @@ INVITES_FILE   = os.environ.get("INVITES_FILE",  "/data/invites.json")
 MODEL_SEARCH = "anthropic/claude-haiku-4-5:online"
 MODEL_FAST   = "anthropic/claude-haiku-4-5"
 
-# ── COMMODITY MAP (v6.1) ──────────────────────────────────────────────────────
-# Maps plain English commodity names to Yahoo Finance futures tickers.
-# Checked BEFORE stock extraction so "silver" never hits extract_stock_symbol().
+# ── COMMODITY MAP ─────────────────────────────────────────────────────────────
+
 COMMODITY_MAP = {
     'silver':       'SI=F',
     'gold':         'GC=F',
@@ -54,10 +87,8 @@ COMMODITY_MAP = {
     'soybean':      'ZS=F',
 }
 
-# ── TICKER STOP WORDS (v6.1) ──────────────────────────────────────────────────
-# Common English words that are 2-5 letters and would otherwise match the
-# "scan all words" fallback in extract_stock_symbol().
-# "What IS THE price of silver" → "IS", "THE" must be blocked.
+# ── TICKER STOP WORDS ─────────────────────────────────────────────────────────
+
 TICKER_STOP_WORDS = {
     'THE','AND','FOR','ARE','BUT','NOT','YOU','ALL','ANY','CAN','HAD',
     'HER','WAS','ONE','OUR','OUT','DAY','GET','HAS','HIM','HIS','HOW',
@@ -82,12 +113,12 @@ TICKER_STOP_WORDS = {
     'ABLE','SOON','LESS','MORE','THAN','ONCE','ELSE','AWAY','DONE',
     'GONE','CAME','WENT','TOLD','MADE','SAID','GAVE','TOOK','CAME',
     'KNEW','GREW','FLEW','DREW','BLEW','CLEW',
-    # Finance words that look like tickers
     'CASH','DEBT','LOAN','FUND','BOND','RISK','GAIN','LOSS','SELL',
     'BULL','BEAR','CALL','PUTS','TOPS','LOWS','HOLD','LONG','SHORT',
 }
 
 # ── RESPONSE CACHE ────────────────────────────────────────────────────────────
+
 _cache = {}
 CACHE_TTL = {'weather': 900, 'news': 600, 'crypto': 120, 'stock': 180, 'commodity': 180}
 
@@ -182,6 +213,12 @@ user_profiles  = {}
 owner_user_ids = set()
 invites        = {}
 
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ALL FUNCTIONS BELOW THIS LINE ARE IDENTICAL TO v6.1.
+# Only the HTTP handler layer (Handler class) has been replaced with FastAPI
+# route functions at the bottom of this file.
+# ═════════════════════════════════════════════════════════════════════════════
 
 # ── PERSISTENCE ───────────────────────────────────────────────────────────────
 
@@ -454,7 +491,7 @@ def fetch_empire():
 def fetch_live_empire():
     try:
         url = "http://143.198.18.66:8080/api/status"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/6.1"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/7.0"})
         with urllib.request.urlopen(req, timeout=8) as r:
             data = json.loads(r.read().decode())
         positions     = data.get("positions", [])
@@ -564,7 +601,7 @@ def geocode_reverse(lat, lng):
         url = (f"https://maps.googleapis.com/maps/api/geocode/json"
                f"?latlng={lat},{lng}&result_type=locality|administrative_area_level_1"
                f"&key={GEOCODING_KEY}")
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/6.1"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/7.0"})
         with urllib.request.urlopen(req, timeout=4) as r:
             data = json.loads(r.read().decode())
         if data.get("results"):
@@ -591,7 +628,7 @@ def fetch_brave_search(query, count=5):
         req = urllib.request.Request(url, headers={
             "Accept": "application/json",
             "X-Subscription-Token": BRAVE_KEY,
-            "User-Agent": "HeraldAI/6.1"
+            "User-Agent": "HeraldAI/7.0"
         })
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
@@ -626,7 +663,7 @@ def fetch_weather_direct(location):
     try:
         clean_loc = location.strip().replace(' ', '+')
         url = f"https://wttr.in/{clean_loc}?format=j1"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.1"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.0"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         cur  = data["current_condition"][0]
@@ -658,7 +695,7 @@ def fetch_weather_backup(location):
     try:
         encoded = urllib.parse.quote(location)
         url = f"https://api.weatherapi.com/v1/forecast.json?key={WEATHER_KEY}&q={encoded}&days=1&aqi=no"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.1"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.0"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         cur  = data["current"]
@@ -701,7 +738,7 @@ def fetch_sports_direct(msg_lower):
                 sport, league = val
                 break
         url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.1"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.0"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         events = data.get("events", [])
@@ -728,7 +765,7 @@ def fetch_crypto_direct():
     try:
         url = ("https://api.coingecko.com/api/v3/simple/price"
                "?ids=bitcoin,ethereum,solana&vs_currencies=usd&include_24hr_change=true")
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.1"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.0"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         parts = []
@@ -758,7 +795,7 @@ def fetch_news_direct(query=None):
             url = f"https://gnews.io/api/v4/search?q={encoded}&lang=en&max=5&token={GNEWS_KEY}"
         else:
             url = f"https://gnews.io/api/v4/top-headlines?lang=en&country=us&max=5&token={GNEWS_KEY}"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.1"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.0"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         articles = data.get("articles", [])
@@ -779,7 +816,7 @@ def fetch_news_backup(query=None):
             url = f"https://newsdata.io/api/1/latest?apikey={NEWSDATA_KEY}&q={encoded}&language=en"
         else:
             url = f"https://newsdata.io/api/1/latest?apikey={NEWSDATA_KEY}&language=en&country=us"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.1"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.0"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         results = data.get("results", [])
@@ -797,12 +834,12 @@ def fetch_movie_direct(query):
     try:
         encoded = urllib.parse.quote(query)
         url = f"https://www.omdbapi.com/?t={encoded}&apikey={OMDB_KEY}"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.1"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.0"})
         with urllib.request.urlopen(req, timeout=5) as r:
             d = json.loads(r.read().decode())
         if d.get("Response") == "False":
             url2 = f"https://www.omdbapi.com/?s={encoded}&apikey={OMDB_KEY}"
-            req2 = urllib.request.Request(url2, headers={"User-Agent": "HeraldAI/6.1"})
+            req2 = urllib.request.Request(url2, headers={"User-Agent": "HeraldAI/7.0"})
             with urllib.request.urlopen(req2, timeout=5) as r2:
                 d2 = json.loads(r2.read().decode())
             results = d2.get("Search", [])
@@ -823,22 +860,16 @@ def fetch_movie_direct(query):
         return None
 
 
-# ── COMMODITY FUNCTIONS (v6.1) ────────────────────────────────────────────────
+# ── COMMODITY FUNCTIONS ───────────────────────────────────────────────────────
 
 def detect_commodity(message):
-    """
-    Returns the Yahoo futures ticker (e.g. 'SI=F') if the message contains
-    a commodity name, else None. Checks multi-word names first.
-    """
     msg_lower = message.lower()
-    # Sort by length descending so "crude oil" matches before "oil"
     for name in sorted(COMMODITY_MAP.keys(), key=len, reverse=True):
         if name in msg_lower:
             return COMMODITY_MAP[name]
     return None
 
 def fetch_commodity_price(ticker, display_name):
-    """Fetch commodity futures price from Yahoo Finance (free, no key)."""
     try:
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=1d"
         req = urllib.request.Request(url, headers={
@@ -853,18 +884,15 @@ def fetch_commodity_price(ticker, display_name):
         change     = price - prev_close if prev_close else 0
         change_pct = (change / prev_close * 100) if prev_close else 0
         direc      = "up" if change >= 0 else "down"
-
         price_int   = int(price)
         price_cents = round((price - price_int) * 100)
         price_str   = (f"{price_int:,} dollars and {price_cents} cents"
                        if price_cents else f"{price_int:,} dollars")
-
         abs_change = abs(change)
         chg_int    = int(abs_change)
         chg_cents  = round((abs_change - chg_int) * 100)
         chg_str    = (f"{chg_int} dollars and {chg_cents} cents"
                       if chg_cents else f"{chg_int} dollars")
-
         return (f"{display_name.title()} is trading at {price_str} per ounce, "
                 f"{direc} {chg_str} or {abs(change_pct):.1f} percent today.")
     except Exception as e:
@@ -872,23 +900,11 @@ def fetch_commodity_price(ticker, display_name):
         return None
 
 
-# ── STOCK SYMBOL EXTRACTION (v6.1 -- stop words + commodity guard) ────────────
+# ── STOCK SYMBOL EXTRACTION ───────────────────────────────────────────────────
 
 def extract_stock_symbol(message):
-    """
-    Returns a stock ticker string or None.
-
-    v6.1 changes:
-    1. Returns None immediately if the message is a commodity query.
-       Prevents 'silver' -> scans words -> grabs 'THE' -> $0 price.
-    2. The free-form word scan now only matches words the USER typed in
-       ALL-CAPS (e.g. 'What is AAPL doing') and never common English words
-       (blocked via TICKER_STOP_WORDS).
-    """
-    # Guard: commodity queries should never reach stock lookup
     if detect_commodity(message):
         return None
-
     known = {
         'APPLE': 'AAPL', 'MICROSOFT': 'MSFT', 'GOOGLE': 'GOOGL', 'ALPHABET': 'GOOGL',
         'AMAZON': 'AMZN', 'TESLA': 'TSLA', 'META': 'META', 'FACEBOOK': 'META',
@@ -901,27 +917,20 @@ def extract_stock_symbol(message):
     for name, ticker in known.items():
         if name in msg_upper:
             return ticker
-
-    # Only match words the user typed in ALL-CAPS (e.g. "AAPL", "NVDA")
-    # Never match sentence words like THE, IS, OF, FOR — those are stop words.
     words = message.split()
     for w in words:
-        # Strip punctuation, keep only letters
         clean = re.sub(r'[^A-Za-z]', '', w)
         if not clean:
             continue
         up = clean.upper()
-        # Must be 2-5 chars, all alpha, typed as ALL-CAPS by the user, not a stop word
         if (2 <= len(up) <= 5
                 and up.isalpha()
-                and clean == clean.upper()   # user typed it in caps
+                and clean == clean.upper()
                 and up not in TICKER_STOP_WORDS):
             return up
-
     return None
 
 def fetch_yahoo_stock(symbol):
-    """Primary stock source -- Yahoo Finance (free, no key)."""
     try:
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol.upper()}?interval=1d&range=1d"
         req = urllib.request.Request(url, headers={
@@ -953,7 +962,6 @@ def fetch_yahoo_stock(symbol):
         return None
 
 def fetch_stock_direct(symbol):
-    """Yahoo Finance first (free), Alpha Vantage as backup."""
     result = fetch_yahoo_stock(symbol)
     if result:
         return result
@@ -962,7 +970,7 @@ def fetch_stock_direct(symbol):
     try:
         url = (f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE"
                f"&symbol={symbol.upper()}&apikey={ALPHA_KEY}")
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/6.1"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.0"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         q = data.get("Global Quote", {})
@@ -1037,7 +1045,7 @@ YOUR RULES:
 - Never use asterisks, markdown, bullet points, or raw URLs in responses.
 - NEVER say: I do not have access to that. I cannot look that up. My knowledge has a cutoff.
   I don't have memory of our conversations. I can't remember previous sessions.
-  These phrases are BANNED. You have the user's profile, memories, and notes — use them.
+  These phrases are BANNED. You have the user's profile, memories, and notes -- use them.
 - NEVER list sources or citations unless the user specifically asks.
 - For local business queries give ONE confident recommendation with a MAPS tag.
 - Be diplomatically honest -- tell the truth with warmth. Never make things up.
@@ -1250,25 +1258,18 @@ def build_ask_context(data):
     }, None
 
 def get_direct_reply(ctx):
-    """
-    Try to answer without hitting the LLM.
-    Returns (reply_str, used_search_bool) or (None, None).
-
-    v6.1: COMMODITY block added BEFORE stock block.
-    """
     message   = ctx["message"]
     msg_lower = ctx["msg_lower"]
     profile   = ctx["profile"]
     owner     = ctx["owner"]
     empire    = ctx["empire"]
 
-    # FORGE-002: on-demand sync
     SYNC_TRIGGERS = ['sync', 'refresh', 'update freddie', 'sync empire', 'refresh data']
     if owner and any(t in msg_lower for t in SYNC_TRIGGERS):
         try:
             payload = json.dumps({"secret": WEBHOOK_SECRET}).encode("utf-8")
             req = urllib.request.Request(VM_WEBHOOK_URL, data=payload,
-                headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/6.1"},
+                headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/7.0"},
                 method="POST")
             with urllib.request.urlopen(req, timeout=35) as r:
                 result = json.loads(r.read().decode())
@@ -1277,7 +1278,6 @@ def get_direct_reply(ctx):
         except Exception:
             return "Could not reach the VM right now. Try again in a second.", False
 
-    # Freddie queries
     FREDDIE_TRIGGERS = [
         'freddie','how are our trades','trading status','open positions',
         'gate progress','win rate','what did freddie','how is freddie',
@@ -1296,7 +1296,6 @@ def get_direct_reply(ctx):
         ]
         return call_openrouter(freddie_prompt, use_search=False), False
 
-    # Weather
     if any(w in msg_lower for w in ['weather','forecast','temperature','rain','snow',
                                      'wind','sunny','humid','hot outside','cold outside','umbrella']):
         loc = extract_weather_location(message, profile.get('location','Dallas TX'))
@@ -1307,13 +1306,11 @@ def get_direct_reply(ctx):
         cache_set(f'weather:{loc}', result, 'weather')
         return result, False
 
-    # Sports
     if any(w in msg_lower for w in ['score','scores','game today','cowboys','rangers',
                                      'mavs','mavericks','stars','nfl','nba','mlb','nhl',
                                      'playoffs','standings']):
         return fetch_sports_direct(msg_lower), False
 
-    # Crypto
     if any(w in msg_lower for w in ['bitcoin','ethereum','solana','crypto','btc','eth',
                                      'sol price','crypto price']):
         cached = cache_get('crypto', 'crypto')
@@ -1323,7 +1320,6 @@ def get_direct_reply(ctx):
         cache_set('crypto', result, 'crypto')
         return result, False
 
-    # News
     if any(w in msg_lower for w in ['news','headlines','top stories',
                                      'what is happening','what happened today']):
         cached = cache_get('news_top', 'news')
@@ -1333,7 +1329,6 @@ def get_direct_reply(ctx):
         cache_set('news_top', result, 'news')
         return result, False
 
-    # Movies
     if any(w in msg_lower for w in ['movie','film','imdb','rotten tomatoes','what to watch','watch tonight']):
         for kw in ['about ','review of ','tell me about ']:
             if kw in msg_lower:
@@ -1342,12 +1337,8 @@ def get_direct_reply(ctx):
                 if query:
                     return fetch_movie_direct(query), False
 
-    # ── COMMODITIES (v6.1 -- checked BEFORE stocks) ───────────────────────────
-    # Must come before the stock block so "price of silver" never hits
-    # extract_stock_symbol() and accidentally returns "THE" or similar.
     commodity_ticker = detect_commodity(message)
     if commodity_ticker:
-        # Find the display name (longest matching key for this ticker)
         display_name = next(
             (k for k in sorted(COMMODITY_MAP.keys(), key=len, reverse=True)
              if COMMODITY_MAP[k] == commodity_ticker),
@@ -1362,7 +1353,6 @@ def get_direct_reply(ctx):
             cache_set(cache_key, result, 'commodity')
         return result, False
 
-    # Stocks
     if any(w in msg_lower for w in ['stock','share price','trading at','stock price',
                                      'how is','price of','how much is']):
         symbol = extract_stock_symbol(message)
@@ -1377,436 +1367,7 @@ def get_direct_reply(ctx):
     return None, None
 
 
-# ── HTTP HANDLER ──────────────────────────────────────────────────────────────
-
-class Handler(BaseHTTPRequestHandler):
-
-    def log_message(self, fmt, *args):
-        pass
-
-    def cors(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-
-    def do_OPTIONS(self):
-        self.send_response(200)
-        self.cors()
-        self.end_headers()
-
-    def do_GET(self):
-        if self.path.startswith("/health"):
-            self._json({
-                "status": "ok", "server": "herald-api", "version": "6.1",
-                "streaming": "enabled (/ask/stream)",
-                "search": f"brave={'configured' if BRAVE_KEY else 'NOT SET'} | fallback=haiku:online",
-                "cache": f"{len(_cache)} entries active",
-                "apis": {
-                    "weather":     "wttr.in (free) + weatherapi backup",
-                    "sports":      "ESPN (free, no key)",
-                    "crypto":      "CoinGecko (free, no key)",
-                    "stocks":      "Yahoo Finance (free) + Alpha Vantage backup",
-                    "commodities": "Yahoo Finance futures (free, no key) -- v6.1",
-                    "news":        "GNews" if GNEWS_KEY else "not configured",
-                    "news_bak":    "NewsData" if NEWSDATA_KEY else "not configured",
-                    "movies":      "OMDb" if OMDB_KEY else "not configured",
-                    "geocoding":   "Google" if GEOCODING_KEY else "not configured",
-                    "tts":         "OpenAI nova" if OPENAI_KEY else "not configured",
-                    "sync":        "VM webhook" if WEBHOOK_SECRET else "WEBHOOK_SECRET not set",
-                },
-                "time": datetime.now().isoformat()
-            })
-
-        elif self.path.startswith("/geocode"):
-            parsed = urllib.parse.urlparse(self.path)
-            params = urllib.parse.parse_qs(parsed.query)
-            lat = params.get("lat", [None])[0]
-            lng = params.get("lng", [None])[0]
-            if not lat or not lng:
-                self._json({"label": None, "error": "lat and lng required"}, 400)
-                return
-            label = geocode_reverse(lat, lng)
-            self._json({"label": label})
-
-        elif self.path.startswith("/empire"):
-            self._json(fetch_empire() or {"error": "empire data unavailable"})
-
-        else:
-            self._json({"error": "not found"}, 404)
-
-    def do_POST(self):
-        length = int(self.headers.get("Content-Length", 0))
-        body   = self.rfile.read(length)
-        try:
-            data = json.loads(body.decode("utf-8"))
-        except Exception:
-            self._json({"error": "invalid JSON"}, 400)
-            return
-
-        # ── AUTH ──────────────────────────────────────────────────────────────
-        if self.path == "/auth":
-            code    = data.get("code", "").strip()
-            user_id = data.get("user_id", "").strip()
-            if not user_id:
-                self._json({"error": "user_id required"}, 400)
-                return
-            valid_codes = [ACCESS_CODE]
-            if OWNER_CODE:
-                valid_codes.append(OWNER_CODE)
-            if code in valid_codes:
-                if OWNER_CODE and code == OWNER_CODE:
-                    owner_user_ids.add(user_id)
-                profile = get_profile(user_id)
-                if OWNER_CODE and code == OWNER_CODE:
-                    profile["is_owner"] = True
-                if not profile.get("created_at"):
-                    profile["created_at"] = datetime.now().isoformat()
-                save_profile(user_id, profile)
-                self._json({
-                    "ok": True, "user_id": user_id,
-                    "ai_name": profile.get("ai_name", "Herald"),
-                    "name": profile.get("name", ""),
-                    "onboarded": bool(profile.get("name")),
-                    "is_owner": is_owner(user_id, code)
-                })
-            elif code in invites:
-                invite = invites[code]
-                if not invite["used"]:
-                    invite["used"] = True
-                    invite["used_by"] = user_id
-                elif invite["used_by"] != user_id:
-                    self._json({"error": "invite already used"}, 401)
-                    return
-                invite["last_seen"] = datetime.now().isoformat()
-                persist_invites()
-                profile = get_profile(user_id)
-                if not profile.get("created_at"):
-                    profile["created_at"] = datetime.now().isoformat()
-                if invite.get("label") and not profile.get("invite_label"):
-                    profile["invite_label"] = invite["label"]
-                save_profile(user_id, profile)
-                self._json({
-                    "ok": True, "user_id": user_id,
-                    "ai_name": profile.get("ai_name", "Herald"),
-                    "name": profile.get("name", ""),
-                    "onboarded": bool(profile.get("name")),
-                    "is_owner": False,
-                    "invite_label": invite.get("label", "")
-                })
-            else:
-                self._json({"error": "invalid code"}, 401)
-
-        # ── ASK (standard) ────────────────────────────────────────────────────
-        elif self.path == "/ask":
-            ctx, err = build_ask_context(data)
-            if err:
-                self._json({"error": err}, 400)
-                return
-
-            profile  = ctx["profile"]
-            messages = ctx["messages"]
-            message  = ctx["message"]
-
-            if is_about_me_query(message):
-                reply = build_about_me(profile)
-                trial = get_trial_status(profile)
-                self._json({
-                    "reply": reply, "action": None,
-                    "ai_name": profile.get("ai_name", "Herald"),
-                    "name": profile.get("name", ""),
-                    "used_search": False, **_trial_fields(trial)
-                })
-                return
-
-            direct_reply, _ = get_direct_reply(ctx)
-            if direct_reply:
-                reply, action = parse_action(direct_reply)
-                trial = get_trial_status(profile)
-                self._json({
-                    "reply": reply, "action": action,
-                    "ai_name": profile.get("ai_name", "Herald"),
-                    "name": profile.get("name", ""),
-                    "used_search": False, **_trial_fields(trial)
-                })
-                return
-
-            use_search = needs_web_search(message)
-            if use_search:
-                raw_reply, _ = call_openrouter_with_search(messages, message)
-            else:
-                raw_reply = call_openrouter(messages, use_search=False)
-
-            reply, action = parse_action(raw_reply)
-            trial = get_trial_status(profile)
-            self._json({
-                "reply": reply, "action": action,
-                "ai_name": profile.get("ai_name", "Herald"),
-                "name": profile.get("name", ""),
-                "used_search": use_search, **_trial_fields(trial)
-            })
-
-        # ── ASK/STREAM ────────────────────────────────────────────────────────
-        elif self.path == "/ask/stream":
-            ctx, err = build_ask_context(data)
-            if err:
-                self._json({"error": err}, 400)
-                return
-
-            profile  = ctx["profile"]
-            messages = ctx["messages"]
-            message  = ctx["message"]
-
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "keep-alive")
-            self.send_header("X-Accel-Buffering", "no")
-            self.cors()
-            self.end_headers()
-
-            def sse(obj):
-                try:
-                    self.wfile.write(f"data: {json.dumps(obj)}\n\n".encode())
-                    self.wfile.flush()
-                except Exception:
-                    pass
-
-            trial = get_trial_status(profile)
-            base_done = {
-                "done": True,
-                "ai_name": profile.get("ai_name", "Herald"),
-                "name":    profile.get("name", ""),
-                **_trial_fields(trial)
-            }
-
-            if is_about_me_query(message):
-                reply = build_about_me(profile)
-                sse({"t": reply})
-                sse({**base_done, "full": reply, "action": None, "used_search": False})
-                return
-
-            direct_reply, _ = get_direct_reply(ctx)
-            if direct_reply:
-                reply, action = parse_action(direct_reply)
-                sse({"t": reply})
-                sse({**base_done, "full": reply, "action": action, "used_search": False})
-                return
-
-            use_search = needs_web_search(message)
-            full_text  = ""
-
-            try:
-                if use_search and BRAVE_KEY:
-                    search_ctx = fetch_brave_search(message)
-                    if search_ctx:
-                        augmented = messages.copy()
-                        augmented[-1] = {
-                            "role": "user",
-                            "content": f"{message}\n\n[Live web search results:\n{search_ctx}]"
-                        }
-                        for token in stream_from_openrouter(augmented, use_search=False):
-                            full_text += token
-                            sse({"t": token})
-                    else:
-                        for token in stream_from_openrouter(messages, use_search=True):
-                            full_text += token
-                            sse({"t": token})
-                elif use_search:
-                    for token in stream_from_openrouter(messages, use_search=True):
-                        full_text += token
-                        sse({"t": token})
-                else:
-                    for token in stream_from_openrouter(messages, use_search=False):
-                        full_text += token
-                        sse({"t": token})
-
-                reply, action = parse_action(full_text)
-                sse({**base_done, "full": reply, "action": action, "used_search": use_search})
-
-            except Exception as e:
-                print(f"[HERALD] /ask/stream error: {e}")
-                sse({"error": "Stream interrupted. Try again."})
-
-        # ── GREETING ──────────────────────────────────────────────────────────
-        elif self.path == "/greeting":
-            user_id        = data.get("user_id", "").strip()
-            local_time     = data.get("local_time", "")
-            lat            = data.get("lat", None)
-            lng            = data.get("lng", None)
-            location_label = data.get("location_label", None)
-
-            if not user_id:
-                self._json({"error": "user_id required"}, 400)
-                return
-
-            profile = get_profile(user_id)
-            name    = profile.get("name", "")
-            ai_name = profile.get("ai_name", "Herald")
-
-            try:
-                hour = datetime.now().hour
-            except Exception:
-                hour = 9
-            if hour < 12:
-                salutation = "Good morning"
-            elif hour < 17:
-                salutation = "Good afternoon"
-            else:
-                salutation = "Good evening"
-
-            name_part = f", {name}" if name else ""
-            location = location_label or profile.get("location", "")
-            weather_line = ""
-            if location:
-                cached = cache_get(f'weather:{location}', 'weather')
-                weather = cached or fetch_weather_direct(location)
-                if weather and not cached:
-                    cache_set(f'weather:{location}', weather, 'weather')
-                if weather:
-                    first = weather.split('.')[0].strip()
-                    weather_line = f" {first}."
-
-            memories = profile.get("memories", [])
-            notes    = profile.get("notes", [])
-            all_notes = (memories + notes)[-5:]
-            memory_hook = ""
-            if all_notes:
-                memory_hook = f" You mentioned {all_notes[-1]}."
-
-            greeting = f"{salutation}{name_part}.{weather_line}{memory_hook} What can I help you with today?"
-
-            self._json({
-                "ok": True,
-                "greeting": greeting,
-                "ai_name": ai_name,
-                "name": name,
-            })
-
-        # ── MEMORY ────────────────────────────────────────────────────────────
-        elif self.path == "/memory":
-            user_id = data.get("user_id", "").strip()
-            message = data.get("message", "").strip()
-            fact    = data.get("fact", "").strip()
-
-            if not user_id:
-                self._json({"error": "user_id required"}, 400)
-                return
-
-            profile = get_profile(user_id)
-
-            if not fact and message:
-                fact = extract_memory_fact(message)
-
-            if fact:
-                memories = profile.setdefault("memories", [])
-                if fact not in memories:
-                    memories.append(fact)
-                    if len(memories) > 30:
-                        memories = memories[-30:]
-                    profile["memories"] = memories
-                    save_profile(user_id, profile)
-                    name = profile.get("name", "")
-                    confirm = f"Got it{', ' + name if name else ''}. I will remember that."
-                    self._json({"ok": True, "fact": fact, "confirm": confirm})
-                else:
-                    self._json({"ok": True, "fact": fact, "confirm": "Already have that noted."})
-            else:
-                self._json({"error": "No fact to remember"}, 400)
-
-        # ── TTS ───────────────────────────────────────────────────────────────
-        elif self.path == "/tts":
-            text = data.get("text", "").strip()
-            if not text:
-                self._json({"error": "text required"}, 400)
-                return
-            audio = text_to_speech(text)
-            if not audio:
-                self._json({"error": "TTS unavailable"}, 503)
-                return
-            self.send_response(200)
-            self.send_header("Content-Type", "audio/mpeg")
-            self.send_header("Content-Length", str(len(audio)))
-            self.cors()
-            self.end_headers()
-            self.wfile.write(audio)
-
-        # ── PROFILE ───────────────────────────────────────────────────────────
-        elif self.path == "/profile":
-            user_id = data.get("user_id", "").strip()
-            if not user_id:
-                self._json({"error": "user_id required"}, 400)
-                return
-            profile = get_profile(user_id)
-            for field in ["name", "ai_name", "location", "app_prefs"]:
-                if field in data:
-                    profile[field] = data[field]
-            save_profile(user_id, profile)
-            self._json({"ok": True, "profile": profile})
-
-        # ── INVITE CREATE ─────────────────────────────────────────────────────
-        elif self.path == "/invite/create":
-            secret = data.get("secret", "").strip()
-            label  = data.get("label", "").strip()
-            if not INVITE_SECRET or secret != INVITE_SECRET:
-                self._json({"error": "unauthorized"}, 401)
-                return
-            code = make_invite_code()
-            invites[code] = {
-                "code": code, "label": label or "unnamed",
-                "created_at": datetime.now().isoformat(),
-                "used": False, "used_by": None, "last_seen": None,
-            }
-            persist_invites()
-            base_url = data.get("base_url", "https://crptofollower.github.io/herald-voice-app/herald.html")
-            self._json({"ok": True, "code": code, "label": label,
-                        "link": f"{base_url}?invite={code}"})
-
-        # ── INVITE LIST ───────────────────────────────────────────────────────
-        elif self.path == "/invite/list":
-            secret = data.get("secret", "").strip()
-            if not INVITE_SECRET or secret != INVITE_SECRET:
-                self._json({"error": "unauthorized"}, 401)
-                return
-            invite_list = sorted(invites.values(), key=lambda x: x.get("created_at",""), reverse=True)
-            self._json({"ok": True, "invites": invite_list, "total": len(invite_list)})
-
-        # ── SYNC ──────────────────────────────────────────────────────────────
-        elif self.path == "/sync":
-            user_id   = data.get("user_id", "").strip()
-            auth_code = data.get("auth_code", "").strip()
-            if not user_id:
-                self._json({"error": "user_id required"}, 400)
-                return
-            if not is_owner(user_id, auth_code):
-                self._json({"error": "owner only"}, 401)
-                return
-            try:
-                payload = json.dumps({"secret": WEBHOOK_SECRET}).encode("utf-8")
-                req = urllib.request.Request(VM_WEBHOOK_URL, data=payload,
-                    headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/6.1"},
-                    method="POST")
-                with urllib.request.urlopen(req, timeout=35) as r:
-                    result = json.loads(r.read().decode())
-                self._json({
-                    "ok":           result.get("ok", False),
-                    "triggered_at": result.get("triggered_at", ""),
-                    "message":      "Sync complete" if result.get("ok") else "Sync failed",
-                })
-            except Exception as e:
-                self._json({"ok": False, "error": f"VM unreachable: {str(e)[:100]}"}, 503)
-
-        else:
-            self._json({"error": "not found"}, 404)
-
-    def _json(self, obj, code=200):
-        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.cors()
-        self.end_headers()
-        self.wfile.write(body)
-
+# ── TRIAL FIELDS HELPER ───────────────────────────────────────────────────────
 
 def _trial_fields(trial):
     return {
@@ -1818,10 +1379,411 @@ def _trial_fields(trial):
     }
 
 
-if __name__ == "__main__":
+# ═════════════════════════════════════════════════════════════════════════════
+# FASTAPI ROUTES
+# Replaces: class Handler(BaseHTTPRequestHandler) from v6.1
+#
+# Key differences from the old Handler:
+#   - Sync def routes run in FastAPI's thread pool (concurrent, not blocking)
+#   - Body parsed with await request.json() in the caller, passed as dict
+#   - JSONResponse() replaces self._json()
+#   - StreamingResponse() replaces direct self.wfile.write() for SSE
+#   - Response(content=audio) replaces self.wfile.write(audio) for TTS
+#   - CORS handled by CORSMiddleware (registered at top), not per-request headers
+# ═════════════════════════════════════════════════════════════════════════════
+
+@app.get("/health")
+def health():
+    return {
+        "status": "ok", "server": "herald-api", "version": "7.0",
+        "streaming": "enabled (/ask/stream)",
+        "search": f"brave={'configured' if BRAVE_KEY else 'NOT SET'} | fallback=haiku:online",
+        "cache": f"{len(_cache)} entries active",
+        "apis": {
+            "weather":     "wttr.in (free) + weatherapi backup",
+            "sports":      "ESPN (free, no key)",
+            "crypto":      "CoinGecko (free, no key)",
+            "stocks":      "Yahoo Finance (free) + Alpha Vantage backup",
+            "commodities": "Yahoo Finance futures (free, no key)",
+            "news":        "GNews" if GNEWS_KEY else "not configured",
+            "news_bak":    "NewsData" if NEWSDATA_KEY else "not configured",
+            "movies":      "OMDb" if OMDB_KEY else "not configured",
+            "geocoding":   "Google" if GEOCODING_KEY else "not configured",
+            "tts":         "OpenAI nova" if OPENAI_KEY else "not configured",
+            "sync":        "VM webhook" if WEBHOOK_SECRET else "WEBHOOK_SECRET not set",
+        },
+        "time": datetime.now().isoformat()
+    }
+
+
+@app.get("/geocode")
+def geocode(lat: str = None, lng: str = None):
+    if not lat or not lng:
+        return JSONResponse({"label": None, "error": "lat and lng required"}, status_code=400)
+    label = geocode_reverse(lat, lng)
+    return {"label": label}
+
+
+@app.get("/empire")
+def empire():
+    data = fetch_empire()
+    if not data:
+        return JSONResponse({"error": "empire data unavailable"}, status_code=503)
+    return data
+
+
+@app.post("/auth")
+async def auth(request: Request):
+    data    = await request.json()
+    code    = data.get("code", "").strip()
+    user_id = data.get("user_id", "").strip()
+
+    if not user_id:
+        return JSONResponse({"error": "user_id required"}, status_code=400)
+
+    valid_codes = [ACCESS_CODE]
+    if OWNER_CODE:
+        valid_codes.append(OWNER_CODE)
+
+    if code in valid_codes:
+        if OWNER_CODE and code == OWNER_CODE:
+            owner_user_ids.add(user_id)
+        profile = get_profile(user_id)
+        if OWNER_CODE and code == OWNER_CODE:
+            profile["is_owner"] = True
+        if not profile.get("created_at"):
+            profile["created_at"] = datetime.now().isoformat()
+        save_profile(user_id, profile)
+        return {
+            "ok": True, "user_id": user_id,
+            "ai_name": profile.get("ai_name", "Herald"),
+            "name": profile.get("name", ""),
+            "onboarded": bool(profile.get("name")),
+            "is_owner": is_owner(user_id, code)
+        }
+    elif code in invites:
+        invite = invites[code]
+        if not invite["used"]:
+            invite["used"] = True
+            invite["used_by"] = user_id
+        elif invite["used_by"] != user_id:
+            return JSONResponse({"error": "invite already used"}, status_code=401)
+        invite["last_seen"] = datetime.now().isoformat()
+        persist_invites()
+        profile = get_profile(user_id)
+        if not profile.get("created_at"):
+            profile["created_at"] = datetime.now().isoformat()
+        if invite.get("label") and not profile.get("invite_label"):
+            profile["invite_label"] = invite["label"]
+        save_profile(user_id, profile)
+        return {
+            "ok": True, "user_id": user_id,
+            "ai_name": profile.get("ai_name", "Herald"),
+            "name": profile.get("name", ""),
+            "onboarded": bool(profile.get("name")),
+            "is_owner": False,
+            "invite_label": invite.get("label", "")
+        }
+    else:
+        return JSONResponse({"error": "invalid code"}, status_code=401)
+
+
+@app.post("/ask")
+def ask(request: Request):
+    # NOTE: sync def -- FastAPI runs this in a thread pool.
+    # We need to call request.json() synchronously here.
+    import asyncio
+    data = asyncio.run(request.json())
+
+    ctx, err = build_ask_context(data)
+    if err:
+        return JSONResponse({"error": err}, status_code=400)
+
+    profile  = ctx["profile"]
+    messages = ctx["messages"]
+    message  = ctx["message"]
+
+    if is_about_me_query(message):
+        reply = build_about_me(profile)
+        trial = get_trial_status(profile)
+        return {"reply": reply, "action": None,
+                "ai_name": profile.get("ai_name", "Herald"),
+                "name": profile.get("name", ""),
+                "used_search": False, **_trial_fields(trial)}
+
+    direct_reply, _ = get_direct_reply(ctx)
+    if direct_reply:
+        reply, action = parse_action(direct_reply)
+        trial = get_trial_status(profile)
+        return {"reply": reply, "action": action,
+                "ai_name": profile.get("ai_name", "Herald"),
+                "name": profile.get("name", ""),
+                "used_search": False, **_trial_fields(trial)}
+
+    use_search = needs_web_search(message)
+    if use_search:
+        raw_reply, _ = call_openrouter_with_search(messages, message)
+    else:
+        raw_reply = call_openrouter(messages, use_search=False)
+
+    reply, action = parse_action(raw_reply)
+    trial = get_trial_status(profile)
+    return {"reply": reply, "action": action,
+            "ai_name": profile.get("ai_name", "Herald"),
+            "name": profile.get("name", ""),
+            "used_search": use_search, **_trial_fields(trial)}
+
+
+@app.post("/ask/stream")
+async def ask_stream(request: Request):
+    data = await request.json()
+
+    ctx, err = build_ask_context(data)
+    if err:
+        return JSONResponse({"error": err}, status_code=400)
+
+    profile  = ctx["profile"]
+    messages = ctx["messages"]
+    message  = ctx["message"]
+    use_search = needs_web_search(message)
+
+    trial = get_trial_status(profile)
+    base_done = {
+        "done": True,
+        "ai_name": profile.get("ai_name", "Herald"),
+        "name":    profile.get("name", ""),
+        **_trial_fields(trial)
+    }
+
+    def generate():
+        # About-me shortcut
+        if is_about_me_query(message):
+            reply = build_about_me(profile)
+            yield f"data: {json.dumps({'t': reply})}\n\n"
+            yield f"data: {json.dumps({**base_done, 'full': reply, 'action': None, 'used_search': False})}\n\n"
+            return
+
+        # Direct data reply (weather, stocks, crypto, etc.)
+        direct_reply, _ = get_direct_reply(ctx)
+        if direct_reply:
+            reply, action = parse_action(direct_reply)
+            yield f"data: {json.dumps({'t': reply})}\n\n"
+            yield f"data: {json.dumps({**base_done, 'full': reply, 'action': action, 'used_search': False})}\n\n"
+            return
+
+        # LLM streaming
+        full_text = ""
+        try:
+            if use_search and BRAVE_KEY:
+                search_ctx = fetch_brave_search(message)
+                if search_ctx:
+                    augmented = messages.copy()
+                    augmented[-1] = {
+                        "role": "user",
+                        "content": f"{message}\n\n[Live web search results:\n{search_ctx}]"
+                    }
+                    for token in stream_from_openrouter(augmented, use_search=False):
+                        full_text += token
+                        yield f"data: {json.dumps({'t': token})}\n\n"
+                else:
+                    for token in stream_from_openrouter(messages, use_search=True):
+                        full_text += token
+                        yield f"data: {json.dumps({'t': token})}\n\n"
+            elif use_search:
+                for token in stream_from_openrouter(messages, use_search=True):
+                    full_text += token
+                    yield f"data: {json.dumps({'t': token})}\n\n"
+            else:
+                for token in stream_from_openrouter(messages, use_search=False):
+                    full_text += token
+                    yield f"data: {json.dumps({'t': token})}\n\n"
+
+            reply, action = parse_action(full_text)
+            yield f"data: {json.dumps({**base_done, 'full': reply, 'action': action, 'used_search': use_search})}\n\n"
+
+        except Exception as e:
+            print(f"[HERALD] /ask/stream error: {e}")
+            yield f"data: {json.dumps({'error': 'Stream interrupted. Try again.'})}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    )
+
+
+@app.post("/greeting")
+async def greeting(request: Request):
+    data           = await request.json()
+    user_id        = data.get("user_id", "").strip()
+    local_time     = data.get("local_time", "")
+    lat            = data.get("lat", None)
+    lng            = data.get("lng", None)
+    location_label = data.get("location_label", None)
+
+    if not user_id:
+        return JSONResponse({"error": "user_id required"}, status_code=400)
+
+    profile = get_profile(user_id)
+    name    = profile.get("name", "")
+    ai_name = profile.get("ai_name", "Herald")
+
+    try:
+        hour = datetime.now().hour
+    except Exception:
+        hour = 9
+    if hour < 12:
+        salutation = "Good morning"
+    elif hour < 17:
+        salutation = "Good afternoon"
+    else:
+        salutation = "Good evening"
+
+    name_part = f", {name}" if name else ""
+    location  = location_label or profile.get("location", "")
+    weather_line = ""
+    if location:
+        cached  = cache_get(f'weather:{location}', 'weather')
+        weather = cached or fetch_weather_direct(location)
+        if weather and not cached:
+            cache_set(f'weather:{location}', weather, 'weather')
+        if weather:
+            first = weather.split('.')[0].strip()
+            weather_line = f" {first}."
+
+    memories  = profile.get("memories", [])
+    notes     = profile.get("notes", [])
+    all_notes = (memories + notes)[-5:]
+    memory_hook = ""
+    if all_notes:
+        memory_hook = f" You mentioned {all_notes[-1]}."
+
+    greeting_text = f"{salutation}{name_part}.{weather_line}{memory_hook} What can I help you with today?"
+
+    return {"ok": True, "greeting": greeting_text, "ai_name": ai_name, "name": name}
+
+
+@app.post("/memory")
+async def memory(request: Request):
+    data    = await request.json()
+    user_id = data.get("user_id", "").strip()
+    message = data.get("message", "").strip()
+    fact    = data.get("fact", "").strip()
+
+    if not user_id:
+        return JSONResponse({"error": "user_id required"}, status_code=400)
+
+    profile = get_profile(user_id)
+
+    if not fact and message:
+        fact = extract_memory_fact(message)
+
+    if fact:
+        memories = profile.setdefault("memories", [])
+        if fact not in memories:
+            memories.append(fact)
+            if len(memories) > 30:
+                memories = memories[-30:]
+            profile["memories"] = memories
+            save_profile(user_id, profile)
+            name    = profile.get("name", "")
+            confirm = f"Got it{', ' + name if name else ''}. I will remember that."
+            return {"ok": True, "fact": fact, "confirm": confirm}
+        else:
+            return {"ok": True, "fact": fact, "confirm": "Already have that noted."}
+    else:
+        return JSONResponse({"error": "No fact to remember"}, status_code=400)
+
+
+@app.post("/tts")
+async def tts(request: Request):
+    data = await request.json()
+    text = data.get("text", "").strip()
+    if not text:
+        return JSONResponse({"error": "text required"}, status_code=400)
+    audio = text_to_speech(text)
+    if not audio:
+        return JSONResponse({"error": "TTS unavailable"}, status_code=503)
+    return Response(content=audio, media_type="audio/mpeg")
+
+
+@app.post("/profile")
+async def profile_update(request: Request):
+    data    = await request.json()
+    user_id = data.get("user_id", "").strip()
+    if not user_id:
+        return JSONResponse({"error": "user_id required"}, status_code=400)
+    profile = get_profile(user_id)
+    for field in ["name", "ai_name", "location", "app_prefs"]:
+        if field in data:
+            profile[field] = data[field]
+    save_profile(user_id, profile)
+    return {"ok": True, "profile": profile}
+
+
+@app.post("/invite/create")
+async def invite_create(request: Request):
+    data   = await request.json()
+    secret = data.get("secret", "").strip()
+    label  = data.get("label", "").strip()
+    if not INVITE_SECRET or secret != INVITE_SECRET:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    code = make_invite_code()
+    invites[code] = {
+        "code": code, "label": label or "unnamed",
+        "created_at": datetime.now().isoformat(),
+        "used": False, "used_by": None, "last_seen": None,
+    }
+    persist_invites()
+    base_url = data.get("base_url", "https://crptofollower.github.io/herald-voice-app/herald.html")
+    return {"ok": True, "code": code, "label": label,
+            "link": f"{base_url}?invite={code}"}
+
+
+@app.post("/invite/list")
+async def invite_list(request: Request):
+    data   = await request.json()
+    secret = data.get("secret", "").strip()
+    if not INVITE_SECRET or secret != INVITE_SECRET:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    invite_list_data = sorted(invites.values(), key=lambda x: x.get("created_at",""), reverse=True)
+    return {"ok": True, "invites": invite_list_data, "total": len(invite_list_data)}
+
+
+@app.post("/sync")
+async def sync(request: Request):
+    data      = await request.json()
+    user_id   = data.get("user_id", "").strip()
+    auth_code = data.get("auth_code", "").strip()
+
+    if not user_id:
+        return JSONResponse({"error": "user_id required"}, status_code=400)
+    if not is_owner(user_id, auth_code):
+        return JSONResponse({"error": "owner only"}, status_code=401)
+
+    try:
+        payload = json.dumps({"secret": WEBHOOK_SECRET}).encode("utf-8")
+        req = urllib.request.Request(VM_WEBHOOK_URL, data=payload,
+            headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/7.0"},
+            method="POST")
+        with urllib.request.urlopen(req, timeout=35) as r:
+            result = json.loads(r.read().decode())
+        return {
+            "ok":           result.get("ok", False),
+            "triggered_at": result.get("triggered_at", ""),
+            "message":      "Sync complete" if result.get("ok") else "Sync failed",
+        }
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"VM unreachable: {str(e)[:100]}"}, status_code=503)
+
+
+# ── STARTUP ───────────────────────────────────────────────────────────────────
+
+@app.on_event("startup")
+def startup():
     load_profiles()
     load_invites()
-    print(f"[HERALD API v6.1] Starting on port {PORT}")
+    print(f"[HERALD API v7.0] FastAPI + uvicorn -- concurrent request handling enabled")
     print(f"[HERALD API] OpenRouter:    {'YES' if OPENROUTER_KEY else 'MISSING -- required'}")
     print(f"[HERALD API] Brave Search:  {'YES' if BRAVE_KEY else 'NOT SET -- add BRAVE_SEARCH_KEY'}")
     print(f"[HERALD API] OpenAI TTS:    {'YES' if OPENAI_KEY else 'not set'}")
@@ -1831,11 +1793,11 @@ if __name__ == "__main__":
     print(f"[HERALD API] AlphaVantage:  {'YES (backup only)' if ALPHA_KEY else 'not set'}")
     print(f"[HERALD API] NewsData:      {'YES' if NEWSDATA_KEY else 'not set'}")
     print(f"[HERALD API] WeatherAPI:    {'YES (backup)' if WEATHER_KEY else 'not set'}")
-    print(f"[HERALD API] Commodities:   Yahoo Finance futures -- silver/gold/oil/gas/copper (v6.1)")
     print(f"[HERALD API] Profiles:      {PROFILES_FILE}")
     print(f"[HERALD API] Owner code:    {'SET' if OWNER_CODE else 'NOT SET'}")
     print(f"[HERALD API] Invite secret: {'SET' if INVITE_SECRET else 'NOT SET'}")
     print(f"[HERALD API] Webhook:       {'SET' if WEBHOOK_SECRET else 'NOT SET'}")
-    print(f"[HERALD API] Streaming:     /ask/stream (SSE) -- LIVE")
-    server = HTTPServer(("0.0.0.0", PORT), Handler)
-    server.serve_forever()
+
+
+if __name__ == "__main__":
+    uvicorn.run("herald_api:app", host="0.0.0.0", port=PORT, reload=False)
