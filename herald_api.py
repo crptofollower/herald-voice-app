@@ -34,7 +34,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="7.1")
+app = FastAPI(title="Herald API", version="7.2")
 
 app.add_middleware(
     CORSMiddleware,
@@ -1491,7 +1491,7 @@ def _trial_fields(trial):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "7.1",
+        "status": "ok", "server": "herald-api", "version": "7.2",
         "streaming": "enabled (/ask/stream)",
         "search": f"brave={'configured' if BRAVE_KEY else 'NOT SET'} | fallback=haiku:online",
         "cache": f"{len(_cache)} entries active",
@@ -1656,19 +1656,43 @@ async def ask_stream(request: Request):
         if is_about_me_query(message):
             reply = build_about_me(profile)
             yield f"data: {json.dumps({'t': reply})}\n\n"
+            yield f"data: {json.dumps({'t': '[S]'})}\n\n"
             yield f"data: {json.dumps({**base_done, 'full': reply, 'action': None, 'used_search': False})}\n\n"
             return
 
         # Direct data reply (weather, stocks, crypto, etc.)
+        # NOTE: these never hit the LLM -- they return immediately.
+        # The frontend detects these with isDataQuery() and calls /ask directly,
+        # so this path is a safety net only.
         direct_reply, _ = get_direct_reply(ctx)
         if direct_reply:
             reply, action = parse_action(direct_reply)
             yield f"data: {json.dumps({'t': reply})}\n\n"
+            yield f"data: {json.dumps({'t': '[S]'})}\n\n"
             yield f"data: {json.dumps({**base_done, 'full': reply, 'action': action, 'used_search': False})}\n\n"
             return
 
-        # LLM streaming
-        full_text = ""
+        # ── LLM streaming with sentence markers ──────────────────────────────
+        # Yields [S] after each sentence boundary so the frontend can speak
+        # sentences as they arrive instead of waiting for the full response.
+        # Sentence boundary = punctuation (. ! ?) followed by a space character.
+        # Detected on the trailing 3 chars of the accumulator after each token.
+        full_text    = ""
+        sentence_buf = ""
+
+        def stream_with_sentences(token_source):
+            nonlocal full_text, sentence_buf
+            for token in token_source:
+                full_text    += token
+                sentence_buf += token
+                yield f"data: {json.dumps({'t': token})}\n\n"
+                if re.search(r'[.!?]\s', sentence_buf[-4:]):
+                    yield f"data: {json.dumps({'t': '[S]'})}\n\n"
+                    sentence_buf = ""
+            # Final sentence marker at end of stream
+            if sentence_buf.strip():
+                yield f"data: {json.dumps({'t': '[S]'})}\n\n"
+
         try:
             if use_search and BRAVE_KEY:
                 search_ctx = fetch_brave_search(message)
@@ -1678,28 +1702,26 @@ async def ask_stream(request: Request):
                         "role": "user",
                         "content": f"{message}\n\n[Live web search results:\n{search_ctx}]"
                     }
-                    for token in stream_from_openrouter(augmented, use_search=False):
-                        full_text += token
-                        yield f"data: {json.dumps({'t': token})}\n\n"
+                    yield from stream_with_sentences(stream_from_openrouter(augmented, use_search=False))
                 else:
-                    for token in stream_from_openrouter(messages, use_search=True):
-                        full_text += token
-                        yield f"data: {json.dumps({'t': token})}\n\n"
+                    yield from stream_with_sentences(stream_from_openrouter(messages, use_search=True))
             elif use_search:
-                for token in stream_from_openrouter(messages, use_search=True):
-                    full_text += token
-                    yield f"data: {json.dumps({'t': token})}\n\n"
+                yield from stream_with_sentences(stream_from_openrouter(messages, use_search=True))
             else:
-                for token in stream_from_openrouter(messages, use_search=False):
-                    full_text += token
-                    yield f"data: {json.dumps({'t': token})}\n\n"
+                yield from stream_with_sentences(stream_from_openrouter(messages, use_search=False))
 
             reply, action = parse_action(full_text)
             yield f"data: {json.dumps({**base_done, 'full': reply, 'action': action, 'used_search': use_search})}\n\n"
 
         except Exception as e:
             print(f"[HERALD] /ask/stream error: {e}")
-            yield f"data: {json.dumps({'error': 'Stream interrupted. Try again.'})}\n\n"
+            # Send whatever partial text we have before the error event.
+            # Frontend abort recovery will display it rather than re-requesting.
+            if full_text.strip():
+                reply, action = parse_action(full_text)
+                yield f"data: {json.dumps({**base_done, 'full': reply, 'action': action, 'used_search': use_search, 'partial': True})}\n\n"
+            else:
+                yield f"data: {json.dumps({'error': 'Stream interrupted. Try again.'})}\n\n"
 
     return StreamingResponse(
         generate(),
