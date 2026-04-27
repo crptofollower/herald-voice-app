@@ -244,7 +244,7 @@
 const RAILWAY_URL    = 'https://web-production-b4083.up.railway.app';
 const STRIPE_MONTHLY = 'PLACEHOLDER_MONTHLY';
 const STRIPE_ANNUAL  = 'PLACEHOLDER_ANNUAL';
-const VERSION        = 'V55.4';
+const VERSION        = 'V55.5';
 
 let userId           = localStorage.getItem('herald_uid') || '';
 let authCode         = localStorage.getItem('herald_auth') || '';
@@ -265,6 +265,10 @@ let heyHeraldEnabled = false;
 let wakeRecognition  = null;
 let locationCache    = null;
 let locationCacheTs  = 0;
+let sentenceBuffer   = '';
+let streamingSpeech  = false;
+let speechQueue      = [];
+let isSpeakingQueue  = false;
 
 document.body.setAttribute('data-theme', currentTheme);
 updateTime();
@@ -453,6 +457,42 @@ async function getLocation() {
   return locationCache;
 }
 
+// ── DATA QUERY FAST-PATH ──────────────────────────────────────────────────────
+// These queries hit /ask directly (instant JSON) instead of /ask/stream (SSE).
+// Weather, stocks, crypto never stream anyway -- they return a single blob.
+// Bypassing SSE overhead cuts ~300ms and eliminates SSE parser risk for them.
+const DATA_QUERY_WORDS = [
+  'weather','forecast','temperature','rain','snow','wind','sunny','umbrella',
+  'bitcoin','ethereum','solana','crypto','btc','eth','sol price',
+  'stock','share price','trading at','price of','how much is',
+  'silver','gold','oil','crude','natural gas','copper',
+  'score','scores','game today','cowboys','rangers','mavs','mavericks',
+  'stars','nfl','nba','mlb','nhl','playoffs','standings',
+  'news','headlines','top stories','what is happening','what happened today',
+  'movie','film','imdb','rotten tomatoes',
+];
+function isDataQuery(msg) {
+  const lower = msg.toLowerCase();
+  return DATA_QUERY_WORDS.some(kw => lower.includes(kw));
+}
+ 
+// ── SENTENCE-BY-SENTENCE TTS ──────────────────────────────────────────────────
+// Speaks sentences via WebSpeech as they arrive from the stream.
+// WebSpeech queues naturally -- calling speak() multiple times is safe.
+// OpenAI TTS is NOT used for sentence speech (too slow per sentence).
+// If no sentence speech happened, full response still goes to speakText().
+function speakSentence(text) {
+  if (muted || !text.trim()) return;
+  try {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.resume();
+      const utt = new SpeechSynthesisUtterance(cleanForSpeech(text));
+      utt.rate = 1.0; utt.pitch = 1.0;
+      window.speechSynthesis.speak(utt);
+    }
+  } catch(e) {}
+}
+ 
 function sendQuick(text) { sendToHerald(text); }
 
 function handleTextKey(e) { if (e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendFromInput();} }
@@ -469,28 +509,27 @@ async function sendToHerald(messageText) {
   if (isStreaming) return;
   isStreaming = true;
   setStatusDot('streaming');
-
-  // Watchdog: auto-reset if stuck > 20s
+ 
   if (watchdogTimer) clearTimeout(watchdogTimer);
   watchdogTimer = setTimeout(() => { if (isStreaming) { isStreaming=false; setStatusDot('live'); } }, 20000);
-
+ 
   const wc = document.getElementById('welcomeCard');
   if (wc) wc.style.display = 'none';
   document.getElementById('suggestChips').style.display = 'none';
   if (currentAudio) { currentAudio.pause(); currentAudio = null; }
-
+ 
   addUserMsg(messageText);
   history.push({ role:'user', content:messageText });
   const thinkingEl = addThinking();
-
+ 
   const { lat, lng, locationLabel } = await getLocation();
-
+ 
   const body = {
     user_id:userId, auth_code:authCode, message:messageText,
     history:history.slice(-20), local_time:getLocalTimeStr(),
     lat, lng, location_label:locationLabel
   };
-
+ 
   const heraldMsgEl = document.createElement('div');
   heraldMsgEl.className = 'msg herald';
   const labelEl = document.createElement('div');
@@ -500,65 +539,20 @@ async function sendToHerald(messageText) {
   bubbleEl.className = 'msg-bubble';
   heraldMsgEl.appendChild(labelEl);
   heraldMsgEl.appendChild(bubbleEl);
-
+ 
   let fullText='', actionData=null, revealed=false;
-
+  sentenceBuffer=''; streamingSpeech=false;
+ 
   function revealBubble() {
     if (!revealed) { thinkingEl.remove(); document.getElementById('messages').appendChild(heraldMsgEl); scrollBottom(); revealed=true; }
   }
-
-  try {
-    const controller = new AbortController();
-    const streamTimeout = setTimeout(()=>controller.abort(), 30000);
-    const response = await fetch(RAILWAY_URL+'/ask/stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:controller.signal});
-    clearTimeout(streamTimeout);
-    if (!response.ok) throw new Error('stream not ok');
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer='', cursor=null;
-
-    while (true) {
-      const {done,value} = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value,{stream:true});
-      const lines = buffer.split('\n');
-      buffer = lines.pop();
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const dataStr = line.slice(6).trim();
-        if (dataStr==='[DONE]') break;
-        try {
-          const data = JSON.parse(dataStr);
-          if (data.t) {
-            revealBubble();
-            if (!cursor) { cursor=document.createElement('span'); cursor.className='stream-cursor'; bubbleEl.appendChild(cursor); }
-            fullText += data.t;
-            bubbleEl.insertBefore(document.createTextNode(data.t), cursor);
-            scrollBottom();
-          }
-          if (data.done) {
-            if (cursor) cursor.remove();
-            if (data.full) fullText = data.full;
-            if (data.action) actionData = data.action;
-            handleTrialData(data);
-            if (data.ai_name) { aiName=data.ai_name; localStorage.setItem('herald_ai_name',data.ai_name); }
-            if (data.name) { userName=data.name; localStorage.setItem('herald_name',data.name); }
-          }
-        } catch(e) {}
-      }
-    }
-    revealBubble();
-    if (cursor) cursor.remove();
-    if (actionData) { const card=buildActionCard(actionData,fullText); if (card) heraldMsgEl.appendChild(card); }
-    history.push({role:'assistant',content:fullText});
-    if (!muted && fullText) speakText(fullText);
-
-  } catch(streamErr) {
+ 
+  // ── DATA QUERY FAST-PATH: use /ask directly, skip SSE entirely ────────────
+  if (isDataQuery(messageText)) {
     try {
       const fc = new AbortController();
-      const ft = setTimeout(()=>fc.abort(), 20000);
-      const r = await fetch(RAILWAY_URL+'/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:fc.signal});
+      const ft = setTimeout(() => fc.abort(), 20000);
+      const r = await fetch(RAILWAY_URL+'/ask', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body), signal:fc.signal});
       clearTimeout(ft);
       const d = await r.json();
       revealBubble();
@@ -568,18 +562,131 @@ async function sendToHerald(messageText) {
       handleTrialData(d);
       if (d.ai_name) { aiName=d.ai_name; localStorage.setItem('herald_ai_name',d.ai_name); }
       if (d.name) { userName=d.name; localStorage.setItem('herald_name',d.name); }
-      fullText=reply;
-      history.push({role:'assistant',content:reply});
+      fullText = reply;
+      history.push({role:'assistant', content:reply});
       if (!muted && reply) speakText(reply);
-    } catch(fe) {
+    } catch(e) {
       revealBubble();
-      if (fe.name==='AbortError') {
-        bubbleEl.textContent = 'Server is waking up — please tap send again in a moment.';
-        setStatusDot('cold'); setTimeout(()=>setStatusDot('live'),8000);
-      } else {
-        bubbleEl.textContent = 'Connection error. Check your internet and try again.';
-      }
+      bubbleEl.textContent = 'Connection error. Check your internet and try again.';
       history.pop();
+    } finally {
+      isStreaming=false;
+      if (watchdogTimer) clearTimeout(watchdogTimer);
+      setStatusDot('live');
+      scrollBottom();
+    }
+    return;
+  }
+ 
+  // ── STREAMING PATH ────────────────────────────────────────────────────────
+  try {
+    const controller = new AbortController();
+    const streamTimeout = setTimeout(() => controller.abort(), 30000);
+    const response = await fetch(RAILWAY_URL+'/ask/stream', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body), signal:controller.signal});
+    clearTimeout(streamTimeout);
+    if (!response.ok) throw new Error('stream not ok');
+ 
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+ 
+    // ── FIXED SSE PARSER ──────────────────────────────────────────────────
+    // Split on \n\n (SSE event boundary) not \n (line boundary).
+    // Prevents silent JSON parse failures when a chunk straddles a \n.
+    let buffer = '', cursor = null;
+ 
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, {stream:true});
+      const events = buffer.split('\n\n');
+      buffer = events.pop(); // keep incomplete event
+      for (const event of events) {
+        const line = event.trim();
+        if (!line.startsWith('data: ')) continue;
+        const dataStr = line.slice(6).trim();
+        if (dataStr === '[DONE]') break;
+        try {
+          const data = JSON.parse(dataStr);
+ 
+          if (data.t) {
+            // [S] = sentence boundary marker -- speak and reset buffer, don't display
+            if (data.t === '[S]') {
+              if (sentenceBuffer.trim()) {
+                streamingSpeech = true;
+                speakSentence(sentenceBuffer.trim());
+                sentenceBuffer = '';
+              }
+              continue;
+            }
+            revealBubble();
+            if (!cursor) { cursor=document.createElement('span'); cursor.className='stream-cursor'; bubbleEl.appendChild(cursor); }
+            fullText += data.t;
+            sentenceBuffer += data.t;
+            bubbleEl.insertBefore(document.createTextNode(data.t), cursor);
+            scrollBottom();
+          }
+ 
+          if (data.done || data.partial) {
+            if (cursor) cursor.remove();
+            if (data.full) fullText = data.full;
+            if (data.action) actionData = data.action;
+            handleTrialData(data);
+            if (data.ai_name) { aiName=data.ai_name; localStorage.setItem('herald_ai_name',data.ai_name); }
+            if (data.name) { userName=data.name; localStorage.setItem('herald_name',data.name); }
+          }
+ 
+          if (data.error) {
+            revealBubble();
+            if (cursor) cursor.remove();
+            if (!fullText) bubbleEl.textContent = 'Stream interrupted — try again.';
+          }
+        } catch(e) {}
+      }
+    }
+ 
+    revealBubble();
+    if (cursor) cursor.remove();
+    if (actionData) { const card=buildActionCard(actionData,fullText); if (card) heraldMsgEl.appendChild(card); }
+    history.push({role:'assistant', content:fullText});
+    // Only use full speakText() if sentence-by-sentence speech didn't fire
+    if (!muted && fullText && !streamingSpeech) speakText(fullText);
+ 
+  } catch(streamErr) {
+    // ── ABORT RECOVERY ────────────────────────────────────────────────────
+    // If we received meaningful partial text, show it -- don't re-request.
+    // Only fall back to /ask if we got nothing at all.
+    if (fullText.trim().length > 15) {
+      revealBubble();
+      history.push({role:'assistant', content:fullText});
+      if (!muted && !streamingSpeech) speakText(fullText);
+    } else {
+      // Nothing received -- try /ask fallback
+      try {
+        const fc = new AbortController();
+        const ft = setTimeout(() => fc.abort(), 20000);
+        const r = await fetch(RAILWAY_URL+'/ask', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body), signal:fc.signal});
+        clearTimeout(ft);
+        const d = await r.json();
+        revealBubble();
+        const reply = d.reply || "I didn't quite get that — try again?";
+        bubbleEl.textContent = reply;
+        if (d.action) { const card=buildActionCard(d.action,reply); if (card) heraldMsgEl.appendChild(card); }
+        handleTrialData(d);
+        if (d.ai_name) { aiName=d.ai_name; localStorage.setItem('herald_ai_name',d.ai_name); }
+        if (d.name) { userName=d.name; localStorage.setItem('herald_name',d.name); }
+        fullText = reply;
+        history.push({role:'assistant', content:reply});
+        if (!muted && reply) speakText(reply);
+      } catch(fe) {
+        revealBubble();
+        if (fe.name==='AbortError') {
+          bubbleEl.textContent = 'Server is waking up — please tap send again in a moment.';
+          setStatusDot('cold'); setTimeout(()=>setStatusDot('live'),8000);
+        } else {
+          bubbleEl.textContent = 'Connection error. Check your internet and try again.';
+        }
+        history.pop();
+      }
     }
   } finally {
     isStreaming=false;
