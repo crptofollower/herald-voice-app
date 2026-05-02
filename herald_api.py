@@ -1,29 +1,28 @@
 # herald_api.py
 # Herald PWA Backend -- Railway Cloud Server
-# v7.1 -- SQLite profile persistence (replaces /data/profiles.json + invites.json)
-#          Profiles and invites now survive Railway deploys and volume remounts.
-#          Memory IS the product. This is the most important missing feature.
+# v7.3 -- LLM learning loop + build_about_me LLM upgrade
 #
-# WHAT CHANGED vs v7.0:
-#   - Added:   import sqlite3
-#   - Added:   DB_FILE = "/data/herald.db"
-#   - Added:   init_db() -- creates tables on first run, migrates JSON data if found
-#   - Replaced: load_profiles() -- now reads from SQLite
-#   - Replaced: load_invites()  -- now reads from SQLite
-#   - Replaced: save_profile()  -- now upserts one row directly (no full-file rewrite)
-#   - Replaced: persist_invites() -- now upserts one row directly
-#   - Removed:  persist_profiles() -- no longer needed
-#   - Updated:  startup() calls init_db() before load_profiles() / load_invites()
-#   - Version bump: 7.0 -> 7.1
+# WHAT CHANGED vs v7.2:
+#   - Added:   extract_learned_facts() -- async Haiku extraction after every LLM response
+#   - Added:   learned_facts field in profile (stored in existing SQLite JSON column)
+#   - Updated: build_system() -- injects learned_facts into every LLM context call
+#   - Updated: build_about_me() -- LLM-powered, replaces string concatenation
+#   - Updated: /ask endpoint -- fires extraction thread after LLM response
+#   - Updated: /ask/stream endpoint -- fires extraction thread after stream completes
+#   - Fixed:   /ask endpoint user_id scope bug (was undefined, now ctx["user_id"])
+#   - Version bump: 7.2 -> 7.3
 #
-# NO NEW DEPENDENCIES -- sqlite3 is Python stdlib.
+# NO NEW DEPENDENCIES -- threading is Python stdlib.
 # requirements.txt does not need to change.
 #
-# RAILWAY VOLUME: /data must be mounted as a persistent volume in Railway.
-# If it is not mounted, SQLite still works but resets on redeploy (same as before).
-# The Railway volume is what makes this permanent.
+# HOW THE LEARNING LOOP WORKS:
+#   Every LLM response fires a background Haiku call (~$0.00004):
+#   "What did the user reveal about themselves in this turn?"
+#   Result is stored as learned_facts[] in their SQLite profile.
+#   Next conversation, those facts appear in build_system() context.
+#   Herald gets smarter with every conversation. Silently. No user action needed.
 
-import os, json, re, random, string, time, http.client, ssl, sqlite3
+import os, json, re, random, string, time, http.client, ssl, sqlite3, threading
 import urllib.request, urllib.error, urllib.parse
 from datetime import datetime
 
@@ -34,7 +33,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="7.2")
+app = FastAPI(title="Herald API", version="7.3")
 
 app.add_middleware(
     CORSMiddleware,
@@ -64,9 +63,9 @@ VM_WEBHOOK_URL = "http://143.198.18.66:8082/webhook/sync"
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 TTS_URL        = "https://api.openai.com/v1/audio/speech"
 EMPIRE_URL     = "https://raw.githubusercontent.com/crptofollower/herald-voice-app/main/empire_status.json"
-PROFILES_FILE  = os.environ.get("PROFILES_FILE", "/data/profiles.json")  # kept for migration only
-INVITES_FILE   = os.environ.get("INVITES_FILE",  "/data/invites.json")   # kept for migration only
-DB_FILE        = "/data/herald.db"  # single SQLite file -- replaces both JSON files
+PROFILES_FILE  = os.environ.get("PROFILES_FILE", "/data/profiles.json")
+INVITES_FILE   = os.environ.get("INVITES_FILE",  "/data/invites.json")
+DB_FILE        = "/data/herald.db"
 
 MODEL_SEARCH = "anthropic/claude-haiku-4-5:online"
 MODEL_FAST   = "anthropic/claude-haiku-4-5"
@@ -216,24 +215,7 @@ owner_user_ids = set()
 invites        = {}
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# ALL FUNCTIONS BELOW THIS LINE ARE IDENTICAL TO v6.1.
-# Only the HTTP handler layer (Handler class) has been replaced with FastAPI
-# route functions at the bottom of this file.
-# ═════════════════════════════════════════════════════════════════════════════
-
 # ── PERSISTENCE (v7.1 -- SQLite) ──────────────────────────────────────────────
-#
-# Architecture:
-#   - Single SQLite file at /data/herald.db (Railway persistent volume)
-#   - In-memory dicts (user_profiles, invites) are the working cache
-#   - SQLite is written on every change, read once on startup
-#   - init_db() migrates existing JSON files on first run so no data is lost
-#   - Each save is a single row upsert -- no full-file rewrites
-#
-# Why this survives deploys:
-#   Railway volumes persist across deploys and restarts. SQLite is a single
-#   file on that volume. As long as /data is mounted, profiles are permanent.
 
 def init_db():
     """Create tables and migrate any existing JSON data. Safe to call repeatedly."""
@@ -258,9 +240,6 @@ def init_db():
         """)
         conn.commit()
 
-        # ── ONE-TIME MIGRATION: JSON -> SQLite ────────────────────────────────
-        # If the old profiles.json exists and the SQLite table is empty,
-        # import it so existing users keep all their memories and preferences.
         c.execute("SELECT COUNT(*) FROM profiles")
         if c.fetchone()[0] == 0 and os.path.exists(PROFILES_FILE):
             try:
@@ -343,7 +322,6 @@ def load_invites():
 
 
 def _save_invite(code, invite):
-    """Upsert a single invite row. Replaces persist_invites()."""
     try:
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
@@ -371,7 +349,7 @@ def make_invite_code():
 def get_profile(user_id):
     return user_profiles.get(user_id, {
         "name": "", "ai_name": "Herald", "location": "", "notes": [],
-        "memories": [],
+        "memories": [], "learned_facts": [],
         "preferences": {}, "query_counts": {},
         "created_at": datetime.now().isoformat(),
         "paid": False, "paid_until": None, "trial_days": 30,
@@ -379,7 +357,6 @@ def get_profile(user_id):
     })
 
 def save_profile(user_id, profile):
-    """Update in-memory cache and upsert to SQLite in one call."""
     user_profiles[user_id] = profile
     try:
         conn = sqlite3.connect(DB_FILE)
@@ -473,6 +450,84 @@ def extract_memory_fact(message):
     return msg[:120]
 
 
+# ── LLM LEARNING LOOP (v7.3) ──────────────────────────────────────────────────
+#
+# Called as a background daemon thread after every LLM response.
+# Uses Haiku to extract facts the user revealed in this conversation turn.
+# Writes structured facts to profile["learned_facts"] in SQLite.
+# These facts appear in build_system() context on the next conversation.
+# Cost: ~$0.00004 per call. Latency: 0ms to user (runs after response sent).
+# Replaces the fragile keyword counter (PREFERENCE_SIGNALS) for nuanced facts.
+# Both systems coexist -- keywords are a fast first pass, LLM catches everything else.
+
+def extract_learned_facts(user_id, user_message, herald_reply):
+    """
+    Async extraction of user facts from a conversation turn.
+    Called via threading.Thread(..., daemon=True).start() -- never blocks response.
+    """
+    try:
+        prompt = f"""Analyze this conversation turn. Extract facts the USER revealed about themselves.
+
+User said: "{user_message[:300]}"
+Herald replied: "{herald_reply[:200]}"
+
+Return ONLY valid JSON, no other text, no markdown fences:
+
+If facts were revealed:
+{{"learned": [{{"category": "music", "value": "loves jazz", "confidence": "high"}}]}}
+
+Categories: music, food, sports, health, location, family, work, hobby, routine, preference
+
+If nothing new was revealed:
+{{"learned": null}}
+
+Rules:
+- Only extract what the USER said, not what Herald said
+- high confidence = explicit statement (I love jazz), medium = implied
+- Max 3 facts per turn
+- Values must be under 40 characters"""
+
+        messages = [{"role": "user", "content": prompt}]
+        result = call_openrouter(messages, use_search=False)
+
+        clean = result.strip().replace("```json", "").replace("```", "").strip()
+        data  = json.loads(clean)
+        facts = data.get("learned")
+        if not facts:
+            return
+
+        profile = get_profile(user_id)
+        learned = profile.setdefault("learned_facts", [])
+
+        added = 0
+        for fact in facts:
+            cat  = fact.get("category", "").strip()
+            val  = fact.get("value", "").strip()
+            conf = fact.get("confidence", "medium")
+            if cat and val:
+                exists = any(
+                    f.get("category") == cat and f.get("value") == val
+                    for f in learned
+                )
+                if not exists:
+                    learned.append({
+                        "category":   cat,
+                        "value":      val,
+                        "confidence": conf,
+                        "learned_at": datetime.now().isoformat()
+                    })
+                    added += 1
+
+        profile["learned_facts"] = learned[-50:]
+        save_profile(user_id, profile)
+        if added:
+            new_vals = [f["value"] for f in learned[-added:]]
+            print(f"[HERALD] Learned {added} new fact(s) for {user_id}: {new_vals}")
+
+    except Exception as e:
+        print(f"[HERALD] extract_learned_facts (non-fatal): {e}")
+
+
 # ── PROFILE SUMMARY ───────────────────────────────────────────────────────────
 
 def build_preferences_summary(profile):
@@ -491,44 +546,81 @@ def build_preferences_summary(profile):
         if top_cats: lines.append(f"Most common requests: {', '.join(top_cats)}")
     return "\n".join(lines) if lines else ""
 
+
+# ── BUILD ABOUT ME (v7.3 -- LLM-powered) ──────────────────────────────────────
+#
+# Replaced string concatenation with an LLM call.
+# Passes the full profile as context. Herald writes a warm, natural summary.
+# Falls back to simple string version if LLM call fails.
+
 def build_about_me(profile):
-    name     = profile.get("name", "")
-    ai_name  = profile.get("ai_name", "Herald")
-    location = profile.get("location", "")
-    notes    = profile.get("notes", [])
-    memories = profile.get("memories", [])
-    prefs    = profile.get("preferences", {})
-    counts   = profile.get("query_counts", {})
-    created  = profile.get("created_at", "")
-    parts    = []
-    first_name = name if name else "friend"
-    parts.append(f"Here's everything I know about you, {first_name}.")
-    basics = []
-    if name:     basics.append(f"your name is {name}")
-    if location: basics.append(f"you're based in {location}")
-    if ai_name != "Herald": basics.append(f"you call me {ai_name}")
-    if basics: parts.append("The basics: " + ", ".join(basics) + ".")
-    food = {k:v for k,v in prefs.get("food",{}).items() if v >= 1}
-    if food: parts.append(f"Food: you love {', '.join(sorted(food,key=food.get,reverse=True)[:3])}.")
-    sports = {k:v for k,v in prefs.get("sports",{}).items() if v >= 1}
-    if sports: parts.append(f"Sports: you follow {', '.join(sorted(sports,key=sports.get,reverse=True)[:2])}.")
-    music = {k:v for k,v in prefs.get("music",{}).items() if v >= 1}
-    if music: parts.append(f"Music: you're into {', '.join(sorted(music,key=music.get,reverse=True)[:2])}.")
-    all_notes = list(dict.fromkeys((memories + notes)[-6:]))
-    if all_notes: parts.append(f"Things you've told me: {'; '.join(all_notes)}.")
-    if counts:
-        top_cats = [(c,n) for c,n in sorted(counts.items(),key=lambda x:-x[1])[:3] if n >= 2]
-        if top_cats: parts.append(f"You ask me about {', '.join(f'{c} ({n}x)' for c,n in top_cats)} most often.")
+    name          = profile.get("name", "")
+    ai_name       = profile.get("ai_name", "Herald")
+    location      = profile.get("location", "")
+    notes         = profile.get("notes", [])
+    memories      = profile.get("memories", [])
+    learned_facts = profile.get("learned_facts", [])
+    query_counts  = profile.get("query_counts", {})
+    created       = profile.get("created_at", "")
+
+    days_known = 0
     if created:
         try:
-            days = (datetime.now() - datetime.fromisoformat(created)).days
-            parts.append(f"We've known each other for {'1 day' if days == 1 else f'{days} days' if days > 0 else 'just today'}.")
-        except Exception: pass
-    if len(parts) <= 2:
-        parts.append("Honestly, I'm still getting to know you. The more we talk, the better I'll understand what matters to you.")
+            days_known = (datetime.now() - datetime.fromisoformat(created)).days
+        except Exception:
+            pass
+
+    all_notes = list(dict.fromkeys((memories + notes)[-10:]))
+    top_cats  = [c for c, n in sorted(query_counts.items(), key=lambda x: -x[1])[:3] if n >= 2]
+    facts_str = "; ".join([f"{f['value']} ({f['category']})" for f in learned_facts[-20:]]) \
+                if learned_facts else "none yet"
+
+    profile_context = (
+        f"Name: {name or 'not yet known'}\n"
+        f"Location: {location or 'not yet known'}\n"
+        f"Days we have known each other: {days_known}\n"
+        f"Things they have told me: {'; '.join(all_notes) if all_notes else 'none yet'}\n"
+        f"Facts learned from conversation: {facts_str}\n"
+        f"Most asked about: {', '.join(top_cats) if top_cats else 'not yet known'}"
+    )
+
+    prompt = [
+        {"role": "system", "content": (
+            f"You are {ai_name}, a warm personal AI companion. "
+            "The user asked what you know about them. "
+            "Write a natural, conversational 2 to 4 sentence response from memory. "
+            "No bullet points, no lists, no markdown, no asterisks. "
+            "Speak like a trusted friend who genuinely remembers things about this person. "
+            "Format all numbers in words for text-to-speech. "
+            f"{'Use their name once naturally.' if name else ''} "
+            "If you know very little yet, say so warmly and invite them to share more."
+        )},
+        {"role": "user", "content": f"Profile:\n{profile_context}\n\nWhat do you know about me?"}
+    ]
+
+    try:
+        result = call_openrouter(prompt, use_search=False)
+        if result and len(result) > 20:
+            return result
+    except Exception as e:
+        print(f"[HERALD] build_about_me LLM failed, using fallback: {e}")
+
+    # Fallback: simple string if LLM call fails
+    first_name = name if name else "friend"
+    parts = [f"Here is what I know so far, {first_name}."]
+    if location:
+        parts.append(f"You are based in {location}.")
+    if all_notes:
+        parts.append(f"You have mentioned: {'; '.join(all_notes[:3])}.")
+    if learned_facts:
+        vals = [f["value"] for f in learned_facts[-3:]]
+        parts.append(f"I have also picked up that {', '.join(vals)}.")
+    if not all_notes and not learned_facts:
+        parts.append("Honestly I am still getting to know you. The more we talk the better I understand what matters to you.")
     else:
-        parts.append("The more you share, the better I get.")
+        parts.append("The more you share the better I get.")
     return " ".join(parts)
+
 
 def get_trial_status(profile):
     if profile.get("paid"):
@@ -587,7 +679,7 @@ def fetch_empire():
 def fetch_live_empire():
     try:
         url = "http://143.198.18.66:8080/api/status"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/7.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/7.3"})
         with urllib.request.urlopen(req, timeout=8) as r:
             data = json.loads(r.read().decode())
         positions     = data.get("positions", [])
@@ -697,7 +789,7 @@ def geocode_reverse(lat, lng):
         url = (f"https://maps.googleapis.com/maps/api/geocode/json"
                f"?latlng={lat},{lng}&result_type=locality|administrative_area_level_1"
                f"&key={GEOCODING_KEY}")
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/7.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/7.3"})
         with urllib.request.urlopen(req, timeout=4) as r:
             data = json.loads(r.read().decode())
         if data.get("results"):
@@ -724,7 +816,7 @@ def fetch_brave_search(query, count=5):
         req = urllib.request.Request(url, headers={
             "Accept": "application/json",
             "X-Subscription-Token": BRAVE_KEY,
-            "User-Agent": "HeraldAI/7.0"
+            "User-Agent": "HeraldAI/7.3"
         })
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
@@ -759,7 +851,7 @@ def fetch_weather_direct(location):
     try:
         clean_loc = location.strip().replace(' ', '+')
         url = f"https://wttr.in/{clean_loc}?format=j1"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.3"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         cur  = data["current_condition"][0]
@@ -791,7 +883,7 @@ def fetch_weather_backup(location):
     try:
         encoded = urllib.parse.quote(location)
         url = f"https://api.weatherapi.com/v1/forecast.json?key={WEATHER_KEY}&q={encoded}&days=1&aqi=no"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.3"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         cur  = data["current"]
@@ -834,7 +926,7 @@ def fetch_sports_direct(msg_lower):
                 sport, league = val
                 break
         url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.3"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         events = data.get("events", [])
@@ -861,7 +953,7 @@ def fetch_crypto_direct():
     try:
         url = ("https://api.coingecko.com/api/v3/simple/price"
                "?ids=bitcoin,ethereum,solana&vs_currencies=usd&include_24hr_change=true")
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.3"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         parts = []
@@ -891,7 +983,7 @@ def fetch_news_direct(query=None):
             url = f"https://gnews.io/api/v4/search?q={encoded}&lang=en&max=5&token={GNEWS_KEY}"
         else:
             url = f"https://gnews.io/api/v4/top-headlines?lang=en&country=us&max=5&token={GNEWS_KEY}"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.3"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         articles = data.get("articles", [])
@@ -912,7 +1004,7 @@ def fetch_news_backup(query=None):
             url = f"https://newsdata.io/api/1/latest?apikey={NEWSDATA_KEY}&q={encoded}&language=en"
         else:
             url = f"https://newsdata.io/api/1/latest?apikey={NEWSDATA_KEY}&language=en&country=us"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.3"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         results = data.get("results", [])
@@ -930,12 +1022,12 @@ def fetch_movie_direct(query):
     try:
         encoded = urllib.parse.quote(query)
         url = f"https://www.omdbapi.com/?t={encoded}&apikey={OMDB_KEY}"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.3"})
         with urllib.request.urlopen(req, timeout=5) as r:
             d = json.loads(r.read().decode())
         if d.get("Response") == "False":
             url2 = f"https://www.omdbapi.com/?s={encoded}&apikey={OMDB_KEY}"
-            req2 = urllib.request.Request(url2, headers={"User-Agent": "HeraldAI/7.0"})
+            req2 = urllib.request.Request(url2, headers={"User-Agent": "HeraldAI/7.3"})
             with urllib.request.urlopen(req2, timeout=5) as r2:
                 d2 = json.loads(r2.read().decode())
             results = d2.get("Search", [])
@@ -1066,7 +1158,7 @@ def fetch_stock_direct(symbol):
     try:
         url = (f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE"
                f"&symbol={symbol.upper()}&apikey={ALPHA_KEY}")
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.0"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.3"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         q = data.get("Global Quote", {})
@@ -1113,9 +1205,19 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
     all_memory = list(dict.fromkeys((memories + notes)[-12:]))
     notes_line = ("What this user has told you (remember and use naturally): "
                   + "; ".join(all_memory)) if all_memory else ""
+
     prefs_summary = build_preferences_summary(profile)
     prefs_line = f"Preferences learned over time:\n{prefs_summary}" if prefs_summary else ""
-    context_parts = [p for p in [notes_line, prefs_line] if p]
+
+    # v7.3 -- LLM-extracted facts injected into every system prompt
+    learned_facts = profile.get("learned_facts", [])
+    facts_line = ""
+    if learned_facts:
+        recent    = learned_facts[-20:]
+        facts_str = "; ".join([f"{f['value']} ({f['category']})" for f in recent])
+        facts_line = f"Facts learned from conversation: {facts_str}"
+
+    context_parts = [p for p in [notes_line, prefs_line, facts_line] if p]
     context_block = "\n".join(context_parts) if context_parts else "Still learning about this user."
     empire_section = f"\n\n{empire}" if owner and empire else ""
 
@@ -1365,7 +1467,7 @@ def get_direct_reply(ctx):
         try:
             payload = json.dumps({"secret": WEBHOOK_SECRET}).encode("utf-8")
             req = urllib.request.Request(VM_WEBHOOK_URL, data=payload,
-                headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/7.0"},
+                headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/7.3"},
                 method="POST")
             with urllib.request.urlopen(req, timeout=35) as r:
                 result = json.loads(r.read().decode())
@@ -1477,21 +1579,13 @@ def _trial_fields(trial):
 
 # ═════════════════════════════════════════════════════════════════════════════
 # FASTAPI ROUTES
-# Replaces: class Handler(BaseHTTPRequestHandler) from v6.1
-#
-# Key differences from the old Handler:
-#   - Sync def routes run in FastAPI's thread pool (concurrent, not blocking)
-#   - Body parsed with await request.json() in the caller, passed as dict
-#   - JSONResponse() replaces self._json()
-#   - StreamingResponse() replaces direct self.wfile.write() for SSE
-#   - Response(content=audio) replaces self.wfile.write(audio) for TTS
-#   - CORS handled by CORSMiddleware (registered at top), not per-request headers
 # ═════════════════════════════════════════════════════════════════════════════
 
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "7.2",
+        "status": "ok", "server": "herald-api", "version": "7.3",
+        "learning_loop": "enabled (LLM extraction after every response)",
         "streaming": "enabled (/ask/stream)",
         "search": f"brave={'configured' if BRAVE_KEY else 'NOT SET'} | fallback=haiku:online",
         "cache": f"{len(_cache)} entries active",
@@ -1586,8 +1680,6 @@ async def auth(request: Request):
 
 @app.post("/ask")
 def ask(request: Request):
-    # NOTE: sync def -- FastAPI runs this in a thread pool.
-    # We need to call request.json() synchronously here.
     import asyncio
     data = asyncio.run(request.json())
 
@@ -1623,6 +1715,14 @@ def ask(request: Request):
         raw_reply = call_openrouter(messages, use_search=False)
 
     reply, action = parse_action(raw_reply)
+
+    # v7.3 -- fire learning extraction in background, never blocks response
+    threading.Thread(
+        target=extract_learned_facts,
+        args=(ctx["user_id"], message, reply),
+        daemon=True
+    ).start()
+
     trial = get_trial_status(profile)
     return {"reply": reply, "action": action,
             "ai_name": profile.get("ai_name", "Herald"),
@@ -1638,9 +1738,9 @@ async def ask_stream(request: Request):
     if err:
         return JSONResponse({"error": err}, status_code=400)
 
-    profile  = ctx["profile"]
-    messages = ctx["messages"]
-    message  = ctx["message"]
+    profile    = ctx["profile"]
+    messages   = ctx["messages"]
+    message    = ctx["message"]
     use_search = needs_web_search(message)
 
     trial = get_trial_status(profile)
@@ -1652,7 +1752,6 @@ async def ask_stream(request: Request):
     }
 
     def generate():
-        # About-me shortcut
         if is_about_me_query(message):
             reply = build_about_me(profile)
             yield f"data: {json.dumps({'t': reply})}\n\n"
@@ -1660,10 +1759,6 @@ async def ask_stream(request: Request):
             yield f"data: {json.dumps({**base_done, 'full': reply, 'action': None, 'used_search': False})}\n\n"
             return
 
-        # Direct data reply (weather, stocks, crypto, etc.)
-        # NOTE: these never hit the LLM -- they return immediately.
-        # The frontend detects these with isDataQuery() and calls /ask directly,
-        # so this path is a safety net only.
         direct_reply, _ = get_direct_reply(ctx)
         if direct_reply:
             reply, action = parse_action(direct_reply)
@@ -1672,11 +1767,6 @@ async def ask_stream(request: Request):
             yield f"data: {json.dumps({**base_done, 'full': reply, 'action': action, 'used_search': False})}\n\n"
             return
 
-        # ── LLM streaming with sentence markers ──────────────────────────────
-        # Yields [S] after each sentence boundary so the frontend can speak
-        # sentences as they arrive instead of waiting for the full response.
-        # Sentence boundary = punctuation (. ! ?) followed by a space character.
-        # Detected on the trailing 3 chars of the accumulator after each token.
         full_text    = ""
         sentence_buf = ""
 
@@ -1689,7 +1779,6 @@ async def ask_stream(request: Request):
                 if re.search(r'[.!?]\s', sentence_buf[-4:]):
                     yield f"data: {json.dumps({'t': '[S]'})}\n\n"
                     sentence_buf = ""
-            # Final sentence marker at end of stream
             if sentence_buf.strip():
                 yield f"data: {json.dumps({'t': '[S]'})}\n\n"
 
@@ -1711,12 +1800,18 @@ async def ask_stream(request: Request):
                 yield from stream_with_sentences(stream_from_openrouter(messages, use_search=False))
 
             reply, action = parse_action(full_text)
+
+            # v7.3 -- fire learning extraction in background, never blocks stream
+            threading.Thread(
+                target=extract_learned_facts,
+                args=(ctx["user_id"], message, reply),
+                daemon=True
+            ).start()
+
             yield f"data: {json.dumps({**base_done, 'full': reply, 'action': action, 'used_search': use_search})}\n\n"
 
         except Exception as e:
             print(f"[HERALD] /ask/stream error: {e}")
-            # Send whatever partial text we have before the error event.
-            # Frontend abort recovery will display it rather than re-requesting.
             if full_text.strip():
                 reply, action = parse_action(full_text)
                 yield f"data: {json.dumps({**base_done, 'full': reply, 'action': action, 'used_search': use_search, 'partial': True})}\n\n"
@@ -1883,7 +1978,7 @@ async def sync(request: Request):
     try:
         payload = json.dumps({"secret": WEBHOOK_SECRET}).encode("utf-8")
         req = urllib.request.Request(VM_WEBHOOK_URL, data=payload,
-            headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/7.1"},
+            headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/7.3"},
             method="POST")
         with urllib.request.urlopen(req, timeout=35) as r:
             result = json.loads(r.read().decode())
@@ -1900,10 +1995,10 @@ async def sync(request: Request):
 
 @app.on_event("startup")
 def startup():
-    init_db()          # create tables + migrate JSON data on first run
+    init_db()
     load_profiles()
     load_invites()
-    print(f"[HERALD API v7.1] FastAPI + uvicorn + SQLite persistence")
+    print(f"[HERALD API v7.3] FastAPI + uvicorn + SQLite + LLM learning loop")
     print(f"[HERALD API] OpenRouter:    {'YES' if OPENROUTER_KEY else 'MISSING -- required'}")
     print(f"[HERALD API] Brave Search:  {'YES' if BRAVE_KEY else 'NOT SET -- add BRAVE_SEARCH_KEY'}")
     print(f"[HERALD API] OpenAI TTS:    {'YES' if OPENAI_KEY else 'not set'}")
@@ -1917,6 +2012,7 @@ def startup():
     print(f"[HERALD API] Owner code:    {'SET' if OWNER_CODE else 'NOT SET'}")
     print(f"[HERALD API] Invite secret: {'SET' if INVITE_SECRET else 'NOT SET'}")
     print(f"[HERALD API] Webhook:       {'SET' if WEBHOOK_SECRET else 'NOT SET'}")
+    print(f"[HERALD API] Learning loop: ENABLED -- extract_learned_facts() fires after every LLM response")
 
 
 if __name__ == "__main__":
