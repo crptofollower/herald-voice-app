@@ -2529,7 +2529,7 @@ async def invite_create(request: Request):
     }
     invites[code] = invite
     _save_invite(code, invite)
-    base_url = data.get("base_url", "https://crptofollower.github.io/herald-voice-app/herald.html")
+    base_url = data.get("base_url", "https://crptofollower.github.io/herald-voice-app/index.html")
     return {"ok": True, "code": code, "label": label,
             "link": f"{base_url}?invite={code}"}
 
