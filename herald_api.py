@@ -673,7 +673,14 @@ def _build_watcher_context(profile: dict) -> str:
     if pending:
         try:
             offer = json.loads(pending) if isinstance(pending, str) else pending
-            if offer.get("type") == "explicit_confirm":
+            if offer.get("type") == "email_needed":
+                desc = offer.get("description", "that")
+                lines.append(
+                    f"INSTRUCTION: User just set a watch for '{desc}' but has no email on file. "
+                    f"Confirm the watch then ask for their email in one natural sentence. "
+                    f"Example: 'Got it, I will watch {desc} for you. What email should I send alerts to?'"
+                )
+            elif offer.get("type") == "explicit_confirm":
                 desc = offer.get("description", "that")
                 lines.append(
                     f"INSTRUCTION: User just set a watch for '{desc}'. "
@@ -1141,10 +1148,16 @@ def _run_watcher_pipeline(message: str, profile: dict, user_id: str):
             watch_data = extract_explicit_watch(message)
             if watch_data:
                 profile = store_watch(profile, watch_data)
-                pending_offer = json.dumps({
-                    "type": "explicit_confirm",
-                    "description": watch_data.get("description", "that"),
-                })
+                if profile.get("email"):
+                    pending_offer = json.dumps({
+                        "type": "explicit_confirm",
+                        "description": watch_data.get("description", "that"),
+                    })
+                else:
+                    pending_offer = json.dumps({
+                        "type": "email_needed",
+                        "description": watch_data.get("description", "that"),
+                    })
                 changed = True
                 print(f"[HERALD] Explicit watch stored: {watch_data.get('description')}")
 
@@ -2237,6 +2250,11 @@ def build_ask_context(data):
                 profile.setdefault("notes", []).append(note)
                 if len(profile["notes"]) > 20: profile["notes"] = profile["notes"][-20:]
         except Exception: pass
+    email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', message)
+    if email_match:
+        profile["email"] = email_match.group(0).lower()
+        print(f"[HERALD] Email saved for {user_id}: {profile['email']}")
+
     if "call you" in msg_lower or "your name is" in msg_lower:
         try:
             key = "call you" if "call you" in msg_lower else "your name is"
