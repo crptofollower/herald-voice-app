@@ -1,8 +1,8 @@
 // Herald Service Worker v3.0
-const CACHE_NAME = 'herald-v3';
+const CACHE_NAME = 'herald-v4';
 const ASSETS = [
   './',
-  './herald.html',
+  './index.html',
   './manifest.json',
   './herald_icon_192.png',
   './herald_icon_512.png',
