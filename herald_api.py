@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald PWA Backend -- Railway Cloud Server
-# v7.4 -- Watcher system + intelligent model routing
+# v7.5 -- Watcher system + intelligent model routing
 #
 # WHAT CHANGED vs v7.3:
 #   - Added:   route_model() -- Haiku for fast/factual, Sonnet for judgment/advice
@@ -30,7 +30,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="7.4")
+app = FastAPI(title="Herald API", version="7.5")
 
 app.add_middleware(
     CORSMiddleware,
@@ -848,7 +848,282 @@ def send_watch_email(profile: dict, watch_data: dict, content: str) -> bool:
     except Exception as e:
         print(f"[HERALD] SendGrid error: {e}")
         return False
+# ── WATCHER CRON HELPERS (v7.5) ───────────────────────────────────────────────
 
+def fetch_espn_scores(league: str) -> list:
+    sport_map = {
+        'nba': ('basketball', 'nba'),
+        'nfl': ('football', 'nfl'),
+        'mlb': ('baseball', 'mlb'),
+        'nhl': ('hockey', 'nhl'),
+    }
+    sport, league_slug = sport_map.get(league.lower(), ('basketball', 'nba'))
+    try:
+        url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league_slug}/scoreboard"
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.5"})
+        with urllib.request.urlopen(req, timeout=6) as r:
+            data = json.loads(r.read().decode())
+        games = []
+        for event in data.get("events", []):
+            comp = event.get("competitions", [{}])[0]
+            competitors = comp.get("competitors", [])
+            status = event.get("status", {}).get("type", {})
+            if len(competitors) < 2:
+                continue
+            t1 = competitors[0]
+            t2 = competitors[1]
+            games.append({
+                "home_team":  t1["team"]["displayName"],
+                "away_team":  t2["team"]["displayName"],
+                "home_score": t1.get("score", "0"),
+                "away_score": t2.get("score", "0"),
+                "status":     status.get("description", ""),
+                "completed":  status.get("completed", False),
+            })
+        return games
+    except Exception as e:
+        print(f"[HERALD] fetch_espn_scores({league}) failed: {e}")
+        return []
+
+def fetch_crypto_prices_batch() -> dict:
+    try:
+        url = ("https://api.coingecko.com/api/v3/simple/price"
+               "?ids=bitcoin,ethereum,solana&vs_currencies=usd")
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.5"})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            data = json.loads(r.read().decode())
+        return {
+            "BTC": data.get("bitcoin", {}).get("usd", 0),
+            "ETH": data.get("ethereum", {}).get("usd", 0),
+            "SOL": data.get("solana", {}).get("usd", 0),
+        }
+    except Exception as e:
+        print(f"[HERALD] fetch_crypto_prices_batch failed: {e}")
+        return {}
+
+def _hours_since(iso_str) -> float:
+    if not iso_str:
+        return 9999
+    try:
+        then = datetime.fromisoformat(iso_str)
+        return (datetime.utcnow() - then).total_seconds() / 3600
+    except Exception:
+        return 9999
+
+def check_sports_watch(watch: dict, scores_cache: dict):
+    params = watch.get("params", {})
+    team   = params.get("team", "").lower()
+    league = params.get("league", "NBA").lower()
+    if _hours_since(watch.get("last_triggered")) < 12:
+        return None
+    if league not in scores_cache:
+        scores_cache[league] = fetch_espn_scores(league)
+    for game in scores_cache[league]:
+        home = game["home_team"].lower()
+        away = game["away_team"].lower()
+        if not (team in home or team in away):
+            continue
+        if not game.get("completed"):
+            continue
+        h = int(game["home_score"] or 0)
+        a = int(game["away_score"] or 0)
+        winner = game["home_team"] if h > a else game["away_team"]
+        loser  = game["away_team"] if h > a else game["home_team"]
+        w_score = max(h, a)
+        l_score = min(h, a)
+        return f"Final: {winner} {w_score}, {loser} {l_score}."
+    return None
+
+def check_crypto_watch(watch: dict, prices: dict):
+    params    = watch.get("params", {})
+    symbol    = params.get("symbol", "BTC").upper()
+    condition = params.get("condition", "")
+    threshold = params.get("threshold", 0)
+    if not condition or not threshold:
+        return None
+    if _hours_since(watch.get("last_triggered")) < 4:
+        return None
+    price = prices.get(symbol, 0)
+    if not price:
+        return None
+    if condition == "below" and price < threshold:
+        return f"{symbol} dropped below {threshold:,.0f} dollars. Now at {price:,.0f} dollars."
+    if condition == "above" and price > threshold:
+        return f"{symbol} crossed above {threshold:,.0f} dollars. Now at {price:,.0f} dollars."
+    return None
+
+def check_stock_watch(watch: dict, stock_cache: dict):
+    params    = watch.get("params", {})
+    symbol    = params.get("symbol", "").upper()
+    condition = params.get("condition", "")
+    threshold = params.get("threshold", 0)
+    if not symbol or not condition or not threshold:
+        return None
+    if _hours_since(watch.get("last_triggered")) < 4:
+        return None
+    if symbol not in stock_cache:
+        stock_cache[symbol] = fetch_yahoo_stock(symbol)
+    raw = stock_cache.get(symbol)
+    if not raw:
+        return None
+    try:
+        price_match = re.search(r'trading at ([\d,]+) dollars', raw)
+        if not price_match:
+            return None
+        price = float(price_match.group(1).replace(",", ""))
+        if condition == "below" and price < threshold:
+            return f"{symbol} is below {threshold:,.0f} dollars. Now at {price:,.0f} dollars."
+        if condition == "above" and price > threshold:
+            return f"{symbol} crossed {threshold:,.0f} dollars. Now at {price:,.0f} dollars."
+    except Exception:
+        pass
+    return None
+
+def check_news_watch(watch: dict):
+    if _hours_since(watch.get("last_triggered")) < 2:
+        return None
+    params = watch.get("params", {})
+    topic  = params.get("topic", watch.get("description", ""))
+    if not topic:
+        return None
+    result = fetch_news_direct(topic)
+    if result and "top stories" in result.lower():
+        first = result.split(". Next,")[0].replace("Here are the top stories right now: ", "")
+        return f"New on {topic}: {first}."
+    return None
+
+def send_alert_email(profile: dict, watch: dict, alert_msg: str) -> bool:
+    email = profile.get("email", "")
+    if not email or not SENDGRID_KEY:
+        return False
+    name  = profile.get("name", "there")
+    topic = watch.get("description", "your watch")
+    html  = (
+        f'<div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;padding:32px 24px;background:#fafafa;">'
+        f'<div style="border-left:3px solid #1A9B8A;padding-left:16px;margin-bottom:24px;">'
+        f'<p style="margin:0;color:#1A9B8A;font-size:12px;letter-spacing:0.1em;text-transform:uppercase;">Herald Watch Alert</p>'
+        f'<h2 style="margin:8px 0 0;color:#1a1a1a;font-size:20px;">{topic}</h2>'
+        f'</div>'
+        f'<p style="color:#333;line-height:1.8;font-size:16px;">Hey {name} — {alert_msg}</p>'
+        f'<div style="margin-top:32px;padding-top:16px;border-top:1px solid #e5e5e5;">'
+        f'<p style="color:#999;font-size:12px;margin:0;">Sent by Herald &middot; herald@apexempire.ai</p>'
+        f'</div></div>'
+    )
+    payload = json.dumps({
+        "personalizations": [{"to": [{"email": email, "name": name}]}],
+        "from": {"email": "herald@apexempire.ai", "name": "Herald"},
+        "subject": f"Herald: Update on {topic}",
+        "content": [{"type": "text/html", "value": html}]
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.sendgrid.com/v3/mail/send",
+        data=payload,
+        headers={"Content-Type": "application/json",
+                 "Authorization": f"Bearer {SENDGRID_KEY}"},
+        method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            print(f"[HERALD] Alert email -> {email} | {topic} | {resp.status}")
+            return True
+    except Exception as e:
+        print(f"[HERALD] Alert email failed: {e}")
+        return False
+
+
+@app.post("/cron/watchers")
+async def cron_watchers(request: Request):
+    """
+    Called every 30 min by VM crontab.
+    Checks all active watches across all users.
+    Batch fetches data -- API calls don't multiply with users.
+    """
+    data   = await request.json()
+    secret = data.get("secret", "")
+    if not WEBHOOK_SECRET or secret != WEBHOOK_SECRET:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+    triggered_count = 0
+    checked_count   = 0
+    now_iso         = datetime.utcnow().isoformat()
+
+    # Data caches -- populated on first use, shared across all users this run
+    scores_cache = {}   # {league: [game dicts]}
+    crypto_cache = {}   # {symbol: price} -- populated once
+    stock_cache  = {}   # {symbol: spoken string}
+
+    # Load all profiles from SQLite in one query
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("SELECT user_id, data FROM profiles")
+        rows = c.fetchall()
+        conn.close()
+    except Exception as e:
+        return JSONResponse({"error": f"db error: {e}"}, status_code=500)
+
+    for user_id, raw_data in rows:
+        try:
+            profile = json.loads(raw_data)
+        except Exception:
+            continue
+
+        watches = [w for w in profile.get("watches", []) if w.get("active")]
+        if not watches:
+            continue
+
+        email = profile.get("email", "")
+        if not email:
+            continue  # no delivery method -- skip for now
+
+        watches_changed = False
+
+        for watch in watches:
+            checked_count += 1
+            watch_type    = watch.get("type", "other")
+            trigger_msg   = None
+
+            try:
+                if watch_type == "sports":
+                    # Lazy-load crypto prices once
+                    trigger_msg = check_sports_watch(watch, scores_cache)
+
+                elif watch_type == "crypto":
+                    if not crypto_cache:
+                        crypto_cache.update(fetch_crypto_prices_batch())
+                    trigger_msg = check_crypto_watch(watch, crypto_cache)
+
+                elif watch_type == "stock":
+                    trigger_msg = check_stock_watch(watch, stock_cache)
+
+                elif watch_type == "news":
+                    trigger_msg = check_news_watch(watch)
+
+                # Update last_checked always
+                watch["last_checked"] = now_iso
+                watches_changed = True
+
+                if trigger_msg:
+                    sent = send_alert_email(profile, watch, trigger_msg)
+                    if sent:
+                        watch["last_triggered"] = now_iso
+                        triggered_count += 1
+                        print(f"[HERALD] Watch triggered: {user_id} | {watch.get('description')} | {trigger_msg[:60]}")
+
+            except Exception as e:
+                print(f"[HERALD] Watch check error ({user_id} / {watch.get('description')}): {e}")
+
+        if watches_changed:
+            profile["watches"] = watches
+            save_profile(user_id, profile)
+
+    print(f"[HERALD] /cron/watchers complete: {checked_count} watches checked, {triggered_count} triggered")
+    return {
+        "ok": True,
+        "checked": checked_count,
+        "triggered": triggered_count,
+        "ran_at": now_iso,
+    }
 def _run_watcher_pipeline(message: str, profile: dict, user_id: str):
     """
     Full watcher pipeline. Runs in background daemon thread -- never blocks response.
@@ -2112,7 +2387,8 @@ def _trial_fields(trial):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "7.4",
+        "status": "ok", "server": "herald-api", "version": "7.5",
+"watcher_cron": "enabled (/cron/watchers -- call every 30min with WEBHOOK_SECRET)",
         "learning_loop": "enabled (LLM extraction after every response)",
         "watcher_system": "enabled (explicit + implicit + travel/task/research intent)",
         "model_routing": f"Haiku default / Sonnet for judgment ({HAIKU_MODEL} / {SONNET_MODEL})",
@@ -2578,7 +2854,7 @@ def startup():
     init_db()
     load_profiles()
     load_invites()
-    print(f"[HERALD API v7.4] FastAPI + uvicorn + SQLite + LLM learning loop + Watcher system")
+    print(f"[HERALD API v7.5] FastAPI + uvicorn + SQLite + LLM learning loop + Watcher cron")
     print(f"[HERALD API] OpenRouter:    {'YES' if OPENROUTER_KEY else 'MISSING -- required'}")
     print(f"[HERALD API] Model routing: Haiku ({HAIKU_MODEL}) / Sonnet ({SONNET_MODEL})")
     print(f"[HERALD API] Brave Search:  {'YES' if BRAVE_KEY else 'NOT SET -- add BRAVE_SEARCH_KEY'}")
