@@ -1,15 +1,15 @@
 <!DOCTYPE html>
-<!-- saved from url=(0060)https://crptofollower.github.io/herald-voice-app/herald.html -->
-<html lang="en" data-theme="dark"><script src="chrome-extension://dlcobpjiigpikoobohmabehhmhfoodbb/inpage.js" id="argent-x-extension" data-extension-id="dlcobpjiigpikoobohmabehhmhfoodbb"></script><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
-  
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <link rel="apple-touch-icon" href="https://crptofollower.github.io/herald-voice-app/herald_icon_180.png">
-  <link rel="manifest" href="https://crptofollower.github.io/herald-voice-app/manifest.json">
+  <link rel="apple-touch-icon" href="herald_icon_180.png">
+  <link rel="manifest" href="manifest.json">
   <title>HERALD — Personal AI</title>
-  <link href="./index_files/css2" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=DM+Serif+Display:ital@0;1&display=swap" rel="stylesheet">
   <style>
     :root {
       --emerald:#1A9B8A;--teal:#3ECFBA;--sand-2:#FDFAF4;--deep-2:#0a1e2e;--deep-3:#0e2a3d;
@@ -30,14 +30,20 @@
     .setup-btn{width:100%;max-width:340px;padding:15px;background:var(--emerald);color:white;font-family:'DM Sans',sans-serif;font-size:13px;font-weight:500;letter-spacing:0.1em;border:none;border-radius:12px;cursor:pointer;}
     .setup-error{font-size:12px;color:#e05a5a;margin-top:12px;min-height:16px;font-weight:300;}
     .setup-note{font-size:11px;color:var(--txt2);margin-top:20px;line-height:1.7;max-width:300px;font-weight:300;opacity:0.7;}
-    .setup-features{width:100%;max-width:340px;margin-bottom:24px;display:flex;flex-direction:column;gap:8px;}
-    .setup-feat{font-size:12px;color:var(--txt2);font-weight:300;text-align:left;padding:8px 14px;background:var(--bg2);border:0.5px solid var(--bdr);border-radius:10px;line-height:1.5;}
-    .onboard{position:fixed;inset:0;z-index:90;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 32px;text-align:center;}
-    .onboard-msg{font-size:20px;color:var(--txt);line-height:1.7;max-width:320px;margin-bottom:32px;font-weight:300;font-style:italic;}
+    .onboard{position:fixed;inset:0;z-index:90;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 28px;text-align:center;overflow-y:auto;}
+    .onboard-msg{font-size:20px;color:var(--txt);line-height:1.7;max-width:320px;margin-bottom:8px;font-weight:300;font-style:italic;}
+    .onboard-sub{font-size:12px;color:var(--txt2);line-height:1.6;max-width:300px;margin-bottom:24px;font-weight:300;min-height:18px;}
     .onboard-input{width:100%;max-width:320px;background:var(--bg2);border:1px solid var(--bdr);border-radius:12px;padding:14px 18px;color:var(--txt);font-family:'DM Sans',sans-serif;font-size:16px;outline:none;margin-bottom:12px;}
     .onboard-input:focus{border-color:var(--emerald);}
+    .onboard-options{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;max-width:340px;margin-bottom:20px;}
+    .onboard-opt{padding:11px 20px;border:1px solid var(--bdr);border-radius:24px;background:var(--bg2);color:var(--txt);font-family:'DM Sans',sans-serif;font-size:13px;cursor:pointer;transition:all 0.15s;}
+    .onboard-opt.selected{background:var(--emerald);color:white;border-color:var(--emerald);}
     .onboard-btn{width:100%;max-width:320px;padding:14px;background:var(--emerald);color:white;font-family:'DM Sans',sans-serif;font-size:13px;font-weight:500;letter-spacing:0.1em;border:none;border-radius:12px;cursor:pointer;}
     .onboard-skip{font-size:11px;color:var(--txt2);margin-top:14px;cursor:pointer;text-decoration:underline;opacity:0.6;}
+    .onboard-dots{display:flex;gap:6px;margin-bottom:28px;}
+    .onboard-dot{width:6px;height:6px;border-radius:50%;background:var(--bdr);transition:background 0.2s;}
+    .onboard-dot.active{background:var(--emerald);}
+    .onboard-dot.done{background:var(--emerald);opacity:0.4;}
     .app{height:100%;height:100dvh;display:flex;flex-direction:column;max-width:680px;margin:0 auto;}
     .header{flex-shrink:0;padding:12px 20px 10px;border-bottom:0.5px solid var(--bdr);background:var(--bg);display:flex;align-items:center;gap:12px;}
     .h-icon{width:32px;height:32px;border-radius:9px;background:var(--emerald);display:flex;align-items:center;justify-content:center;font-family:'DM Serif Display',serif;font-size:17px;color:white;flex-shrink:0;}
@@ -52,27 +58,30 @@
     .dot-live{width:6px;height:6px;border-radius:50%;background:var(--emerald);animation:pulse 2.5s infinite;transition:background 0.4s;}
     .dot-live.cold{background:#c8a84b;animation:pulse 0.8s infinite;}
     @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
-    .messages{flex:1;overflow-y:auto;padding:16px 20px 8px;display:flex;flex-direction:column;gap:14px;-webkit-overflow-scrolling:touch;}
+    .messages{flex:1;overflow-y:auto;padding:20px 20px 8px;display:flex;flex-direction:column;gap:18px;-webkit-overflow-scrolling:touch;}
     .messages::-webkit-scrollbar{display:none;}
-    .msg{display:flex;flex-direction:column;gap:3px;animation:fadeIn 0.2s ease;}
-    .msg.user{align-items:flex-end;}.msg.herald{align-items:flex-start;}
+    .msg{display:flex;flex-direction:column;gap:4px;animation:fadeIn 0.25s ease;}
+    .msg.user{align-items:flex-end;}
+    .msg.herald{align-items:flex-start;width:100%;}
     .msg-label{font-size:9px;letter-spacing:0.14em;text-transform:uppercase;color:var(--txt2);padding:0 4px;font-weight:300;}
-    .msg.herald .msg-label{color:var(--emerald);opacity:0.7;}
-    .msg-bubble{max-width:82%;padding:10px 14px;font-size:15px;line-height:1.6;border-radius:16px;font-weight:300;}
-    .msg.user .msg-bubble{background:var(--emerald);color:white;border-bottom-right-radius:4px;}
-    .msg.herald .msg-bubble{background:var(--card);border:0.5px solid var(--bdr);color:var(--txt);border-bottom-left-radius:4px;}
+    .msg.herald .msg-label{color:var(--emerald);opacity:0.6;}
+    .msg.user .msg-bubble{max-width:78%;padding:10px 14px;font-size:14px;line-height:1.6;border-radius:16px;border-bottom-right-radius:4px;font-weight:400;background:var(--emerald);color:white;}
+    .msg.herald .msg-bubble{background:transparent;border:none;padding:2px 0;color:var(--txt);font-size:15px;line-height:1.7;font-weight:300;width:100%;max-width:100%;letter-spacing:0.01em;}
     @keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
-    .action-chip{display:inline-flex;align-items:center;gap:6px;margin-top:6px;padding:8px 16px;background:var(--emerald);color:white;border-radius:20px;font-size:12px;font-weight:500;cursor:pointer;text-decoration:none;border:none;transition:opacity 0.15s;}
-    .action-chip:active{opacity:0.75;}
-    .action-chip.phone{background:var(--bg2);color:var(--emerald);border:0.5px solid var(--emerald);}
-    .action-chip.music{background:#e52d27;color:white;}
-    .action-chip.radio{background:#0082ca;color:white;}
-    .action-chip.calendar{background:#4285f4;color:white;}
-    .action-chip.alarm{background:#34a853;color:white;}
-    .search-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;}
-    .search-chips .action-chip{font-size:11px;padding:6px 12px;margin-top:0;}
-    .thinking{display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--card);border:0.5px solid var(--bdr);border-radius:16px;border-bottom-left-radius:4px;}
-    .thinking-label{font-size:11px;color:var(--txt2);font-weight:300;}
+    .stream-cursor{display:inline-block;width:2px;height:14px;background:var(--emerald);margin-left:2px;animation:blink 0.8s infinite;vertical-align:middle;}
+    @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+    .action-card{display:flex;align-items:center;gap:14px;margin-top:14px;padding:13px 16px;background:var(--bg2);border:0.5px solid var(--bdr);border-radius:16px;cursor:pointer;text-decoration:none;transition:transform 0.12s,opacity 0.12s;width:100%;max-width:300px;-webkit-tap-highlight-color:transparent;box-shadow:0 1px 8px rgba(0,0,0,0.12);}
+    .action-card:active{transform:scale(0.97);opacity:0.8;}
+    .action-card-icon{width:42px;height:42px;border-radius:11px;display:flex;align-items:center;justify-content:center;font-size:21px;flex-shrink:0;}
+    .action-card-body{flex:1;min-width:0;}
+    .action-card-title{font-size:13px;font-weight:500;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .action-card-sub{font-size:11px;color:var(--txt2);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+    .action-card-arrow{font-size:18px;color:var(--txt2);flex-shrink:0;opacity:0.5;font-weight:300;}
+    .search-cards{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;}
+    .search-card{display:inline-flex;align-items:center;gap:6px;padding:9px 14px;border-radius:12px;font-size:12px;font-weight:500;color:white;cursor:pointer;text-decoration:none;border:none;transition:opacity 0.12s;}
+    .search-card:active{opacity:0.75;}
+    .thinking{display:flex;align-items:center;gap:8px;padding:6px 0;}
+    .thinking-label{font-size:11px;color:var(--txt2);font-weight:300;font-style:italic;}
     .dots{display:flex;gap:3px;}
     .dots span{width:4px;height:4px;border-radius:50%;background:var(--emerald);opacity:0.6;animation:bounce 1.2s infinite;}
     .dots span:nth-child(2){animation-delay:0.2s;}.dots span:nth-child(3){animation-delay:0.4s;}
@@ -82,22 +91,23 @@
     .welcome-title{font-family:'DM Serif Display',serif;font-size:15px;color:var(--emerald);letter-spacing:0.12em;margin-bottom:8px;}
     .welcome-text{font-size:13px;color:var(--txt2);line-height:1.7;margin-bottom:24px;font-weight:300;font-style:italic;}
     .quick-cmds{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;}
-    .q-btn{padding:7px 14px;border:0.5px solid var(--bdr);border-radius:20px;font-size:11px;color:var(--chip-txt);cursor:pointer;background:var(--chip-bg);font-family:'DM Sans',sans-serif;font-weight:400;}
+    .q-btn{padding:7px 14px;border:0.5px solid var(--bdr);border-radius:20px;font-size:11px;color:var(--chip-txt);cursor:pointer;background:var(--chip-bg);font-family:'DM Sans',sans-serif;}
     .chips{display:flex;gap:8px;padding:0 20px 12px;justify-content:center;flex-wrap:wrap;}
     .chip{background:var(--chip-bg);border:0.5px solid var(--bdr);border-radius:20px;padding:7px 14px;font-size:11px;color:var(--chip-txt);cursor:pointer;font-weight:400;white-space:nowrap;}
     .mic-zone{flex-shrink:0;padding:10px 20px 16px;border-top:0.5px solid var(--bdr);background:var(--bg);display:flex;flex-direction:column;align-items:stretch;gap:8px;}
-    .mic-zone .text-input{width:100%;max-height:80px;min-height:40px;}
     .mic-row{display:flex;align-items:center;gap:14px;justify-content:center;}
     .mic-btn{width:64px;height:64px;border-radius:50%;background:var(--emerald);border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
     .mic-btn svg{width:26px;height:26px;}
-    .mic-btn.on{background:var(--teal);box-shadow:0 0 0 8px rgba(62,207,186,0.15);animation:micpulse 1.5s infinite;}
+    .mic-btn.on{background:var(--teal);animation:micpulse 1.5s infinite;}
+    .mic-btn.wake{background:#c8a84b;animation:micpulse 1.5s infinite;}
     @keyframes micpulse{0%,100%{box-shadow:0 0 0 6px rgba(62,207,186,0.12)}50%{box-shadow:0 0 0 14px rgba(62,207,186,0.04)}}
-    .text-input{background:var(--bg2);border:0.5px solid var(--bdr);border-radius:20px;padding:10px 16px;color:var(--txt);font-family:'DM Sans',sans-serif;font-size:14px;line-height:1.4;resize:none;outline:none;}
+    .text-input{background:var(--bg2);border:0.5px solid var(--bdr);border-radius:20px;padding:10px 16px;color:var(--txt);font-family:'DM Sans',sans-serif;font-size:14px;line-height:1.4;resize:none;outline:none;width:100%;max-height:160px;min-height:40px;}
     .text-input:focus{border-color:var(--emerald);}
     .text-input::placeholder{color:var(--txt2);opacity:0.6;font-style:italic;}
     .send-btn{width:40px;height:40px;border-radius:50%;border:0.5px solid var(--bdr);background:var(--bg2);color:var(--emerald);cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
     .send-btn svg{width:16px;height:16px;}
-    .voice-hint{font-size:10px;color:var(--txt2);text-align:center;min-height:14px;font-weight:300;letter-spacing:0.06em;}
+    .voice-hint{font-size:10px;color:var(--txt2);text-align:center;min-height:14px;font-weight:300;letter-spacing:0.06em;cursor:pointer;padding:4px 0;}
+    .voice-hint.wake-active{color:var(--teal);}
     .footer{text-align:center;padding:4px 20px 6px;font-size:9px;color:var(--txt2);font-weight:300;opacity:0.5;flex-shrink:0;}
     .trial-wall{position:fixed;inset:0;z-index:300;background:rgba(10,30,46,0.97);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 32px;text-align:center;animation:fadeIn 0.4s ease;}
     .trial-icon{width:64px;height:64px;border-radius:18px;background:var(--emerald);display:flex;align-items:center;justify-content:center;font-family:'DM Serif Display',serif;font-size:32px;color:white;margin:0 auto 24px;}
@@ -105,356 +115,818 @@
     .trial-btn{width:100%;max-width:320px;padding:16px;background:var(--emerald);color:white;border:none;border-radius:12px;font-family:'DM Sans',sans-serif;font-size:14px;font-weight:500;cursor:pointer;margin-bottom:10px;letter-spacing:0.05em;}
     .trial-secondary{font-size:12px;color:var(--txt2);max-width:300px;line-height:1.6;font-weight:300;margin-top:8px;}
     .trial-warning{background:rgba(26,155,138,0.12);border-top:0.5px solid rgba(26,155,138,0.3);padding:10px 20px;text-align:center;font-size:12px;color:#3ECFBA;flex-shrink:0;cursor:pointer;}
-    .install-banner{position:fixed;bottom:0;left:0;right:0;z-index:200;background:var(--bg2);border-top:0.5px solid var(--bdr);padding:14px 20px 20px;display:flex;flex-direction:column;gap:10px;animation:slideUp 0.3s ease;max-width:680px;margin:0 auto;}
+    .web-panel-backdrop{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,0.72);backdrop-filter:blur(6px);animation:fadeIn 0.2s ease;}
+    .web-panel{position:fixed;bottom:0;left:0;right:0;z-index:201;background:var(--bg2);border-radius:24px 24px 0 0;border-top:0.5px solid var(--bdr);display:flex;flex-direction:column;animation:slideUp 0.28s ease;max-width:680px;margin:0 auto;}
     @keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
-    .install-banner-title{font-size:13px;font-weight:500;color:var(--txt);}
-    .install-banner-text,.install-banner-steps{font-size:12px;color:var(--txt2);line-height:1.8;font-weight:300;}
-    .install-banner-steps span{color:var(--emerald);font-weight:500;}
-    .install-banner-row{display:flex;gap:10px;align-items:center;}
-    .install-btn{flex:1;padding:11px;background:var(--emerald);color:white;border:none;border-radius:10px;font-family:'DM Sans',sans-serif;font-size:13px;font-weight:500;cursor:pointer;}
-    .install-dismiss{padding:11px 16px;background:transparent;color:var(--txt2);border:0.5px solid var(--bdr);border-radius:10px;font-family:'DM Sans',sans-serif;font-size:12px;cursor:pointer;white-space:nowrap;}
+    .web-panel-handle{width:36px;height:4px;background:var(--bdr);border-radius:2px;margin:12px auto 0;flex-shrink:0;}
+    .web-panel-header{display:flex;align-items:center;justify-content:space-between;padding:14px 20px 10px;flex-shrink:0;}
+    .web-panel-title{font-size:11px;color:var(--emerald);letter-spacing:0.14em;text-transform:uppercase;font-weight:500;}
+    .web-panel-close{width:28px;height:28px;border-radius:50%;border:0.5px solid var(--bdr);background:transparent;color:var(--txt2);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:16px;line-height:1;}
+    .web-panel-body{padding:0 20px 0;flex-shrink:0;display:flex;flex-direction:column;}
+    .web-panel-scroll{max-height:110px;overflow-y:auto;padding-bottom:12px;}
+    .web-panel-answer{font-size:12px;color:var(--txt);line-height:1.6;font-weight:300;padding:0 0 12px;}
+    .web-panel-divider{height:0.5px;background:var(--bdr);margin-bottom:14px;}
+    .web-panel-open-label{font-size:10px;color:var(--txt2);letter-spacing:0.1em;text-transform:uppercase;margin-bottom:10px;}
+    .web-panel-chips{display:flex;gap:8px;flex-wrap:wrap;padding-bottom:32px;}
+    .web-panel-chip{padding:8px 14px;border-radius:20px;font-size:11px;font-weight:500;color:white;cursor:pointer;text-decoration:none;border:none;display:inline-flex;align-items:center;gap:6px;}
+    .web-panel-chip:active{opacity:0.75;}
   </style>
 </head>
-<body>
-<div class="setup" id="setup">
+<body data-theme="dark">
+
+<div class="setup" id="setupScreen">
   <div class="setup-icon">H</div>
   <div class="setup-title">HERALD</div>
-  <div class="setup-sub">Herald learns what matters to you. Your AI, your data — just between you and me.</div>
-  <div class="setup-features">
-    <div class="setup-feat">🌐 Live web search on every answer</div>
-    <div class="setup-feat">🎤 Talks back — just like Alexa</div>
-    <div class="setup-feat">⚡ Remembers your name, city and preferences</div>
-  </div>
-  <input class="setup-input" type="text" id="codeInput" placeholder="Enter your access code..." autocomplete="off" autocapitalize="none">
-  <button class="setup-btn" onclick="activate()">GET STARTED</button>
+  <div class="setup-sub">Your personal AI — always on, always ready.</div>
+  <input class="setup-input" id="codeInput" type="text" placeholder="Enter your access code..."
+    autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false"
+    onkeydown="if(event.key==='Enter')submitCode()"/>
+  <button class="setup-btn" onclick="submitCode()">GET STARTED</button>
   <div class="setup-error" id="setupError"></div>
-  <div class="setup-note">You will only need this code once. Herald remembers you after that.</div>
+  <div class="setup-note">Herald works on any device with a browser.<br>Add to Home Screen for the full app experience.</div>
 </div>
-<div class="onboard" id="onboard" style="display:none">
-  <div class="setup-icon">H</div>
-  <div class="onboard-msg" id="onboardMsg">Hi, I am Herald. What should I call you?</div>
-  <input class="onboard-input" type="text" id="onboardInput" placeholder="Your first name..." autocomplete="off">
-  <button class="onboard-btn" onclick="submitOnboard()">Continue</button>
-  <div class="onboard-skip" onclick="skipOnboard()">skip for now</div>
+
+<div class="onboard" id="onboardScreen" style="display:none;">
+  <div class="onboard-dots" id="onboardDots"></div>
+  <div class="onboard-msg" id="onboardMsg"></div>
+  <div class="onboard-sub" id="onboardSub"></div>
+  <div id="onboardInputArea"></div>
+  <button class="onboard-btn" id="onboardBtn" onclick="nextOnboard()">Continue</button>
+  <div class="onboard-skip" id="onboardSkip" onclick="skipOnboard()">skip for now</div>
 </div>
-<div class="trial-wall" id="trialWall" style="display:none">
-  <div class="trial-icon" id="trialIcon">H</div>
-  <div class="trial-msg" id="trialMsg">Loading...</div>
-  <button class="trial-btn" onclick="goToPayment()">Continue for $4.99/month</button>
-  <button class="trial-btn" style="background:transparent;border:0.5px solid var(--bdr);color:var(--txt2);font-size:12px;padding:12px;" onclick="goToAnnual()">$39/year - two months free</button>
-  <div class="trial-secondary">Apple Pay and Google Pay accepted. Cancel anytime.</div>
-</div>
-<div class="app" id="app" style="display:none">
+
+<div class="app" id="appScreen" style="display:none;">
   <div class="header">
-    <div class="h-icon" id="hIcon">H</div>
+    <div class="h-icon">H</div>
     <div>
-      <div class="h-title" id="hTitle">HERALD</div>
-      <div class="h-sub">personal ai v49.0</div>
+      <div class="h-title">HERALD</div>
+      <div class="h-sub" id="headerSub">PERSONAL AI V55.5</div>
     </div>
     <div class="h-right">
-      <div class="dot-live" id="liveDot"></div>
-      <div class="h-time" id="clock">11:14 AM CDT</div>
-      <div class="icon-btn" id="voiceToggleBtn" onclick="toggleVoiceOutput()" title="Toggle voice">
+      <div class="dot-live" id="statusDot"></div>
+      <div class="h-time" id="headerTime"></div>
+      <div class="icon-btn" id="volumeBtn" onclick="toggleMute()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-          <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
-          <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+          <path id="volWave" d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
         </svg>
       </div>
       <div class="icon-btn" onclick="toggleTheme()">
-        <svg id="themeIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+        </svg>
       </div>
     </div>
   </div>
-  <div class="messages" id="msgs">
-    <div class="welcome" id="welcome">
-      <div class="welcome-icon" id="welcomeIcon">H</div>
-      <div class="welcome-title" id="welcomeTitle">HERALD READY</div>
-      <div class="welcome-text" id="welcomeText">Tap the mic and talk, or type below.</div>
+
+  <div class="messages" id="messages">
+    <div class="welcome" id="welcomeCard">
+      <div class="welcome-icon">H</div>
+      <div class="welcome-title">HERALD</div>
+      <div class="welcome-text" id="welcomeText">Your personal AI. Ask me anything.</div>
       <div class="quick-cmds">
-        <button class="q-btn" onclick="quick(&#39;What is the weather today?&#39;)">Weather Today</button>
-        <button class="q-btn" onclick="quick(&#39;What is happening in the news?&#39;)">News</button>
-        <button class="q-btn" onclick="quick(&#39;Find me a good restaurant near me&#39;)">Restaurants Near Me</button>
-        <button class="q-btn" onclick="quick(&#39;Give me a morning briefing&#39;)">Morning Briefing</button>
+        <div class="q-btn" onclick="sendQuick('What\'s the weather today?')">Weather</div>
+        <div class="q-btn" onclick="sendQuick('What\'s the latest news?')">News</div>
+        <div class="q-btn" onclick="sendQuick('What time is it?')">Time</div>
+        <div class="q-btn" onclick="sendQuick('What can you do?')">What can you do?</div>
       </div>
     </div>
   </div>
-  <div class="chips">
-    <div class="chip" onclick="quick(&#39;What is the weather today?&#39;)">weather</div>
-    <div class="chip" onclick="quick(&#39;What is happening in the news today?&#39;)">news</div>
-    <div class="chip" onclick="quick(&#39;What time is it?&#39;)">time</div>
+
+  <div class="chips" id="suggestChips">
+    <div class="chip" onclick="sendQuick('What\'s the weather today?')">weather</div>
+    <div class="chip" onclick="sendQuick('What\'s in the news?')">news</div>
+    <div class="chip" onclick="sendQuick('What time is it?')">time</div>
   </div>
-  <div class="trial-warning" id="trialWarningBanner" style="display:none" onclick="showTrialWall()"></div>
+
+  <div class="trial-warning" id="trialWarningBar" style="display:none;" onclick="showTrialWall()"></div>
 
   <div class="mic-zone">
-    <textarea class="text-input" id="textIn" placeholder="type here..." rows="1" onkeydown="onKey(event)" oninput="resize(this)"></textarea>
+    <textarea class="text-input" id="textInput" placeholder="type here..." rows="1"
+      onkeydown="handleTextKey(event)" oninput="autoResize(this)"></textarea>
     <div class="mic-row">
-      <button class="mic-btn" id="micBtn" onclick="toggleVoice()">
-        <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2">
-          <rect x="9" y="2" width="6" height="11" rx="3"></rect>
-          <path d="M5 10a7 7 0 0 0 14 0"></path>
-          <line x1="12" y1="19" x2="12" y2="22"></line>
-          <line x1="8" y1="22" x2="16" y2="22"></line>
+      <button class="mic-btn" id="micBtn" onclick="toggleMic()">
+        <svg viewBox="0 0 24 24" fill="white">
+          <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2" stroke="white" stroke-width="2" fill="none" stroke-linecap="round"/>
+          <line x1="12" y1="19" x2="12" y2="23" stroke="white" stroke-width="2" stroke-linecap="round"/>
+          <line x1="8" y1="23" x2="16" y2="23" stroke="white" stroke-width="2" stroke-linecap="round"/>
         </svg>
       </button>
-      <button class="send-btn" onclick="send()">
+      <button class="send-btn" onclick="sendFromInput()">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <line x1="22" y1="2" x2="11" y2="13"></line>
           <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
         </svg>
       </button>
     </div>
-    <div class="voice-hint" id="voiceHint">tap mic - talk - get answer</div>
+    <div class="voice-hint" id="voiceHint" onclick="toggleHeyHerald()">tap mic · talk · get answer</div>
   </div>
   <div class="footer">Your AI, your data — just between you and me.</div>
 </div>
-<div class="install-banner" id="installBanner" style="display:none"></div>
+
+<div class="trial-wall" id="trialWall" style="display:none;">
+  <div class="trial-icon">H</div>
+  <div class="trial-msg" id="trialWallMsg"></div>
+  <button class="trial-btn" onclick="openStripe('monthly')">Continue for $7.99 / month</button>
+  <button class="trial-btn" style="background:transparent;border:0.5px solid var(--emerald);color:var(--emerald);" onclick="openStripe('annual')">$59 / year — best value</button>
+  <div class="trial-secondary" id="trialSecondarMsg"></div>
+</div>
+
 <script>
-const RAILWAY_URL="https://web-production-b4083.up.railway.app";
-let userId='',aiName='Herald',history=[],recog=null,listening=false,voiceInput=false;
-function warmServer(){const dot=document.getElementById('liveDot');if(dot)dot.classList.add('cold');fetch(RAILWAY_URL+'/health').then(()=>{if(dot)dot.classList.remove('cold');}).catch(()=>{});}
-warmServer();setInterval(warmServer,4*60*1000);
-if(window.visualViewport){window.visualViewport.addEventListener('resize',()=>{const app=document.getElementById('app');if(app&&app.style.display!=='none')app.style.height=window.visualViewport.height+'px';const msgs=document.getElementById('msgs');if(msgs)setTimeout(()=>msgs.scrollTop=msgs.scrollHeight,50);});}
-let cachedGPS=null,gpsTimestamp=0;const GPS_TTL=5*60*1000;
-function getGPS(){return new Promise((resolve)=>{if(cachedGPS&&(Date.now()-gpsTimestamp)<GPS_TTL){resolve(cachedGPS);return;}if(!navigator.geolocation){resolve(null);return;}const timer=setTimeout(()=>resolve(null),3000);navigator.geolocation.getCurrentPosition((pos)=>{clearTimeout(timer);cachedGPS={lat:pos.coords.latitude.toFixed(5),lng:pos.coords.longitude.toFixed(5)};gpsTimestamp=Date.now();resolve(cachedGPS);},(()=>{clearTimeout(timer);resolve(null);}),{enableHighAccuracy:false,timeout:3000,maximumAge:GPS_TTL});});}
-let voiceEnabled=localStorage.getItem('voice_on')!=='false';let selectedVoice=null,voicesLoaded=false;
-function loadVoices(){if(!window.speechSynthesis)return;const voices=window.speechSynthesis.getVoices();if(!voices.length)return;voicesLoaded=true;const preferred=['Samantha','Karen','Moira','Google US English','Microsoft Aria','Microsoft Jenny','Microsoft Zira'];for(const name of preferred){const v=voices.find(v=>v.name===name);if(v){selectedVoice=v;return;}}const femaleNames=['female','woman','aria','jenny','zira','samantha','karen','moira','nova','allison'];const female=voices.find(v=>v.lang.startsWith('en')&&femaleNames.some(n=>v.name.toLowerCase().includes(n)));if(female){selectedVoice=female;return;}const english=voices.find(v=>v.lang.startsWith('en'));if(english)selectedVoice=english;}
-if(window.speechSynthesis){window.speechSynthesis.onvoiceschanged=loadVoices;loadVoices();}
-function updateVoiceButton(){const btn=document.getElementById('voiceToggleBtn');if(!btn)return;btn.classList.toggle('muted',!voiceEnabled);btn.title=voiceEnabled?'Voice on - tap to mute':'Voice off - tap to unmute';}
-function toggleVoiceOutput(){voiceEnabled=!voiceEnabled;localStorage.setItem('voice_on',voiceEnabled);if(!voiceEnabled)window.speechSynthesis&&window.speechSynthesis.cancel();updateVoiceButton();}
-function cleanForSpeech(text){return text.replace(/\[([^\]]+)\]\([^)]+\)/g,'').replace(/\bhttps?:\/\/\S+/g,'').replace(/\[[^\]]*\]/g,'').replace(/\*\*/g,' ').replace(/\*/g,' ').replace(/#+\s/g,'').replace(/_{1,2}([^_]+)_{1,2}/g,'$1').replace(/#(\d+)/g,'trade number $1').replace(/\$(\d+)\.(\d{2})/g,(_,d,c)=>`${d} dollar${d==='1'?'':'s'} and ${c} cents`).replace(/\$(\d+)/g,(_,d)=>`${d} dollar${d==='1'?'':'s'}`).replace(/[^\w\s.,!?;:'"()-]/g,' ').replace(/\s+/g,' ').trim();}
-function speak(text){if(!voiceEnabled||!window.speechSynthesis)return;window.speechSynthesis.cancel();const clean=cleanForSpeech(text);if(!clean)return;const sentenceMatch=clean.match(/^([^.!?]+[.!?]+)(?:\s+[^.!?]+[.!?]+)?(?:\s+[^.!?]+[.!?]+)?/);const spoken=sentenceMatch?sentenceMatch[0].trim():clean.slice(0,200);if(!voicesLoaded)loadVoices();const sentences=spoken.match(/[^.!?]+[.!?]+/g)||[spoken];sentences.forEach(s=>{const u=new SpeechSynthesisUtterance(s.trim());if(selectedVoice)u.voice=selectedVoice;u.rate=0.90;u.pitch=1.0;u.volume=1.0;window.speechSynthesis.speak(u);});}
-// ── ACTION CHIPS ─────────────────────────────────────────────────────────────
-// Each chip type documents both the current PWA implementation and the
-// native app equivalent. Goal: zero-tap voice-only in Phase 3.
-//
-// MAPS:     PWA opens Google Maps URL. Native: launch Maps app directly,
-//           start navigation without confirmation.
-// PHONE:    PWA opens tel: link (one tap to call). Native: same, or auto-dial
-//           after voice confirmation "calling now".
-// MUSIC:    PWA opens YouTube Music search tab. Native: YouTube Music SDK,
-//           start playback directly. No tap. Resume last session automatically.
-// RADIO:    PWA opens iHeartRadio search tab. Native: stream direct URL via
-//           MediaPlayer (Android) / AVPlayer (iOS). No tap.
-// CALENDAR: PWA opens Google Calendar with event pre-filled. One tap to save.
-//           Native: write directly to device calendar via CalendarContract
-//           (Android) / EventKit (iOS). Zero taps. Can read calendar too.
-// ALARM:    PWA opens Android clock via SET_ALARM intent. iOS requires manual.
-//           Native: SCHEDULE_EXACT_ALARM (Android) / UNUserNotificationCenter
-//           (iOS). Herald sets the alarm directly. Zero taps.
-// ─────────────────────────────────────────────────────────────────────────────
-function addActionChip(msgDiv, action) {
-  if (!action || !action.type || !action.value) return;
-  const chip = document.createElement('a');
-  chip.className = 'action-chip';
+// ═══════════════════════════════════════════════════════
+// HERALD v55.5 — Capacitor Native Android App
+// GPS:   Capacitor.Plugins.Geolocation → navigator fallback
+// SOUND: Railway/OpenAI → Capacitor TTS → WebSpeech+resume()
+// NEW:   Watchdog timer + Hey [AI Name] wake word
+// ═══════════════════════════════════════════════════════
 
-  if (action.type === 'maps') {
-    chip.href = 'https://maps.google.com/?q=' + encodeURIComponent(action.value);
-    chip.target = '_blank'; chip.rel = 'noopener noreferrer';
-    chip.innerHTML = 'Open in Maps';
+const RAILWAY_URL    = 'https://web-production-b4083.up.railway.app';
+const STRIPE_MONTHLY = 'PLACEHOLDER_MONTHLY';
+const STRIPE_ANNUAL  = 'PLACEHOLDER_ANNUAL';
+const VERSION        = 'V55.7';
 
-  } else if (action.type === 'phone') {
-    chip.href = 'tel:' + action.value.replace(/[^0-9+]/g, '');
-    chip.className += ' phone';
-    chip.innerHTML = 'Call ' + action.value;
+let userId           = localStorage.getItem('herald_uid') || '';
+let authCode         = localStorage.getItem('herald_auth') || '';
+let aiName           = localStorage.getItem('herald_ai_name') || 'Herald';
+let userName         = localStorage.getItem('herald_name') || '';
+let isOwner          = localStorage.getItem('herald_owner') === 'true';
+let history          = [];
+let isStreaming       = false;
+let muted            = localStorage.getItem('herald_muted') === 'true';
+let recognition      = null;
+let micActive        = false;
+let currentAudio     = null;
+let onboardStep      = 0;
+let onboardData      = {};
+let currentTheme     = localStorage.getItem('herald_theme') || 'dark';
+let watchdogTimer    = null;
+let heyHeraldEnabled = false;
+let wakeRecognition  = null;
+let locationCache    = null;
+let locationCacheTs  = 0;
+let sentenceBuffer   = '';
+let streamingSpeech  = false;
+let speechQueue      = [];
+let isSpeakingQueue  = false;
 
-  } else if (action.type === 'music') {
-    chip.href = 'https://music.youtube.com/search?q=' + encodeURIComponent(action.value);
-    chip.target = '_blank'; chip.rel = 'noopener noreferrer';
-    chip.className += ' music';
-    chip.innerHTML = '&#9654; Play on YouTube Music';
+document.body.setAttribute('data-theme', currentTheme);
+updateTime();
+setInterval(updateTime, 30000);
+setInterval(() => fetch(RAILWAY_URL + '/health').catch(()=>{}), 180000);
 
-  } else if (action.type === 'radio') {
-    chip.href = 'https://www.iheart.com/search/?keywords=' + encodeURIComponent(action.value);
-    chip.target = '_blank'; chip.rel = 'noopener noreferrer';
-    chip.className += ' radio';
-    chip.innerHTML = 'On iHeartRadio';
+if (userId && authCode) {
+  showApp();
+} else {
+  const inviteCode = new URLSearchParams(window.location.search).get('invite');
+  if (inviteCode) document.getElementById('codeInput').value = inviteCode;
+}
 
-  } else if (action.type === 'calendar') {
-    // Format from backend: "event title|YYYY-MM-DD|HH:MM" (time optional)
-    // PWA: Google Calendar URL with event pre-filled. User taps once to save.
-    // Native Phase 3: Write directly to device calendar. Zero taps.
-    const parts = action.value.split('|');
-    const title = parts[0] || 'Herald Reminder';
-    const dateStr = (parts[1] || '').replace(/-/g, '');
-    const timeStr = (parts[2] || '').replace(':', '');
-    let dates = '';
-    if (dateStr) {
-      if (timeStr) {
-        dates = dateStr + 'T' + timeStr + '00/' + dateStr + 'T' + timeStr + '59';
-      } else {
-        // All-day: end date is next day
-        const d = new Date(parts[1]);
-        d.setDate(d.getDate() + 1);
-        dates = dateStr + '/' + d.toISOString().slice(0,10).replace(/-/g,'');
+function updateTime() {
+  const el = document.getElementById('headerTime');
+  if (el) el.textContent = new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',hour12:true});
+}
+
+function getLocalTimeStr() {
+  return new Date().toLocaleString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric',hour:'numeric',minute:'2-digit',hour12:true,timeZoneName:'short'});
+}
+
+function toggleTheme() {
+  currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
+  document.body.setAttribute('data-theme', currentTheme);
+  localStorage.setItem('herald_theme', currentTheme);
+}
+
+function toggleMute() {
+  muted = !muted;
+  localStorage.setItem('herald_muted', muted);
+  document.getElementById('volumeBtn').classList.toggle('muted', muted);
+  if (muted && currentAudio) { currentAudio.pause(); currentAudio = null; }
+}
+
+async function submitCode() {
+  const code = document.getElementById('codeInput').value.trim();
+  if (!code) { showError('Enter your access code.'); return; }
+  const errEl = document.getElementById('setupError');
+  errEl.textContent = '';
+  if (!userId) userId = 'u_' + Date.now() + '_' + Math.random().toString(36).slice(2,8);
+  try {
+    const r = await fetch(RAILWAY_URL + '/auth', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({code, user_id: userId})
+    });
+    const d = await r.json();
+    if (!r.ok || !d.ok) { errEl.textContent = d.error || 'Invalid code. Try again.'; return; }
+    localStorage.setItem('herald_uid', userId);
+    localStorage.setItem('herald_auth', code);
+    localStorage.setItem('herald_owner', d.is_owner ? 'true' : 'false');
+    authCode = code; isOwner = d.is_owner;
+    if (d.name) { userName = d.name; localStorage.setItem('herald_name', d.name); }
+    if (d.ai_name) { aiName = d.ai_name; localStorage.setItem('herald_ai_name', d.ai_name); }
+    if (d.onboarded || d.name) showApp(); else startOnboarding();
+  } catch(e) { errEl.textContent = 'Connection error. Is your internet on?'; }
+}
+
+function showError(msg) { document.getElementById('setupError').textContent = msg; }
+
+const ONBOARD_STEPS = [
+  { msg:"What should I call you?", sub:"Just your first name is fine.", type:'input', placeholder:'Your name...', key:'name' },
+  { msg:"Where are you based?", sub:"I'll use this for weather and local recommendations.", type:'input', placeholder:'City, State...', key:'location' },
+  { msg:"What's your go-to music app?", sub:"I'll open it when you ask to play something.", type:'options', options:['Spotify','Apple Music','YouTube Music','Amazon Music'], key:'music_app' },
+];
+
+function startOnboarding() {
+  document.getElementById('setupScreen').style.display = 'none';
+  document.getElementById('onboardScreen').style.display = 'flex';
+  onboardStep = 0; onboardData = {};
+  renderOnboardStep();
+}
+
+function renderOnboardStep() {
+  const step = ONBOARD_STEPS[onboardStep];
+  document.getElementById('onboardDots').innerHTML = ONBOARD_STEPS.map((_,i)=>
+    `<div class="onboard-dot ${i<onboardStep?'done':i===onboardStep?'active':''}"></div>`).join('');
+  document.getElementById('onboardMsg').textContent = step.msg;
+  document.getElementById('onboardSub').textContent = step.sub;
+  const area = document.getElementById('onboardInputArea');
+  if (step.type === 'input') {
+    area.innerHTML = `<input class="onboard-input" id="onboardInput" placeholder="${step.placeholder}" autocomplete="off"/>`;
+    const inp = document.getElementById('onboardInput');
+    inp.addEventListener('keydown', e => { if (e.key==='Enter') nextOnboard(); });
+    setTimeout(() => inp.focus(), 100);
+  } else {
+    area.innerHTML = `<div class="onboard-options">${step.options.map(o=>`<div class="onboard-opt" onclick="selectOpt(this,'${o}')">${o}</div>`).join('')}</div>`;
+  }
+  document.getElementById('onboardSkip').style.display = onboardStep < ONBOARD_STEPS.length-1 ? 'block' : 'none';
+}
+
+function selectOpt(el, val) {
+  el.closest('.onboard-options').querySelectorAll('.onboard-opt').forEach(o=>o.classList.remove('selected'));
+  el.classList.add('selected');
+  onboardData[ONBOARD_STEPS[onboardStep].key] = val;
+}
+
+async function nextOnboard() {
+  const step = ONBOARD_STEPS[onboardStep];
+  if (step.type === 'input') { const val = document.getElementById('onboardInput').value.trim(); if (val) onboardData[step.key] = val; }
+  if (onboardStep < ONBOARD_STEPS.length-1) { onboardStep++; renderOnboardStep(); }
+  else await finishOnboarding();
+}
+
+function skipOnboard() {
+  if (onboardStep < ONBOARD_STEPS.length-1) { onboardStep++; renderOnboardStep(); } else finishOnboarding();
+}
+
+async function finishOnboarding() {
+  if (onboardData.name) { userName = onboardData.name; localStorage.setItem('herald_name', onboardData.name); }
+  if (onboardData.ai_name) { aiName = onboardData.ai_name; localStorage.setItem('herald_ai_name', onboardData.ai_name); }
+  try {
+    await fetch(RAILWAY_URL+'/profile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user_id:userId,...onboardData})});
+  } catch(e) {}
+  document.getElementById('onboardScreen').style.display = 'none';
+  showApp();
+}
+
+async function showApp() {
+  document.getElementById('setupScreen').style.display = 'none';
+  document.getElementById('onboardScreen').style.display = 'none';
+  document.getElementById('appScreen').style.display = 'flex';
+  document.getElementById('headerSub').textContent = `PERSONAL AI ${VERSION}`;
+  if (userName) document.getElementById('welcomeText').textContent = `Good to see you, ${userName}. What can I help with?`;
+  await fetchGreeting();
+  checkProactive();
+}
+
+// ── PROACTIVE LOOP (v55.7) ────────────────────────────────────────────────────
+// Herald opens the conversation without being asked.
+// Fires on app open and every time user brings app to foreground.
+async function checkProactive() {
+  if (!userId) return;
+  try {
+    const r = await fetch(`${RAILWAY_URL}/proactive/${userId}`);
+    if (!r.ok) return;
+    const d = await r.json();
+    if (!d.messages || d.messages.length === 0) return;
+    const msg = d.messages[0];
+    setTimeout(() => {
+      addHeraldMsg(msg.text, null, false);
+      if (!muted) speakText(msg.text);
+    }, 1500);
+  } catch(e) {}
+}
+
+document.addEventListener('resume', () => { checkProactive(); }, false);
+
+async function fetchGreeting() {
+  try {
+    const { lat, lng, locationLabel } = await getLocation();
+    const r = await fetch(RAILWAY_URL+'/greeting',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({user_id:userId,local_time:getLocalTimeStr(),lat,lng,location_label:locationLabel})});
+    const d = await r.json();
+    if (d.greeting) {
+      if (d.ai_name) { aiName = d.ai_name; localStorage.setItem('herald_ai_name', d.ai_name); }
+      if (d.name) { userName = d.name; localStorage.setItem('herald_name', d.name); }
+      addHeraldMsg(d.greeting, null, false);
+      if (!muted) speakText(d.greeting);
+    }
+  } catch(e) {}
+}
+
+// ══════════════════════════════════════════════════════
+// GPS — Capacitor native primary, navigator fallback
+// Fixes: "I don't have real-time GPS data" in native app
+// ══════════════════════════════════════════════════════
+async function getLocation() {
+  // 5-minute cache -- prevents 4-second GPS delay on every message send
+  if (locationCache && (Date.now() - locationCacheTs) < 300000) {
+    return locationCache;
+  }
+  let lat = null, lng = null, locationLabel = null;
+
+  // Layer 1: Capacitor Geolocation (native Android — works in WebView)
+  try {
+    if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Geolocation) {
+      const pos = await window.Capacitor.Plugins.Geolocation.getCurrentPosition({
+        enableHighAccuracy: true, timeout: 5000
+      });
+      lat = pos.coords.latitude;
+      lng = pos.coords.longitude;
+    }
+  } catch(e) {}
+
+  // Layer 2: Standard browser geolocation (PWA / browser fallback)
+  if (!lat) {
+    try {
+      await new Promise(resolve => navigator.geolocation.getCurrentPosition(
+        pos => { lat = pos.coords.latitude; lng = pos.coords.longitude; resolve(); },
+        () => resolve(), { timeout: 4000, enableHighAccuracy: true }
+      ));
+    } catch(e) {}
+  }
+
+  // Geocode to human-readable label
+  if (lat && lng) {
+    try {
+      const gr = await fetch(`${RAILWAY_URL}/geocode?lat=${lat}&lng=${lng}`);
+      const gd = await gr.json();
+      if (gd.label) locationLabel = gd.label;
+    } catch(e) {}
+  }
+
+  locationCache = { lat, lng, locationLabel };
+  locationCacheTs = Date.now();
+  return locationCache;
+}
+
+// ── DATA QUERY FAST-PATH ──────────────────────────────────────────────────────
+// These queries hit /ask directly (instant JSON) instead of /ask/stream (SSE).
+// Weather, stocks, crypto never stream anyway -- they return a single blob.
+// Bypassing SSE overhead cuts ~300ms and eliminates SSE parser risk for them.
+const DATA_QUERY_WORDS = [
+  'weather','forecast','temperature','rain','snow','wind','sunny','umbrella',
+  'bitcoin','ethereum','solana','crypto','btc','eth','sol price',
+  'stock','share price','trading at','price of','how much is',
+  'silver','gold','oil','crude','natural gas','copper',
+  'score','scores','game today','cowboys','rangers','mavs','mavericks',
+  'stars','nfl','nba','mlb','nhl','playoffs','standings',
+  'news','headlines','top stories','what is happening','what happened today',
+  'movie','film','imdb','rotten tomatoes',
+];
+function isDataQuery(msg) {
+  const lower = msg.toLowerCase();
+  return DATA_QUERY_WORDS.some(kw => lower.includes(kw));
+}
+ 
+// ── SENTENCE-BY-SENTENCE TTS ──────────────────────────────────────────────────
+// Speaks sentences via WebSpeech as they arrive from the stream.
+// WebSpeech queues naturally -- calling speak() multiple times is safe.
+// OpenAI TTS is NOT used for sentence speech (too slow per sentence).
+// If no sentence speech happened, full response still goes to speakText().
+function speakSentence(text) {
+  if (muted || !text.trim()) return;
+  try {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.resume();
+      const utt = new SpeechSynthesisUtterance(cleanForSpeech(text));
+      utt.rate = 1.0; utt.pitch = 1.0;
+      window.speechSynthesis.speak(utt);
+    }
+  } catch(e) {}
+}
+ 
+function sendQuick(text) { sendToHerald(text); }
+
+function handleTextKey(e) { if (e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendFromInput();} }
+function autoResize(el) { el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,160)+'px'; }
+function sendFromInput() {
+  const inp = document.getElementById('textInput');
+  const val = inp.value.trim();
+  if (!val) return;
+  inp.value=''; inp.style.height='auto';
+  sendToHerald(val);
+}
+
+async function sendToHerald(messageText) {
+  if (isStreaming) return;
+  isStreaming = true;
+  setStatusDot('streaming');
+ 
+  if (watchdogTimer) clearTimeout(watchdogTimer);
+  watchdogTimer = setTimeout(() => { if (isStreaming) { isStreaming=false; setStatusDot('live'); } }, 20000);
+ 
+  const wc = document.getElementById('welcomeCard');
+  if (wc) wc.style.display = 'none';
+  document.getElementById('suggestChips').style.display = 'none';
+  if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+ 
+  addUserMsg(messageText);
+  history.push({ role:'user', content:messageText });
+  const thinkingEl = addThinking();
+ 
+  const { lat, lng, locationLabel } = await getLocation();
+ 
+  const body = {
+    user_id:userId, auth_code:authCode, message:messageText,
+    history:history.slice(-20), local_time:getLocalTimeStr(),
+    lat, lng, location_label:locationLabel
+  };
+ 
+  const heraldMsgEl = document.createElement('div');
+  heraldMsgEl.className = 'msg herald';
+  const labelEl = document.createElement('div');
+  labelEl.className = 'msg-label';
+  labelEl.textContent = aiName.toUpperCase();
+  const bubbleEl = document.createElement('div');
+  bubbleEl.className = 'msg-bubble';
+  heraldMsgEl.appendChild(labelEl);
+  heraldMsgEl.appendChild(bubbleEl);
+ 
+  let fullText='', actionData=null, revealed=false;
+  sentenceBuffer=''; streamingSpeech=false;
+ 
+  function revealBubble() {
+    if (!revealed) { thinkingEl.remove(); document.getElementById('messages').appendChild(heraldMsgEl); scrollBottom(); revealed=true; }
+  }
+ 
+  // ── DATA QUERY FAST-PATH: use /ask directly, skip SSE entirely ────────────
+  if (isDataQuery(messageText)) {
+    try {
+      const fc = new AbortController();
+      const ft = setTimeout(() => fc.abort(), 20000);
+      const r = await fetch(RAILWAY_URL+'/ask', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body), signal:fc.signal});
+      clearTimeout(ft);
+      const d = await r.json();
+      revealBubble();
+      const reply = d.reply || "I didn't quite get that — try again?";
+      bubbleEl.textContent = reply;
+      if (d.action) { const card=buildActionCard(d.action,reply); if (card) heraldMsgEl.appendChild(card); }
+      handleTrialData(d);
+      if (d.ai_name) { aiName=d.ai_name; localStorage.setItem('herald_ai_name',d.ai_name); }
+      if (d.name) { userName=d.name; localStorage.setItem('herald_name',d.name); }
+      fullText = reply;
+      history.push({role:'assistant', content:reply});
+      if (!muted && reply) speakText(reply);
+    } catch(e) {
+      revealBubble();
+      bubbleEl.textContent = 'Connection error. Check your internet and try again.';
+      history.pop();
+    } finally {
+      isStreaming=false;
+      if (watchdogTimer) clearTimeout(watchdogTimer);
+      setStatusDot('live');
+      scrollBottom();
+    }
+    return;
+  }
+ 
+  // ── STREAMING PATH ────────────────────────────────────────────────────────
+  try {
+    const controller = new AbortController();
+    const streamTimeout = setTimeout(() => controller.abort(), 30000);
+    const response = await fetch(RAILWAY_URL+'/ask/stream', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body), signal:controller.signal});
+    clearTimeout(streamTimeout);
+    if (!response.ok) throw new Error('stream not ok');
+ 
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+ 
+    // ── FIXED SSE PARSER ──────────────────────────────────────────────────
+    // Split on \n\n (SSE event boundary) not \n (line boundary).
+    // Prevents silent JSON parse failures when a chunk straddles a \n.
+    let buffer = '', cursor = null;
+ 
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, {stream:true});
+      const events = buffer.split('\n\n');
+      buffer = events.pop(); // keep incomplete event
+      for (const event of events) {
+        const line = event.trim();
+        if (!line.startsWith('data: ')) continue;
+        const dataStr = line.slice(6).trim();
+        if (dataStr === '[DONE]') break;
+        try {
+          const data = JSON.parse(dataStr);
+ 
+          if (data.t) {
+            // [S] = sentence boundary marker -- speak and reset buffer, don't display
+            if (data.t === '[S]') {
+              if (sentenceBuffer.trim()) {
+                streamingSpeech = true;
+                speakSentence(sentenceBuffer.trim());
+                sentenceBuffer = '';
+              }
+              continue;
+            }
+            revealBubble();
+            if (!cursor) { cursor=document.createElement('span'); cursor.className='stream-cursor'; bubbleEl.appendChild(cursor); }
+            const cleanToken = data.t.replace('[S]', '');
+            fullText += cleanToken;
+            sentenceBuffer += cleanToken;
+            bubbleEl.insertBefore(document.createTextNode(cleanToken), cursor);
+            scrollBottom();
+          }
+ 
+          if (data.done || data.partial) {
+            if (cursor) cursor.remove();
+            if (data.full) fullText = data.full;
+            if (data.action) actionData = data.action;
+            handleTrialData(data);
+            if (data.ai_name) { aiName=data.ai_name; localStorage.setItem('herald_ai_name',data.ai_name); }
+            if (data.name) { userName=data.name; localStorage.setItem('herald_name',data.name); }
+          }
+ 
+          if (data.error) {
+            revealBubble();
+            if (cursor) cursor.remove();
+            if (!fullText) bubbleEl.textContent = 'Stream interrupted — try again.';
+          }
+        } catch(e) {}
       }
     }
-    chip.href = 'https://calendar.google.com/calendar/render?action=TEMPLATE'
-      + '&text=' + encodeURIComponent(title)
-      + (dates ? '&dates=' + dates : '')
-      + '&details=' + encodeURIComponent('Set by Herald');
-    chip.target = '_blank'; chip.rel = 'noopener noreferrer';
-    chip.className += ' calendar';
-    chip.innerHTML = 'Add to Calendar';
-
-  } else if (action.type === 'alarm') {
-    // Format from backend: "HH:MM|label" (label optional)
-    // PWA Android: SET_ALARM intent opens clock app pre-filled. One tap to save.
-    // PWA iOS: No reliable deep link -- shows instructions instead.
-    // Native Phase 3: Set alarm directly via OS API. Zero taps.
-    const parts = action.value.split('|');
-    const time = parts[0] || '09:00';
-    const label = parts[1] || 'Herald Alarm';
-    const timeParts = time.split(':');
-    const hour = parseInt(timeParts[0]) || 9;
-    const min  = parseInt(timeParts[1]) || 0;
-    chip.className += ' alarm';
-    chip.innerHTML = 'Set Alarm ' + time;
-    if (/iphone|ipad|ipod/i.test(navigator.userAgent)) {
-      // iOS has no browser alarm deep link -- show friendly instructions
-      chip.href = '#';
-      chip.addEventListener('click', (e) => {
-        e.preventDefault();
-        alert('To set this alarm: open your Clock app, tap the + button, and set it for ' + time + '.');
-      });
+ 
+    revealBubble();
+    if (cursor) cursor.remove();
+    if (actionData) { const card=buildActionCard(actionData,fullText); if (card) heraldMsgEl.appendChild(card); }
+    history.push({role:'assistant', content:fullText});
+    // Only use full speakText() if sentence-by-sentence speech didn't fire
+    if (!muted && fullText && !streamingSpeech) speakText(fullText);
+ 
+  } catch(streamErr) {
+    // ── ABORT RECOVERY ────────────────────────────────────────────────────
+    // If we received meaningful partial text, show it -- don't re-request.
+    // Only fall back to /ask if we got nothing at all.
+    if (fullText.trim().length > 15) {
+      revealBubble();
+      history.push({role:'assistant', content:fullText});
+      if (!muted && !streamingSpeech) speakText(fullText);
     } else {
-      // Android Chrome: SET_ALARM intent opens clock with alarm pre-filled
-      chip.href = 'intent:#Intent;action=android.intent.action.SET_ALARM'
-        + ';i.android.intent.extra.alarm.HOUR=' + hour
-        + ';i.android.intent.extra.alarm.MINUTES=' + min
-        + ';S.android.intent.extra.alarm.MESSAGE=' + encodeURIComponent(label)
-        + ';B.android.intent.extra.alarm.SKIP_UI=false;end';
+      // Nothing received -- try /ask fallback
+      try {
+        const fc = new AbortController();
+        const ft = setTimeout(() => fc.abort(), 20000);
+        const r = await fetch(RAILWAY_URL+'/ask', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body), signal:fc.signal});
+        clearTimeout(ft);
+        const d = await r.json();
+        revealBubble();
+        const reply = d.reply || "I didn't quite get that — try again?";
+        bubbleEl.textContent = reply;
+        if (d.action) { const card=buildActionCard(d.action,reply); if (card) heraldMsgEl.appendChild(card); }
+        handleTrialData(d);
+        if (d.ai_name) { aiName=d.ai_name; localStorage.setItem('herald_ai_name',d.ai_name); }
+        if (d.name) { userName=d.name; localStorage.setItem('herald_name',d.name); }
+        fullText = reply;
+        history.push({role:'assistant', content:reply});
+        if (!muted && reply) speakText(reply);
+      } catch(fe) {
+        revealBubble();
+        if (fe.name==='AbortError') {
+          bubbleEl.textContent = 'Server is waking up — please tap send again in a moment.';
+          setStatusDot('cold'); setTimeout(()=>setStatusDot('live'),8000);
+        } else {
+          bubbleEl.textContent = 'Connection error. Check your internet and try again.';
+        }
+        history.pop();
+      }
     }
-
-  } else if (action.type === 'search') {
-    // SEARCH: generates YouTube + X + Google chips from one query.
-    // Herald already answers with a spoken summary (web search via :online model).
-    // Chips let the user dive into the raw platform content with one tap.
-    //
-    // Native Phase 3: Could open an in-app unified search view, or trigger
-    // platform API calls (YouTube Data API, Twitter API v2) directly and
-    // display results inside Herald without leaving the app. Zero taps --
-    // Herald surfaces the top result inline and offers to open more.
-    const query = action.value;
-    const container = document.createElement('div');
-    container.className = 'search-chips';
-    [
-      {label:'YouTube',   url:'https://www.youtube.com/results?search_query='+encodeURIComponent(query), bg:'#e52d27'},
-      {label:'on X',      url:'https://twitter.com/search?q='+encodeURIComponent(query)+'&f=live',       bg:'#14171a'},
-      {label:'Instagram', url:'https://www.instagram.com/explore/search/keyword/?q='+encodeURIComponent(query), bg:'#c13584'},
-      {label:'Google',    url:'https://www.google.com/search?q='+encodeURIComponent(query),             bg:'#4285f4'},
-    ].forEach(p => {
-      const c = document.createElement('a');
-      c.className = 'action-chip';
-      c.style.cssText = 'background:'+p.bg+';color:white;font-size:11px;padding:6px 12px;margin-top:0;';
-      c.href = p.url; c.target = '_blank'; c.rel = 'noopener noreferrer';
-      c.textContent = p.label;
-      container.appendChild(c);
-    });
-    msgDiv.appendChild(container);
-    return; // multiple chips already appended -- skip single chip append below
-
-  } else if (action.type === 'launch') {
-    // LAUNCH: opens a specific social app or website.
-    // PWA: universal link opens native app if installed, mobile web if not.
-    // The chip is shown prominently so voice users have a clear one-tap target.
-    //
-    // Phase 2: Herald fetches content from the app's API first (Twitter trending,
-    // Instagram explore, YouTube feed) and summarizes it in voice. Then shows
-    // this chip to go deeper. Herald reads, you listen, you tap only if you want more.
-    //
-    // Phase 3 (native app): Herald opens the app directly in a WebView inside
-    // Herald itself, or uses platform SDKs to pull content without leaving Herald.
-    // Zero taps. "Hey Herald get my X" -> Herald reads your timeline to you.
-    const appMap = {
-      'x':         'https://x.com',
-      'twitter':   'https://x.com',
-      'instagram': 'https://instagram.com',
-      'ig':        'https://instagram.com',
-      'youtube':   'https://youtube.com',
-      'yt':        'https://youtube.com',
-      'tiktok':    'https://tiktok.com',
-      'facebook':  'https://facebook.com',
-      'fb':        'https://facebook.com',
-    };
-    const key = action.value.toLowerCase().trim();
-    const url = appMap[key] || ('https://' + key + '.com');
-    chip.href = url;
-    chip.target = '_blank'; chip.rel = 'noopener noreferrer';
-    chip.className += ' launch';
-    chip.innerHTML = 'Open ' + action.value.charAt(0).toUpperCase() + action.value.slice(1);
-
-  } else { return; }
-
-  msgDiv.appendChild(chip);
+  } finally {
+    isStreaming=false;
+    if (watchdogTimer) clearTimeout(watchdogTimer);
+    setStatusDot('live');
+    scrollBottom();
+  }
 }
-function applyTheme(t){document.documentElement.setAttribute('data-theme',t);const icon=document.getElementById('themeIcon');icon.innerHTML=t==='dark'?'<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>':'<circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>';localStorage.setItem('ht',t);}
-function toggleTheme(){applyTheme(document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark');}
-function tick(){const s=new Date().toLocaleString("en-US",{timeZone:"America/Chicago",hour:"numeric",minute:"2-digit",hour12:true});const tz=new Date().toLocaleString("en-US",{timeZone:"America/Chicago",timeZoneName:"short"}).split(' ').pop();document.getElementById('clock').textContent=s+' '+tz;}
-tick();setInterval(tick,30000);
-function getLocalTime(){return new Date().toLocaleString("en-US",{timeZone:"America/Chicago",weekday:"long",year:"numeric",month:"long",day:"numeric",hour:"numeric",minute:"2-digit",hour12:true,timeZoneName:"short"});}
-function genUserId(){return 'u_'+Math.random().toString(36).substr(2,9)+'_'+Date.now();}
-function cleanText(t){return t.replace(/\*\*/g,'').replace(/\*/g,'').replace(/\bhttps?:\/\/\S+/g,'').replace(/\[([^\]]+)\]\([^)]+\)/g,'$1').replace(/#+\s/g,'').replace(/_{1,2}([^_]+)_{1,2}/g,'$1').trim();}
-function updateAiName(name){aiName=name||'Herald';const f=aiName[0].toUpperCase();document.getElementById('hIcon').textContent=f;document.getElementById('hTitle').textContent=aiName.toUpperCase();const wi=document.getElementById('welcomeIcon'),wt=document.getElementById('welcomeTitle');if(wi)wi.textContent=f;if(wt)wt.textContent=aiName.toUpperCase()+' READY';}
-async function activate(){const code=document.getElementById('codeInput').value.trim();const err=document.getElementById('setupError');err.textContent='';if(!code){err.textContent='Enter your access code.';return;}let uid=localStorage.getItem('herald_uid');if(!uid){uid=genUserId();localStorage.setItem('herald_uid',uid);}try{const r=await fetch(RAILWAY_URL+'/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code,user_id:uid})});const d=await r.json();if(!r.ok){err.textContent='Invalid access code. Try again.';return;}userId=uid;localStorage.setItem('herald_authed','1');localStorage.setItem('herald_code',code);updateAiName(d.ai_name);d.onboarded?showApp():showOnboard();}catch(e){err.textContent='Connection error. Check your internet and try again.';}}
-let onboardStep=0;const onboardQ=[{q:"Hi, I am Herald. What should I call you?",field:'name',ph:'Your first name...'},{q:"Great! What city are you in?",field:'location',ph:'Your city...'},{q:"Last one - what would you like to call me?",field:'ai_name',ph:'Herald, Max, Aria...'}];
-function showOnboard(){
-  document.getElementById('setup').style.display='none';
-  document.getElementById('onboard').style.display='flex';
-  renderStep();
-  // Speak a warm welcome the first time onboarding appears.
-  // Uses the same Web Speech engine as all Herald responses.
-  // Native app Phase 3: this becomes a higher-quality TTS voice (OpenAI Nova)
-  // played automatically without any user interaction required.
-  setTimeout(()=>speak("Hi, I am Herald, your personal AI companion. Just a few quick questions and we will be ready to go. What should I call you?"), 600);
+
+function setStatusDot(state) {
+  const dot = document.getElementById('statusDot');
+  if (dot) dot.classList.toggle('cold', state==='cold');
 }
-function renderStep(){const s=onboardQ[onboardStep];document.getElementById('onboardMsg').textContent=s.q;document.getElementById('onboardInput').placeholder=s.ph;document.getElementById('onboardInput').value='';document.getElementById('onboardInput').focus();}
-async function submitOnboard(){const val=document.getElementById('onboardInput').value.trim();const step=onboardQ[onboardStep];if(val){const u={user_id:userId};u[step.field]=val;try{await fetch(RAILWAY_URL+'/profile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(u)});if(step.field==='ai_name')updateAiName(val);}catch(e){}}if(++onboardStep>=onboardQ.length)showApp();else renderStep();}
-function skipOnboard(){if(++onboardStep>=onboardQ.length)showApp();else renderStep();}
-function showApp(){document.getElementById('setup').style.display='none';document.getElementById('onboard').style.display='none';document.getElementById('app').style.display='flex';updateVoiceButton();loadHistory();setTimeout(()=>maybeShowInstallBanner(),4000);}
-function loadHistory(){try{const s=localStorage.getItem('hh_'+userId);if(!s)return;history=JSON.parse(s)||[];if(!history.length)return;clearWelcome();history.slice(-30).forEach(m=>{if(m.role==='user'||m.role==='assistant')addBubble(m.role==='assistant'?'herald':'user',m.content);});}catch(e){}}
-function saveHistory(){try{localStorage.setItem('hh_'+userId,JSON.stringify(history.slice(-100)));}catch(e){}}
-function clearWelcome(){const w=document.getElementById('welcome')||document.querySelector('.welcome');if(w)w.remove();}
-function streamBubble(role,text,onComplete){clearWelcome();const msgs=document.getElementById('msgs');const div=document.createElement('div');div.className='msg '+role;const lbl=document.createElement('div');lbl.className='msg-label';lbl.textContent=role==='user'?'you':aiName.toLowerCase();const bub=document.createElement('div');bub.className='msg-bubble';bub.textContent='';div.appendChild(lbl);div.appendChild(bub);msgs.appendChild(div);msgs.scrollTop=msgs.scrollHeight;const clean=cleanText(text);const words=clean.split(' ');let idx=0;const delay=Math.min(80,Math.max(30,4000/words.length));const timer=setInterval(()=>{if(idx<words.length){bub.textContent+=(idx>0?' ':'')+words[idx++];msgs.scrollTop=msgs.scrollHeight;}else{clearInterval(timer);if(onComplete)onComplete();}},delay);return div;}
-function addBubble(role,text){clearWelcome();const msgs=document.getElementById('msgs');const div=document.createElement('div');div.className='msg '+role;const lbl=document.createElement('div');lbl.className='msg-label';lbl.textContent=role==='user'?'you':aiName.toLowerCase();const bub=document.createElement('div');bub.className='msg-bubble';bub.textContent=cleanText(text);div.appendChild(lbl);div.appendChild(bub);msgs.appendChild(div);msgs.scrollTop=msgs.scrollHeight;return div;}
-function showThinking(){clearWelcome();const msgs=document.getElementById('msgs');const div=document.createElement('div');div.className='msg herald';div.id='thinking';const lbl=document.createElement('div');lbl.className='msg-label';lbl.textContent=aiName.toLowerCase();const t=document.createElement('div');t.className='thinking';t.innerHTML='<div class="thinking-label">thinking</div><div class="dots"><span></span><span></span><span></span></div>';div.appendChild(lbl);div.appendChild(t);msgs.appendChild(div);msgs.scrollTop=msgs.scrollHeight;}
-function removeThinking(){const t=document.getElementById('thinking');if(t)t.remove();}
-function getLocalAnswer(text){const t=text.toLowerCase().trim();if(t.match(/^(what time is it|what's the time|current time|time now|what time)[\?\.!]?$/)){const now=new Date().toLocaleString("en-US",{timeZone:"America/Chicago",hour:"numeric",minute:"2-digit",hour12:true,timeZoneName:"short"});return 'It is '+now+'.';}if(t.match(/^(what('s| is) (today'?s? date|the date)|what day is (it|today)|today'?s? date)[\?\.!]?$/)){const d=new Date().toLocaleString("en-US",{timeZone:"America/Chicago",weekday:"long",month:"long",day:"numeric",year:"numeric"});return 'Today is '+d+'.';}if(t.match(/^what day (of the week )?(is it|is today)[\?\.!]?$/)){const day=new Date().toLocaleString("en-US",{timeZone:"America/Chicago",weekday:"long"});return 'Today is '+day+'.';}return null;}
-async function send(){const inp=document.getElementById('textIn');const text=inp.value.trim();if(!text)return;if(!userId)userId=localStorage.getItem('herald_uid')||'';if(!userId){addBubble('herald','Please refresh and enter your access code.');return;}if(document.getElementById('thinking'))return;const localAnswer=getLocalAnswer(text);if(localAnswer){addBubble('user',text);history.push({role:'user',content:text});setTimeout(()=>{addBubble('herald',localAnswer);history.push({role:'assistant',content:localAnswer});saveHistory();speak(localAnswer);},120);inp.value='';inp.style.height='auto';return;}inp.value='';inp.style.height='auto';addBubble('user',text);history.push({role:'user',content:text});saveHistory();showThinking();const gps=await getGPS();try{const body={user_id:userId,message:text,history:history.slice(-20),local_time:getLocalTime(),auth_code:localStorage.getItem('herald_code')||''};if(gps){body.lat=gps.lat;body.lng=gps.lng;}const r=await fetch(RAILWAY_URL+'/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const d=await r.json();removeThinking();if(d.error){addBubble('herald','Something went wrong - try again in a moment.');history.pop();return;}if(d.ai_name)updateAiName(d.ai_name);history.push({role:'assistant',content:d.reply});saveHistory();speak(d.reply);
-    if(voiceInput){
-      // Voice mode -- Alexa style: instant text, speak full response
-      const msgDiv=addBubble('herald',d.reply);
-      if(d.action)addActionChip(msgDiv,d.action);
-      handleTrialStatus(d);
-    }else{
-      // Typed mode -- keep word streaming (looks nice on screen)
-      streamBubble('herald',d.reply,()=>{
-        if(d.action)addActionChip(document.querySelector('.msg.herald:last-child'),d.action);
-        handleTrialStatus(d);
+
+function addUserMsg(text) {
+  const el = document.createElement('div');
+  el.className = 'msg user';
+  el.innerHTML = `<div class="msg-bubble">${escHtml(text)}</div>`;
+  document.getElementById('messages').appendChild(el);
+  scrollBottom(); return el;
+}
+
+function addHeraldMsg(text, action, speak) {
+  const el = document.createElement('div');
+  el.className = 'msg herald';
+  el.innerHTML = `<div class="msg-label">${escHtml(aiName.toUpperCase())}</div><div class="msg-bubble">${escHtml(text)}</div>`;
+  if (action) { const card=buildActionCard(action,text); if (card) el.appendChild(card); }
+  document.getElementById('messages').appendChild(el);
+  scrollBottom();
+  if (speak && !muted) speakText(text);
+  return el;
+}
+
+function addThinking() {
+  const el = document.createElement('div');
+  el.className = 'msg herald';
+  el.innerHTML = `<div class="msg-label">${escHtml(aiName.toUpperCase())}</div>
+    <div class="thinking"><div class="dots"><span></span><span></span><span></span></div>
+    <div class="thinking-label">thinking...</div></div>`;
+  document.getElementById('messages').appendChild(el);
+  scrollBottom(); return el;
+}
+
+function scrollBottom() { const m=document.getElementById('messages'); m.scrollTop=m.scrollHeight; }
+function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function buildActionCard(action, replyText) {
+  if (!action||!action.type) return null;
+  const {type,value} = action;
+  if (type==='maps') {
+    const encoded = encodeURIComponent(value);
+    const url = /iPhone|iPad|iPod/.test(navigator.userAgent)?`maps://maps.apple.com/?q=${encoded}`:`https://www.google.com/maps/search/?api=1&query=${encoded}`;
+    const card = document.createElement('a');
+    card.className='action-card'; card.href=url; card.target='_blank';
+    card.innerHTML=`<div class="action-card-icon" style="background:rgba(26,155,138,0.15);">🗺️</div><div class="action-card-body"><div class="action-card-title">${escHtml(value)}</div><div class="action-card-sub">Tap to open Maps</div></div><div class="action-card-arrow">›</div>`;
+    return card;
+  }
+  if (type==='phone') {
+    const card = document.createElement('a');
+    card.className='action-card'; card.href=`tel:${value.replace(/\D/g,'')}`;
+    card.innerHTML=`<div class="action-card-icon" style="background:rgba(26,155,138,0.15);">📞</div><div class="action-card-body"><div class="action-card-title">${escHtml(value)}</div><div class="action-card-sub">Tap to call</div></div><div class="action-card-arrow">›</div>`;
+    return card;
+  }
+  if (type==='music') {
+    const wrap=document.createElement('div'); wrap.className='search-cards';
+    [[`https://open.spotify.com/search/${encodeURIComponent(value)}`,'#1DB954','♪ Spotify'],
+     [`https://music.youtube.com/search?q=${encodeURIComponent(value)}`,'#FF0000','▶ YouTube'],
+     [`https://music.apple.com/search?term=${encodeURIComponent(value)}`,'#FC3C44','♫ Apple']].forEach(([url,bg,label])=>{
+      const btn=document.createElement('a'); btn.className='search-card'; btn.href=url; btn.target='_blank'; btn.style.background=bg; btn.textContent=label; wrap.appendChild(btn);
+    }); return wrap;
+  }
+  if (type==='search') {
+    const wrap=document.createElement('div'); wrap.className='search-cards';
+    [[`https://www.google.com/search?q=${encodeURIComponent(value)}`,'#4285F4','🔍 Google'],
+     [`https://www.youtube.com/results?search_query=${encodeURIComponent(value)}`,'#FF0000','▶ YouTube']].forEach(([url,bg,label])=>{
+      const btn=document.createElement('a'); btn.className='search-card'; btn.href=url; btn.target='_blank'; btn.style.background=bg; btn.textContent=label; wrap.appendChild(btn);
+    }); return wrap;
+  }
+  if (type==='launch') {
+    const appMap={'x':['https://x.com','#000','✕ Open X'],'twitter':['https://x.com','#000','✕ Open X'],'instagram':['https://instagram.com','linear-gradient(45deg,#405DE6,#E1306C)','📷 Instagram'],'youtube':['https://youtube.com','#FF0000','▶ YouTube'],'tiktok':['https://tiktok.com','#010101','🎵 TikTok'],'facebook':['https://facebook.com','#1877F2','Facebook']};
+    const key=value.toLowerCase().replace(/\s+/g,'');
+    const info=appMap[key]||[`https://www.google.com/search?q=${encodeURIComponent(value)}`,'#333',`Open ${value}`];
+    const btn=document.createElement('a'); btn.className='search-card'; btn.href=info[0]; btn.target='_blank'; btn.style.background=info[1]; btn.textContent=info[2];
+    const wrap=document.createElement('div'); wrap.className='search-cards'; wrap.appendChild(btn); return wrap;
+  }
+  if (type==='alarm'||type==='calendar') {
+    const card=document.createElement('div'); card.className='action-card';
+    card.innerHTML=`<div class="action-card-icon" style="background:rgba(26,155,138,0.15);">${type==='alarm'?'⏰':'📅'}</div><div class="action-card-body"><div class="action-card-title">${escHtml(value.split('|')[0])}</div><div class="action-card-sub">${type==='alarm'?'Set alarm':'Add to calendar'}</div></div>`;
+    return card;
+  }
+  return null;
+}
+
+function handleTrialData(d) {
+  if (!d) return;
+  if (d.trial_show_wall&&d.trial_message) { document.getElementById('trialWallMsg').textContent=d.trial_message; document.getElementById('trialWall').style.display='flex'; }
+  else if (d.trial_show_warning) { const bar=document.getElementById('trialWarningBar'); bar.style.display='block'; bar.textContent=`${d.trial_days_remaining} day${d.trial_days_remaining===1?'':'s'} left in free trial — tap to subscribe`; }
+}
+function showTrialWall() { document.getElementById('trialWall').style.display='flex'; }
+function openStripe(plan) { const url=plan==='monthly'?STRIPE_MONTHLY:STRIPE_ANNUAL; if (url.startsWith('http')) window.open(url,'_blank'); }
+
+// ══════════════════════════════════════════════════════
+// TTS — 3-layer for Capacitor native Android
+// Layer 1: Railway / OpenAI (best quality, costs ~$0.003)
+// Layer 2: Capacitor TextToSpeech plugin (native, free, reliable)
+// Layer 3: WebSpeech + resume() (Android WebView fix)
+// ══════════════════════════════════════════════════════
+function cleanForSpeech(text) {
+  return text.replace(/\$(\d)/g,'$1 dollars ').replace(/(\d+)%/g,'$1 percent').replace(/°[CF]/g,' degrees').replace(/°/g,' degrees').replace(/&/g,'and').replace(/\*\*/g,'').replace(/\*/g,'').replace(/#/g,'').replace(/\n/g,'. ').trim();
+}
+
+async function speakText(text) {
+  if (muted) return;
+  const clean = cleanForSpeech(text);
+  if (!clean) return;
+
+  // Layer 1: Railway OpenAI TTS -- PWA/browser only
+  // Skipped in Capacitor native -- 3-4s round trip for no benefit.
+  // Native gets instant TTS from Layer 2 below.
+  if (!window.Capacitor) {
+    try {
+      const r = await fetch(RAILWAY_URL+'/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:clean.slice(0,500)})});
+      if (r.ok) {
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        currentAudio = new Audio(url);
+        await currentAudio.play();
+        return;
+      }
+    } catch(e) {}
+  }
+
+  // Layer 2: Capacitor native Android TTS
+  try {
+    if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.TextToSpeech) {
+      await window.Capacitor.Plugins.TextToSpeech.speak({
+        text: clean.slice(0,500), lang:'en-US', rate:1.0, pitch:1.0, volume:1.0, category:'ambient'
       });
+      return;
     }
-    voiceInput=false;}catch(e){removeThinking();addBubble('herald','Connection error. Check your internet and try again.');history.pop();}}
-function quick(cmd){document.getElementById('textIn').value=cmd;send();}
-function onKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}}
-function resize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,80)+'px';}
-function toggleVoice(){if(!window.SpeechRecognition&&!window.webkitSpeechRecognition){alert('Voice input works best in Chrome.');return;}listening?stopVoice():startVoice();}
-function startVoice(){const SR=window.SpeechRecognition||window.webkitSpeechRecognition;recog=new SR();recog.continuous=false;recog.interimResults=true;recog.lang='en-US';recog.onstart=()=>{listening=true;voiceInput=true;document.getElementById('micBtn').classList.add('on');document.getElementById('voiceHint').textContent='listening...';};recog.onresult=e=>{const t=Array.from(e.results).map(r=>r[0].transcript).join('');document.getElementById('voiceHint').textContent=t;document.getElementById('textIn').value=t;};recog.onend=()=>{listening=false;document.getElementById('micBtn').classList.remove('on');document.getElementById('voiceHint').textContent='tap mic - talk - get answer';const t=document.getElementById('textIn').value.trim();if(t)send();};recog.onerror=()=>{listening=false;document.getElementById('micBtn').classList.remove('on');document.getElementById('voiceHint').textContent='tap mic - talk - get answer';};recog.start();}
-function stopVoice(){if(recog)recog.stop();}
-const STRIPE_MONTHLY='https://buy.stripe.com/PLACEHOLDER_MONTHLY';const STRIPE_ANNUAL='https://buy.stripe.com/PLACEHOLDER_ANNUAL';
-function handleTrialStatus(d){if(!d.trial_status||d.trial_status==='paid')return;if(d.trial_show_wall){showTrialWall(d.trial_message);return;}if(d.trial_show_warning&&d.trial_message){const b=document.getElementById('trialWarningBanner');if(b){b.textContent=d.trial_message;b.style.display='block';}}}
-function showTrialWall(msg){const wall=document.getElementById('trialWall'),msgEl=document.getElementById('trialMsg'),icon=document.getElementById('trialIcon');if(!wall)return;if(icon)icon.textContent=aiName?aiName[0].toUpperCase():'H';if(msgEl)msgEl.textContent=msg||"I hope I have made your days a little easier. To continue - it is just $4.99 a month or $39 for the year. I will be right here.";wall.style.display='flex';}
-function goToPayment(){if(STRIPE_MONTHLY.includes('PLACEHOLDER')){alert('Payment coming soon! You are still in beta - enjoy Herald free for now.');document.getElementById('trialWall').style.display='none';return;}window.location.href=STRIPE_MONTHLY+'?prefilled_email=';}
-function goToAnnual(){if(STRIPE_ANNUAL.includes('PLACEHOLDER')){alert('Payment coming soon! You are still in beta - enjoy Herald free for now.');document.getElementById('trialWall').style.display='none';return;}window.location.href=STRIPE_ANNUAL;}
-let deferredInstallPrompt=null;
-window.addEventListener('beforeinstallprompt',(e)=>{e.preventDefault();deferredInstallPrompt=e;setTimeout(()=>maybeShowInstallBanner(),3000);});
-function isIOS(){return /iphone|ipad|ipod/i.test(navigator.userAgent);}
-function isStandalone(){return window.matchMedia('(display-mode: standalone)').matches||window.navigator.standalone===true;}
-function maybeShowInstallBanner(){if(isStandalone()||localStorage.getItem('install_dismissed')||!localStorage.getItem('herald_authed'))return;const banner=document.getElementById('installBanner');if(!banner)return;if(deferredInstallPrompt){banner.innerHTML='<div class="install-banner-title">Add Herald to your home screen</div><div class="install-banner-text">Install Herald as an app for the best experience.</div><div class="install-banner-row"><button class="install-btn" onclick="doAndroidInstall()">Add to Home Screen</button><button class="install-dismiss" onclick="dismissInstallBanner()">Not now</button></div>';banner.style.display='flex';}else if(isIOS()){banner.innerHTML='<div class="install-banner-title">Add Herald to your home screen</div><div class="install-banner-steps">1. Tap the <span>Share button</span> at the bottom of Safari<br>2. Scroll down and tap <span>Add to Home Screen</span><br>3. Tap <span>Add</span></div><div class="install-banner-row"><button class="install-dismiss" onclick="dismissInstallBanner()" style="flex:1">Got it</button></div>';banner.style.display='flex';}}
-async function doAndroidInstall(){if(!deferredInstallPrompt)return;deferredInstallPrompt.prompt();await deferredInstallPrompt.userChoice;deferredInstallPrompt=null;dismissInstallBanner();}
-function dismissInstallBanner(){localStorage.setItem('install_dismissed','1');const b=document.getElementById('installBanner');if(b)b.style.display='none';}
-window.onload=function(){applyTheme(localStorage.getItem('ht')||'dark');voiceEnabled=localStorage.getItem('voice_on')!=='false';const urlParams=new URLSearchParams(window.location.search);const inviteCode=urlParams.get('invite');const authed=localStorage.getItem('herald_authed');const uid=localStorage.getItem('herald_uid');if(authed&&uid){userId=uid;showApp();return;}if(inviteCode){autoActivate(inviteCode);return;}setTimeout(()=>speak('Hello. Herald learns what matters to you. Your AI, your data, just between you and me. Lets get started.'),800);if('serviceWorker'in navigator){navigator.serviceWorker.register('/herald-voice-app/sw.js').then(reg=>{reg.update();reg.addEventListener('updatefound',()=>{const w=reg.installing;w.addEventListener('statechange',()=>{if(w.state==='installed'&&navigator.serviceWorker.controller)w.postMessage({type:'SKIP_WAITING'});});});}).catch(()=>{});}};
-async function autoActivate(inviteCode){let uid=localStorage.getItem('herald_uid');if(!uid){uid=genUserId();localStorage.setItem('herald_uid',uid);}const setup=document.getElementById('setup');if(setup)setup.innerHTML='<div class="setup-icon">H</div><div class="setup-title">HERALD</div><div class="setup-sub">Setting up your personal AI...</div>';try{const r=await fetch(RAILWAY_URL+'/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:inviteCode,user_id:uid})});const d=await r.json();if(!r.ok){if(setup)setup.innerHTML='<div class="setup-icon">H</div><div class="setup-title">HERALD</div><div class="setup-sub" style="color:#e05a5a">This invite link has already been used. Ask for a new one.</div>';return;}userId=uid;localStorage.setItem('herald_uid',uid);localStorage.setItem('herald_authed','1');localStorage.setItem('herald_code',inviteCode);window.history.replaceState({},'',window.location.pathname);updateAiName(d.ai_name);d.onboarded?showApp():showOnboard();}catch(e){if(setup){const sub=setup.querySelector('.setup-sub');if(sub)sub.textContent='Connection error. Check your internet and try again.';}}if('serviceWorker'in navigator)navigator.serviceWorker.register('/herald-voice-app/sw.js').then(r=>r.update()).catch(()=>{});}
+  } catch(e) {}
+
+  // Layer 3: WebSpeech + resume() fix for Android WebView
+  try {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.resume(); // required for Android WebView
+      const utt = new SpeechSynthesisUtterance(clean.slice(0,400));
+      utt.rate=1.0; utt.pitch=1.0;
+      window.speechSynthesis.speak(utt);
+    }
+  } catch(e) {}
+}
+
+// ── MIC ──
+function toggleMic() {
+  if (heyHeraldEnabled) { stopWakeWord(); return; }
+  if (micActive) { stopMic(); return; }
+  startMic();
+}
+
+function startMic() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) { document.getElementById('voiceHint').textContent='Voice not supported — use keyboard'; return; }
+  recognition = new SpeechRecognition();
+  recognition.continuous=false; recognition.interimResults=true; recognition.lang='en-US';
+  recognition.onstart = () => { micActive=true; document.getElementById('micBtn').classList.add('on'); document.getElementById('voiceHint').textContent='listening...'; };
+  recognition.onresult = e => { const t=Array.from(e.results).map(r=>r[0].transcript).join(''); const inp=document.getElementById('textInput'); inp.value=t; autoResize(inp); };
+  recognition.onend = () => { micActive=false; document.getElementById('micBtn').classList.remove('on'); document.getElementById('voiceHint').textContent='tap mic · talk · get answer'; const val=document.getElementById('textInput').value.trim(); if (val) sendFromInput(); };
+  recognition.onerror = () => { micActive=false; document.getElementById('micBtn').classList.remove('on'); document.getElementById('voiceHint').textContent='tap mic · talk · get answer'; };
+  recognition.start();
+}
+
+function stopMic() { if (recognition) recognition.stop(); }
+
+// ── HEY [AI NAME] WAKE WORD ──
+function toggleHeyHerald() { if (heyHeraldEnabled) stopWakeWord(); else startWakeWord(); }
+
+function startWakeWord() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) { document.getElementById('voiceHint').textContent='Wake word not supported on this browser'; return; }
+  heyHeraldEnabled = true;
+  const hintEl = document.getElementById('voiceHint');
+  const micEl = document.getElementById('micBtn');
+  hintEl.classList.add('wake-active');
+  micEl.classList.add('wake');
+  hintEl.textContent = `Hey ${aiName} — always listening · tap to stop`;
+
+  wakeRecognition = new SpeechRecognition();
+  wakeRecognition.continuous=true; wakeRecognition.interimResults=true; wakeRecognition.lang='en-US';
+  let lastSent='';
+
+  wakeRecognition.onresult = (e) => {
+    const transcript = Array.from(e.results).map(r=>r[0].transcript).join('').toLowerCase().trim();
+    const wakePhrase = `hey ${aiName.toLowerCase()}`;
+    const wakeIdx = transcript.indexOf(wakePhrase);
+    const nameIdx = transcript.indexOf(aiName.toLowerCase());
+    let commandStart = -1;
+    if (wakeIdx!==-1) commandStart = wakeIdx+wakePhrase.length;
+    else if (nameIdx!==-1) commandStart = nameIdx+aiName.length;
+    if (commandStart!==-1) {
+      const command = transcript.slice(commandStart).trim();
+      const lastResult = e.results[e.results.length-1];
+      if (command.length>3 && command!==lastSent && lastResult.isFinal) { lastSent=command; sendToHerald(command); }
+    }
+  };
+  wakeRecognition.onend = () => { if (heyHeraldEnabled) try { wakeRecognition.start(); } catch(e) {} };
+  wakeRecognition.onerror = (e) => { if (heyHeraldEnabled&&(e.error==='no-speech'||e.error==='audio-capture')) setTimeout(()=>{ if (heyHeraldEnabled) try { wakeRecognition.start(); } catch(err){} },1000); };
+  try { wakeRecognition.start(); } catch(e) { stopWakeWord(); }
+}
+
+function stopWakeWord() {
+  heyHeraldEnabled=false;
+  if (wakeRecognition) { try { wakeRecognition.stop(); } catch(e){} wakeRecognition=null; }
+  document.getElementById('voiceHint').classList.remove('wake-active');
+  document.getElementById('micBtn').classList.remove('wake');
+  document.getElementById('voiceHint').textContent='tap mic · talk · get answer';
+}
 </script>
-
-
-</body></html>
+</body>
+</html>
