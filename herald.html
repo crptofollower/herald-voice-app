@@ -244,7 +244,7 @@
 const RAILWAY_URL    = 'https://web-production-b4083.up.railway.app';
 const STRIPE_MONTHLY = 'PLACEHOLDER_MONTHLY';
 const STRIPE_ANNUAL  = 'PLACEHOLDER_ANNUAL';
-const VERSION        = 'V55.5';
+const VERSION        = 'V55.7';
 
 let userId           = localStorage.getItem('herald_uid') || '';
 let authCode         = localStorage.getItem('herald_auth') || '';
@@ -394,7 +394,28 @@ async function showApp() {
   document.getElementById('headerSub').textContent = `PERSONAL AI ${VERSION}`;
   if (userName) document.getElementById('welcomeText').textContent = `Good to see you, ${userName}. What can I help with?`;
   await fetchGreeting();
+  checkProactive();
 }
+
+// ── PROACTIVE LOOP (v55.7) ────────────────────────────────────────────────────
+// Herald opens the conversation without being asked.
+// Fires on app open and every time user brings app to foreground.
+async function checkProactive() {
+  if (!userId) return;
+  try {
+    const r = await fetch(`${RAILWAY_URL}/proactive/${userId}`);
+    if (!r.ok) return;
+    const d = await r.json();
+    if (!d.messages || d.messages.length === 0) return;
+    const msg = d.messages[0];
+    setTimeout(() => {
+      addHeraldMsg(msg.text, null, false);
+      if (!muted) speakText(msg.text);
+    }, 1500);
+  } catch(e) {}
+}
+
+document.addEventListener('resume', () => { checkProactive(); }, false);
 
 async function fetchGreeting() {
   try {
@@ -804,17 +825,21 @@ async function speakText(text) {
   const clean = cleanForSpeech(text);
   if (!clean) return;
 
-  // Layer 1: Railway OpenAI TTS
-  try {
-    const r = await fetch(RAILWAY_URL+'/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:clean.slice(0,500)})});
-    if (r.ok) {
-      const blob = await r.blob();
-      const url = URL.createObjectURL(blob);
-      currentAudio = new Audio(url);
-      await currentAudio.play();
-      return;
-    }
-  } catch(e) {}
+  // Layer 1: Railway OpenAI TTS -- PWA/browser only
+  // Skipped in Capacitor native -- 3-4s round trip for no benefit.
+  // Native gets instant TTS from Layer 2 below.
+  if (!window.Capacitor) {
+    try {
+      const r = await fetch(RAILWAY_URL+'/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:clean.slice(0,500)})});
+      if (r.ok) {
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        currentAudio = new Audio(url);
+        await currentAudio.play();
+        return;
+      }
+    } catch(e) {}
+  }
 
   // Layer 2: Capacitor native Android TTS
   try {

@@ -1,23 +1,17 @@
 # herald_api.py
 # Herald PWA Backend -- Railway Cloud Server
-# v7.5 -- Watcher system + intelligent model routing
+# v7.6 -- Proactive loop + gas price watcher + /proactive endpoint
 #
-# WHAT CHANGED vs v7.3:
-#   - Added:   route_model() -- Haiku for fast/factual, Sonnet for judgment/advice
-#   - Added:   Watcher system -- explicit watches ("watch the Mavericks")
-#   - Added:   Implicit interest detection -- Herald notices patterns over time
-#   - Added:   Travel/task/research intent classification (Haiku-powered, no hardcoding)
-#   - Added:   5 rotating offer phrases per interest type
-#   - Added:   SendGrid email delivery for curated watch summaries
-#   - Added:   Progressive capability discovery (email only -- Session A)
-#   - Added:   Cost guardrails (30 extraction calls/user/day cap)
-#   - Added:   migrate_db_v74() -- adds watches/topic_touches/pending_watch_offer to profile
-#   - Updated: get_profile() -- new watcher fields in default profile
-#   - Updated: build_system() -- injects watcher context and pending offers
-#   - Updated: /ask -- route_model, watcher pipeline, capability offer
-#   - Updated: /ask/stream -- route_model, watcher pipeline, capability offer
-#   - Updated: startup -- calls migrate_db_v74()
-#   - Version bump: 7.3 -> 7.4
+# WHAT CHANGED vs v7.5.1:
+#   - Added:   EIA_KEY config variable (EIA_API_KEY env var)
+#   - Added:   proactive_queue[] to user profile schema
+#   - Added:   fetch_gas_price_eia() -- free government gas price API
+#   - Added:   check_gas_watch() -- alerts on price moves >= threshold
+#   - Added:   GET /proactive/{user_id} -- frontend polls on app open + resume
+#   - Updated: /cron/watchers -- gas watch type + writes to proactive_queue
+#   - Updated: EXPLICIT_WATCH_PROMPT -- gas watch examples
+#   - Updated: get_profile() -- proactive_queue field in default schema
+#   - Version bump: 7.5.1 -> 7.6
 
 import os, json, re, random, string, time, http.client, ssl, sqlite3, threading, uuid
 import urllib.request, urllib.error, urllib.parse
@@ -30,7 +24,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="7.5")
+app = FastAPI(title="Herald API", version="7.6")
 
 app.add_middleware(
     CORSMiddleware,
@@ -56,6 +50,7 @@ NEWSDATA_KEY   = os.environ.get("NEWSDATA_API_KEY", "")
 WEATHER_KEY    = os.environ.get("WEATHER_API_KEY", "")
 GEOCODING_KEY  = os.environ.get("GOOGLE_GEOCODING_KEY", "")
 BRAVE_KEY      = os.environ.get("BRAVE_SEARCH_KEY", "")
+EIA_KEY        = os.environ.get("EIA_API_KEY", "")
 OR_URL         = "https://openrouter.ai/api/v1/chat/completions"
 VM_WEBHOOK_URL = "http://143.198.18.66:8082/webhook/sync"
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
@@ -66,12 +61,9 @@ INVITES_FILE   = os.environ.get("INVITES_FILE",  "/data/invites.json")
 DB_FILE        = "/data/herald.db"
 
 # ── MODEL ROUTING (v7.4) ──────────────────────────────────────────────────────
-# Haiku: fast, factual, data queries, short answers
-# Sonnet: judgment, advice, emotional support, nuanced conversation
-# Default is Haiku. Sonnet only when clearly needed. This is the cost lever.
 
-MODEL_SEARCH = "anthropic/claude-haiku-4-5:online"   # Haiku + web search fallback
-MODEL_FAST   = "anthropic/claude-haiku-4-5"           # Haiku, no search
+MODEL_SEARCH = "anthropic/claude-haiku-4-5:online"
+MODEL_FAST   = "anthropic/claude-haiku-4-5"
 HAIKU_MODEL  = "anthropic/claude-haiku-4-5"
 SONNET_MODEL = "anthropic/claude-sonnet-4-5"
 
@@ -103,10 +95,6 @@ SONNET_SIGNALS = [
 ]
 
 def route_model(message: str) -> str:
-    """
-    Route to Sonnet for judgment/nuance. Haiku for everything else.
-    Sonnet is ~15x more expensive -- only upgrade when clearly needed.
-    """
     msg_lower = message.lower()
     if any(sig in msg_lower for sig in SONNET_SIGNALS):
         return SONNET_MODEL
@@ -114,13 +102,13 @@ def route_model(message: str) -> str:
         return HAIKU_MODEL
     if any(sig in msg_lower for sig in HAIKU_SIGNALS):
         return HAIKU_MODEL
-    return HAIKU_MODEL  # default
+    return HAIKU_MODEL
 
 
 # ── WATCHER SYSTEM (v7.4) ─────────────────────────────────────────────────────
 
 MAX_EXTRACTION_CALLS_PER_DAY = 30
-_extraction_counts: dict = {}  # {user_id: {"date": str, "count": int}}
+_extraction_counts: dict = {}
 
 WATCH_OFFER_PHRASES = [
     "Hey {name}, I've noticed you've been curious about {topic} lately — want me to keep an eye out and let you know when something interesting comes up?",
@@ -148,7 +136,6 @@ RESEARCH_OFFER_PHRASES = [
     "I've noticed you're digging into {topic}, {name}. Want me to do a proper pull on that and email you something worth reading?",
 ]
 
-# Only offer capabilities that are actually BUILT. Add more as sessions build them.
 BUILT_CAPABILITIES = ["email"]
 
 CAPABILITY_TRIGGERS = {
@@ -199,12 +186,14 @@ EXPLICIT_WATCH_PROMPT = """User asked Herald to watch or monitor something.
 User said: {message}
 
 Extract a structured watch. Return ONLY valid JSON:
-{{"type": "sports|stock|crypto|news|weather|travel|task|health|other", "description": "short description", "params": {{}}, "offer_email": false}}
+{{"type": "sports|stock|crypto|news|weather|gas|other", "description": "short description", "params": {{}}, "offer_email": false}}
 
 Examples:
 "watch the Mavericks" -> {{"type": "sports", "description": "Dallas Mavericks game results", "params": {{"team": "Dallas Mavericks", "league": "NBA"}}, "offer_email": false}}
 "let me know if Bitcoin drops below 80k" -> {{"type": "crypto", "description": "Bitcoin price alert below 80000", "params": {{"symbol": "BTC", "condition": "below", "threshold": 80000}}, "offer_email": false}}
-"keep an eye on AI news" -> {{"type": "news", "description": "AI industry news updates", "params": {{"topic": "artificial intelligence"}}, "offer_email": false}}"""
+"keep an eye on AI news" -> {{"type": "news", "description": "AI industry news updates", "params": {{"topic": "artificial intelligence"}}, "offer_email": false}}
+"let me know if gas prices drop" -> {{"type": "gas", "description": "gas price alert when prices drop", "params": {{"threshold": 0.05, "direction": "down", "last_price": null}}, "offer_email": false}}
+"watch gas prices for me" -> {{"type": "gas", "description": "weekly gas price updates", "params": {{"threshold": 0.05, "direction": "any", "last_price": null}}, "offer_email": false}}"""
 
 
 # ── COMMODITY MAP ─────────────────────────────────────────────────────────────
@@ -347,12 +336,10 @@ invites        = {}
 # ── PERSISTENCE (v7.1 -- SQLite) ──────────────────────────────────────────────
 
 def init_db():
-    """Create tables and migrate any existing JSON data. Safe to call repeatedly."""
     try:
         os.makedirs("/data", exist_ok=True)
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
-
         c.execute("""
             CREATE TABLE IF NOT EXISTS profiles (
                 user_id    TEXT PRIMARY KEY,
@@ -368,7 +355,6 @@ def init_db():
             )
         """)
         conn.commit()
-
         c.execute("SELECT COUNT(*) FROM profiles")
         if c.fetchone()[0] == 0 and os.path.exists(PROFILES_FILE):
             try:
@@ -384,7 +370,6 @@ def init_db():
                 print(f"[HERALD] Migrated {len(old_profiles)} profiles from JSON to SQLite")
             except Exception as e:
                 print(f"[HERALD] JSON migration warning (non-fatal): {e}")
-
         c.execute("SELECT COUNT(*) FROM invites")
         if c.fetchone()[0] == 0 and os.path.exists(INVITES_FILE):
             try:
@@ -400,7 +385,6 @@ def init_db():
                 print(f"[HERALD] Migrated {len(old_invites)} invites from JSON to SQLite")
             except Exception as e:
                 print(f"[HERALD] Invite migration warning (non-fatal): {e}")
-
         conn.close()
         print(f"[HERALD] SQLite ready: {DB_FILE}")
     except Exception as e:
@@ -488,6 +472,8 @@ def get_profile(user_id):
         "topic_touches": [],
         "pending_watch_offer": None,
         "capabilities": {},
+        # v7.6 proactive loop
+        "proactive_queue": [],
     })
 
 def save_profile(user_id, profile):
@@ -505,7 +491,6 @@ def save_profile(user_id, profile):
         print(f"[HERALD] Could not save profile for {user_id}: {e}")
 
 def save_profile_fields(user_id, updates: dict):
-    """Update specific fields in a profile. Used by background threads."""
     profile = get_profile(user_id)
     profile.update(updates)
     save_profile(user_id, profile)
@@ -528,7 +513,6 @@ def is_owner(user_id, auth_code=None):
 # ── WATCHER HELPERS (v7.4) ────────────────────────────────────────────────────
 
 def _check_extraction_budget(user_id: str) -> bool:
-    """Returns True if under daily Haiku extraction cap (30/user/day)."""
     today = date.today().isoformat()
     record = _extraction_counts.get(user_id, {"date": today, "count": 0})
     if record["date"] != today:
@@ -540,12 +524,10 @@ def _check_extraction_budget(user_id: str) -> bool:
     return True
 
 def has_watch_intent(message: str) -> bool:
-    """Zero-cost keyword scan for explicit watch requests."""
     msg_lower = message.lower()
     return any(kw in msg_lower for kw in WATCH_KEYWORDS)
 
 def check_capability_offer(message: str, profile: dict):
-    """Return a natural capability offer string if relevant and not yet connected."""
     capabilities = profile.get("capabilities", {})
     msg_lower = message.lower()
     for cap in BUILT_CAPABILITIES:
@@ -567,7 +549,6 @@ def _get_offer_phrase(interest_type: str, name: str, topic: str, touch_count: in
     return phrases[touch_count % len(phrases)].format(name=name or "there", topic=topic)
 
 def log_topic_touch(profile: dict, topic_label: str, interest_type: str) -> dict:
-    """Increment touch count. Resets after 30 days of inactivity."""
     touches = profile.get("topic_touches", [])
     today = date.today().isoformat()
     existing = next((t for t in touches if t["topic_label"] == topic_label), None)
@@ -598,7 +579,6 @@ def log_topic_touch(profile: dict, topic_label: str, interest_type: str) -> dict
     return profile
 
 def check_promotion_threshold(profile: dict, topic_label: str, classification: dict) -> bool:
-    """Returns True if topic should be offered. Checks every 3rd touch. Respects suppression."""
     touches = profile.get("topic_touches", [])
     touch = next((t for t in touches if t["topic_label"] == topic_label), None)
     if not touch:
@@ -624,7 +604,6 @@ def check_promotion_threshold(profile: dict, topic_label: str, classification: d
     return count >= required
 
 def mark_topic_offered(profile: dict, topic_label: str, accepted: bool) -> dict:
-    """Mark topic offered. If declined, suppress for 14 days."""
     touches = profile.get("topic_touches", [])
     for touch in touches:
         if touch["topic_label"] == topic_label:
@@ -637,7 +616,6 @@ def mark_topic_offered(profile: dict, topic_label: str, accepted: bool) -> dict:
     return profile
 
 def store_watch(profile: dict, watch_data: dict) -> dict:
-    """Add watch to profile. Deduplicates by description."""
     watches = profile.get("watches", [])
     desc_new = watch_data.get("description", "").lower()
     if any(w.get("description", "").lower() == desc_new for w in watches):
@@ -653,16 +631,11 @@ def store_watch(profile: dict, watch_data: dict) -> dict:
         "last_checked": None,
         "last_triggered": None,
     }
-    if watch_data.get("type") == "travel_planning":
-        travel_date = watch_data.get("params", {}).get("travel_date")
-        if travel_date:
-            watch["expires_after"] = travel_date
     watches.append(watch)
     profile["watches"] = watches
     return profile
 
 def _build_watcher_context(profile: dict) -> str:
-    """Build watcher context lines for injection into system prompt."""
     lines = []
     watches = profile.get("watches", [])
     active = [w for w in watches if w.get("active")]
@@ -705,7 +678,6 @@ def _build_watcher_context(profile: dict) -> str:
     return " ".join(lines)
 
 def classify_topic(message: str, profile: dict):
-    """Haiku call to classify whether message reveals a trackable interest. Returns dict or None."""
     user_id = profile.get("user_id", "unknown")
     if not _check_extraction_budget(user_id):
         return None
@@ -741,7 +713,6 @@ def classify_topic(message: str, profile: dict):
         return None
 
 def extract_explicit_watch(message: str):
-    """Haiku call to extract structured watch from explicit request. Returns dict or None."""
     prompt = EXPLICIT_WATCH_PROMPT.format(message=message[:300])
     try:
         payload = json.dumps({
@@ -765,7 +736,6 @@ def extract_explicit_watch(message: str):
         return None
 
 def generate_watch_content(watch_data: dict, profile: dict) -> str:
-    """Generate curated email content via Haiku. Called only after user confirms."""
     topic = watch_data.get("description", "your topic")
     interest_type = watch_data.get("type", "other")
     name = profile.get("name", "there")
@@ -806,17 +776,13 @@ def generate_watch_content(watch_data: dict, profile: dict) -> str:
         return f"I put together some notes on {topic} but hit a technical snag getting them to you. Ask me directly and I'll walk you through everything."
 
 def send_watch_email(profile: dict, watch_data: dict, content: str) -> bool:
-    """Send curated summary email via SendGrid REST API (no extra dependency)."""
     email = profile.get("email", "")
     if not email:
-        print(f"[HERALD] send_watch_email: no email on profile")
         return False
     if not SENDGRID_KEY:
-        print(f"[HERALD] send_watch_email: SENDGRID_API_KEY not set")
         return False
     name = profile.get("name", "there")
     topic = watch_data.get("description", "your topic")
-    # Convert TEXT -> URL to html links
     html_body = re.sub(r'(.+?) -> (https?://\S+)', r'<a href="\2" style="color:#2563eb;">\1</a>', content)
     html_body = html_body.replace("\n", "<br>")
     html = (
@@ -839,10 +805,7 @@ def send_watch_email(profile: dict, watch_data: dict, content: str) -> bool:
     req = urllib.request.Request(
         "https://api.sendgrid.com/v3/mail/send",
         data=payload,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {SENDGRID_KEY}"
-        },
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {SENDGRID_KEY}"},
         method="POST"
     )
     try:
@@ -855,6 +818,8 @@ def send_watch_email(profile: dict, watch_data: dict, content: str) -> bool:
     except Exception as e:
         print(f"[HERALD] SendGrid error: {e}")
         return False
+
+
 # ── WATCHER CRON HELPERS (v7.5) ───────────────────────────────────────────────
 
 def fetch_espn_scores(league: str) -> list:
@@ -867,7 +832,7 @@ def fetch_espn_scores(league: str) -> list:
     sport, league_slug = sport_map.get(league.lower(), ('basketball', 'nba'))
     try:
         url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league_slug}/scoreboard"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.5"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.6"})
         with urllib.request.urlopen(req, timeout=6) as r:
             data = json.loads(r.read().decode())
         games = []
@@ -896,7 +861,7 @@ def fetch_crypto_prices_batch() -> dict:
     try:
         url = ("https://api.coingecko.com/api/v3/simple/price"
                "?ids=bitcoin,ethereum,solana&vs_currencies=usd")
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.5"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.6"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         return {
@@ -999,6 +964,94 @@ def check_news_watch(watch: dict):
         return f"New on {topic}: {first}."
     return None
 
+
+# ── GAS PRICE WATCHER (v7.6) ──────────────────────────────────────────────────
+
+def fetch_gas_price_eia():
+    """
+    Fetch weekly average US regular gasoline price from EIA.
+    Free government API. Updates every Monday.
+    Returns (price_float, period_str) or (None, None) on failure.
+    """
+    if not EIA_KEY:
+        return None, None
+    try:
+        url = (
+            "https://api.eia.gov/v2/petroleum/pri/gnd/data/"
+            f"?api_key={EIA_KEY}"
+            "&frequency=weekly"
+            "&data[]=value"
+            "&facets[product][]=EPM0"
+            "&facets[duoarea][]=R10"
+            "&offset=0&length=2"
+            "&sort[0][column]=period&sort[0][direction]=desc"
+        )
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.6"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            data = json.loads(r.read().decode())
+        rows = data.get("response", {}).get("data", [])
+        if not rows:
+            return None, None
+        price  = float(rows[0].get("value", 0))
+        period = rows[0].get("period", "")
+        return price, period
+    except Exception as e:
+        print(f"[HERALD] EIA gas price failed: {e}")
+        return None, None
+
+
+def check_gas_watch(watch: dict, gas_cache: dict) -> str:
+    """
+    Alert when gas price moves >= threshold cents from last stored value.
+    Lazy-loads EIA price once per cron run shared across all users.
+    Max one alert per 24 hours per user.
+    """
+    if _hours_since(watch.get("last_triggered")) < 24:
+        return None
+
+    if "us_regular" not in gas_cache:
+        price, period = fetch_gas_price_eia()
+        if price:
+            gas_cache["us_regular"] = {"price": price, "period": period}
+        else:
+            return None
+
+    current = gas_cache["us_regular"]["price"]
+    params  = watch.setdefault("params", {})
+
+    # First check -- store baseline, no alert yet
+    if params.get("last_price") is None:
+        params["last_price"] = current
+        print(f"[HERALD] Gas watch baseline set: ${current:.3f}/gal")
+        return None
+
+    last      = float(params["last_price"])
+    change    = current - last
+    threshold = float(params.get("threshold", 0.05))
+
+    if abs(change) < threshold:
+        return None
+
+    direction_pref = params.get("direction", "any")
+    if direction_pref == "down" and change >= 0:
+        return None
+    if direction_pref == "up" and change <= 0:
+        return None
+
+    params["last_price"] = current
+
+    direction = "dropped" if change < 0 else "went up"
+    cents     = round(abs(change) * 100)
+    dol       = int(current)
+    rem_cents = round((current - dol) * 100)
+    price_str = f"{dol} dollars and {rem_cents} cents" if rem_cents else f"{dol} dollars"
+
+    return (
+        f"Gas prices {direction} {cents} cents since last week. "
+        f"Regular is now averaging {price_str} per gallon nationally."
+    )
+
+
 def send_alert_email(profile: dict, watch: dict, alert_msg: str) -> bool:
     email = profile.get("email", "")
     if not email or not SENDGRID_KEY:
@@ -1025,8 +1078,7 @@ def send_alert_email(profile: dict, watch: dict, alert_msg: str) -> bool:
     req = urllib.request.Request(
         "https://api.sendgrid.com/v3/mail/send",
         data=payload,
-        headers={"Content-Type": "application/json",
-                 "Authorization": f"Bearer {SENDGRID_KEY}"},
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {SENDGRID_KEY}"},
         method="POST"
     )
     try:
@@ -1038,112 +1090,11 @@ def send_alert_email(profile: dict, watch: dict, alert_msg: str) -> bool:
         return False
 
 
-@app.post("/cron/watchers")
-async def cron_watchers(request: Request):
-    """
-    Called every 30 min by VM crontab.
-    Checks all active watches across all users.
-    Batch fetches data -- API calls don't multiply with users.
-    """
-    data   = await request.json()
-    secret = data.get("secret", "")
-    if not WEBHOOK_SECRET or secret != WEBHOOK_SECRET:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
-
-    triggered_count = 0
-    checked_count   = 0
-    now_iso         = datetime.utcnow().isoformat()
-
-    # Data caches -- populated on first use, shared across all users this run
-    scores_cache = {}   # {league: [game dicts]}
-    crypto_cache = {}   # {symbol: price} -- populated once
-    stock_cache  = {}   # {symbol: spoken string}
-
-    # Load all profiles from SQLite in one query
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute("SELECT user_id, data FROM profiles")
-        rows = c.fetchall()
-        conn.close()
-    except Exception as e:
-        return JSONResponse({"error": f"db error: {e}"}, status_code=500)
-
-    for user_id, raw_data in rows:
-        try:
-            profile = json.loads(raw_data)
-        except Exception:
-            continue
-
-        watches = [w for w in profile.get("watches", []) if w.get("active")]
-        if not watches:
-            continue
-
-        email = profile.get("email", "")
-        if not email:
-            continue  # no delivery method -- skip for now
-
-        watches_changed = False
-
-        for watch in watches:
-            checked_count += 1
-            watch_type    = watch.get("type", "other")
-            trigger_msg   = None
-
-            try:
-                if watch_type == "sports":
-                    # Lazy-load crypto prices once
-                    trigger_msg = check_sports_watch(watch, scores_cache)
-
-                elif watch_type == "crypto":
-                    if not crypto_cache:
-                        crypto_cache.update(fetch_crypto_prices_batch())
-                    trigger_msg = check_crypto_watch(watch, crypto_cache)
-
-                elif watch_type == "stock":
-                    trigger_msg = check_stock_watch(watch, stock_cache)
-
-                elif watch_type == "news":
-                    trigger_msg = check_news_watch(watch)
-
-                # Update last_checked always
-                watch["last_checked"] = now_iso
-                watches_changed = True
-
-                if trigger_msg:
-                    sent = send_alert_email(profile, watch, trigger_msg)
-                    if sent:
-                        watch["last_triggered"] = now_iso
-                        triggered_count += 1
-                        print(f"[HERALD] Watch triggered: {user_id} | {watch.get('description')} | {trigger_msg[:60]}")
-
-            except Exception as e:
-                print(f"[HERALD] Watch check error ({user_id} / {watch.get('description')}): {e}")
-
-        if watches_changed:
-            profile["watches"] = watches
-            save_profile(user_id, profile)
-
-    print(f"[HERALD] /cron/watchers complete: {checked_count} watches checked, {triggered_count} triggered")
-    return {
-        "ok": True,
-        "checked": checked_count,
-        "triggered": triggered_count,
-        "ran_at": now_iso,
-    }
 def _run_watcher_pipeline(message: str, profile: dict, user_id: str):
-    """
-    Full watcher pipeline. Runs in background daemon thread -- never blocks response.
-    1. Explicit watch detection (keyword -> Haiku extract)
-    2. Implicit topic classification (Haiku)
-    3. Promotion threshold check
-    4. Save changed profile fields
-    """
     try:
         changed = False
         pending_offer = None
 
-        # Step 1: Explicit watch
         if has_watch_intent(message):
             watch_data = extract_explicit_watch(message)
             if watch_data:
@@ -1161,8 +1112,7 @@ def _run_watcher_pipeline(message: str, profile: dict, user_id: str):
                 changed = True
                 print(f"[HERALD] Explicit watch stored: {watch_data.get('description')}")
 
-        # Step 2: Implicit topic classification
-        if _check_extraction_budget.__code__:  # always True, just a readable guard
+        if _check_extraction_budget.__code__:
             classification = classify_topic(message, profile)
             if (classification
                     and classification.get("touch_worthy")
@@ -1172,12 +1122,10 @@ def _run_watcher_pipeline(message: str, profile: dict, user_id: str):
                 profile = log_topic_touch(profile, topic_label, interest_type)
                 changed = True
 
-                # Step 3: Promotion check (every 3rd touch)
                 if not pending_offer and check_promotion_threshold(profile, topic_label, classification):
                     touches = profile.get("topic_touches", [])
                     touch = next((t for t in touches if t["topic_label"] == topic_label), {})
                     touch_count = touch.get("count", 0)
-                    offer_email = interest_type in ["trip_planning", "task_planning", "research"]
                     offer_text = _get_offer_phrase(
                         interest_type,
                         profile.get("name", ""),
@@ -1189,11 +1137,10 @@ def _run_watcher_pipeline(message: str, profile: dict, user_id: str):
                         "topic_label": topic_label,
                         "interest_type": interest_type,
                         "offer_text": offer_text,
-                        "offer_email": offer_email,
+                        "offer_email": interest_type in ["trip_planning", "task_planning", "research"],
                     })
                     print(f"[HERALD] Implicit watch offer queued: {topic_label} ({interest_type})")
 
-        # Step 4: Save
         if changed or pending_offer:
             save_profile_fields(user_id, {
                 "watches": profile.get("watches", []),
@@ -1273,9 +1220,6 @@ def extract_memory_fact(message):
 # ── LLM LEARNING LOOP (v7.3) ──────────────────────────────────────────────────
 
 def extract_learned_facts(user_id, user_message, herald_reply):
-    """
-    Async extraction of user facts. Daemon thread -- never blocks response.
-    """
     try:
         prompt = f"""Analyze this conversation turn. Extract facts the USER revealed about themselves.
 
@@ -1485,7 +1429,7 @@ def fetch_empire():
 def fetch_live_empire():
     try:
         url = "http://143.198.18.66:8080/api/status"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/7.4"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/7.6"})
         with urllib.request.urlopen(req, timeout=8) as r:
             data = json.loads(r.read().decode())
         positions     = data.get("positions", [])
@@ -1595,7 +1539,7 @@ def geocode_reverse(lat, lng):
         url = (f"https://maps.googleapis.com/maps/api/geocode/json"
                f"?latlng={lat},{lng}&result_type=locality|administrative_area_level_1"
                f"&key={GEOCODING_KEY}")
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/7.4"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/7.6"})
         with urllib.request.urlopen(req, timeout=4) as r:
             data = json.loads(r.read().decode())
         if data.get("results"):
@@ -1622,7 +1566,7 @@ def fetch_brave_search(query, count=5):
         req = urllib.request.Request(url, headers={
             "Accept": "application/json",
             "X-Subscription-Token": BRAVE_KEY,
-            "User-Agent": "HeraldAI/7.4"
+            "User-Agent": "HeraldAI/7.6"
         })
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
@@ -1657,7 +1601,7 @@ def fetch_weather_direct(location):
     try:
         clean_loc = location.strip().replace(' ', '+')
         url = f"https://wttr.in/{clean_loc}?format=j1"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.4"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.6"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         cur  = data["current_condition"][0]
@@ -1689,7 +1633,7 @@ def fetch_weather_backup(location):
     try:
         encoded = urllib.parse.quote(location)
         url = f"https://api.weatherapi.com/v1/forecast.json?key={WEATHER_KEY}&q={encoded}&days=1&aqi=no"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.4"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.6"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         cur  = data["current"]
@@ -1732,7 +1676,7 @@ def fetch_sports_direct(msg_lower):
                 sport, league = val
                 break
         url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.4"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.6"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         events = data.get("events", [])
@@ -1759,7 +1703,7 @@ def fetch_crypto_direct():
     try:
         url = ("https://api.coingecko.com/api/v3/simple/price"
                "?ids=bitcoin,ethereum,solana&vs_currencies=usd&include_24hr_change=true")
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.4"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.6"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         parts = []
@@ -1789,7 +1733,7 @@ def fetch_news_direct(query=None):
             url = f"https://gnews.io/api/v4/search?q={encoded}&lang=en&max=5&token={GNEWS_KEY}"
         else:
             url = f"https://gnews.io/api/v4/top-headlines?lang=en&country=us&max=5&token={GNEWS_KEY}"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.4"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.6"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         articles = data.get("articles", [])
@@ -1810,7 +1754,7 @@ def fetch_news_backup(query=None):
             url = f"https://newsdata.io/api/1/latest?apikey={NEWSDATA_KEY}&q={encoded}&language=en"
         else:
             url = f"https://newsdata.io/api/1/latest?apikey={NEWSDATA_KEY}&language=en&country=us"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.4"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.6"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         results = data.get("results", [])
@@ -1828,12 +1772,12 @@ def fetch_movie_direct(query):
     try:
         encoded = urllib.parse.quote(query)
         url = f"https://www.omdbapi.com/?t={encoded}&apikey={OMDB_KEY}"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.4"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.6"})
         with urllib.request.urlopen(req, timeout=5) as r:
             d = json.loads(r.read().decode())
         if d.get("Response") == "False":
             url2 = f"https://www.omdbapi.com/?s={encoded}&apikey={OMDB_KEY}"
-            req2 = urllib.request.Request(url2, headers={"User-Agent": "HeraldAI/7.4"})
+            req2 = urllib.request.Request(url2, headers={"User-Agent": "HeraldAI/7.6"})
             with urllib.request.urlopen(req2, timeout=5) as r2:
                 d2 = json.loads(r2.read().decode())
             results = d2.get("Search", [])
@@ -1964,7 +1908,7 @@ def fetch_stock_direct(symbol):
     try:
         url = (f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE"
                f"&symbol={symbol.upper()}&apikey={ALPHA_KEY}")
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.4"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/7.6"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         q = data.get("Global Quote", {})
@@ -2022,7 +1966,6 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
         facts_str = "; ".join([f"{f['value']} ({f['category']})" for f in recent])
         facts_line = f"Facts learned from conversation: {facts_str}"
 
-    # v7.4 -- watcher context injection
     watcher_context = _build_watcher_context(profile)
 
     context_parts = [p for p in [notes_line, prefs_line, facts_line] if p]
@@ -2066,8 +2009,7 @@ You speak through a text-to-speech engine. Follow these rules for every response
 - Write prices in words: say "seventy-four dollars and two cents" not "$74.02"
 - Write large numbers in words: say "one point two million" not "1,200,000"
 - Write percentages in words: say "twelve and a half percent" not "12.5%"
-- Write temperatures in words: say "eighty-five degrees" not "85 degrees F" or "85 degrees"
-- Write stock prices in words: say "one hundred forty two dollars" not "$142.00"
+- Write temperatures in words: say "eighty-five degrees" not "85 degrees F"
 - Never use symbols: no $, %, degrees symbol, #, *, &, or @ in your responses
 - Spell out abbreviations: say "miles per hour" not "mph"
 - Never start a response with a number -- spell it out or rephrase
@@ -2086,7 +2028,6 @@ ACTION TAGS -- append silently at end, never explain them:
 - Open social app: LAUNCH: [app name]
 - One action tag maximum per response.
 - When using an action tag, end your response with a short natural verbal offer to open it.
-  Example: "Want me to open Maps?" or "Should I pull that up on Spotify?" One question only.
 - Never give a flat one-sentence answer to a personal or conversational question."""
 
 
@@ -2104,10 +2045,6 @@ def parse_action(reply):
     return reply, None
 
 def call_openrouter(messages, use_search=True, model=None):
-    """
-    Call OpenRouter. model param overrides use_search model selection.
-    v7.4: accepts explicit model for routing control.
-    """
     if not OPENROUTER_KEY:
         return "Configuration error: API key not set on server."
     if model is None:
@@ -2227,7 +2164,7 @@ def build_ask_context(data):
     owner   = is_owner(user_id, auth_code)
     empire  = fetch_live_empire() if owner else None
     profile = get_profile(user_id)
-    profile["user_id"] = user_id  # ensure user_id is available in profile for watcher
+    profile["user_id"] = user_id
     msg_lower = message.lower()
 
     profile = detect_preferences(message, profile)
@@ -2288,7 +2225,7 @@ def get_direct_reply(ctx):
         try:
             payload = json.dumps({"secret": WEBHOOK_SECRET}).encode("utf-8")
             req = urllib.request.Request(VM_WEBHOOK_URL, data=payload,
-                headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/7.4"},
+                headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/7.6"},
                 method="POST")
             with urllib.request.urlopen(req, timeout=35) as r:
                 result = json.loads(r.read().decode())
@@ -2405,11 +2342,12 @@ def _trial_fields(trial):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "7.5",
-"watcher_cron": "enabled (/cron/watchers -- call every 30min with WEBHOOK_SECRET)",
+        "status": "ok", "server": "herald-api", "version": "7.6",
+        "proactive_loop": "enabled (/proactive/{user_id} -- poll on app open + resume)",
+        "watcher_cron": "enabled (/cron/watchers -- call every 30min with WEBHOOK_SECRET)",
         "learning_loop": "enabled (LLM extraction after every response)",
-        "watcher_system": "enabled (explicit + implicit + travel/task/research intent)",
-        "model_routing": f"Haiku default / Sonnet for judgment ({HAIKU_MODEL} / {SONNET_MODEL})",
+        "watcher_system": "enabled (explicit + implicit + gas + travel/task/research)",
+        "model_routing": f"Haiku default / Sonnet for judgment",
         "streaming": "enabled (/ask/stream)",
         "search": f"brave={'configured' if BRAVE_KEY else 'NOT SET'} | fallback=haiku:online",
         "cache": f"{len(_cache)} entries active",
@@ -2419,6 +2357,7 @@ def health():
             "crypto":      "CoinGecko (free, no key)",
             "stocks":      "Yahoo Finance (free) + Alpha Vantage backup",
             "commodities": "Yahoo Finance futures (free, no key)",
+            "gas":         "EIA" if EIA_KEY else "NOT SET -- add EIA_API_KEY",
             "news":        "GNews" if GNEWS_KEY else "not configured",
             "news_bak":    "NewsData" if NEWSDATA_KEY else "not configured",
             "movies":      "OMDb" if OMDB_KEY else "not configured",
@@ -2429,6 +2368,26 @@ def health():
         },
         "time": datetime.now().isoformat()
     }
+
+
+@app.get("/proactive/{user_id}")
+def get_proactive(user_id: str):
+    """
+    Frontend polls this on every app open and Capacitor resume event.
+    Returns queued proactive messages then clears the queue.
+    This is how Herald opens the conversation without being asked.
+    Queue is written by /cron/watchers when a watch condition fires.
+    """
+    if not user_id:
+        return {"messages": []}
+    profile = get_profile(user_id)
+    queue   = profile.get("proactive_queue", [])
+    if not queue:
+        return {"messages": []}
+    profile["proactive_queue"] = []
+    save_profile(user_id, profile)
+    print(f"[HERALD] Proactive queue delivered to {user_id}: {len(queue)} message(s)")
+    return {"messages": queue}
 
 
 @app.get("/geocode")
@@ -2520,7 +2479,6 @@ def ask(request: Request):
     if is_about_me_query(message):
         reply = build_about_me(profile)
         trial = get_trial_status(profile)
-        # Clear pending offer after it's been shown
         if profile.get("pending_watch_offer"):
             save_profile_fields(user_id, {"pending_watch_offer": None})
         return {"reply": reply, "action": None,
@@ -2539,12 +2497,9 @@ def ask(request: Request):
                 "name": profile.get("name", ""),
                 "used_search": False, **_trial_fields(trial)}
 
-    # v7.4 -- route model (Haiku vs Sonnet)
     routed_model = route_model(message)
-    # Sonnet queries don't need live search (they're advice/nuance, not data)
     use_search = needs_web_search(message) and routed_model != SONNET_MODEL
 
-    # v7.4 -- capability offer injection into system prompt
     cap_offer = check_capability_offer(message, profile)
     if cap_offer:
         messages[0]["content"] += f"\n\nINSTRUCTION: At the END of your response, naturally add: '{cap_offer}'"
@@ -2556,18 +2511,15 @@ def ask(request: Request):
 
     reply, action = parse_action(raw_reply)
 
-    # Clear pending watch offer (was injected into system prompt for this response)
     if profile.get("pending_watch_offer"):
         save_profile_fields(user_id, {"pending_watch_offer": None})
 
-    # v7.3 -- learning loop (background)
     threading.Thread(
         target=extract_learned_facts,
         args=(user_id, message, reply),
         daemon=True
     ).start()
 
-    # v7.4 -- watcher pipeline (background)
     threading.Thread(
         target=_run_watcher_pipeline,
         args=(message, profile, user_id),
@@ -2596,11 +2548,9 @@ async def ask_stream(request: Request):
     message    = ctx["message"]
     user_id    = ctx["user_id"]
 
-    # v7.4 -- route model
     routed_model = route_model(message)
     use_search   = needs_web_search(message) and routed_model != SONNET_MODEL
 
-    # v7.4 -- capability offer injection
     cap_offer = check_capability_offer(message, profile)
     if cap_offer:
         messages[0]["content"] += f"\n\nINSTRUCTION: At the END of your response, naturally add: '{cap_offer}'"
@@ -2615,7 +2565,6 @@ async def ask_stream(request: Request):
     }
 
     def generate():
-        # Clear pending offer (it was injected into this response's system prompt)
         if profile.get("pending_watch_offer"):
             save_profile_fields(user_id, {"pending_watch_offer": None})
 
@@ -2668,14 +2617,12 @@ async def ask_stream(request: Request):
 
             reply, action = parse_action(full_text)
 
-            # v7.3 -- learning loop (background)
             threading.Thread(
                 target=extract_learned_facts,
                 args=(user_id, message, reply),
                 daemon=True
             ).start()
 
-            # v7.4 -- watcher pipeline (background)
             threading.Thread(
                 target=_run_watcher_pipeline,
                 args=(message, profile, user_id),
@@ -2838,6 +2785,119 @@ async def invite_list(request: Request):
     return {"ok": True, "invites": invite_list_data, "total": len(invite_list_data)}
 
 
+@app.post("/cron/watchers")
+async def cron_watchers(request: Request):
+    """
+    Called every 30 min by VM crontab.
+    Checks all active watches across all users.
+    When a condition fires:
+      - Writes to proactive_queue[] (delivered on next app open -- no push needed)
+      - Sends email alert if user has email on file
+    Batch fetches data -- API calls don't multiply with users.
+    """
+    data   = await request.json()
+    secret = data.get("secret", "")
+    if not WEBHOOK_SECRET or secret != WEBHOOK_SECRET:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+    triggered_count = 0
+    checked_count   = 0
+    now_iso         = datetime.utcnow().isoformat()
+
+    scores_cache = {}
+    crypto_cache = {}
+    stock_cache  = {}
+    gas_cache    = {}
+
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("SELECT user_id, data FROM profiles")
+        rows = c.fetchall()
+        conn.close()
+    except Exception as e:
+        return JSONResponse({"error": f"db error: {e}"}, status_code=500)
+
+    for user_id, raw_data in rows:
+        try:
+            profile = json.loads(raw_data)
+        except Exception:
+            continue
+
+        watches = [w for w in profile.get("watches", []) if w.get("active")]
+        if not watches:
+            continue
+
+        watches_changed = False
+        proactive_queue = profile.get("proactive_queue", [])
+        queue_changed   = False
+
+        for watch in watches:
+            checked_count += 1
+            watch_type    = watch.get("type", "other")
+            trigger_msg   = None
+
+            try:
+                if watch_type == "sports":
+                    trigger_msg = check_sports_watch(watch, scores_cache)
+
+                elif watch_type == "crypto":
+                    if not crypto_cache:
+                        crypto_cache.update(fetch_crypto_prices_batch())
+                    trigger_msg = check_crypto_watch(watch, crypto_cache)
+
+                elif watch_type == "stock":
+                    trigger_msg = check_stock_watch(watch, stock_cache)
+
+                elif watch_type == "news":
+                    trigger_msg = check_news_watch(watch)
+
+                elif watch_type == "gas":
+                    trigger_msg = check_gas_watch(watch, gas_cache)
+
+                watch["last_checked"] = now_iso
+                watches_changed = True
+
+                if trigger_msg:
+                    # Write to proactive_queue -- delivered on next app open
+                    queue_item = {
+                        "id":                str(uuid.uuid4())[:8],
+                        "type":              watch_type,
+                        "text":              trigger_msg,
+                        "watch_description": watch.get("description", ""),
+                        "created_at":        now_iso,
+                    }
+                    proactive_queue.append(queue_item)
+                    if len(proactive_queue) > 5:
+                        proactive_queue = proactive_queue[-5:]
+                    queue_changed = True
+
+                    # Email alert if user has email on file
+                    email = profile.get("email", "")
+                    if email:
+                        send_alert_email(profile, watch, trigger_msg)
+
+                    watch["last_triggered"] = now_iso
+                    triggered_count += 1
+                    print(f"[HERALD] Watch triggered: {user_id} | {watch.get('description')} | {trigger_msg[:60]}")
+
+            except Exception as e:
+                print(f"[HERALD] Watch check error ({user_id} / {watch.get('description')}): {e}")
+
+        if watches_changed or queue_changed:
+            profile["watches"]         = watches
+            profile["proactive_queue"] = proactive_queue
+            save_profile(user_id, profile)
+
+    print(f"[HERALD] /cron/watchers complete: {checked_count} watches checked, {triggered_count} triggered")
+    return {
+        "ok": True,
+        "checked": checked_count,
+        "triggered": triggered_count,
+        "ran_at": now_iso,
+    }
+
+
 @app.post("/sync")
 async def sync(request: Request):
     data      = await request.json()
@@ -2852,7 +2912,7 @@ async def sync(request: Request):
     try:
         payload = json.dumps({"secret": WEBHOOK_SECRET}).encode("utf-8")
         req = urllib.request.Request(VM_WEBHOOK_URL, data=payload,
-            headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/7.4"},
+            headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/7.6"},
             method="POST")
         with urllib.request.urlopen(req, timeout=35) as r:
             result = json.loads(r.read().decode())
@@ -2872,10 +2932,11 @@ def startup():
     init_db()
     load_profiles()
     load_invites()
-    print(f"[HERALD API v7.5] FastAPI + uvicorn + SQLite + LLM learning loop + Watcher cron")
+    print(f"[HERALD API v7.6] FastAPI + uvicorn + SQLite + proactive loop LIVE")
     print(f"[HERALD API] OpenRouter:    {'YES' if OPENROUTER_KEY else 'MISSING -- required'}")
     print(f"[HERALD API] Model routing: Haiku ({HAIKU_MODEL}) / Sonnet ({SONNET_MODEL})")
     print(f"[HERALD API] Brave Search:  {'YES' if BRAVE_KEY else 'NOT SET -- add BRAVE_SEARCH_KEY'}")
+    print(f"[HERALD API] EIA gas price: {'YES' if EIA_KEY else 'NOT SET -- add EIA_API_KEY'}")
     print(f"[HERALD API] OpenAI TTS:    {'YES' if OPENAI_KEY else 'not set'}")
     print(f"[HERALD API] SendGrid:      {'YES' if SENDGRID_KEY else 'NOT SET -- watch emails disabled'}")
     print(f"[HERALD API] Geocoding:     {'YES' if GEOCODING_KEY else 'not set'}")
@@ -2888,8 +2949,9 @@ def startup():
     print(f"[HERALD API] Owner code:    {'SET' if OWNER_CODE else 'NOT SET'}")
     print(f"[HERALD API] Invite secret: {'SET' if INVITE_SECRET else 'NOT SET'}")
     print(f"[HERALD API] Webhook:       {'SET' if WEBHOOK_SECRET else 'NOT SET'}")
+    print(f"[HERALD API] Proactive:     ENABLED -- /proactive/{{user_id}} queues on watch trigger")
     print(f"[HERALD API] Learning loop: ENABLED -- extract_learned_facts() after every LLM response")
-    print(f"[HERALD API] Watcher:       ENABLED -- explicit + implicit + travel/task/research")
+    print(f"[HERALD API] Watcher:       ENABLED -- explicit + implicit + gas + travel/task/research")
     print(f"[HERALD API] Built caps:    {BUILT_CAPABILITIES}")
 
 
