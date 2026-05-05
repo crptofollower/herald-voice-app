@@ -130,9 +130,46 @@
     .web-panel-chips{display:flex;gap:8px;flex-wrap:wrap;padding-bottom:32px;}
     .web-panel-chip{padding:8px 14px;border-radius:20px;font-size:11px;font-weight:500;color:white;cursor:pointer;text-decoration:none;border:none;display:inline-flex;align-items:center;gap:6px;}
     .web-panel-chip:active{opacity:0.75;}
+    .trust{position:fixed;inset:0;z-index:110;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 32px;text-align:center;}
+    .trust-icon{width:72px;height:72px;border-radius:20px;background:var(--emerald);display:flex;align-items:center;justify-content:center;margin:0 auto 28px;font-family:'DM Serif Display',serif;font-size:36px;color:white;}
+    .trust-title{font-family:'DM Serif Display',serif;font-size:26px;color:var(--emerald);letter-spacing:0.08em;margin-bottom:20px;}
+    .trust-body{font-size:15px;color:var(--txt);line-height:1.9;max-width:320px;margin-bottom:12px;font-weight:300;}
+    .trust-body strong{color:var(--emerald);font-weight:500;}
+    .trust-note{font-size:12px;color:var(--txt2);line-height:1.7;max-width:300px;margin-bottom:36px;font-weight:300;opacity:0.8;font-style:italic;}
+    .trust-btn{width:100%;max-width:320px;padding:16px;background:var(--emerald);color:white;font-family:'DM Sans',sans-serif;font-size:14px;font-weight:500;letter-spacing:0.08em;border:none;border-radius:12px;cursor:pointer;}
+    .perm{position:fixed;inset:0;z-index:105;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 32px;text-align:center;}
+    .perm-emoji{font-size:52px;margin-bottom:20px;}
+    .perm-title{font-family:'DM Serif Display',serif;font-size:22px;color:var(--txt);margin-bottom:14px;}
+    .perm-body{font-size:14px;color:var(--txt2);line-height:1.8;max-width:300px;margin-bottom:8px;font-weight:300;}
+    .perm-assurance{font-size:12px;color:var(--emerald);line-height:1.7;max-width:280px;margin-bottom:36px;font-weight:400;}
+    .perm-btn{width:100%;max-width:300px;padding:15px;background:var(--emerald);color:white;font-family:'DM Sans',sans-serif;font-size:13px;font-weight:500;letter-spacing:0.08em;border:none;border-radius:12px;cursor:pointer;margin-bottom:12px;}
+    .perm-skip{font-size:11px;color:var(--txt2);cursor:pointer;text-decoration:underline;opacity:0.6;}
   </style>
 </head>
 <body data-theme="dark">
+
+<div class="trust" id="trustScreen" style="display:none;">
+  <div class="trust-icon">H</div>
+  <div class="trust-title">Before we start</div>
+  <div class="trust-body">
+    Herald works <strong>for you</strong>, not the other way around.<br><br>
+    I don't sell your information.<br>
+    I don't track where you go.<br>
+    I don't listen unless you ask me to.<br><br>
+    Everything you tell me stays between us.
+  </div>
+  <div class="trust-note">That's not a policy — that's just how a good friend works.</div>
+  <button class="trust-btn" onclick="startPermissions()">Got it, let's go →</button>
+</div>
+
+<div class="perm" id="permScreen" style="display:none;">
+  <div class="perm-emoji" id="permEmoji">🎤</div>
+  <div class="perm-title" id="permTitle">Can I hear you?</div>
+  <div class="perm-body" id="permBody">So you can just talk to me instead of typing. I only listen when you tap the mic — never in the background.</div>
+  <div class="perm-assurance" id="permAssurance">I never record or store your voice.</div>
+  <button class="perm-btn" id="permBtn" onclick="grantCurrentPermission()">Allow</button>
+  <div class="perm-skip" onclick="skipCurrentPermission()">skip for now</div>
+</div>
 
 <div class="setup" id="setupScreen">
   <div class="setup-icon">H</div>
@@ -160,7 +197,7 @@
     <div class="h-icon">H</div>
     <div>
       <div class="h-title">HERALD</div>
-      <div class="h-sub" id="headerSub">PERSONAL AI V55.5</div>
+      <div class="h-sub" id="headerSub">PERSONAL AI V55.95</div>
     </div>
     <div class="h-right">
       <div class="dot-live" id="statusDot"></div>
@@ -193,7 +230,7 @@
     </div>
   </div>
 
-  <div class="chips" id="suggestChips">
+  <div class="chips" id="suggestChips" style="display:none;">
     <div class="chip" onclick="sendQuick('What\'s the weather today?')">weather</div>
     <div class="chip" onclick="sendQuick('What\'s in the news?')">news</div>
     <div class="chip" onclick="sendQuick('What time is it?')">time</div>
@@ -235,7 +272,7 @@
 
 <script>
 // ═══════════════════════════════════════════════════════
-// HERALD v55.5 — Capacitor Native Android App
+// HERALD V55.9 — Capacitor Native Android App
 // GPS:   Capacitor.Plugins.Geolocation → navigator fallback
 // SOUND: Railway/OpenAI → Capacitor TTS → WebSpeech+resume()
 // NEW:   Watchdog timer + Hey [AI Name] wake word
@@ -244,7 +281,7 @@
 const RAILWAY_URL    = 'https://web-production-b4083.up.railway.app';
 const STRIPE_MONTHLY = 'PLACEHOLDER_MONTHLY';
 const STRIPE_ANNUAL  = 'PLACEHOLDER_ANNUAL';
-const VERSION        = 'V55.7';
+const VERSION        = 'V55.9';
 
 let userId           = localStorage.getItem('herald_uid') || '';
 let authCode         = localStorage.getItem('herald_auth') || '';
@@ -279,7 +316,13 @@ if (userId && authCode) {
   showApp();
 } else {
   const inviteCode = new URLSearchParams(window.location.search).get('invite');
-  if (inviteCode) document.getElementById('codeInput').value = inviteCode;
+  if (inviteCode) {
+    document.getElementById('codeInput').value = inviteCode;
+  } else if (!localStorage.getItem('herald_trust_shown')) {
+    // Brand new user -- show trust screen first
+    document.getElementById('setupScreen').style.display = 'none';
+    document.getElementById('trustScreen').style.display = 'flex';
+  }
 }
 
 function updateTime() {
@@ -928,6 +971,82 @@ function stopWakeWord() {
   document.getElementById('voiceHint').classList.remove('wake-active');
   document.getElementById('micBtn').classList.remove('wake');
   document.getElementById('voiceHint').textContent='tap mic · talk · get answer';
+}
+
+// ── TRUST + PERMISSION FLOW ───────────────────────────────────────────────────
+const PERMISSIONS = [
+  {
+    emoji: '🎤',
+    title: 'Can I hear you?',
+    body: 'So you can just talk to me instead of typing. I only listen when you tap the mic — never in the background.',
+    assurance: 'I never record or store your voice.',
+    grant: async () => {
+      try {
+        await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch(e) {}
+    }
+  },
+  {
+    emoji: '📍',
+    title: 'Where are you?',
+    body: 'So I know if it\'s raining where you are and can recommend things nearby. I only check when you ask.',
+    assurance: 'I never track your location in the background or share it with anyone.',
+    grant: async () => {
+      try {
+        if (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Geolocation) {
+          await window.Capacitor.Plugins.Geolocation.requestPermissions();
+        } else {
+          await new Promise(resolve => navigator.geolocation.getCurrentPosition(resolve, resolve, {timeout:3000}));
+        }
+      } catch(e) {}
+    }
+  },
+  {
+    emoji: '🔔',
+    title: 'Can I tap you on the shoulder?',
+    body: 'So I can let you know when something you care about happens — like a score, a price change, or something you asked me to watch.',
+    assurance: 'You control everything I watch. You can turn this off anytime.',
+    grant: async () => {
+      try {
+        if ('Notification' in window) await Notification.requestPermission();
+      } catch(e) {}
+    }
+  }
+];
+
+let currentPermIndex = 0;
+
+function startPermissions() {
+  localStorage.setItem('herald_trust_shown', '1');
+  document.getElementById('trustScreen').style.display = 'none';
+  currentPermIndex = 0;
+  showPermission(0);
+}
+
+function showPermission(idx) {
+  if (idx >= PERMISSIONS.length) {
+    // All done -- go to setup
+    document.getElementById('permScreen').style.display = 'none';
+    document.getElementById('setupScreen').style.display = 'flex';
+    return;
+  }
+  const p = PERMISSIONS[idx];
+  document.getElementById('permEmoji').textContent = p.emoji;
+  document.getElementById('permTitle').textContent = p.title;
+  document.getElementById('permBody').textContent = p.body;
+  document.getElementById('permAssurance').textContent = p.assurance;
+  document.getElementById('permScreen').style.display = 'flex';
+}
+
+async function grantCurrentPermission() {
+  await PERMISSIONS[currentPermIndex].grant();
+  currentPermIndex++;
+  showPermission(currentPermIndex);
+}
+
+function skipCurrentPermission() {
+  currentPermIndex++;
+  showPermission(currentPermIndex);
 }
 </script>
 </body>
