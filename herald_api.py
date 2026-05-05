@@ -2027,6 +2027,7 @@ ACTION TAGS -- append silently at end, never explain them:
 - Find videos or social content: SEARCH: [search query]
 - Open social app: LAUNCH: [app name]
 - One action tag maximum per response.
+- Action tags MUST appear on their own line at the very end of the response, after all spoken text. Never inline.
 - When using an action tag, end your response with a short natural verbal offer to open it.
 - Never give a flat one-sentence answer to a personal or conversational question."""
 
