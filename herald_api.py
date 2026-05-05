@@ -2674,7 +2674,14 @@ async def greeting(request: Request):
         salutation = "Good evening"
 
     name_part = f", {name}" if name else ""
-    location  = location_label or profile.get("location", "")
+    # Prefer explicitly learned location over GPS geocode label
+    # User saying "I'm in Destin" beats what the GPS chip reports
+    learned_location = ""
+    for fact in profile.get("learned_facts", []):
+        if fact.get("category") == "location":
+            learned_location = fact.get("value", "")
+            break
+    location = learned_location or location_label or profile.get("location", "")
     weather_line = ""
     if location:
         cached  = cache_get(f'weather:{location}', 'weather')

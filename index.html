@@ -394,7 +394,9 @@ async function showApp() {
   document.getElementById('headerSub').textContent = `PERSONAL AI ${VERSION}`;
   if (userName) document.getElementById('welcomeText').textContent = `Good to see you, ${userName}. What can I help with?`;
   await fetchGreeting();
-  checkProactive();
+  // Delay proactive check -- greeting must finish first
+  // Prevents duplicate message on app open when queue is empty
+  setTimeout(() => checkProactive(), 3000);
 }
 
 // ── PROACTIVE LOOP (v55.7) ────────────────────────────────────────────────────
