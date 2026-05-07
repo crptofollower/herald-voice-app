@@ -1,6 +1,18 @@
 # herald_api.py
 # Herald PWA Backend -- Railway Cloud Server
-# v7.7 -- Episodic memory + life tracker + session history + APScheduler
+# v7.8 -- IRA trade logging via Herald voice entry
+#
+# WHAT CHANGED vs v7.7:
+#   - Added:   ira_trades table (SQLite) -- Herald trade memory
+#   - Added:   IRA_TRADE_EXTRACTION_PROMPT
+#   - Added:   extract_ira_trade() -- background trade detection
+#   - Added:   log_ira_trade_to_vm() -- syncs to ira_trade_log.json
+#   - Added:   get_open_ira_positions() -- for morning briefing
+#   - Added:   /trades/ira GET endpoint -- Freddie can poll this
+#   - Updated: FREDDIE_TRIGGERS -- IRA language added
+#   - Updated: morning_briefing_job() -- checks open IRA positions
+#   - Updated: /ask + /ask/stream -- extract_ira_trade() thread added
+#   - Version bump: 7.7 -> 7.8
 #
 # WHAT CHANGED vs v7.6:
 #   - Added:   life_moments table (SQLite) -- episodic memory layer
@@ -33,7 +45,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="7.7")
+app = FastAPI(title="Herald API", version="7.8")
 
 app.add_middleware(
     CORSMiddleware,
@@ -294,6 +306,62 @@ If nothing meaningful was shared:
 Return ONLY valid JSON. No markdown. No preamble."""
 
 
+# ── IRA TRADE CONFIG (v7.8) ───────────────────────────────────────────────────
+
+IRA_TRADE_EXTRACTION_PROMPT = """You are analyzing a message from a trader who is
+logging their IRA options trades by speaking naturally to their assistant.
+
+User said: "{message}"
+
+Detect if the user is logging a trade open, close, or outcome.
+
+Natural language examples to detect:
+
+OPENS:
+"opened a SPY put spread, May 16 expiration, sold the 520 put bought the 515,
+ took in one dollar forty credit, two contracts"
+"put on an iron condor on QQQ, collected two eighty"
+"sold a covered call on AAPL 195 strike expiring Friday, got eighty cents"
+"opened XYZ call spread for a dollar twenty credit"
+
+CLOSES / OUTCOMES:
+"closed the SPY spread for full credit, expired worthless Friday"
+"May 8th IRA trade closed, expired full credit"
+"bought back the QQQ condor for fifteen cents, took most of the profit"
+"SPY put spread closed at a loss, paid one ninety to close"
+"trade expired worthless, kept the full premium"
+
+If a trade is detected return ONLY valid JSON:
+{{
+  "detected": true,
+  "action": "open" or "close" or "expired",
+  "account": "IRA",
+  "ticker": "SPY" or null,
+  "strategy": "put spread" or "call spread" or "iron condor" or
+              "covered call" or "cash secured put" or "other",
+  "direction": "credit" or "debit" or null,
+  "amount": 1.40 or null,
+  "contracts": 2 or null,
+  "expiration": "2026-05-16" or null,
+  "short_strike": 520 or null,
+  "long_strike": 515 or null,
+  "outcome": "full credit" or "partial" or "loss" or null,
+  "trade_date": "today" or "friday" or "2026-05-08" or null,
+  "notes": "raw summary of what they said in one sentence"
+}}
+
+If nothing trade-related was said:
+{{"detected": false}}
+
+Rules:
+- "full credit" / "expired worthless" / "kept premium" = expired outcome
+- Always set account to IRA unless user says otherwise
+- If expiration day mentioned without year assume current month
+- Return ONLY valid JSON. No markdown. No preamble."""
+
+VM_IRA_WEBHOOK_URL = "http://143.198.18.66:8082/webhook/ira_trade"
+
+
 # ── COMMODITY MAP ─────────────────────────────────────────────────────────────
 
 COMMODITY_MAP = {
@@ -523,6 +591,60 @@ def init_db():
         c.execute("""
             CREATE INDEX IF NOT EXISTS idx_tracker_user
             ON life_tracker (user_id, active, remind_date)
+        """)
+        # v7.8 -- IRA trade log (Herald voice entry -> VM sync)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS ira_trades (
+                id            TEXT PRIMARY KEY,
+                user_id       TEXT NOT NULL,
+                action        TEXT NOT NULL,
+                account       TEXT DEFAULT 'IRA',
+                ticker        TEXT,
+                strategy      TEXT,
+                direction     TEXT,
+                amount        REAL,
+                contracts     INTEGER,
+                expiration    TEXT,
+                short_strike  REAL,
+                long_strike   REAL,
+                outcome       TEXT,
+                trade_date    TEXT,
+                notes         TEXT,
+                status        TEXT DEFAULT 'open',
+                vm_synced     INTEGER DEFAULT 0,
+                created_at    TEXT NOT NULL
+            )
+        """)
+        c.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ira_user
+            ON ira_trades (user_id, status, created_at DESC)
+        """)
+        # v7.8 -- IRA trade log (Herald voice entry -> VM sync)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS ira_trades (
+                id            TEXT PRIMARY KEY,
+                user_id       TEXT NOT NULL,
+                action        TEXT NOT NULL,
+                account       TEXT DEFAULT 'IRA',
+                ticker        TEXT,
+                strategy      TEXT,
+                direction     TEXT,
+                amount        REAL,
+                contracts     INTEGER,
+                expiration    TEXT,
+                short_strike  REAL,
+                long_strike   REAL,
+                outcome       TEXT,
+                trade_date    TEXT,
+                notes         TEXT,
+                status        TEXT DEFAULT 'open',
+                vm_synced     INTEGER DEFAULT 0,
+                created_at    TEXT NOT NULL
+            )
+        """)
+        c.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ira_user
+            ON ira_trades (user_id, status, created_at DESC)
         """)
         # v7.7 -- session history (conversation survives reload)
         c.execute("""
@@ -972,6 +1094,496 @@ def extract_life_moment(user_id: str, user_message: str, herald_reply: str):
 
     except Exception as e:
         print(f"[HERALD] extract_life_moment (non-fatal): {e}")
+
+
+# ── IRA TRADE FUNCTIONS (v7.8) ────────────────────────────────────────────────
+
+def _resolve_trade_date(raw: str) -> str:
+    """Convert natural date references to ISO date string."""
+    if not raw or raw == "today":
+        return datetime.now().date().isoformat()
+    if raw.lower() == "friday":
+        today = datetime.now().date()
+        days_back = (today.weekday() - 4) % 7
+        return (today - timedelta(days=days_back)).isoformat()
+    if raw.lower() == "monday":
+        today = datetime.now().date()
+        days_back = (today.weekday() - 0) % 7
+        return (today - timedelta(days=days_back)).isoformat()
+    if raw.lower() == "yesterday":
+        return (datetime.now().date() - timedelta(days=1)).isoformat()
+    # Try direct parse
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y"):
+        try:
+            return datetime.strptime(raw, fmt).date().isoformat()
+        except Exception:
+            pass
+    return datetime.now().date().isoformat()
+
+
+def save_ira_trade(user_id: str, trade: dict) -> str:
+    """Write a trade to the ira_trades SQLite table. Returns trade id."""
+    tid = str(uuid.uuid4())[:12]
+    try:
+        trade_date = _resolve_trade_date(trade.get("trade_date"))
+        action     = trade.get("action", "open")
+        # If action is expired/close, mark any matching open as closed
+        if action in ("close", "expired"):
+            _close_matching_trade(user_id, trade)
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("""
+            INSERT INTO ira_trades
+            (id, user_id, action, account, ticker, strategy,
+             direction, amount, contracts, expiration,
+             short_strike, long_strike, outcome,
+             trade_date, notes, status, vm_synced, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+        """, (
+            tid, user_id,
+            action,
+            trade.get("account", "IRA"),
+            trade.get("ticker"),
+            trade.get("strategy"),
+            trade.get("direction"),
+            trade.get("amount"),
+            trade.get("contracts"),
+            trade.get("expiration"),
+            trade.get("short_strike"),
+            trade.get("long_strike"),
+            trade.get("outcome"),
+            trade_date,
+            trade.get("notes", "")[:300],
+            "closed" if action in ("close", "expired") else "open",
+            datetime.now().isoformat()
+        ))
+        conn.commit()
+        conn.close()
+        print(f"[HERALD] IRA trade saved: {user_id} | {action} | "
+              f"{trade.get('ticker','?')} {trade.get('strategy','?')}")
+    except Exception as e:
+        print(f"[HERALD] save_ira_trade (non-fatal): {e}")
+    return tid
+
+
+def _close_matching_trade(user_id: str, trade: dict):
+    """Mark the most recent open trade for this ticker/strategy as closed."""
+    try:
+        ticker   = trade.get("ticker")
+        strategy = trade.get("strategy")
+        if not ticker and not strategy:
+            return
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        if ticker:
+            c.execute("""
+                UPDATE ira_trades SET status = 'closed'
+                WHERE user_id = ? AND status = 'open'
+                AND ticker = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, (user_id, ticker))
+        else:
+            c.execute("""
+                UPDATE ira_trades SET status = 'closed'
+                WHERE user_id = ? AND status = 'open'
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, (user_id,))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[HERALD] _close_matching_trade (non-fatal): {e}")
+
+
+def get_open_ira_positions(user_id: str) -> list:
+    """Return open IRA positions for morning briefing and query responses."""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("""
+            SELECT id, ticker, strategy, direction, amount,
+                   contracts, expiration, short_strike,
+                   long_strike, trade_date, notes
+            FROM ira_trades
+            WHERE user_id = ? AND status = 'open'
+            ORDER BY created_at DESC
+            LIMIT 10
+        """, (user_id,))
+        rows = c.fetchall()
+        conn.close()
+        return [{
+            "id":           r[0], "ticker":       r[1],
+            "strategy":     r[2], "direction":    r[3],
+            "amount":       r[4], "contracts":    r[5],
+            "expiration":   r[6], "short_strike": r[7],
+            "long_strike":  r[8], "trade_date":   r[9],
+            "notes":        r[10],
+        } for r in rows]
+    except Exception as e:
+        print(f"[HERALD] get_open_ira_positions (non-fatal): {e}")
+        return []
+
+
+def log_ira_trade_to_vm(user_id: str, trade_id: str, trade: dict):
+    """
+    POST trade to VM webhook so ira_trade_log.json stays current.
+    Runs in background thread. Non-fatal if VM unreachable.
+    Marks vm_synced=1 in SQLite on success.
+    """
+    if not WEBHOOK_SECRET:
+        return
+    try:
+        payload = json.dumps({
+            "secret":   WEBHOOK_SECRET,
+            "trade_id": trade_id,
+            "user_id":  user_id,
+            "trade":    trade,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            VM_IRA_WEBHOOK_URL, data=payload,
+            headers={"Content-Type": "application/json",
+                     "User-Agent": "HeraldAPI/7.8"},
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=10) as r:
+            result = json.loads(r.read().decode())
+        if result.get("ok"):
+            conn = sqlite3.connect(DB_FILE)
+            c = conn.cursor()
+            c.execute("UPDATE ira_trades SET vm_synced=1 WHERE id=?",
+                      (trade_id,))
+            conn.commit()
+            conn.close()
+            print(f"[HERALD] IRA trade synced to VM: {trade_id}")
+        else:
+            print(f"[HERALD] VM IRA sync returned not-ok: {result}")
+    except Exception as e:
+        print(f"[HERALD] log_ira_trade_to_vm (non-fatal): {e}")
+
+
+def extract_ira_trade(user_id: str, user_message: str, herald_reply: str):
+    """
+    Runs in background after every response for owner only.
+    Detects IRA trade language, stores to SQLite, syncs to VM.
+    """
+    try:
+        prompt = IRA_TRADE_EXTRACTION_PROMPT.format(
+            message=user_message[:500]
+        )
+        payload = json.dumps({
+            "model":      HAIKU_MODEL,
+            "max_tokens": 200,
+            "messages":   [{"role": "user", "content": prompt}]
+        }).encode("utf-8")
+        req = urllib.request.Request(OR_URL, data=payload, headers={
+            "Content-Type":  "application/json",
+            "Authorization": f"Bearer {OPENROUTER_KEY}",
+            "HTTP-Referer":  "https://apexempire.ai",
+            "X-Title":       "Herald Personal AI"
+        }, method="POST")
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode())
+        raw = data["choices"][0]["message"]["content"].strip()
+        raw = raw.replace("```json", "").replace("```", "").strip()
+        result = json.loads(raw)
+
+        if not result.get("detected"):
+            return
+
+        trade_id = save_ira_trade(user_id, result)
+
+        # Sync to VM in background
+        threading.Thread(
+            target=log_ira_trade_to_vm,
+            args=(user_id, trade_id, result),
+            daemon=True
+        ).start()
+
+    except Exception as e:
+        print(f"[HERALD] extract_ira_trade (non-fatal): {e}")
+
+
+def build_ira_position_summary(positions: list) -> str:
+    """
+    Generate a natural language summary of open IRA positions.
+    Used by morning briefing and direct IRA queries.
+    """
+    if not positions:
+        return "No open IRA positions on record."
+    lines = []
+    today = datetime.now().date()
+    for p in positions:
+        parts = []
+        if p.get("ticker"):
+            parts.append(p["ticker"])
+        if p.get("strategy"):
+            parts.append(p["strategy"])
+        if p.get("contracts"):
+            parts.append(f"{p['contracts']} contracts")
+        if p.get("amount"):
+            parts.append(f"credit {p['amount']:.2f}")
+        if p.get("expiration"):
+            try:
+                exp = date.fromisoformat(p["expiration"])
+                dte = (exp - today).days
+                parts.append(
+                    f"expires {exp.strftime('%b %d')} "
+                    f"({'today' if dte == 0 else f'{dte}d'})"
+                )
+            except Exception:
+                parts.append(f"exp {p['expiration']}")
+        if p.get("short_strike") and p.get("long_strike"):
+            parts.append(
+                f"strikes {p['short_strike']}/{p['long_strike']}"
+            )
+        lines.append(" | ".join(parts))
+    return "\n".join(f"• {l}" for l in lines)
+
+
+# ── IRA TRADE FUNCTIONS (v7.8) ────────────────────────────────────────────────
+
+def _resolve_trade_date(raw: str) -> str:
+    """Convert natural date references to ISO date string."""
+    if not raw or raw == "today":
+        return datetime.now().date().isoformat()
+    if raw.lower() == "friday":
+        today = datetime.now().date()
+        days_back = (today.weekday() - 4) % 7
+        return (today - timedelta(days=days_back)).isoformat()
+    if raw.lower() == "monday":
+        today = datetime.now().date()
+        days_back = (today.weekday() - 0) % 7
+        return (today - timedelta(days=days_back)).isoformat()
+    if raw.lower() == "yesterday":
+        return (datetime.now().date() - timedelta(days=1)).isoformat()
+    # Try direct parse
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y"):
+        try:
+            return datetime.strptime(raw, fmt).date().isoformat()
+        except Exception:
+            pass
+    return datetime.now().date().isoformat()
+
+
+def save_ira_trade(user_id: str, trade: dict) -> str:
+    """Write a trade to the ira_trades SQLite table. Returns trade id."""
+    tid = str(uuid.uuid4())[:12]
+    try:
+        trade_date = _resolve_trade_date(trade.get("trade_date"))
+        action     = trade.get("action", "open")
+        # If action is expired/close, mark any matching open as closed
+        if action in ("close", "expired"):
+            _close_matching_trade(user_id, trade)
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("""
+            INSERT INTO ira_trades
+            (id, user_id, action, account, ticker, strategy,
+             direction, amount, contracts, expiration,
+             short_strike, long_strike, outcome,
+             trade_date, notes, status, vm_synced, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+        """, (
+            tid, user_id,
+            action,
+            trade.get("account", "IRA"),
+            trade.get("ticker"),
+            trade.get("strategy"),
+            trade.get("direction"),
+            trade.get("amount"),
+            trade.get("contracts"),
+            trade.get("expiration"),
+            trade.get("short_strike"),
+            trade.get("long_strike"),
+            trade.get("outcome"),
+            trade_date,
+            trade.get("notes", "")[:300],
+            "closed" if action in ("close", "expired") else "open",
+            datetime.now().isoformat()
+        ))
+        conn.commit()
+        conn.close()
+        print(f"[HERALD] IRA trade saved: {user_id} | {action} | "
+              f"{trade.get('ticker','?')} {trade.get('strategy','?')}")
+    except Exception as e:
+        print(f"[HERALD] save_ira_trade (non-fatal): {e}")
+    return tid
+
+
+def _close_matching_trade(user_id: str, trade: dict):
+    """Mark the most recent open trade for this ticker/strategy as closed."""
+    try:
+        ticker   = trade.get("ticker")
+        strategy = trade.get("strategy")
+        if not ticker and not strategy:
+            return
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        if ticker:
+            c.execute("""
+                UPDATE ira_trades SET status = 'closed'
+                WHERE user_id = ? AND status = 'open'
+                AND ticker = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, (user_id, ticker))
+        else:
+            c.execute("""
+                UPDATE ira_trades SET status = 'closed'
+                WHERE user_id = ? AND status = 'open'
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, (user_id,))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[HERALD] _close_matching_trade (non-fatal): {e}")
+
+
+def get_open_ira_positions(user_id: str) -> list:
+    """Return open IRA positions for morning briefing and query responses."""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("""
+            SELECT id, ticker, strategy, direction, amount,
+                   contracts, expiration, short_strike,
+                   long_strike, trade_date, notes
+            FROM ira_trades
+            WHERE user_id = ? AND status = 'open'
+            ORDER BY created_at DESC
+            LIMIT 10
+        """, (user_id,))
+        rows = c.fetchall()
+        conn.close()
+        return [{
+            "id":           r[0], "ticker":       r[1],
+            "strategy":     r[2], "direction":    r[3],
+            "amount":       r[4], "contracts":    r[5],
+            "expiration":   r[6], "short_strike": r[7],
+            "long_strike":  r[8], "trade_date":   r[9],
+            "notes":        r[10],
+        } for r in rows]
+    except Exception as e:
+        print(f"[HERALD] get_open_ira_positions (non-fatal): {e}")
+        return []
+
+
+def log_ira_trade_to_vm(user_id: str, trade_id: str, trade: dict):
+    """
+    POST trade to VM webhook so ira_trade_log.json stays current.
+    Runs in background thread. Non-fatal if VM unreachable.
+    Marks vm_synced=1 in SQLite on success.
+    """
+    if not WEBHOOK_SECRET:
+        return
+    try:
+        payload = json.dumps({
+            "secret":   WEBHOOK_SECRET,
+            "trade_id": trade_id,
+            "user_id":  user_id,
+            "trade":    trade,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            VM_IRA_WEBHOOK_URL, data=payload,
+            headers={"Content-Type": "application/json",
+                     "User-Agent": "HeraldAPI/7.8"},
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=10) as r:
+            result = json.loads(r.read().decode())
+        if result.get("ok"):
+            conn = sqlite3.connect(DB_FILE)
+            c = conn.cursor()
+            c.execute("UPDATE ira_trades SET vm_synced=1 WHERE id=?",
+                      (trade_id,))
+            conn.commit()
+            conn.close()
+            print(f"[HERALD] IRA trade synced to VM: {trade_id}")
+        else:
+            print(f"[HERALD] VM IRA sync returned not-ok: {result}")
+    except Exception as e:
+        print(f"[HERALD] log_ira_trade_to_vm (non-fatal): {e}")
+
+
+def extract_ira_trade(user_id: str, user_message: str, herald_reply: str):
+    """
+    Runs in background after every response for owner only.
+    Detects IRA trade language, stores to SQLite, syncs to VM.
+    """
+    try:
+        prompt = IRA_TRADE_EXTRACTION_PROMPT.format(
+            message=user_message[:500]
+        )
+        payload = json.dumps({
+            "model":      HAIKU_MODEL,
+            "max_tokens": 200,
+            "messages":   [{"role": "user", "content": prompt}]
+        }).encode("utf-8")
+        req = urllib.request.Request(OR_URL, data=payload, headers={
+            "Content-Type":  "application/json",
+            "Authorization": f"Bearer {OPENROUTER_KEY}",
+            "HTTP-Referer":  "https://apexempire.ai",
+            "X-Title":       "Herald Personal AI"
+        }, method="POST")
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode())
+        raw = data["choices"][0]["message"]["content"].strip()
+        raw = raw.replace("```json", "").replace("```", "").strip()
+        result = json.loads(raw)
+
+        if not result.get("detected"):
+            return
+
+        trade_id = save_ira_trade(user_id, result)
+
+        # Sync to VM in background
+        threading.Thread(
+            target=log_ira_trade_to_vm,
+            args=(user_id, trade_id, result),
+            daemon=True
+        ).start()
+
+    except Exception as e:
+        print(f"[HERALD] extract_ira_trade (non-fatal): {e}")
+
+
+def build_ira_position_summary(positions: list) -> str:
+    """
+    Generate a natural language summary of open IRA positions.
+    Used by morning briefing and direct IRA queries.
+    """
+    if not positions:
+        return "No open IRA positions on record."
+    lines = []
+    today = datetime.now().date()
+    for p in positions:
+        parts = []
+        if p.get("ticker"):
+            parts.append(p["ticker"])
+        if p.get("strategy"):
+            parts.append(p["strategy"])
+        if p.get("contracts"):
+            parts.append(f"{p['contracts']} contracts")
+        if p.get("amount"):
+            parts.append(f"credit {p['amount']:.2f}")
+        if p.get("expiration"):
+            try:
+                exp = date.fromisoformat(p["expiration"])
+                dte = (exp - today).days
+                parts.append(
+                    f"expires {exp.strftime('%b %d')} "
+                    f"({'today' if dte == 0 else f'{dte}d'})"
+                )
+            except Exception:
+                parts.append(f"exp {p['expiration']}")
+        if p.get("short_strike") and p.get("long_strike"):
+            parts.append(
+                f"strikes {p['short_strike']}/{p['long_strike']}"
+            )
+        lines.append(" | ".join(parts))
+    return "\n".join(f"• {l}" for l in lines)
 
 
 # ── MORNING BRIEFING JOB (v7.7 -- APScheduler) ───────────────────────────────
