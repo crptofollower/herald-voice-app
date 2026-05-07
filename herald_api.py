@@ -1,21 +1,30 @@
 # herald_api.py
 # Herald PWA Backend -- Railway Cloud Server
-# v7.6 -- Proactive loop + gas price watcher + /proactive endpoint
+# v7.7 -- Episodic memory + life tracker + session history + APScheduler
 #
-# WHAT CHANGED vs v7.5.1:
-#   - Added:   EIA_KEY config variable (EIA_API_KEY env var)
-#   - Added:   proactive_queue[] to user profile schema
-#   - Added:   fetch_gas_price_eia() -- free government gas price API
-#   - Added:   check_gas_watch() -- alerts on price moves >= threshold
-#   - Added:   GET /proactive/{user_id} -- frontend polls on app open + resume
-#   - Updated: /cron/watchers -- gas watch type + writes to proactive_queue
-#   - Updated: EXPLICIT_WATCH_PROMPT -- gas watch examples
-#   - Updated: get_profile() -- proactive_queue field in default schema
-#   - Version bump: 7.5.1 -> 7.6
+# WHAT CHANGED vs v7.6:
+#   - Added:   life_moments table (SQLite) -- episodic memory layer
+#   - Added:   life_tracker table (SQLite) -- cycle/reminder layer
+#   - Added:   sessions table (SQLite) -- conversation history across reloads
+#   - Added:   extract_life_moment() -- background story extraction
+#   - Added:   extract_life_tracker() -- cycle detection + calendar offer
+#   - Added:   load_session_history() + save_session_turn()
+#   - Added:   morning_briefing_job() via APScheduler (07:00 ET daily)
+#   - Updated: build_system() -- injects hot life moments into system prompt
+#   - Updated: get_profile() -- life_events field
+#   - Updated: startup() -- starts APScheduler
+#   - Version bump: 7.6 -> 7.7
 
 import os, json, re, random, string, time, http.client, ssl, sqlite3, threading, uuid
 import urllib.request, urllib.error, urllib.parse
 from datetime import datetime, timedelta, date
+
+try:
+    from apscheduler.schedulers.background import BackgroundScheduler
+    APSCHEDULER_AVAILABLE = True
+except ImportError:
+    APSCHEDULER_AVAILABLE = False
+    print("[HERALD] APScheduler not installed -- add apscheduler to requirements.txt")
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -24,7 +33,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="7.6")
+app = FastAPI(title="Herald API", version="7.7")
 
 app.add_middleware(
     CORSMiddleware,
@@ -194,6 +203,95 @@ Examples:
 "keep an eye on AI news" -> {{"type": "news", "description": "AI industry news updates", "params": {{"topic": "artificial intelligence"}}, "offer_email": false}}
 "let me know if gas prices drop" -> {{"type": "gas", "description": "gas price alert when prices drop", "params": {{"threshold": 0.05, "direction": "down", "last_price": null}}, "offer_email": false}}
 "watch gas prices for me" -> {{"type": "gas", "description": "weekly gas price updates", "params": {{"threshold": 0.05, "direction": "any", "last_price": null}}, "offer_email": false}}"""
+
+
+# ── LIFE MOMENT CONFIG (v7.7) ─────────────────────────────────────────────────
+
+# Cycle events: Herald detects these and offers to set a reminder.
+# Key = phrase to detect in extracted event_type
+# interval_days = default cycle length
+# label = friendly name Herald uses when speaking
+
+CYCLE_EVENT_DEFAULTS = {
+    # Vehicle
+    "oil change":          {"days": 90,   "label": "oil change"},
+    "tire rotation":       {"days": 180,  "label": "tire rotation"},
+    "car inspection":      {"days": 365,  "label": "car inspection"},
+    "car registration":    {"days": 365,  "label": "car registration"},
+    "air filter":          {"days": 365,  "label": "car air filter"},
+    # Home
+    "ac filter":           {"days": 90,   "label": "AC filter"},
+    "hvac service":        {"days": 365,  "label": "HVAC service"},
+    "pest control":        {"days": 90,   "label": "pest control"},
+    "gutter cleaning":     {"days": 180,  "label": "gutter cleaning"},
+    "smoke detector":      {"days": 180,  "label": "smoke detector check"},
+    # Health
+    "dentist":             {"days": 180,  "label": "dentist appointment"},
+    "annual physical":     {"days": 365,  "label": "annual physical"},
+    "eye exam":            {"days": 365,  "label": "eye exam"},
+    "skin check":          {"days": 365,  "label": "dermatologist visit"},
+    "medication refill":   {"days": 30,   "label": "prescription refill"},
+    "therapy":             {"days": 7,    "label": "therapy session"},
+    # Pet
+    "vet":                 {"days": 365,  "label": "vet appointment"},
+    "flea prevention":     {"days": 30,   "label": "flea and tick prevention"},
+    "pet grooming":        {"days": 60,   "label": "pet grooming"},
+    # Finance / Admin
+    "tax filing":          {"days": 365,  "label": "tax filing"},
+    "insurance review":    {"days": 365,  "label": "insurance review"},
+    "passport":            {"days": 3650, "label": "passport renewal"},
+    "drivers license":     {"days": 1460, "label": "driver's license renewal"},
+    # Self care
+    "haircut":             {"days": 30,   "label": "haircut"},
+    "massage":             {"days": 30,   "label": "massage"},
+    "gym checkin":         {"days": 7,    "label": "gym check-in"},
+}
+
+LIFE_MOMENT_EXTRACTION_PROMPT = """You are analyzing a conversation turn to detect meaningful personal life moments.
+
+User said: "{message}"
+
+A life moment is anything personal and meaningful the user shared:
+- A struggle, worry, or challenge ("my back has been killing me", "stressed about work")
+- A goal or intention ("trying to lose weight", "want to save up for a trip")
+- A win or milestone ("got the promotion", "finally paid off my car")
+- A relationship moment ("my mom is sick", "having issues with my partner")
+- A completed recurring task ("just got my oil changed", "went to the dentist")
+- A self-care or personal moment ("been feeling burnt out", "started meditating")
+- A life event ("we're moving to Austin", "just had a baby", "starting a new job")
+
+NOT a life moment:
+- Questions about weather, sports, stocks, news
+- Generic how-to questions
+- Small talk with no personal content
+
+If a life moment was shared, return ONLY valid JSON:
+{{
+  "detected": true,
+  "moment": "brief natural language description of what they shared (1-2 sentences max)",
+  "tags": ["tag1", "tag2"],
+  "is_cycle_event": true or false,
+  "cycle_type": "oil change" or null,
+  "days_ago": 0,
+  "is_goal": true or false,
+  "is_struggle": true or false,
+  "is_win": true or false
+}}
+
+Tags should be 1-3 of: health, family, work, money, relationships, home, vehicle, fitness, mental_health, self_care, pet, travel, education, goal, win, struggle
+
+cycle_type must be one of these if is_cycle_event is true:
+oil change, tire rotation, car inspection, car registration, air filter,
+ac filter, hvac service, pest control, gutter cleaning, smoke detector,
+dentist, annual physical, eye exam, skin check, medication refill, therapy,
+vet, flea prevention, pet grooming,
+tax filing, insurance review, passport, drivers license,
+haircut, massage, gym checkin
+
+If nothing meaningful was shared:
+{{"detected": false}}
+
+Return ONLY valid JSON. No markdown. No preamble."""
 
 
 # ── COMMODITY MAP ─────────────────────────────────────────────────────────────
@@ -385,6 +483,62 @@ def init_db():
                 print(f"[HERALD] Migrated {len(old_invites)} invites from JSON to SQLite")
             except Exception as e:
                 print(f"[HERALD] Invite migration warning (non-fatal): {e}")
+        # v7.7 -- life moments (episodic memory)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS life_moments (
+                id           TEXT PRIMARY KEY,
+                user_id      TEXT NOT NULL,
+                moment       TEXT NOT NULL,
+                tags         TEXT,
+                status       TEXT DEFAULT 'open',
+                tier         TEXT DEFAULT 'hot',
+                is_goal      INTEGER DEFAULT 0,
+                is_struggle  INTEGER DEFAULT 0,
+                is_win       INTEGER DEFAULT 0,
+                created_at   TEXT NOT NULL,
+                resolved_at  TEXT,
+                last_referenced_at TEXT
+            )
+        """)
+        c.execute("""
+            CREATE INDEX IF NOT EXISTS idx_moments_user
+            ON life_moments (user_id, status, tier, created_at DESC)
+        """)
+        # v7.7 -- life tracker (cycle reminders)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS life_tracker (
+                id              TEXT PRIMARY KEY,
+                user_id         TEXT NOT NULL,
+                cycle_type      TEXT NOT NULL,
+                label           TEXT NOT NULL,
+                interval_days   INTEGER NOT NULL,
+                last_done_date  TEXT,
+                remind_date     TEXT,
+                calendar_set    INTEGER DEFAULT 0,
+                active          INTEGER DEFAULT 1,
+                created_at      TEXT NOT NULL,
+                last_triggered  TEXT
+            )
+        """)
+        c.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tracker_user
+            ON life_tracker (user_id, active, remind_date)
+        """)
+        # v7.7 -- session history (conversation survives reload)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    TEXT NOT NULL,
+                role       TEXT NOT NULL,
+                content    TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        c.execute("""
+            CREATE INDEX IF NOT EXISTS idx_sessions_user
+            ON sessions (user_id, id DESC)
+        """)
+        conn.commit()
         conn.close()
         print(f"[HERALD] SQLite ready: {DB_FILE}")
     except Exception as e:
@@ -474,6 +628,8 @@ def get_profile(user_id):
         "capabilities": {},
         # v7.6 proactive loop
         "proactive_queue": [],
+        # v7.7 life tracker (structured cycle reminders)
+        "life_events": [],
     })
 
 def save_profile(user_id, profile):
@@ -508,6 +664,443 @@ def is_owner(user_id, auth_code=None):
         owner_user_ids.add(user_id)
         return True
     return False
+
+
+# ── SESSION HISTORY (v7.7) ────────────────────────────────────────────────────
+
+def save_session_turn(user_id: str, user_msg: str, assistant_msg: str):
+    try:
+        now = datetime.now().isoformat()
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute(
+            "INSERT INTO sessions (user_id, role, content, created_at) VALUES (?, ?, ?, ?)",
+            (user_id, "user", user_msg[:1000], now)
+        )
+        c.execute(
+            "INSERT INTO sessions (user_id, role, content, created_at) VALUES (?, ?, ?, ?)",
+            (user_id, "assistant", assistant_msg[:1000], now)
+        )
+        c.execute("""
+            DELETE FROM sessions WHERE user_id = ? AND id NOT IN (
+                SELECT id FROM sessions WHERE user_id = ?
+                ORDER BY id DESC LIMIT 100
+            )
+        """, (user_id, user_id))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[HERALD] save_session_turn (non-fatal): {e}")
+
+
+def load_session_history(user_id: str, limit: int = 12) -> list:
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute(
+            "SELECT role, content FROM sessions WHERE user_id = ? ORDER BY id DESC LIMIT ?",
+            (user_id, limit * 2)
+        )
+        rows = c.fetchall()
+        conn.close()
+        rows.reverse()
+        return [{"role": r, "content": ct} for r, ct in rows]
+    except Exception as e:
+        print(f"[HERALD] load_session_history (non-fatal): {e}")
+        return []
+
+
+# ── LIFE MOMENT FUNCTIONS (v7.7) ──────────────────────────────────────────────
+
+def save_life_moment(user_id: str, moment: str, tags: list,
+                     is_goal: bool, is_struggle: bool, is_win: bool) -> str:
+    """Store a new life moment. Returns the new id."""
+    mid = str(uuid.uuid4())[:12]
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("""
+            INSERT INTO life_moments
+            (id, user_id, moment, tags, status, tier,
+             is_goal, is_struggle, is_win, created_at)
+            VALUES (?, ?, ?, ?, 'open', 'hot', ?, ?, ?, ?)
+        """, (
+            mid, user_id, moment[:400],
+            json.dumps(tags),
+            1 if is_goal else 0,
+            1 if is_struggle else 0,
+            1 if is_win else 0,
+            datetime.now().isoformat()
+        ))
+        conn.commit()
+        conn.close()
+        print(f"[HERALD] Life moment stored: {user_id} | {moment[:60]}")
+    except Exception as e:
+        print(f"[HERALD] save_life_moment (non-fatal): {e}")
+    return mid
+
+
+def load_hot_moments(user_id: str, limit: int = 12) -> list:
+    """Load open hot-tier moments for system prompt injection."""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("""
+            SELECT moment, tags, is_goal, is_struggle, is_win, created_at
+            FROM life_moments
+            WHERE user_id = ? AND status = 'open' AND tier = 'hot'
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (user_id, limit))
+        rows = c.fetchall()
+        conn.close()
+        return [{"moment": r[0], "tags": json.loads(r[1] or "[]"),
+                 "is_goal": r[2], "is_struggle": r[3], "is_win": r[4],
+                 "created_at": r[5]} for r in rows]
+    except Exception as e:
+        print(f"[HERALD] load_hot_moments (non-fatal): {e}")
+        return []
+
+
+def search_moments(user_id: str, query: str) -> list:
+    """Simple keyword search across all moments. Used when user says 'remember when'."""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("""
+            SELECT moment, tags, status, created_at
+            FROM life_moments
+            WHERE user_id = ? AND moment LIKE ?
+            ORDER BY created_at DESC
+            LIMIT 5
+        """, (user_id, f"%{query}%"))
+        rows = c.fetchall()
+        conn.close()
+        return [{"moment": r[0], "tags": json.loads(r[1] or "[]"),
+                 "status": r[2], "created_at": r[3]} for r in rows]
+    except Exception as e:
+        print(f"[HERALD] search_moments (non-fatal): {e}")
+        return []
+
+
+def decay_old_moments(user_id: str):
+    """
+    Move stale open moments to warm tier.
+    Open + no reference in 60 days = warm.
+    Resolved + older than 30 days = cold.
+    Runs in background, non-fatal.
+    """
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        cutoff_warm = (datetime.now() - timedelta(days=60)).isoformat()
+        cutoff_cold = (datetime.now() - timedelta(days=30)).isoformat()
+        c.execute("""
+            UPDATE life_moments SET tier = 'warm'
+            WHERE user_id = ? AND status = 'open' AND tier = 'hot'
+            AND created_at < ?
+        """, (user_id, cutoff_warm))
+        c.execute("""
+            UPDATE life_moments SET tier = 'cold'
+            WHERE user_id = ? AND status = 'resolved' AND tier != 'cold'
+            AND resolved_at < ?
+        """, (user_id, cutoff_cold))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[HERALD] decay_old_moments (non-fatal): {e}")
+
+
+def save_life_tracker(user_id: str, cycle_type: str, label: str,
+                      interval_days: int, last_done_date: str):
+    """Upsert a life tracker entry. Creates or updates."""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("""
+            SELECT id FROM life_tracker
+            WHERE user_id = ? AND cycle_type = ? AND active = 1
+        """, (user_id, cycle_type))
+        existing = c.fetchone()
+
+        from datetime import date as date_type
+        last_done = date_type.fromisoformat(last_done_date)
+        remind_date = (last_done + timedelta(days=int(interval_days * 0.9))).isoformat()
+
+        if existing:
+            c.execute("""
+                UPDATE life_tracker
+                SET last_done_date = ?, remind_date = ?, last_triggered = NULL
+                WHERE id = ?
+            """, (last_done_date, remind_date, existing[0]))
+            print(f"[HERALD] Life tracker updated: {user_id} | {cycle_type} | remind {remind_date}")
+        else:
+            tid = str(uuid.uuid4())[:12]
+            c.execute("""
+                INSERT INTO life_tracker
+                (id, user_id, cycle_type, label, interval_days,
+                 last_done_date, remind_date, active, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+            """, (tid, user_id, cycle_type, label, interval_days,
+                  last_done_date, remind_date, datetime.now().isoformat()))
+            print(f"[HERALD] Life tracker created: {user_id} | {cycle_type} | remind {remind_date}")
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[HERALD] save_life_tracker (non-fatal): {e}")
+
+
+def get_due_trackers(user_id: str) -> list:
+    """Return tracker entries whose remind_date has arrived."""
+    try:
+        today = datetime.now().date().isoformat()
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("""
+            SELECT id, cycle_type, label, interval_days,
+                   last_done_date, remind_date
+            FROM life_tracker
+            WHERE user_id = ? AND active = 1
+            AND remind_date <= ?
+            AND (last_triggered IS NULL OR last_triggered < ?)
+        """, (user_id, today,
+              (datetime.now() - timedelta(days=7)).date().isoformat()))
+        rows = c.fetchall()
+        conn.close()
+        return [{"id": r[0], "cycle_type": r[1], "label": r[2],
+                 "interval_days": r[3], "last_done_date": r[4],
+                 "remind_date": r[5]} for r in rows]
+    except Exception as e:
+        print(f"[HERALD] get_due_trackers (non-fatal): {e}")
+        return []
+
+
+def mark_tracker_triggered(tracker_id: str):
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("""
+            UPDATE life_tracker SET last_triggered = ?
+            WHERE id = ?
+        """, (datetime.now().date().isoformat(), tracker_id))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[HERALD] mark_tracker_triggered (non-fatal): {e}")
+
+
+def extract_life_moment(user_id: str, user_message: str, herald_reply: str):
+    """
+    Runs in background after every response.
+    Detects meaningful life moments and cycle events.
+    Stores moments. Queues cycle event offer if applicable.
+    """
+    try:
+        prompt = LIFE_MOMENT_EXTRACTION_PROMPT.format(message=user_message[:400])
+        payload = json.dumps({
+            "model": HAIKU_MODEL,
+            "max_tokens": 150,
+            "messages": [{"role": "user", "content": prompt}]
+        }).encode("utf-8")
+        req = urllib.request.Request(OR_URL, data=payload, headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {OPENROUTER_KEY}",
+            "HTTP-Referer": "https://apexempire.ai",
+            "X-Title": "Herald Personal AI"
+        }, method="POST")
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode())
+        raw = data["choices"][0]["message"]["content"].strip()
+        raw = raw.replace("```json", "").replace("```", "").strip()
+        result = json.loads(raw)
+
+        if not result.get("detected"):
+            return
+
+        moment     = result.get("moment", "").strip()
+        tags       = result.get("tags", [])
+        is_cycle   = result.get("is_cycle_event", False)
+        cycle_type = result.get("cycle_type", "")
+        days_ago   = int(result.get("days_ago", 0))
+        is_goal    = result.get("is_goal", False)
+        is_struggle= result.get("is_struggle", False)
+        is_win     = result.get("is_win", False)
+
+        if not moment:
+            return
+
+        # Always store the life moment
+        save_life_moment(user_id, moment, tags, is_goal, is_struggle, is_win)
+
+        # Decay old moments periodically (1 in 10 chance to keep it light)
+        if random.randint(1, 10) == 1:
+            threading.Thread(
+                target=decay_old_moments, args=(user_id,), daemon=True
+            ).start()
+
+        # If it's a cycle event, store tracker + queue the offer
+        if is_cycle and cycle_type and cycle_type in CYCLE_EVENT_DEFAULTS:
+            defaults  = CYCLE_EVENT_DEFAULTS[cycle_type]
+            done_date = (datetime.now() - timedelta(days=days_ago)).date().isoformat()
+
+            save_life_tracker(
+                user_id, cycle_type,
+                defaults["label"], defaults["days"], done_date
+            )
+
+            # Queue the calendar offer for Herald to deliver
+            profile = get_profile(user_id)
+            if not profile.get("pending_watch_offer"):
+                from datetime import date as date_type
+                remind = (date_type.fromisoformat(done_date) +
+                          timedelta(days=int(defaults["days"] * 0.9)))
+                remind_str = remind.strftime("%B")  # Just the month name
+                offer_text = (
+                    f"You mentioned your {defaults['label']} — "
+                    f"want me to put a reminder on your calendar for {remind_str}?"
+                )
+                save_profile_fields(user_id, {
+                    "pending_watch_offer": json.dumps({
+                        "type":        "cycle_offer",
+                        "cycle_type":  cycle_type,
+                        "label":       defaults["label"],
+                        "remind_month": remind_str,
+                        "offer_text":  offer_text,
+                    })
+                })
+                print(f"[HERALD] Cycle offer queued: {user_id} | {cycle_type}")
+
+    except Exception as e:
+        print(f"[HERALD] extract_life_moment (non-fatal): {e}")
+
+
+# ── MORNING BRIEFING JOB (v7.7 -- APScheduler) ───────────────────────────────
+
+def morning_briefing_job():
+    """
+    Runs at 07:00 ET daily via APScheduler.
+    For each named user: checks due trackers + open life moments.
+    Queues a proactive message for delivery on next app open.
+    """
+    print("[HERALD] morning_briefing_job: starting")
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("SELECT user_id, data FROM profiles")
+        rows = c.fetchall()
+        conn.close()
+    except Exception as e:
+        print(f"[HERALD] morning_briefing_job DB error: {e}")
+        return
+
+    briefed = 0
+    for user_id, raw in rows:
+        try:
+            profile = json.loads(raw)
+        except Exception:
+            continue
+
+        name = profile.get("name", "")
+        if not name:
+            continue
+
+        bits = []
+
+        # 1. Weather for their location
+        location = profile.get("location", "")
+        if location:
+            weather = fetch_weather_direct(location)
+            if weather:
+                bits.append(weather.split(".")[0].strip())
+
+        # 2. Due life trackers
+        due = get_due_trackers(user_id)
+        for tracker in due[:2]:
+            from datetime import date as date_type
+            try:
+                last = date_type.fromisoformat(tracker["last_done_date"])
+                months = round((datetime.now().date() - last).days / 30)
+                bits.append(
+                    f"it has been about {months} month{'s' if months != 1 else ''} "
+                    f"since your last {tracker['label']}"
+                )
+                mark_tracker_triggered(tracker["id"])
+            except Exception:
+                pass
+
+        # 3. Check open struggles/goals for a gentle follow-up
+        hot = load_hot_moments(user_id, limit=5)
+        struggles = [m for m in hot if m["is_struggle"]]
+        goals     = [m for m in hot if m["is_goal"]]
+        if struggles:
+            bits.append(f"checking in on: {struggles[0]['moment'][:80]}")
+        elif goals:
+            bits.append(f"following up on your goal: {goals[0]['moment'][:80]}")
+
+        if not bits:
+            continue
+
+        # Generate natural briefing via Haiku
+        bits_str = ". ".join(bits)
+        prompt = (
+            f"You are Herald, a warm personal AI companion. "
+            f"Write a natural, friendly 1-2 sentence morning message for {name}. "
+            f"Based on these notes: {bits_str}. "
+            f"Speak like a caring friend. Voice format only. No markdown. No bullet points. "
+            f"If following up on a struggle or goal, be warm and brief -- just check in, "
+            f"don't lecture. Keep it under 40 words."
+        )
+        try:
+            payload = json.dumps({
+                "model": HAIKU_MODEL,
+                "max_tokens": 100,
+                "messages": [{"role": "user", "content": prompt}]
+            }).encode("utf-8")
+            req = urllib.request.Request(OR_URL, data=payload, headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {OPENROUTER_KEY}",
+                "HTTP-Referer": "https://apexempire.ai",
+                "X-Title": "Herald Personal AI"
+            }, method="POST")
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                data = json.loads(resp.read().decode())
+            briefing = data["choices"][0]["message"]["content"].strip()
+        except Exception as e:
+            print(f"[HERALD] morning_briefing LLM failed for {user_id}: {e}")
+            briefing = f"Good morning, {name}."
+
+        # Queue for delivery on next app open
+        profile = get_profile(user_id)
+        queue   = profile.get("proactive_queue", [])
+        queue.append({
+            "id":         str(uuid.uuid4())[:8],
+            "type":       "morning_briefing",
+            "text":       briefing,
+            "created_at": datetime.utcnow().isoformat(),
+        })
+        if len(queue) > 5:
+            queue = queue[-5:]
+        profile["proactive_queue"] = queue
+        save_profile(user_id, profile)
+        briefed += 1
+        print(f"[HERALD] Morning briefing queued: {user_id} ({name})")
+
+    print(f"[HERALD] morning_briefing_job complete: {briefed} users briefed")
+
+
+def _start_scheduler():
+    if not APSCHEDULER_AVAILABLE:
+        print("[HERALD] Scheduler skipped -- add apscheduler to requirements.txt")
+        return
+    scheduler = BackgroundScheduler(timezone="US/Eastern")
+    scheduler.add_job(
+        morning_briefing_job, "cron",
+        hour=7, minute=0,
+        id="morning_briefing",
+        replace_existing=True
+    )
+    scheduler.start()
+    print("[HERALD] APScheduler started -- morning briefing at 07:00 ET daily")
 
 
 # ── WATCHER HELPERS (v7.4) ────────────────────────────────────────────────────
@@ -672,6 +1265,12 @@ def _build_watcher_context(profile: dict) -> str:
                 cap_text = offer.get("offer_text", "")
                 lines.append(
                     f"INSTRUCTION: At the END of your response, add: '{cap_text}'"
+                )
+            elif offer.get("type") == "cycle_offer":
+                offer_text = offer.get("offer_text", "")
+                lines.append(
+                    f"INSTRUCTION: At the END of your response, naturally add (word for word): "
+                    f"'{offer_text}'"
                 )
         except Exception:
             pass
@@ -1938,6 +2537,7 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
     location = profile.get("location", "")
     notes    = profile.get("notes", [])
     memories = profile.get("memories", [])
+    user_id  = profile.get("user_id", "")
 
     user_line = (f"User's name: {name}. Use their name naturally and occasionally -- "
                  f"like a trusted friend would. Not every sentence. Just when it feels right."
@@ -1968,7 +2568,26 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
 
     watcher_context = _build_watcher_context(profile)
 
-    context_parts = [p for p in [notes_line, prefs_line, facts_line] if p]
+    # Hot life moments -- things this person has shared that matter
+    hot_moments = load_hot_moments(user_id, limit=12) if user_id else []
+    moments_line = ""
+    if hot_moments:
+        parts = []
+        for m in hot_moments:
+            age_days = 0
+            try:
+                age_days = (datetime.now() - datetime.fromisoformat(m["created_at"])).days
+            except Exception:
+                pass
+            age_str = f"{age_days}d ago" if age_days > 0 else "today"
+            parts.append(f"{m['moment']} ({age_str})")
+        moments_line = (
+            "Things this person has shared with you that you remember "
+            "(use naturally when relevant, never robotically): "
+            + "; ".join(parts)
+        )
+
+    context_parts = [p for p in [notes_line, prefs_line, facts_line, moments_line] if p]
     context_block = "\n".join(context_parts) if context_parts else "Still learning about this user."
     empire_section = f"\n\n{empire}" if owner and empire else ""
     watcher_section = f"\n\n{watcher_context}" if watcher_context else ""
@@ -2156,6 +2775,8 @@ def build_ask_context(data):
         return None, "user_id and message required"
 
     history        = data.get("history", [])
+    if not history:
+        history = load_session_history(user_id, limit=12)
     local_time     = data.get("local_time", None)
     lat            = data.get("lat", None)
     lng            = data.get("lng", None)
@@ -2343,7 +2964,7 @@ def _trial_fields(trial):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "7.6",
+        "status": "ok", "server": "herald-api", "version": "7.7",
         "proactive_loop": "enabled (/proactive/{user_id} -- poll on app open + resume)",
         "watcher_cron": "enabled (/cron/watchers -- call every 30min with WEBHOOK_SECRET)",
         "learning_loop": "enabled (LLM extraction after every response)",
@@ -2527,6 +3148,18 @@ def ask(request: Request):
         daemon=True
     ).start()
 
+    threading.Thread(
+        target=extract_life_moment,
+        args=(user_id, message, reply),
+        daemon=True
+    ).start()
+
+    threading.Thread(
+        target=save_session_turn,
+        args=(user_id, message, reply),
+        daemon=True
+    ).start()
+
     trial = get_trial_status(profile)
     return {"reply": reply, "action": action,
             "ai_name": profile.get("ai_name", "Herald"),
@@ -2627,6 +3260,18 @@ async def ask_stream(request: Request):
             threading.Thread(
                 target=_run_watcher_pipeline,
                 args=(message, profile, user_id),
+                daemon=True
+            ).start()
+
+            threading.Thread(
+                target=extract_life_moment,
+                args=(user_id, message, reply),
+                daemon=True
+            ).start()
+
+            threading.Thread(
+                target=save_session_turn,
+                args=(user_id, message, reply),
                 daemon=True
             ).start()
 
@@ -2940,7 +3585,8 @@ def startup():
     init_db()
     load_profiles()
     load_invites()
-    print(f"[HERALD API v7.6] FastAPI + uvicorn + SQLite + proactive loop LIVE")
+    _start_scheduler()
+    print(f"[HERALD API v7.7] FastAPI + uvicorn + SQLite + episodic memory + life tracker LIVE")
     print(f"[HERALD API] OpenRouter:    {'YES' if OPENROUTER_KEY else 'MISSING -- required'}")
     print(f"[HERALD API] Model routing: Haiku ({HAIKU_MODEL}) / Sonnet ({SONNET_MODEL})")
     print(f"[HERALD API] Brave Search:  {'YES' if BRAVE_KEY else 'NOT SET -- add BRAVE_SEARCH_KEY'}")
