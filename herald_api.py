@@ -308,56 +308,55 @@ Return ONLY valid JSON. No markdown. No preamble."""
 
 # ── IRA TRADE CONFIG (v7.8) ───────────────────────────────────────────────────
 
-IRA_TRADE_EXTRACTION_PROMPT = """You are analyzing a message from a trader who is
-logging their IRA options trades by speaking naturally to their assistant.
+IRA_TRADE_EXTRACTION_PROMPT = """You are analyzing a message from a trader logging
+IRA options trades by speaking naturally to their AI assistant.
 
 User said: "{message}"
 
-Detect if the user is logging a trade open, close, or outcome.
+Detect if the user is logging a trade OPEN, CLOSE, or EXPIRED outcome.
 
-Natural language examples to detect:
-
-OPENS:
-"opened a SPY put spread, May 16 expiration, sold the 520 put bought the 515,
- took in one dollar forty credit, two contracts"
-"put on an iron condor on QQQ, collected two eighty"
+OPEN examples:
+"opened a SPY put spread, sold 710 bought 705, May 16 expiry, ninety-five cent credit, one contract"
+"put on a call spread on SPY, 722/727, took in one fifty credit"
 "sold a covered call on AAPL 195 strike expiring Friday, got eighty cents"
-"opened XYZ call spread for a dollar twenty credit"
 
-CLOSES / OUTCOMES:
-"closed the SPY spread for full credit, expired worthless Friday"
+CLOSE / EXPIRED examples:
 "May 8th IRA trade closed, expired full credit"
-"bought back the QQQ condor for fifteen cents, took most of the profit"
-"SPY put spread closed at a loss, paid one ninety to close"
-"trade expired worthless, kept the full premium"
+"IRA-002 closed expired worthless, kept the full premium"
+"closed the SPY put spread for full credit"
+"bought back the condor for fifteen cents, locked the profit"
+"SPY spread closed at a loss, paid one ninety to close"
 
-If a trade is detected return ONLY valid JSON:
+If a trade is detected return ONLY valid JSON, no markdown:
 {{
   "detected": true,
   "action": "open" or "close" or "expired",
-  "account": "IRA",
-  "ticker": "SPY" or null,
-  "strategy": "put spread" or "call spread" or "iron condor" or
-              "covered call" or "cash secured put" or "other",
-  "direction": "credit" or "debit" or null,
-  "amount": 1.40 or null,
-  "contracts": 2 or null,
-  "expiration": "2026-05-16" or null,
-  "short_strike": 520 or null,
-  "long_strike": 515 or null,
-  "outcome": "full credit" or "partial" or "loss" or null,
+  "trade_ref": "IRA-002" or null,
+  "instrument": "SPY" or "SPX" or null,
+  "direction": "PUT_SPREAD" or "CALL_SPREAD" or "IRON_CONDOR" or "COVERED_CALL" or "CSP" or "OTHER",
+  "short_strike": 710.0 or null,
+  "long_strike": 705.0 or null,
+  "entry_credit": 0.95 or null,
+  "exit_debit": 0.15 or null,
+  "contracts": 1 or null,
+  "expiry": "2026-05-16" or null,
+  "outcome": "WIN" or "LOSS" or "OPEN" or null,
+  "exit_type": "expired" or "early_close" or null,
+  "pct_max_captured": 100.0 or null,
+  "override_reason": "any note about deviation from advisor recommendation" or null,
   "trade_date": "today" or "friday" or "2026-05-08" or null,
-  "notes": "raw summary of what they said in one sentence"
+  "notes": "one sentence summary of what they said"
 }}
 
-If nothing trade-related was said:
-{{"detected": false}}
-
 Rules:
-- "full credit" / "expired worthless" / "kept premium" = expired outcome
-- Always set account to IRA unless user says otherwise
-- If expiration day mentioned without year assume current month
-- Return ONLY valid JSON. No markdown. No preamble."""
+- "expired worthless" / "full credit" / "kept premium" = expired, WIN, pct_max_captured 100
+- "bought back for X cents" = early_close, estimate pct_max_captured
+- New trades always get outcome OPEN
+- trade_ref = any IRA-XXX reference the user mentions
+- expiry: if day mentioned without year use nearest future date
+- If nothing trade-related: {{"detected": false}}
+
+Return ONLY valid JSON. No preamble. No markdown."""
 
 VM_IRA_WEBHOOK_URL = "http://143.198.18.66:8082/webhook/ira_trade"
 
@@ -1121,15 +1120,30 @@ def _resolve_trade_date(raw: str) -> str:
     return datetime.now().date().isoformat()
 
 
+def _next_ira_trade_id(user_id: str) -> str:
+    """Generate next IRA-XXX id matching ira_trade_log.json format."""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM ira_trades WHERE user_id = ?",
+                  (user_id,))
+        count = c.fetchone()[0]
+        conn.close()
+        return f"IRA-{str(count + 1).zfill(3)}"
+    except Exception:
+        return f"IRA-{str(uuid.uuid4())[:4].upper()}"
+
+
 def save_ira_trade(user_id: str, trade: dict) -> str:
     """Write a trade to the ira_trades SQLite table. Returns trade id."""
-    tid = str(uuid.uuid4())[:12]
+    tid        = _next_ira_trade_id(user_id)
+    action     = trade.get("action", "open")
+    trade_date = _resolve_trade_date(trade.get("trade_date"))
+
+    if action in ("close", "expired"):
+        _close_matching_trade(user_id, trade)
+
     try:
-        trade_date = _resolve_trade_date(trade.get("trade_date"))
-        action     = trade.get("action", "open")
-        # If action is expired/close, mark any matching open as closed
-        if action in ("close", "expired"):
-            _close_matching_trade(user_id, trade)
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
         c.execute("""
@@ -1142,16 +1156,16 @@ def save_ira_trade(user_id: str, trade: dict) -> str:
         """, (
             tid, user_id,
             action,
-            trade.get("account", "IRA"),
-            trade.get("ticker"),
-            trade.get("strategy"),
+            "IRA",
+            trade.get("instrument"),
             trade.get("direction"),
-            trade.get("amount"),
+            trade.get("direction"),
+            trade.get("entry_credit") or trade.get("exit_debit"),
             trade.get("contracts"),
-            trade.get("expiration"),
+            trade.get("expiry"),
             trade.get("short_strike"),
             trade.get("long_strike"),
-            trade.get("outcome"),
+            trade.get("outcome", "OPEN"),
             trade_date,
             trade.get("notes", "")[:300],
             "closed" if action in ("close", "expired") else "open",
@@ -1159,30 +1173,34 @@ def save_ira_trade(user_id: str, trade: dict) -> str:
         ))
         conn.commit()
         conn.close()
-        print(f"[HERALD] IRA trade saved: {user_id} | {action} | "
-              f"{trade.get('ticker','?')} {trade.get('strategy','?')}")
+        print(f"[HERALD] IRA trade saved: {tid} | {user_id} | "
+              f"{action} | {trade.get('instrument','?')} "
+              f"{trade.get('direction','?')}")
     except Exception as e:
         print(f"[HERALD] save_ira_trade (non-fatal): {e}")
     return tid
 
 
 def _close_matching_trade(user_id: str, trade: dict):
-    """Mark the most recent open trade for this ticker/strategy as closed."""
+    """Mark the most recent matching open trade as closed."""
     try:
-        ticker   = trade.get("ticker")
-        strategy = trade.get("strategy")
-        if not ticker and not strategy:
-            return
+        instrument = trade.get("instrument")
+        trade_ref  = trade.get("trade_ref")
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
-        if ticker:
+        if trade_ref:
+            c.execute("""
+                UPDATE ira_trades SET status = 'closed'
+                WHERE user_id = ? AND id = ?
+            """, (user_id, trade_ref))
+        elif instrument:
             c.execute("""
                 UPDATE ira_trades SET status = 'closed'
                 WHERE user_id = ? AND status = 'open'
                 AND ticker = ?
                 ORDER BY created_at DESC
                 LIMIT 1
-            """, (user_id, ticker))
+            """, (user_id, instrument))
         else:
             c.execute("""
                 UPDATE ira_trades SET status = 'closed'
@@ -3473,6 +3491,10 @@ def get_direct_reply(ctx):
         'gate progress','win rate','what did freddie','how is freddie',
         'empire status','regime','last scan','any setups','near miss',
         'expectancy','p&l','sovereign','forge','signal','bankroll',
+        'ira','ira trades','ira positions','ira-0','our trades',
+        'my spread','my condor','my covered call','what are we trading',
+        'open ira','close ira','expired','full credit','put spread',
+        'call spread','iron condor','short strike','entry credit',
     ]
     if owner and any(t in msg_lower for t in FREDDIE_TRIGGERS) and empire:
         freddie_prompt = [
@@ -3576,7 +3598,7 @@ def _trial_fields(trial):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "7.7",
+        "status": "ok", "server": "herald-api", "version": "7.8",
         "proactive_loop": "enabled (/proactive/{user_id} -- poll on app open + resume)",
         "watcher_cron": "enabled (/cron/watchers -- call every 30min with WEBHOOK_SECRET)",
         "learning_loop": "enabled (LLM extraction after every response)",
@@ -3772,6 +3794,13 @@ def ask(request: Request):
         daemon=True
     ).start()
 
+    if is_owner(user_id):
+        threading.Thread(
+            target=extract_ira_trade,
+            args=(user_id, message, reply),
+            daemon=True
+        ).start()
+
     trial = get_trial_status(profile)
     return {"reply": reply, "action": action,
             "ai_name": profile.get("ai_name", "Herald"),
@@ -3886,6 +3915,13 @@ async def ask_stream(request: Request):
                 args=(user_id, message, reply),
                 daemon=True
             ).start()
+
+            if is_owner(user_id):
+                threading.Thread(
+                    target=extract_ira_trade,
+                    args=(user_id, message, reply),
+                    daemon=True
+                ).start()
 
             yield f"data: {json.dumps({**base_done, 'full': reply, 'action': action, 'used_search': use_search})}\n\n"
 
@@ -4050,6 +4086,48 @@ async def invite_list(request: Request):
     return {"ok": True, "invites": invite_list_data, "total": len(invite_list_data)}
 
 
+@app.get("/trades/ira")
+def get_ira_trades(user_id: str = None, status: str = "open"):
+    """
+    Returns IRA trades logged by Herald.
+    Owner query: "show me my IRA positions"
+    Future: Freddie ira_advisor.py can poll this.
+    """
+    if not user_id:
+        return JSONResponse({"error": "user_id required"}, status_code=400)
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        if status == "all":
+            c.execute("""
+                SELECT id, action, account, ticker, strategy,
+                       direction, amount, contracts, expiration,
+                       short_strike, long_strike, outcome,
+                       trade_date, notes, status, vm_synced, created_at
+                FROM ira_trades WHERE user_id = ?
+                ORDER BY created_at DESC LIMIT 50
+            """, (user_id,))
+        else:
+            c.execute("""
+                SELECT id, action, account, ticker, strategy,
+                       direction, amount, contracts, expiration,
+                       short_strike, long_strike, outcome,
+                       trade_date, notes, status, vm_synced, created_at
+                FROM ira_trades WHERE user_id = ? AND status = ?
+                ORDER BY created_at DESC LIMIT 20
+            """, (user_id, status))
+        rows = c.fetchall()
+        conn.close()
+        cols = ["id","action","account","ticker","strategy",
+                "direction","amount","contracts","expiration",
+                "short_strike","long_strike","outcome",
+                "trade_date","notes","status","vm_synced","created_at"]
+        trades = [dict(zip(cols, r)) for r in rows]
+        return {"ok": True, "count": len(trades), "trades": trades}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @app.post("/cron/watchers")
 async def cron_watchers(request: Request):
     """
@@ -4198,7 +4276,7 @@ def startup():
     load_profiles()
     load_invites()
     _start_scheduler()
-    print(f"[HERALD API v7.7] FastAPI + uvicorn + SQLite + episodic memory + life tracker LIVE")
+    print(f"[HERALD API v7.8] FastAPI + uvicorn + SQLite + episodic memory + IRA trade log LIVE")
     print(f"[HERALD API] OpenRouter:    {'YES' if OPENROUTER_KEY else 'MISSING -- required'}")
     print(f"[HERALD API] Model routing: Haiku ({HAIKU_MODEL}) / Sonnet ({SONNET_MODEL})")
     print(f"[HERALD API] Brave Search:  {'YES' if BRAVE_KEY else 'NOT SET -- add BRAVE_SEARCH_KEY'}")
