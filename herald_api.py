@@ -2422,20 +2422,34 @@ async def auth(request: Request):
 
     if code in valid_codes:
         if OWNER_CODE and code == OWNER_CODE:
-            owner_user_ids.add(user_id)
-        profile = get_profile(user_id)
-        if OWNER_CODE and code == OWNER_CODE:
+            # Always resolve to canonical OWNER_ID -- desktop + mobile share one profile
+            canonical_id = OWNER_ID if OWNER_ID else user_id
+            owner_user_ids.add(canonical_id)
+            profile = get_profile(canonical_id)
             profile["is_owner"] = True
-        if not profile.get("created_at"):
-            profile["created_at"] = datetime.now().isoformat()
-        save_profile(user_id, profile)
-        return {
-            "ok": True, "user_id": user_id,
-            "ai_name": profile.get("ai_name", "Herald"),
-            "name": profile.get("name", ""),
-            "onboarded": bool(profile.get("name")),
-            "is_owner": is_owner(user_id, code)
-        }
+            if not profile.get("created_at"):
+                profile["created_at"] = datetime.now().isoformat()
+            save_profile(canonical_id, profile)
+            return {
+                "ok": True,
+                "user_id": canonical_id,
+                "ai_name": profile.get("ai_name", "Herald"),
+                "name": profile.get("name", ""),
+                "onboarded": bool(profile.get("name")),
+                "is_owner": True
+            }
+        else:
+            profile = get_profile(user_id)
+            if not profile.get("created_at"):
+                profile["created_at"] = datetime.now().isoformat()
+            save_profile(user_id, profile)
+            return {
+                "ok": True, "user_id": user_id,
+                "ai_name": profile.get("ai_name", "Herald"),
+                "name": profile.get("name", ""),
+                "onboarded": bool(profile.get("name")),
+                "is_owner": False
+            }
     elif code in invites:
         invite = invites[code]
         if not invite["used"]:
