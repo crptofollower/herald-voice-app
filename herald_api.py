@@ -1,42 +1,21 @@
 # herald_api.py
 # Herald PWA Backend -- Railway Cloud Server
-# v7.8 -- IRA trade logging via Herald voice entry
+# v7.6 -- Proactive loop + gas price watcher + /proactive endpoint
 #
-# WHAT CHANGED vs v7.7:
-#   - Added:   ira_trades table (SQLite) -- Herald trade memory
-#   - Added:   IRA_TRADE_EXTRACTION_PROMPT
-#   - Added:   extract_ira_trade() -- background trade detection
-#   - Added:   log_ira_trade_to_vm() -- syncs to ira_trade_log.json
-#   - Added:   get_open_ira_positions() -- for morning briefing
-#   - Added:   /trades/ira GET endpoint -- Freddie can poll this
-#   - Updated: FREDDIE_TRIGGERS -- IRA language added
-#   - Updated: morning_briefing_job() -- checks open IRA positions
-#   - Updated: /ask + /ask/stream -- extract_ira_trade() thread added
-#   - Version bump: 7.7 -> 7.8
-#
-# WHAT CHANGED vs v7.6:
-#   - Added:   life_moments table (SQLite) -- episodic memory layer
-#   - Added:   life_tracker table (SQLite) -- cycle/reminder layer
-#   - Added:   sessions table (SQLite) -- conversation history across reloads
-#   - Added:   extract_life_moment() -- background story extraction
-#   - Added:   extract_life_tracker() -- cycle detection + calendar offer
-#   - Added:   load_session_history() + save_session_turn()
-#   - Added:   morning_briefing_job() via APScheduler (07:00 ET daily)
-#   - Updated: build_system() -- injects hot life moments into system prompt
-#   - Updated: get_profile() -- life_events field
-#   - Updated: startup() -- starts APScheduler
-#   - Version bump: 7.6 -> 7.7
+# WHAT CHANGED vs v7.5.1:
+#   - Added:   EIA_KEY config variable (EIA_API_KEY env var)
+#   - Added:   proactive_queue[] to user profile schema
+#   - Added:   fetch_gas_price_eia() -- free government gas price API
+#   - Added:   check_gas_watch() -- alerts on price moves >= threshold
+#   - Added:   GET /proactive/{user_id} -- frontend polls on app open + resume
+#   - Updated: /cron/watchers -- gas watch type + writes to proactive_queue
+#   - Updated: EXPLICIT_WATCH_PROMPT -- gas watch examples
+#   - Updated: get_profile() -- proactive_queue field in default schema
+#   - Version bump: 7.5.1 -> 7.6
 
 import os, json, re, random, string, time, http.client, ssl, sqlite3, threading, uuid
 import urllib.request, urllib.error, urllib.parse
 from datetime import datetime, timedelta, date
-
-try:
-    from apscheduler.schedulers.background import BackgroundScheduler
-    APSCHEDULER_AVAILABLE = True
-except ImportError:
-    APSCHEDULER_AVAILABLE = False
-    print("[HERALD] APScheduler not installed -- add apscheduler to requirements.txt")
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -45,7 +24,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="7.8")
+app = FastAPI(title="Herald API", version="7.6")
 
 app.add_middleware(
     CORSMiddleware,
@@ -215,150 +194,6 @@ Examples:
 "keep an eye on AI news" -> {{"type": "news", "description": "AI industry news updates", "params": {{"topic": "artificial intelligence"}}, "offer_email": false}}
 "let me know if gas prices drop" -> {{"type": "gas", "description": "gas price alert when prices drop", "params": {{"threshold": 0.05, "direction": "down", "last_price": null}}, "offer_email": false}}
 "watch gas prices for me" -> {{"type": "gas", "description": "weekly gas price updates", "params": {{"threshold": 0.05, "direction": "any", "last_price": null}}, "offer_email": false}}"""
-
-
-# ── LIFE MOMENT CONFIG (v7.7) ─────────────────────────────────────────────────
-
-# Cycle events: Herald detects these and offers to set a reminder.
-# Key = phrase to detect in extracted event_type
-# interval_days = default cycle length
-# label = friendly name Herald uses when speaking
-
-CYCLE_EVENT_DEFAULTS = {
-    # Vehicle
-    "oil change":          {"days": 90,   "label": "oil change"},
-    "tire rotation":       {"days": 180,  "label": "tire rotation"},
-    "car inspection":      {"days": 365,  "label": "car inspection"},
-    "car registration":    {"days": 365,  "label": "car registration"},
-    "air filter":          {"days": 365,  "label": "car air filter"},
-    # Home
-    "ac filter":           {"days": 90,   "label": "AC filter"},
-    "hvac service":        {"days": 365,  "label": "HVAC service"},
-    "pest control":        {"days": 90,   "label": "pest control"},
-    "gutter cleaning":     {"days": 180,  "label": "gutter cleaning"},
-    "smoke detector":      {"days": 180,  "label": "smoke detector check"},
-    # Health
-    "dentist":             {"days": 180,  "label": "dentist appointment"},
-    "annual physical":     {"days": 365,  "label": "annual physical"},
-    "eye exam":            {"days": 365,  "label": "eye exam"},
-    "skin check":          {"days": 365,  "label": "dermatologist visit"},
-    "medication refill":   {"days": 30,   "label": "prescription refill"},
-    "therapy":             {"days": 7,    "label": "therapy session"},
-    # Pet
-    "vet":                 {"days": 365,  "label": "vet appointment"},
-    "flea prevention":     {"days": 30,   "label": "flea and tick prevention"},
-    "pet grooming":        {"days": 60,   "label": "pet grooming"},
-    # Finance / Admin
-    "tax filing":          {"days": 365,  "label": "tax filing"},
-    "insurance review":    {"days": 365,  "label": "insurance review"},
-    "passport":            {"days": 3650, "label": "passport renewal"},
-    "drivers license":     {"days": 1460, "label": "driver's license renewal"},
-    # Self care
-    "haircut":             {"days": 30,   "label": "haircut"},
-    "massage":             {"days": 30,   "label": "massage"},
-    "gym checkin":         {"days": 7,    "label": "gym check-in"},
-}
-
-LIFE_MOMENT_EXTRACTION_PROMPT = """You are analyzing a conversation turn to detect meaningful personal life moments.
-
-User said: "{message}"
-
-A life moment is anything personal and meaningful the user shared:
-- A struggle, worry, or challenge ("my back has been killing me", "stressed about work")
-- A goal or intention ("trying to lose weight", "want to save up for a trip")
-- A win or milestone ("got the promotion", "finally paid off my car")
-- A relationship moment ("my mom is sick", "having issues with my partner")
-- A completed recurring task ("just got my oil changed", "went to the dentist")
-- A self-care or personal moment ("been feeling burnt out", "started meditating")
-- A life event ("we're moving to Austin", "just had a baby", "starting a new job")
-
-NOT a life moment:
-- Questions about weather, sports, stocks, news
-- Generic how-to questions
-- Small talk with no personal content
-
-If a life moment was shared, return ONLY valid JSON:
-{{
-  "detected": true,
-  "moment": "brief natural language description of what they shared (1-2 sentences max)",
-  "tags": ["tag1", "tag2"],
-  "is_cycle_event": true or false,
-  "cycle_type": "oil change" or null,
-  "days_ago": 0,
-  "is_goal": true or false,
-  "is_struggle": true or false,
-  "is_win": true or false
-}}
-
-Tags should be 1-3 of: health, family, work, money, relationships, home, vehicle, fitness, mental_health, self_care, pet, travel, education, goal, win, struggle
-
-cycle_type must be one of these if is_cycle_event is true:
-oil change, tire rotation, car inspection, car registration, air filter,
-ac filter, hvac service, pest control, gutter cleaning, smoke detector,
-dentist, annual physical, eye exam, skin check, medication refill, therapy,
-vet, flea prevention, pet grooming,
-tax filing, insurance review, passport, drivers license,
-haircut, massage, gym checkin
-
-If nothing meaningful was shared:
-{{"detected": false}}
-
-Return ONLY valid JSON. No markdown. No preamble."""
-
-
-# ── IRA TRADE CONFIG (v7.8) ───────────────────────────────────────────────────
-
-IRA_TRADE_EXTRACTION_PROMPT = """You are analyzing a message from a trader logging
-IRA options trades by speaking naturally to their AI assistant.
-
-User said: "{message}"
-
-Detect if the user is logging a trade OPEN, CLOSE, or EXPIRED outcome.
-
-OPEN examples:
-"opened a SPY put spread, sold 710 bought 705, May 16 expiry, ninety-five cent credit, one contract"
-"put on a call spread on SPY, 722/727, took in one fifty credit"
-"sold a covered call on AAPL 195 strike expiring Friday, got eighty cents"
-
-CLOSE / EXPIRED examples:
-"May 8th IRA trade closed, expired full credit"
-"IRA-002 closed expired worthless, kept the full premium"
-"closed the SPY put spread for full credit"
-"bought back the condor for fifteen cents, locked the profit"
-"SPY spread closed at a loss, paid one ninety to close"
-
-If a trade is detected return ONLY valid JSON, no markdown:
-{{
-  "detected": true,
-  "action": "open" or "close" or "expired",
-  "trade_ref": "IRA-002" or null,
-  "instrument": "SPY" or "SPX" or null,
-  "direction": "PUT_SPREAD" or "CALL_SPREAD" or "IRON_CONDOR" or "COVERED_CALL" or "CSP" or "OTHER",
-  "short_strike": 710.0 or null,
-  "long_strike": 705.0 or null,
-  "entry_credit": 0.95 or null,
-  "exit_debit": 0.15 or null,
-  "contracts": 1 or null,
-  "expiry": "2026-05-16" or null,
-  "outcome": "WIN" or "LOSS" or "OPEN" or null,
-  "exit_type": "expired" or "early_close" or null,
-  "pct_max_captured": 100.0 or null,
-  "override_reason": "any note about deviation from advisor recommendation" or null,
-  "trade_date": "today" or "friday" or "2026-05-08" or null,
-  "notes": "one sentence summary of what they said"
-}}
-
-Rules:
-- "expired worthless" / "full credit" / "kept premium" = expired, WIN, pct_max_captured 100
-- "bought back for X cents" = early_close, estimate pct_max_captured
-- New trades always get outcome OPEN
-- trade_ref = any IRA-XXX reference the user mentions
-- expiry: if day mentioned without year use nearest future date
-- If nothing trade-related: {{"detected": false}}
-
-Return ONLY valid JSON. No preamble. No markdown."""
-
-VM_IRA_WEBHOOK_URL = "http://143.198.18.66:8082/webhook/ira_trade"
 
 
 # ── COMMODITY MAP ─────────────────────────────────────────────────────────────
@@ -550,116 +385,6 @@ def init_db():
                 print(f"[HERALD] Migrated {len(old_invites)} invites from JSON to SQLite")
             except Exception as e:
                 print(f"[HERALD] Invite migration warning (non-fatal): {e}")
-        # v7.7 -- life moments (episodic memory)
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS life_moments (
-                id           TEXT PRIMARY KEY,
-                user_id      TEXT NOT NULL,
-                moment       TEXT NOT NULL,
-                tags         TEXT,
-                status       TEXT DEFAULT 'open',
-                tier         TEXT DEFAULT 'hot',
-                is_goal      INTEGER DEFAULT 0,
-                is_struggle  INTEGER DEFAULT 0,
-                is_win       INTEGER DEFAULT 0,
-                created_at   TEXT NOT NULL,
-                resolved_at  TEXT,
-                last_referenced_at TEXT
-            )
-        """)
-        c.execute("""
-            CREATE INDEX IF NOT EXISTS idx_moments_user
-            ON life_moments (user_id, status, tier, created_at DESC)
-        """)
-        # v7.7 -- life tracker (cycle reminders)
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS life_tracker (
-                id              TEXT PRIMARY KEY,
-                user_id         TEXT NOT NULL,
-                cycle_type      TEXT NOT NULL,
-                label           TEXT NOT NULL,
-                interval_days   INTEGER NOT NULL,
-                last_done_date  TEXT,
-                remind_date     TEXT,
-                calendar_set    INTEGER DEFAULT 0,
-                active          INTEGER DEFAULT 1,
-                created_at      TEXT NOT NULL,
-                last_triggered  TEXT
-            )
-        """)
-        c.execute("""
-            CREATE INDEX IF NOT EXISTS idx_tracker_user
-            ON life_tracker (user_id, active, remind_date)
-        """)
-        # v7.8 -- IRA trade log (Herald voice entry -> VM sync)
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS ira_trades (
-                id            TEXT PRIMARY KEY,
-                user_id       TEXT NOT NULL,
-                action        TEXT NOT NULL,
-                account       TEXT DEFAULT 'IRA',
-                ticker        TEXT,
-                strategy      TEXT,
-                direction     TEXT,
-                amount        REAL,
-                contracts     INTEGER,
-                expiration    TEXT,
-                short_strike  REAL,
-                long_strike   REAL,
-                outcome       TEXT,
-                trade_date    TEXT,
-                notes         TEXT,
-                status        TEXT DEFAULT 'open',
-                vm_synced     INTEGER DEFAULT 0,
-                created_at    TEXT NOT NULL
-            )
-        """)
-        c.execute("""
-            CREATE INDEX IF NOT EXISTS idx_ira_user
-            ON ira_trades (user_id, status, created_at DESC)
-        """)
-        # v7.8 -- IRA trade log (Herald voice entry -> VM sync)
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS ira_trades (
-                id            TEXT PRIMARY KEY,
-                user_id       TEXT NOT NULL,
-                action        TEXT NOT NULL,
-                account       TEXT DEFAULT 'IRA',
-                ticker        TEXT,
-                strategy      TEXT,
-                direction     TEXT,
-                amount        REAL,
-                contracts     INTEGER,
-                expiration    TEXT,
-                short_strike  REAL,
-                long_strike   REAL,
-                outcome       TEXT,
-                trade_date    TEXT,
-                notes         TEXT,
-                status        TEXT DEFAULT 'open',
-                vm_synced     INTEGER DEFAULT 0,
-                created_at    TEXT NOT NULL
-            )
-        """)
-        c.execute("""
-            CREATE INDEX IF NOT EXISTS idx_ira_user
-            ON ira_trades (user_id, status, created_at DESC)
-        """)
-        # v7.7 -- session history (conversation survives reload)
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS sessions (
-                id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id    TEXT NOT NULL,
-                role       TEXT NOT NULL,
-                content    TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            )
-        """)
-        c.execute("""
-            CREATE INDEX IF NOT EXISTS idx_sessions_user
-            ON sessions (user_id, id DESC)
-        """)
-        conn.commit()
         conn.close()
         print(f"[HERALD] SQLite ready: {DB_FILE}")
     except Exception as e:
@@ -749,8 +474,6 @@ def get_profile(user_id):
         "capabilities": {},
         # v7.6 proactive loop
         "proactive_queue": [],
-        # v7.7 life tracker (structured cycle reminders)
-        "life_events": [],
     })
 
 def save_profile(user_id, profile):
@@ -785,952 +508,6 @@ def is_owner(user_id, auth_code=None):
         owner_user_ids.add(user_id)
         return True
     return False
-
-
-# ── SESSION HISTORY (v7.7) ────────────────────────────────────────────────────
-
-def save_session_turn(user_id: str, user_msg: str, assistant_msg: str):
-    try:
-        now = datetime.now().isoformat()
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute(
-            "INSERT INTO sessions (user_id, role, content, created_at) VALUES (?, ?, ?, ?)",
-            (user_id, "user", user_msg[:1000], now)
-        )
-        c.execute(
-            "INSERT INTO sessions (user_id, role, content, created_at) VALUES (?, ?, ?, ?)",
-            (user_id, "assistant", assistant_msg[:1000], now)
-        )
-        c.execute("""
-            DELETE FROM sessions WHERE user_id = ? AND id NOT IN (
-                SELECT id FROM sessions WHERE user_id = ?
-                ORDER BY id DESC LIMIT 100
-            )
-        """, (user_id, user_id))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"[HERALD] save_session_turn (non-fatal): {e}")
-
-
-def load_session_history(user_id: str, limit: int = 12) -> list:
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute(
-            "SELECT role, content FROM sessions WHERE user_id = ? ORDER BY id DESC LIMIT ?",
-            (user_id, limit * 2)
-        )
-        rows = c.fetchall()
-        conn.close()
-        rows.reverse()
-        return [{"role": r, "content": ct} for r, ct in rows]
-    except Exception as e:
-        print(f"[HERALD] load_session_history (non-fatal): {e}")
-        return []
-
-
-# ── LIFE MOMENT FUNCTIONS (v7.7) ──────────────────────────────────────────────
-
-def save_life_moment(user_id: str, moment: str, tags: list,
-                     is_goal: bool, is_struggle: bool, is_win: bool) -> str:
-    """Store a new life moment. Returns the new id."""
-    mid = str(uuid.uuid4())[:12]
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute("""
-            INSERT INTO life_moments
-            (id, user_id, moment, tags, status, tier,
-             is_goal, is_struggle, is_win, created_at)
-            VALUES (?, ?, ?, ?, 'open', 'hot', ?, ?, ?, ?)
-        """, (
-            mid, user_id, moment[:400],
-            json.dumps(tags),
-            1 if is_goal else 0,
-            1 if is_struggle else 0,
-            1 if is_win else 0,
-            datetime.now().isoformat()
-        ))
-        conn.commit()
-        conn.close()
-        print(f"[HERALD] Life moment stored: {user_id} | {moment[:60]}")
-    except Exception as e:
-        print(f"[HERALD] save_life_moment (non-fatal): {e}")
-    return mid
-
-
-def load_hot_moments(user_id: str, limit: int = 12) -> list:
-    """Load open hot-tier moments for system prompt injection."""
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute("""
-            SELECT moment, tags, is_goal, is_struggle, is_win, created_at
-            FROM life_moments
-            WHERE user_id = ? AND status = 'open' AND tier = 'hot'
-            ORDER BY created_at DESC
-            LIMIT ?
-        """, (user_id, limit))
-        rows = c.fetchall()
-        conn.close()
-        return [{"moment": r[0], "tags": json.loads(r[1] or "[]"),
-                 "is_goal": r[2], "is_struggle": r[3], "is_win": r[4],
-                 "created_at": r[5]} for r in rows]
-    except Exception as e:
-        print(f"[HERALD] load_hot_moments (non-fatal): {e}")
-        return []
-
-
-def search_moments(user_id: str, query: str) -> list:
-    """Simple keyword search across all moments. Used when user says 'remember when'."""
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute("""
-            SELECT moment, tags, status, created_at
-            FROM life_moments
-            WHERE user_id = ? AND moment LIKE ?
-            ORDER BY created_at DESC
-            LIMIT 5
-        """, (user_id, f"%{query}%"))
-        rows = c.fetchall()
-        conn.close()
-        return [{"moment": r[0], "tags": json.loads(r[1] or "[]"),
-                 "status": r[2], "created_at": r[3]} for r in rows]
-    except Exception as e:
-        print(f"[HERALD] search_moments (non-fatal): {e}")
-        return []
-
-
-def decay_old_moments(user_id: str):
-    """
-    Move stale open moments to warm tier.
-    Open + no reference in 60 days = warm.
-    Resolved + older than 30 days = cold.
-    Runs in background, non-fatal.
-    """
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        cutoff_warm = (datetime.now() - timedelta(days=60)).isoformat()
-        cutoff_cold = (datetime.now() - timedelta(days=30)).isoformat()
-        c.execute("""
-            UPDATE life_moments SET tier = 'warm'
-            WHERE user_id = ? AND status = 'open' AND tier = 'hot'
-            AND created_at < ?
-        """, (user_id, cutoff_warm))
-        c.execute("""
-            UPDATE life_moments SET tier = 'cold'
-            WHERE user_id = ? AND status = 'resolved' AND tier != 'cold'
-            AND resolved_at < ?
-        """, (user_id, cutoff_cold))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"[HERALD] decay_old_moments (non-fatal): {e}")
-
-
-def save_life_tracker(user_id: str, cycle_type: str, label: str,
-                      interval_days: int, last_done_date: str):
-    """Upsert a life tracker entry. Creates or updates."""
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute("""
-            SELECT id FROM life_tracker
-            WHERE user_id = ? AND cycle_type = ? AND active = 1
-        """, (user_id, cycle_type))
-        existing = c.fetchone()
-
-        from datetime import date as date_type
-        last_done = date_type.fromisoformat(last_done_date)
-        remind_date = (last_done + timedelta(days=int(interval_days * 0.9))).isoformat()
-
-        if existing:
-            c.execute("""
-                UPDATE life_tracker
-                SET last_done_date = ?, remind_date = ?, last_triggered = NULL
-                WHERE id = ?
-            """, (last_done_date, remind_date, existing[0]))
-            print(f"[HERALD] Life tracker updated: {user_id} | {cycle_type} | remind {remind_date}")
-        else:
-            tid = str(uuid.uuid4())[:12]
-            c.execute("""
-                INSERT INTO life_tracker
-                (id, user_id, cycle_type, label, interval_days,
-                 last_done_date, remind_date, active, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
-            """, (tid, user_id, cycle_type, label, interval_days,
-                  last_done_date, remind_date, datetime.now().isoformat()))
-            print(f"[HERALD] Life tracker created: {user_id} | {cycle_type} | remind {remind_date}")
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"[HERALD] save_life_tracker (non-fatal): {e}")
-
-
-def get_due_trackers(user_id: str) -> list:
-    """Return tracker entries whose remind_date has arrived."""
-    try:
-        today = datetime.now().date().isoformat()
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute("""
-            SELECT id, cycle_type, label, interval_days,
-                   last_done_date, remind_date
-            FROM life_tracker
-            WHERE user_id = ? AND active = 1
-            AND remind_date <= ?
-            AND (last_triggered IS NULL OR last_triggered < ?)
-        """, (user_id, today,
-              (datetime.now() - timedelta(days=7)).date().isoformat()))
-        rows = c.fetchall()
-        conn.close()
-        return [{"id": r[0], "cycle_type": r[1], "label": r[2],
-                 "interval_days": r[3], "last_done_date": r[4],
-                 "remind_date": r[5]} for r in rows]
-    except Exception as e:
-        print(f"[HERALD] get_due_trackers (non-fatal): {e}")
-        return []
-
-
-def mark_tracker_triggered(tracker_id: str):
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute("""
-            UPDATE life_tracker SET last_triggered = ?
-            WHERE id = ?
-        """, (datetime.now().date().isoformat(), tracker_id))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"[HERALD] mark_tracker_triggered (non-fatal): {e}")
-
-
-def extract_life_moment(user_id: str, user_message: str, herald_reply: str):
-    """
-    Runs in background after every response.
-    Detects meaningful life moments and cycle events.
-    Stores moments. Queues cycle event offer if applicable.
-    """
-    try:
-        prompt = LIFE_MOMENT_EXTRACTION_PROMPT.format(message=user_message[:400])
-        payload = json.dumps({
-            "model": HAIKU_MODEL,
-            "max_tokens": 150,
-            "messages": [{"role": "user", "content": prompt}]
-        }).encode("utf-8")
-        req = urllib.request.Request(OR_URL, data=payload, headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {OPENROUTER_KEY}",
-            "HTTP-Referer": "https://apexempire.ai",
-            "X-Title": "Herald Personal AI"
-        }, method="POST")
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            data = json.loads(resp.read().decode())
-        raw = data["choices"][0]["message"]["content"].strip()
-        raw = raw.replace("```json", "").replace("```", "").strip()
-        result = json.loads(raw)
-
-        if not result.get("detected"):
-            return
-
-        moment     = result.get("moment", "").strip()
-        tags       = result.get("tags", [])
-        is_cycle   = result.get("is_cycle_event", False)
-        cycle_type = result.get("cycle_type", "")
-        days_ago   = int(result.get("days_ago", 0))
-        is_goal    = result.get("is_goal", False)
-        is_struggle= result.get("is_struggle", False)
-        is_win     = result.get("is_win", False)
-
-        if not moment:
-            return
-
-        # Always store the life moment
-        save_life_moment(user_id, moment, tags, is_goal, is_struggle, is_win)
-
-        # Decay old moments periodically (1 in 10 chance to keep it light)
-        if random.randint(1, 10) == 1:
-            threading.Thread(
-                target=decay_old_moments, args=(user_id,), daemon=True
-            ).start()
-
-        # If it's a cycle event, store tracker + queue the offer
-        if is_cycle and cycle_type and cycle_type in CYCLE_EVENT_DEFAULTS:
-            defaults  = CYCLE_EVENT_DEFAULTS[cycle_type]
-            done_date = (datetime.now() - timedelta(days=days_ago)).date().isoformat()
-
-            save_life_tracker(
-                user_id, cycle_type,
-                defaults["label"], defaults["days"], done_date
-            )
-
-            # Queue the calendar offer for Herald to deliver
-            profile = get_profile(user_id)
-            if not profile.get("pending_watch_offer"):
-                from datetime import date as date_type
-                remind = (date_type.fromisoformat(done_date) +
-                          timedelta(days=int(defaults["days"] * 0.9)))
-                remind_str = remind.strftime("%B")  # Just the month name
-                offer_text = (
-                    f"You mentioned your {defaults['label']} — "
-                    f"want me to put a reminder on your calendar for {remind_str}?"
-                )
-                save_profile_fields(user_id, {
-                    "pending_watch_offer": json.dumps({
-                        "type":        "cycle_offer",
-                        "cycle_type":  cycle_type,
-                        "label":       defaults["label"],
-                        "remind_month": remind_str,
-                        "offer_text":  offer_text,
-                    })
-                })
-                print(f"[HERALD] Cycle offer queued: {user_id} | {cycle_type}")
-
-    except Exception as e:
-        print(f"[HERALD] extract_life_moment (non-fatal): {e}")
-
-
-# ── IRA TRADE FUNCTIONS (v7.8) ────────────────────────────────────────────────
-
-def _resolve_trade_date(raw: str) -> str:
-    """Convert natural date references to ISO date string."""
-    if not raw or raw == "today":
-        return datetime.now().date().isoformat()
-    if raw.lower() == "friday":
-        today = datetime.now().date()
-        days_back = (today.weekday() - 4) % 7
-        return (today - timedelta(days=days_back)).isoformat()
-    if raw.lower() == "monday":
-        today = datetime.now().date()
-        days_back = (today.weekday() - 0) % 7
-        return (today - timedelta(days=days_back)).isoformat()
-    if raw.lower() == "yesterday":
-        return (datetime.now().date() - timedelta(days=1)).isoformat()
-    # Try direct parse
-    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y"):
-        try:
-            return datetime.strptime(raw, fmt).date().isoformat()
-        except Exception:
-            pass
-    return datetime.now().date().isoformat()
-
-
-def _next_ira_trade_id(user_id: str) -> str:
-    """Generate next IRA-XXX id matching ira_trade_log.json format."""
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute("SELECT COUNT(*) FROM ira_trades WHERE user_id = ?",
-                  (user_id,))
-        count = c.fetchone()[0]
-        conn.close()
-        return f"IRA-{str(count + 1).zfill(3)}"
-    except Exception:
-        return f"IRA-{str(uuid.uuid4())[:4].upper()}"
-
-
-def save_ira_trade(user_id: str, trade: dict) -> str:
-    """Write a trade to the ira_trades SQLite table. Returns trade id."""
-    tid        = _next_ira_trade_id(user_id)
-    action     = trade.get("action", "open")
-    trade_date = _resolve_trade_date(trade.get("trade_date"))
-
-    if action in ("close", "expired"):
-        _close_matching_trade(user_id, trade)
-
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute("""
-            INSERT INTO ira_trades
-            (id, user_id, action, account, ticker, strategy,
-             direction, amount, contracts, expiration,
-             short_strike, long_strike, outcome,
-             trade_date, notes, status, vm_synced, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
-        """, (
-            tid, user_id,
-            action,
-            "IRA",
-            trade.get("instrument"),
-            trade.get("direction"),
-            trade.get("direction"),
-            trade.get("entry_credit") or trade.get("exit_debit"),
-            trade.get("contracts"),
-            trade.get("expiry"),
-            trade.get("short_strike"),
-            trade.get("long_strike"),
-            trade.get("outcome", "OPEN"),
-            trade_date,
-            trade.get("notes", "")[:300],
-            "closed" if action in ("close", "expired") else "open",
-            datetime.now().isoformat()
-        ))
-        conn.commit()
-        conn.close()
-        print(f"[HERALD] IRA trade saved: {tid} | {user_id} | "
-              f"{action} | {trade.get('instrument','?')} "
-              f"{trade.get('direction','?')}")
-    except Exception as e:
-        print(f"[HERALD] save_ira_trade (non-fatal): {e}")
-    return tid
-
-
-def _close_matching_trade(user_id: str, trade: dict):
-    """Mark the most recent matching open trade as closed."""
-    try:
-        instrument = trade.get("instrument")
-        trade_ref  = trade.get("trade_ref")
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        if trade_ref:
-            c.execute("""
-                UPDATE ira_trades SET status = 'closed'
-                WHERE user_id = ? AND id = ?
-            """, (user_id, trade_ref))
-        elif instrument:
-            c.execute("""
-                UPDATE ira_trades SET status = 'closed'
-                WHERE user_id = ? AND status = 'open'
-                AND ticker = ?
-                ORDER BY created_at DESC
-                LIMIT 1
-            """, (user_id, instrument))
-        else:
-            c.execute("""
-                UPDATE ira_trades SET status = 'closed'
-                WHERE user_id = ? AND status = 'open'
-                ORDER BY created_at DESC
-                LIMIT 1
-            """, (user_id,))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"[HERALD] _close_matching_trade (non-fatal): {e}")
-
-
-def get_open_ira_positions(user_id: str) -> list:
-    """Return open IRA positions for morning briefing and query responses."""
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute("""
-            SELECT id, ticker, strategy, direction, amount,
-                   contracts, expiration, short_strike,
-                   long_strike, trade_date, notes
-            FROM ira_trades
-            WHERE user_id = ? AND status = 'open'
-            ORDER BY created_at DESC
-            LIMIT 10
-        """, (user_id,))
-        rows = c.fetchall()
-        conn.close()
-        return [{
-            "id":           r[0], "ticker":       r[1],
-            "strategy":     r[2], "direction":    r[3],
-            "amount":       r[4], "contracts":    r[5],
-            "expiration":   r[6], "short_strike": r[7],
-            "long_strike":  r[8], "trade_date":   r[9],
-            "notes":        r[10],
-        } for r in rows]
-    except Exception as e:
-        print(f"[HERALD] get_open_ira_positions (non-fatal): {e}")
-        return []
-
-
-def log_ira_trade_to_vm(user_id: str, trade_id: str, trade: dict):
-    """
-    POST trade to VM webhook so ira_trade_log.json stays current.
-    Runs in background thread. Non-fatal if VM unreachable.
-    Marks vm_synced=1 in SQLite on success.
-    """
-    if not WEBHOOK_SECRET:
-        return
-    try:
-        payload = json.dumps({
-            "secret":   WEBHOOK_SECRET,
-            "trade_id": trade_id,
-            "user_id":  user_id,
-            "trade":    trade,
-        }).encode("utf-8")
-        req = urllib.request.Request(
-            VM_IRA_WEBHOOK_URL, data=payload,
-            headers={"Content-Type": "application/json",
-                     "User-Agent": "HeraldAPI/7.8"},
-            method="POST"
-        )
-        with urllib.request.urlopen(req, timeout=10) as r:
-            result = json.loads(r.read().decode())
-        if result.get("ok"):
-            conn = sqlite3.connect(DB_FILE)
-            c = conn.cursor()
-            c.execute("UPDATE ira_trades SET vm_synced=1 WHERE id=?",
-                      (trade_id,))
-            conn.commit()
-            conn.close()
-            print(f"[HERALD] IRA trade synced to VM: {trade_id}")
-        else:
-            print(f"[HERALD] VM IRA sync returned not-ok: {result}")
-    except Exception as e:
-        print(f"[HERALD] log_ira_trade_to_vm (non-fatal): {e}")
-
-
-def extract_ira_trade(user_id: str, user_message: str, herald_reply: str):
-    """
-    Runs in background after every response for owner only.
-    Detects IRA trade language, stores to SQLite, syncs to VM.
-    """
-    try:
-        prompt = IRA_TRADE_EXTRACTION_PROMPT.format(
-            message=user_message[:500]
-        )
-        payload = json.dumps({
-            "model":      HAIKU_MODEL,
-            "max_tokens": 200,
-            "messages":   [{"role": "user", "content": prompt}]
-        }).encode("utf-8")
-        req = urllib.request.Request(OR_URL, data=payload, headers={
-            "Content-Type":  "application/json",
-            "Authorization": f"Bearer {OPENROUTER_KEY}",
-            "HTTP-Referer":  "https://apexempire.ai",
-            "X-Title":       "Herald Personal AI"
-        }, method="POST")
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            data = json.loads(resp.read().decode())
-        raw = data["choices"][0]["message"]["content"].strip()
-        raw = raw.replace("```json", "").replace("```", "").strip()
-        result = json.loads(raw)
-
-        if not result.get("detected"):
-            return
-
-        trade_id = save_ira_trade(user_id, result)
-
-        # Sync to VM in background
-        threading.Thread(
-            target=log_ira_trade_to_vm,
-            args=(user_id, trade_id, result),
-            daemon=True
-        ).start()
-
-    except Exception as e:
-        print(f"[HERALD] extract_ira_trade (non-fatal): {e}")
-
-
-def build_ira_position_summary(positions: list) -> str:
-    """
-    Generate a natural language summary of open IRA positions.
-    Used by morning briefing and direct IRA queries.
-    """
-    if not positions:
-        return "No open IRA positions on record."
-    lines = []
-    today = datetime.now().date()
-    for p in positions:
-        parts = []
-        if p.get("ticker"):
-            parts.append(p["ticker"])
-        if p.get("strategy"):
-            parts.append(p["strategy"])
-        if p.get("contracts"):
-            parts.append(f"{p['contracts']} contracts")
-        if p.get("amount"):
-            parts.append(f"credit {p['amount']:.2f}")
-        if p.get("expiration"):
-            try:
-                exp = date.fromisoformat(p["expiration"])
-                dte = (exp - today).days
-                parts.append(
-                    f"expires {exp.strftime('%b %d')} "
-                    f"({'today' if dte == 0 else f'{dte}d'})"
-                )
-            except Exception:
-                parts.append(f"exp {p['expiration']}")
-        if p.get("short_strike") and p.get("long_strike"):
-            parts.append(
-                f"strikes {p['short_strike']}/{p['long_strike']}"
-            )
-        lines.append(" | ".join(parts))
-    return "\n".join(f"• {l}" for l in lines)
-
-
-# ── IRA TRADE FUNCTIONS (v7.8) ────────────────────────────────────────────────
-
-def _resolve_trade_date(raw: str) -> str:
-    """Convert natural date references to ISO date string."""
-    if not raw or raw == "today":
-        return datetime.now().date().isoformat()
-    if raw.lower() == "friday":
-        today = datetime.now().date()
-        days_back = (today.weekday() - 4) % 7
-        return (today - timedelta(days=days_back)).isoformat()
-    if raw.lower() == "monday":
-        today = datetime.now().date()
-        days_back = (today.weekday() - 0) % 7
-        return (today - timedelta(days=days_back)).isoformat()
-    if raw.lower() == "yesterday":
-        return (datetime.now().date() - timedelta(days=1)).isoformat()
-    # Try direct parse
-    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y"):
-        try:
-            return datetime.strptime(raw, fmt).date().isoformat()
-        except Exception:
-            pass
-    return datetime.now().date().isoformat()
-
-
-def save_ira_trade(user_id: str, trade: dict) -> str:
-    """Write a trade to the ira_trades SQLite table. Returns trade id."""
-    tid = str(uuid.uuid4())[:12]
-    try:
-        trade_date = _resolve_trade_date(trade.get("trade_date"))
-        action     = trade.get("action", "open")
-        # If action is expired/close, mark any matching open as closed
-        if action in ("close", "expired"):
-            _close_matching_trade(user_id, trade)
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute("""
-            INSERT INTO ira_trades
-            (id, user_id, action, account, ticker, strategy,
-             direction, amount, contracts, expiration,
-             short_strike, long_strike, outcome,
-             trade_date, notes, status, vm_synced, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
-        """, (
-            tid, user_id,
-            action,
-            trade.get("account", "IRA"),
-            trade.get("ticker"),
-            trade.get("strategy"),
-            trade.get("direction"),
-            trade.get("amount"),
-            trade.get("contracts"),
-            trade.get("expiration"),
-            trade.get("short_strike"),
-            trade.get("long_strike"),
-            trade.get("outcome"),
-            trade_date,
-            trade.get("notes", "")[:300],
-            "closed" if action in ("close", "expired") else "open",
-            datetime.now().isoformat()
-        ))
-        conn.commit()
-        conn.close()
-        print(f"[HERALD] IRA trade saved: {user_id} | {action} | "
-              f"{trade.get('ticker','?')} {trade.get('strategy','?')}")
-    except Exception as e:
-        print(f"[HERALD] save_ira_trade (non-fatal): {e}")
-    return tid
-
-
-def _close_matching_trade(user_id: str, trade: dict):
-    """Mark the most recent open trade for this ticker/strategy as closed."""
-    try:
-        ticker   = trade.get("ticker")
-        strategy = trade.get("strategy")
-        if not ticker and not strategy:
-            return
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        if ticker:
-            c.execute("""
-                UPDATE ira_trades SET status = 'closed'
-                WHERE user_id = ? AND status = 'open'
-                AND ticker = ?
-                ORDER BY created_at DESC
-                LIMIT 1
-            """, (user_id, ticker))
-        else:
-            c.execute("""
-                UPDATE ira_trades SET status = 'closed'
-                WHERE user_id = ? AND status = 'open'
-                ORDER BY created_at DESC
-                LIMIT 1
-            """, (user_id,))
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"[HERALD] _close_matching_trade (non-fatal): {e}")
-
-
-def get_open_ira_positions(user_id: str) -> list:
-    """Return open IRA positions for morning briefing and query responses."""
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute("""
-            SELECT id, ticker, strategy, direction, amount,
-                   contracts, expiration, short_strike,
-                   long_strike, trade_date, notes
-            FROM ira_trades
-            WHERE user_id = ? AND status = 'open'
-            ORDER BY created_at DESC
-            LIMIT 10
-        """, (user_id,))
-        rows = c.fetchall()
-        conn.close()
-        return [{
-            "id":           r[0], "ticker":       r[1],
-            "strategy":     r[2], "direction":    r[3],
-            "amount":       r[4], "contracts":    r[5],
-            "expiration":   r[6], "short_strike": r[7],
-            "long_strike":  r[8], "trade_date":   r[9],
-            "notes":        r[10],
-        } for r in rows]
-    except Exception as e:
-        print(f"[HERALD] get_open_ira_positions (non-fatal): {e}")
-        return []
-
-
-def log_ira_trade_to_vm(user_id: str, trade_id: str, trade: dict):
-    """
-    POST trade to VM webhook so ira_trade_log.json stays current.
-    Runs in background thread. Non-fatal if VM unreachable.
-    Marks vm_synced=1 in SQLite on success.
-    """
-    if not WEBHOOK_SECRET:
-        return
-    try:
-        payload = json.dumps({
-            "secret":   WEBHOOK_SECRET,
-            "trade_id": trade_id,
-            "user_id":  user_id,
-            "trade":    trade,
-        }).encode("utf-8")
-        req = urllib.request.Request(
-            VM_IRA_WEBHOOK_URL, data=payload,
-            headers={"Content-Type": "application/json",
-                     "User-Agent": "HeraldAPI/7.8"},
-            method="POST"
-        )
-        with urllib.request.urlopen(req, timeout=10) as r:
-            result = json.loads(r.read().decode())
-        if result.get("ok"):
-            conn = sqlite3.connect(DB_FILE)
-            c = conn.cursor()
-            c.execute("UPDATE ira_trades SET vm_synced=1 WHERE id=?",
-                      (trade_id,))
-            conn.commit()
-            conn.close()
-            print(f"[HERALD] IRA trade synced to VM: {trade_id}")
-        else:
-            print(f"[HERALD] VM IRA sync returned not-ok: {result}")
-    except Exception as e:
-        print(f"[HERALD] log_ira_trade_to_vm (non-fatal): {e}")
-
-
-def extract_ira_trade(user_id: str, user_message: str, herald_reply: str):
-    """
-    Runs in background after every response for owner only.
-    Detects IRA trade language, stores to SQLite, syncs to VM.
-    """
-    try:
-        prompt = IRA_TRADE_EXTRACTION_PROMPT.format(
-            message=user_message[:500]
-        )
-        payload = json.dumps({
-            "model":      HAIKU_MODEL,
-            "max_tokens": 200,
-            "messages":   [{"role": "user", "content": prompt}]
-        }).encode("utf-8")
-        req = urllib.request.Request(OR_URL, data=payload, headers={
-            "Content-Type":  "application/json",
-            "Authorization": f"Bearer {OPENROUTER_KEY}",
-            "HTTP-Referer":  "https://apexempire.ai",
-            "X-Title":       "Herald Personal AI"
-        }, method="POST")
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            data = json.loads(resp.read().decode())
-        raw = data["choices"][0]["message"]["content"].strip()
-        raw = raw.replace("```json", "").replace("```", "").strip()
-        result = json.loads(raw)
-
-        if not result.get("detected"):
-            return
-
-        trade_id = save_ira_trade(user_id, result)
-
-        # Sync to VM in background
-        threading.Thread(
-            target=log_ira_trade_to_vm,
-            args=(user_id, trade_id, result),
-            daemon=True
-        ).start()
-
-    except Exception as e:
-        print(f"[HERALD] extract_ira_trade (non-fatal): {e}")
-
-
-def build_ira_position_summary(positions: list) -> str:
-    """
-    Generate a natural language summary of open IRA positions.
-    Used by morning briefing and direct IRA queries.
-    """
-    if not positions:
-        return "No open IRA positions on record."
-    lines = []
-    today = datetime.now().date()
-    for p in positions:
-        parts = []
-        if p.get("ticker"):
-            parts.append(p["ticker"])
-        if p.get("strategy"):
-            parts.append(p["strategy"])
-        if p.get("contracts"):
-            parts.append(f"{p['contracts']} contracts")
-        if p.get("amount"):
-            parts.append(f"credit {p['amount']:.2f}")
-        if p.get("expiration"):
-            try:
-                exp = date.fromisoformat(p["expiration"])
-                dte = (exp - today).days
-                parts.append(
-                    f"expires {exp.strftime('%b %d')} "
-                    f"({'today' if dte == 0 else f'{dte}d'})"
-                )
-            except Exception:
-                parts.append(f"exp {p['expiration']}")
-        if p.get("short_strike") and p.get("long_strike"):
-            parts.append(
-                f"strikes {p['short_strike']}/{p['long_strike']}"
-            )
-        lines.append(" | ".join(parts))
-    return "\n".join(f"• {l}" for l in lines)
-
-
-# ── MORNING BRIEFING JOB (v7.7 -- APScheduler) ───────────────────────────────
-
-def morning_briefing_job():
-    """
-    Runs at 07:00 ET daily via APScheduler.
-    For each named user: checks due trackers + open life moments.
-    Queues a proactive message for delivery on next app open.
-    """
-    print("[HERALD] morning_briefing_job: starting")
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute("SELECT user_id, data FROM profiles")
-        rows = c.fetchall()
-        conn.close()
-    except Exception as e:
-        print(f"[HERALD] morning_briefing_job DB error: {e}")
-        return
-
-    briefed = 0
-    for user_id, raw in rows:
-        try:
-            profile = json.loads(raw)
-        except Exception:
-            continue
-
-        name = profile.get("name", "")
-        if not name:
-            continue
-
-        bits = []
-
-        # 1. Weather for their location
-        location = profile.get("location", "")
-        if location:
-            weather = fetch_weather_direct(location)
-            if weather:
-                bits.append(weather.split(".")[0].strip())
-
-        # 2. Due life trackers
-        due = get_due_trackers(user_id)
-        for tracker in due[:2]:
-            from datetime import date as date_type
-            try:
-                last = date_type.fromisoformat(tracker["last_done_date"])
-                months = round((datetime.now().date() - last).days / 30)
-                bits.append(
-                    f"it has been about {months} month{'s' if months != 1 else ''} "
-                    f"since your last {tracker['label']}"
-                )
-                mark_tracker_triggered(tracker["id"])
-            except Exception:
-                pass
-
-        # 3. Check open struggles/goals for a gentle follow-up
-        hot = load_hot_moments(user_id, limit=5)
-        struggles = [m for m in hot if m["is_struggle"]]
-        goals     = [m for m in hot if m["is_goal"]]
-        if struggles:
-            bits.append(f"checking in on: {struggles[0]['moment'][:80]}")
-        elif goals:
-            bits.append(f"following up on your goal: {goals[0]['moment'][:80]}")
-
-        if not bits:
-            continue
-
-        # Generate natural briefing via Haiku
-        bits_str = ". ".join(bits)
-        prompt = (
-            f"You are Herald, a warm personal AI companion. "
-            f"Write a natural, friendly 1-2 sentence morning message for {name}. "
-            f"Based on these notes: {bits_str}. "
-            f"Speak like a caring friend. Voice format only. No markdown. No bullet points. "
-            f"If following up on a struggle or goal, be warm and brief -- just check in, "
-            f"don't lecture. Keep it under 40 words."
-        )
-        try:
-            payload = json.dumps({
-                "model": HAIKU_MODEL,
-                "max_tokens": 100,
-                "messages": [{"role": "user", "content": prompt}]
-            }).encode("utf-8")
-            req = urllib.request.Request(OR_URL, data=payload, headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {OPENROUTER_KEY}",
-                "HTTP-Referer": "https://apexempire.ai",
-                "X-Title": "Herald Personal AI"
-            }, method="POST")
-            with urllib.request.urlopen(req, timeout=12) as resp:
-                data = json.loads(resp.read().decode())
-            briefing = data["choices"][0]["message"]["content"].strip()
-        except Exception as e:
-            print(f"[HERALD] morning_briefing LLM failed for {user_id}: {e}")
-            briefing = f"Good morning, {name}."
-
-        # Queue for delivery on next app open
-        profile = get_profile(user_id)
-        queue   = profile.get("proactive_queue", [])
-        queue.append({
-            "id":         str(uuid.uuid4())[:8],
-            "type":       "morning_briefing",
-            "text":       briefing,
-            "created_at": datetime.utcnow().isoformat(),
-        })
-        if len(queue) > 5:
-            queue = queue[-5:]
-        profile["proactive_queue"] = queue
-        save_profile(user_id, profile)
-        briefed += 1
-        print(f"[HERALD] Morning briefing queued: {user_id} ({name})")
-
-    print(f"[HERALD] morning_briefing_job complete: {briefed} users briefed")
-
-
-def _start_scheduler():
-    if not APSCHEDULER_AVAILABLE:
-        print("[HERALD] Scheduler skipped -- add apscheduler to requirements.txt")
-        return
-    scheduler = BackgroundScheduler(timezone="US/Eastern")
-    scheduler.add_job(
-        morning_briefing_job, "cron",
-        hour=7, minute=0,
-        id="morning_briefing",
-        replace_existing=True
-    )
-    scheduler.start()
-    print("[HERALD] APScheduler started -- morning briefing at 07:00 ET daily")
 
 
 # ── WATCHER HELPERS (v7.4) ────────────────────────────────────────────────────
@@ -1895,12 +672,6 @@ def _build_watcher_context(profile: dict) -> str:
                 cap_text = offer.get("offer_text", "")
                 lines.append(
                     f"INSTRUCTION: At the END of your response, add: '{cap_text}'"
-                )
-            elif offer.get("type") == "cycle_offer":
-                offer_text = offer.get("offer_text", "")
-                lines.append(
-                    f"INSTRUCTION: At the END of your response, naturally add (word for word): "
-                    f"'{offer_text}'"
                 )
         except Exception:
             pass
@@ -3167,7 +1938,6 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
     location = profile.get("location", "")
     notes    = profile.get("notes", [])
     memories = profile.get("memories", [])
-    user_id  = profile.get("user_id", "")
 
     user_line = (f"User's name: {name}. Use their name naturally and occasionally -- "
                  f"like a trusted friend would. Not every sentence. Just when it feels right."
@@ -3198,26 +1968,7 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
 
     watcher_context = _build_watcher_context(profile)
 
-    # Hot life moments -- things this person has shared that matter
-    hot_moments = load_hot_moments(user_id, limit=12) if user_id else []
-    moments_line = ""
-    if hot_moments:
-        parts = []
-        for m in hot_moments:
-            age_days = 0
-            try:
-                age_days = (datetime.now() - datetime.fromisoformat(m["created_at"])).days
-            except Exception:
-                pass
-            age_str = f"{age_days}d ago" if age_days > 0 else "today"
-            parts.append(f"{m['moment']} ({age_str})")
-        moments_line = (
-            "Things this person has shared with you that you remember "
-            "(use naturally when relevant, never robotically): "
-            + "; ".join(parts)
-        )
-
-    context_parts = [p for p in [notes_line, prefs_line, facts_line, moments_line] if p]
+    context_parts = [p for p in [notes_line, prefs_line, facts_line] if p]
     context_block = "\n".join(context_parts) if context_parts else "Still learning about this user."
     empire_section = f"\n\n{empire}" if owner and empire else ""
     watcher_section = f"\n\n{watcher_context}" if watcher_context else ""
@@ -3405,8 +2156,6 @@ def build_ask_context(data):
         return None, "user_id and message required"
 
     history        = data.get("history", [])
-    if not history:
-        history = load_session_history(user_id, limit=12)
     local_time     = data.get("local_time", None)
     lat            = data.get("lat", None)
     lng            = data.get("lng", None)
@@ -3491,10 +2240,6 @@ def get_direct_reply(ctx):
         'gate progress','win rate','what did freddie','how is freddie',
         'empire status','regime','last scan','any setups','near miss',
         'expectancy','p&l','sovereign','forge','signal','bankroll',
-        'ira','ira trades','ira positions','ira-0','our trades',
-        'my spread','my condor','my covered call','what are we trading',
-        'open ira','close ira','expired','full credit','put spread',
-        'call spread','iron condor','short strike','entry credit',
     ]
     if owner and any(t in msg_lower for t in FREDDIE_TRIGGERS) and empire:
         freddie_prompt = [
@@ -3598,7 +2343,7 @@ def _trial_fields(trial):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "7.8",
+        "status": "ok", "server": "herald-api", "version": "7.6",
         "proactive_loop": "enabled (/proactive/{user_id} -- poll on app open + resume)",
         "watcher_cron": "enabled (/cron/watchers -- call every 30min with WEBHOOK_SECRET)",
         "learning_loop": "enabled (LLM extraction after every response)",
@@ -3782,25 +2527,6 @@ def ask(request: Request):
         daemon=True
     ).start()
 
-    threading.Thread(
-        target=extract_life_moment,
-        args=(user_id, message, reply),
-        daemon=True
-    ).start()
-
-    threading.Thread(
-        target=save_session_turn,
-        args=(user_id, message, reply),
-        daemon=True
-    ).start()
-
-    if is_owner(user_id):
-        threading.Thread(
-            target=extract_ira_trade,
-            args=(user_id, message, reply),
-            daemon=True
-        ).start()
-
     trial = get_trial_status(profile)
     return {"reply": reply, "action": action,
             "ai_name": profile.get("ai_name", "Herald"),
@@ -3903,25 +2629,6 @@ async def ask_stream(request: Request):
                 args=(message, profile, user_id),
                 daemon=True
             ).start()
-
-            threading.Thread(
-                target=extract_life_moment,
-                args=(user_id, message, reply),
-                daemon=True
-            ).start()
-
-            threading.Thread(
-                target=save_session_turn,
-                args=(user_id, message, reply),
-                daemon=True
-            ).start()
-
-            if is_owner(user_id):
-                threading.Thread(
-                    target=extract_ira_trade,
-                    args=(user_id, message, reply),
-                    daemon=True
-                ).start()
 
             yield f"data: {json.dumps({**base_done, 'full': reply, 'action': action, 'used_search': use_search})}\n\n"
 
@@ -4086,48 +2793,6 @@ async def invite_list(request: Request):
     return {"ok": True, "invites": invite_list_data, "total": len(invite_list_data)}
 
 
-@app.get("/trades/ira")
-def get_ira_trades(user_id: str = None, status: str = "open"):
-    """
-    Returns IRA trades logged by Herald.
-    Owner query: "show me my IRA positions"
-    Future: Freddie ira_advisor.py can poll this.
-    """
-    if not user_id:
-        return JSONResponse({"error": "user_id required"}, status_code=400)
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        if status == "all":
-            c.execute("""
-                SELECT id, action, account, ticker, strategy,
-                       direction, amount, contracts, expiration,
-                       short_strike, long_strike, outcome,
-                       trade_date, notes, status, vm_synced, created_at
-                FROM ira_trades WHERE user_id = ?
-                ORDER BY created_at DESC LIMIT 50
-            """, (user_id,))
-        else:
-            c.execute("""
-                SELECT id, action, account, ticker, strategy,
-                       direction, amount, contracts, expiration,
-                       short_strike, long_strike, outcome,
-                       trade_date, notes, status, vm_synced, created_at
-                FROM ira_trades WHERE user_id = ? AND status = ?
-                ORDER BY created_at DESC LIMIT 20
-            """, (user_id, status))
-        rows = c.fetchall()
-        conn.close()
-        cols = ["id","action","account","ticker","strategy",
-                "direction","amount","contracts","expiration",
-                "short_strike","long_strike","outcome",
-                "trade_date","notes","status","vm_synced","created_at"]
-        trades = [dict(zip(cols, r)) for r in rows]
-        return {"ok": True, "count": len(trades), "trades": trades}
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
-
-
 @app.post("/cron/watchers")
 async def cron_watchers(request: Request):
     """
@@ -4239,7 +2904,116 @@ async def cron_watchers(request: Request):
         "triggered": triggered_count,
         "ran_at": now_iso,
     }
+# ── FORGE-015: POST /proactive/{user_id} ─────────────────────────────────────
+# VM posts here when a setup crosses threshold.
+# Writes to proactive_queue -- delivered on next app open.
+@app.post("/proactive/{user_id}")
+async def post_proactive(user_id: str, request: Request):
+    data   = await request.json()
+    secret = data.get("secret", "")
+    if not WEBHOOK_SECRET or secret != WEBHOOK_SECRET:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
 
+    message = data.get("message", "").strip()
+    source  = data.get("source", "freddie")
+    if not message:
+        return JSONResponse({"error": "message required"}, status_code=400)
+
+    profile         = get_profile(user_id)
+    proactive_queue = profile.get("proactive_queue", [])
+    proactive_queue.append({
+        "id":         str(uuid.uuid4())[:8],
+        "type":       "freddie_alert",
+        "text":       message,
+        "source":     source,
+        "created_at": datetime.utcnow().isoformat(),
+    })
+    if len(proactive_queue) > 10:
+        proactive_queue = proactive_queue[-10:]
+    profile["proactive_queue"] = proactive_queue
+    save_profile(user_id, profile)
+    print(f"[HERALD] Proactive queued for {user_id} from {source}: {message[:60]}")
+    return {"ok": True, "queued": len(proactive_queue)}
+
+
+# ── FORGE-016: POST /freddie/trades ──────────────────────────────────────────
+# VM posts nightly trade sync here.
+# Writes closed trades to freddie_trades table in SQLite.
+@app.post("/freddie/trades")
+async def freddie_trades(request: Request):
+    data   = await request.json()
+    secret = data.get("secret", "")
+    if not WEBHOOK_SECRET or secret != WEBHOOK_SECRET:
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+    user_id    = data.get("user_id", "miked2026")
+    trades     = data.get("trades", [])
+    synced_at  = data.get("synced_at", datetime.utcnow().isoformat())
+
+    if not trades:
+        return {"ok": True, "synced": 0, "message": "no trades to sync"}
+
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS freddie_trades (
+                trade_id   TEXT PRIMARY KEY,
+                user_id    TEXT NOT NULL,
+                data       TEXT NOT NULL,
+                synced_at  TEXT NOT NULL
+            )
+        """)
+        synced = 0
+        for trade in trades:
+            tid = trade.get("trade_id") or trade.get("timestamp", str(synced))
+            c.execute(
+                "INSERT OR REPLACE INTO freddie_trades (trade_id, user_id, data, synced_at) VALUES (?, ?, ?, ?)",
+                (str(tid), user_id, json.dumps(trade), synced_at)
+            )
+            synced += 1
+        conn.commit()
+        conn.close()
+        print(f"[HERALD] Freddie trade sync: {synced} trades stored for {user_id}")
+        return {"ok": True, "synced": synced, "synced_at": synced_at}
+    except Exception as e:
+        print(f"[HERALD] Freddie trade sync error: {e}")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+# ── FORGE-014: /freddie/status ────────────────────────────────────────────────
+# Returns Freddie status block for morning briefing.
+# Owner-gated. Pulls from GitHub cache (empire_status.json).
+@app.get("/freddie/status")
+def freddie_status(user_id: str = None, auth_code: str = None):
+    if not user_id or not is_owner(user_id, auth_code):
+        return JSONResponse({"error": "owner only"}, status_code=401)
+    empire = fetch_empire()
+    if not empire:
+        return {"ok": False, "message": "Freddie data unavailable"}
+    gate       = empire.get("gate_progress", "0/20")
+    regime     = empire.get("regime", "UNKNOWN")
+    window     = empire.get("window_type", "UNKNOWN")
+    near_miss  = empire.get("near_miss_setups", [])
+    health     = empire.get("swarm_health", "UNKNOWN")
+    nm_text    = ""
+    if near_miss:
+        top = near_miss[0]
+        nm_text = f"{top.get('asset')} {top.get('best_dir')} at {top.get('score')}/100"
+    return {
+        "ok":          True,
+        "gate":        gate,
+        "regime":      regime,
+        "window":      window,
+        "near_miss":   nm_text,
+        "health":      health,
+        "briefing_block": (
+            f"Freddie: {regime} regime, {window} window. "
+            f"Gate at {gate}. "
+            + (f"{nm_text} -- closest setup. " if nm_text else "No near misses. ")
+            + f"Swarm {health.lower()}."
+        )
+    }
 
 @app.post("/sync")
 async def sync(request: Request):
@@ -4275,8 +3049,7 @@ def startup():
     init_db()
     load_profiles()
     load_invites()
-    _start_scheduler()
-    print(f"[HERALD API v7.8] FastAPI + uvicorn + SQLite + episodic memory + IRA trade log LIVE")
+    print(f"[HERALD API v7.6] FastAPI + uvicorn + SQLite + proactive loop LIVE")
     print(f"[HERALD API] OpenRouter:    {'YES' if OPENROUTER_KEY else 'MISSING -- required'}")
     print(f"[HERALD API] Model routing: Haiku ({HAIKU_MODEL}) / Sonnet ({SONNET_MODEL})")
     print(f"[HERALD API] Brave Search:  {'YES' if BRAVE_KEY else 'NOT SET -- add BRAVE_SEARCH_KEY'}")
