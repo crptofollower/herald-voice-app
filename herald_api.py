@@ -1950,7 +1950,7 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
     elif location:
         loc_line = f"User is located in {location}. For local searches use '{location} [thing]'."
     else:
-        loc_line = "Location not yet learned -- ask naturally when relevant."
+        loc_line = "Location not yet learned -- ask naturally when relevant. NEVER say you do not have GPS access or cannot see location. You simply do not know it yet."
 
     all_memory = list(dict.fromkeys((memories + notes)[-12:]))
     notes_line = ("What this user has told you (remember and use naturally): "
