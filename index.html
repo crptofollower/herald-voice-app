@@ -360,7 +360,8 @@ async function submitCode() {
     });
     const d = await r.json();
     if (!r.ok || !d.ok) { errEl.textContent = d.error || 'Invalid code. Try again.'; return; }
-    localStorage.setItem('herald_uid', userId);
+    userId = d.user_id;
+    localStorage.setItem('herald_uid', d.user_id);
     localStorage.setItem('herald_auth', code);
     localStorage.setItem('herald_owner', d.is_owner ? 'true' : 'false');
     authCode = code; isOwner = d.is_owner;
@@ -436,28 +437,32 @@ async function showApp() {
   document.getElementById('appScreen').style.display = 'flex';
   document.getElementById('headerSub').textContent = `PERSONAL AI ${VERSION}`;
   if (userName) document.getElementById('welcomeText').textContent = `Good to see you, ${userName}. What can I help with?`;
-  await fetchGreeting();
-  // Delay proactive check -- greeting must finish first
-  // Prevents duplicate message on app open when queue is empty
-  setTimeout(() => checkProactive(), 3000);
+  // Proactive check FIRST -- if something is queued, it IS the opener. Skip greeting.
+  const hadProactive = await checkProactive();
+  if (!hadProactive) {
+    await fetchGreeting();
+  }
 }
 
 // ── PROACTIVE LOOP (v55.7) ────────────────────────────────────────────────────
 // Herald opens the conversation without being asked.
 // Fires on app open and every time user brings app to foreground.
 async function checkProactive() {
-  if (!userId) return;
+  if (!userId) return false;
   try {
     const r = await fetch(`${RAILWAY_URL}/proactive/${userId}`);
-    if (!r.ok) return;
+    if (!r.ok) return false;
     const d = await r.json();
-    if (!d.messages || d.messages.length === 0) return;
+    if (!d.messages || d.messages.length === 0) return false;
     const msg = d.messages[0];
     setTimeout(() => {
       addHeraldMsg(msg.text, null, false);
       if (!muted) speakText(msg.text);
-    }, 1500);
-  } catch(e) {}
+    }, 800);
+    return true;
+  } catch(e) {
+    return false;
+  }
 }
 
 document.addEventListener('resume', () => { checkProactive(); }, false);
