@@ -20,6 +20,27 @@
     [data-theme="light"]{--bg:var(--sand-2);--bg2:white;--txt:var(--text-l);--txt2:#5aacbc;--bdr:var(--border-l);--card:var(--card-l);--chip-bg:white;--chip-txt:var(--emerald);}
     *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
     html,body{height:100%;height:100dvh;background:var(--bg);color:var(--txt);font-family:'DM Sans',sans-serif;overflow:hidden;position:fixed;width:100%;transition:background var(--transition),color var(--transition);}
+    .persona-pick{position:fixed;inset:0;z-index:95;background:#0a0a12;display:flex;flex-direction:column;align-items:stretch;overflow:hidden;}
+    .persona-header{padding:32px 24px 16px;text-align:center;flex-shrink:0;}
+    .persona-logo{width:52px;height:52px;border-radius:14px;background:var(--emerald);display:flex;align-items:center;justify-content:center;font-family:'DM Serif Display',serif;font-size:26px;color:white;margin:0 auto 14px;transition:background 0.5s ease;}
+    .persona-title{font-family:'DM Serif Display',serif;font-size:22px;color:white;letter-spacing:0.12em;margin-bottom:6px;}
+    .persona-sub{font-size:13px;color:rgba(255,255,255,0.45);font-weight:300;line-height:1.6;}
+    .persona-tiles{flex:1;overflow-y:auto;padding:8px 16px;display:flex;flex-direction:column;gap:10px;}
+    .persona-tile{border-radius:16px;padding:16px 18px;cursor:pointer;border:1.5px solid transparent;transition:border-color 0.2s,transform 0.15s;position:relative;overflow:hidden;min-height:96px;display:flex;flex-direction:column;justify-content:flex-end;background-size:cover;background-position:center;}
+    .persona-tile:active{transform:scale(0.98);}
+    .persona-tile.selected{border-color:rgba(255,255,255,0.7);}
+    .persona-tile-overlay{position:absolute;inset:0;background:linear-gradient(to top,rgba(0,0,0,0.72) 0%,rgba(0,0,0,0.1) 100%);}
+    .persona-tile-content{position:relative;z-index:2;}
+    .persona-tile-name{font-size:15px;font-weight:500;color:white;letter-spacing:0.08em;text-transform:uppercase;}
+    .persona-tile-desc{font-size:11px;color:rgba(255,255,255,0.65);font-weight:300;margin-top:2px;}
+    .persona-tile-chips{display:flex;gap:5px;margin-top:7px;flex-wrap:wrap;}
+    .persona-chip{font-size:10px;color:rgba(255,255,255,0.8);border:0.5px solid rgba(255,255,255,0.3);border-radius:20px;padding:3px 9px;}
+    .persona-check{position:absolute;top:12px;right:12px;z-index:3;width:22px;height:22px;border-radius:50%;background:white;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity 0.2s;}
+    .persona-tile.selected .persona-check{opacity:1;}
+    .persona-preview{padding:4px 16px 0;font-size:11px;color:rgba(255,255,255,0.4);text-align:center;min-height:28px;font-style:italic;transition:opacity 0.3s;flex-shrink:0;}
+    .persona-cta{padding:12px 16px 28px;flex-shrink:0;}
+    .persona-btn{width:100%;padding:15px;border:none;border-radius:14px;font-family:'DM Sans',sans-serif;font-size:13px;font-weight:500;letter-spacing:0.08em;cursor:pointer;background:var(--emerald);color:white;transition:background 0.5s,opacity 0.2s;}
+    .persona-btn:disabled{opacity:0.35;cursor:default;}
     .setup{position:fixed;inset:0;z-index:100;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 32px;text-align:center;}
     .setup-icon{width:72px;height:72px;border-radius:20px;background:var(--emerald);display:flex;align-items:center;justify-content:center;margin:0 auto 24px;font-family:'DM Serif Display',serif;font-size:36px;color:white;}
     .setup-title{font-family:'DM Serif Display',serif;font-size:32px;color:var(--emerald);letter-spacing:0.12em;margin-bottom:6px;}
@@ -183,6 +204,19 @@
   <div class="setup-note">Herald works on any device with a browser.<br>Add to Home Screen for the full app experience.</div>
 </div>
 
+<div class="persona-pick" id="personaScreen" style="display:none;">
+  <div class="persona-header">
+    <div class="persona-logo" id="personaLogo">H</div>
+    <div class="persona-title">HERALD</div>
+    <div class="persona-sub">Choose your world.<br>This is where your AI lives.</div>
+  </div>
+  <div class="persona-tiles" id="personaTiles"></div>
+  <div class="persona-preview" id="personaPreview"></div>
+  <div class="persona-cta">
+    <button class="persona-btn" id="personaBtn" disabled onclick="confirmPersona()">Choose your world</button>
+  </div>
+</div>
+
 <div class="onboard" id="onboardScreen" style="display:none;">
   <div class="onboard-dots" id="onboardDots"></div>
   <div class="onboard-msg" id="onboardMsg"></div>
@@ -313,6 +347,8 @@ setInterval(updateTime, 30000);
 setInterval(() => fetch(RAILWAY_URL + '/health').catch(()=>{}), 180000);
 
 if (userId && authCode) {
+  const savedPersona = localStorage.getItem('herald_persona');
+  if (savedPersona) applyPersonaTheme(savedPersona);
   showApp();
 } else {
   const inviteCode = new URLSearchParams(window.location.search).get('invite');
@@ -367,11 +403,136 @@ async function submitCode() {
     authCode = code; isOwner = d.is_owner;
     if (d.name) { userName = d.name; localStorage.setItem('herald_name', d.name); }
     if (d.ai_name) { aiName = d.ai_name; localStorage.setItem('herald_ai_name', d.ai_name); }
-    if (d.onboarded || d.name) showApp(); else startOnboarding();
+    if (d.onboarded || d.name) {
+      const savedPersona = localStorage.getItem('herald_persona');
+      if (savedPersona) applyPersonaTheme(savedPersona);
+      showApp();
+    } else {
+      const savedPersona = localStorage.getItem('herald_persona');
+      if (savedPersona) { applyPersonaTheme(savedPersona); startOnboarding(); }
+      else showPersonaPicker();
+    }
   } catch(e) { errEl.textContent = 'Connection error. Is your internet on?'; }
 }
 
 function showError(msg) { document.getElementById('setupError').textContent = msg; }
+
+const PERSONA_IMG_BASE = 'https://raw.githubusercontent.com/crptofollower/herald-voice-app/main/assets/personas/';
+
+const PERSONAS = [
+  {
+    id: 'beach', name: 'Beach', desc: 'Salt air, open water, easy rhythm',
+    chips: ['Surf report','UV index','Tides','Coastal dining'],
+    accent: '#1A9B8A',
+    preview: 'Good morning. Waves are 3 to 4 feet, offshore winds. Perfect morning for it.',
+    systemHint: 'relaxed, warm, coastal lifestyle',
+    quickCmds: ["What's the surf like?","UV index today","Tide times","Beach weather"]
+  },
+  {
+    id: 'mountain', name: 'Mountain', desc: 'High peaks, clear air, grounded pace',
+    chips: ['Trail conditions','Weather window','Sunrise','Summit routes'],
+    accent: '#5C8FD6',
+    preview: 'Clear skies this morning, winds pick up after 2pm. Good window for the ridge.',
+    systemHint: 'grounded, outdoorsy, mountain lifestyle',
+    quickCmds: ["Trail conditions","Weather window","Sunrise time","Snow report"]
+  },
+  {
+    id: 'urban', name: 'Urban', desc: 'City pulse, sharp and always moving',
+    chips: ['Traffic','Events tonight','Restaurants','Transit'],
+    accent: '#C8A84B',
+    preview: 'Game starts at 7. Traffic is clear til 5. Reservation confirmed at 6:15.',
+    systemHint: 'sharp, efficient, city lifestyle',
+    quickCmds: ["Traffic right now","Events tonight","Best restaurant nearby","Latest news"]
+  },
+  {
+    id: 'country', name: 'Country', desc: 'Open land, honest pace, real roots',
+    chips: ['Local weather','Sunrise','Farm supply','Country music'],
+    accent: '#C87820',
+    preview: 'Storms rolling in around 4. Good morning to get the field work done early.',
+    systemHint: 'friendly, unhurried, country lifestyle',
+    quickCmds: ["Weather today","Sunrise time","What's in the news","Play country music"]
+  },
+  {
+    id: 'desert', name: 'Desert', desc: 'Red rock, big sky, unhurried clarity',
+    chips: ['Heat index','Sunset time','Trail access','Stargazing'],
+    accent: '#E07020',
+    preview: 'High of 94 today. Sunset at 7:21. Should be a good one tonight.',
+    systemHint: 'calm, minimal, Southwest desert lifestyle',
+    quickCmds: ["Heat index today","Sunset time","Trail conditions","Stargazing forecast"]
+  }
+];
+
+let selectedPersona = null;
+
+function buildPersonaTiles() {
+  const container = document.getElementById('personaTiles');
+  container.innerHTML = '';
+  PERSONAS.forEach(p => {
+    const tile = document.createElement('div');
+    tile.className = 'persona-tile';
+    tile.dataset.id = p.id;
+    tile.style.backgroundImage = `url('${PERSONA_IMG_BASE}${p.id}.jpg')`;
+    tile.innerHTML = `
+      <div class="persona-tile-overlay"></div>
+      <div class="persona-check">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+          <polyline points="2,6 5,9 10,3" stroke="${p.accent}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <div class="persona-tile-content">
+        <div class="persona-tile-name">${p.name}</div>
+        <div class="persona-tile-desc">${p.desc}</div>
+        <div class="persona-tile-chips">${p.chips.map(c=>`<div class="persona-chip">${c}</div>`).join('')}</div>
+      </div>`;
+    tile.addEventListener('click', () => selectPersona(p));
+    container.appendChild(tile);
+  });
+}
+
+function selectPersona(p) {
+  selectedPersona = p;
+  document.querySelectorAll('.persona-tile').forEach(t => t.classList.toggle('selected', t.dataset.id === p.id));
+  document.getElementById('personaLogo').style.background = p.accent;
+  document.getElementById('personaPreview').textContent = `"${p.preview}"`;
+  const btn = document.getElementById('personaBtn');
+  btn.style.background = p.accent;
+  btn.disabled = false;
+  btn.textContent = `Enter ${p.name} →`;
+}
+
+function showPersonaPicker() {
+  document.getElementById('setupScreen').style.display = 'none';
+  document.getElementById('personaScreen').style.display = 'flex';
+  buildPersonaTiles();
+}
+
+async function confirmPersona() {
+  if (!selectedPersona) return;
+  localStorage.setItem('herald_persona', selectedPersona.id);
+  localStorage.setItem('herald_persona_accent', selectedPersona.accent);
+  applyPersonaTheme(selectedPersona.id);
+  try {
+    await fetch(RAILWAY_URL+'/profile', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({user_id: userId, persona: selectedPersona.id})
+    });
+  } catch(e) {}
+  document.getElementById('personaScreen').style.display = 'none';
+  startOnboarding();
+}
+
+function applyPersonaTheme(personaId) {
+  const p = PERSONAS.find(x => x.id === personaId);
+  if (!p) return;
+  document.documentElement.style.setProperty('--emerald', p.accent);
+  document.documentElement.style.setProperty('--teal', p.accent);
+  const quickCmds = p.quickCmds;
+  const qArea = document.querySelector('.quick-cmds');
+  if (qArea && quickCmds) {
+    const btns = qArea.querySelectorAll('.q-btn');
+    quickCmds.forEach((cmd, i) => { if (btns[i]) btns[i].textContent = cmd; btns[i] && (btns[i].onclick = () => sendQuick(cmd)); });
+  }
+}
 
 const ONBOARD_STEPS = [
   { msg:"What should I call you?", sub:"Just your first name is fine.", type:'input', placeholder:'Your name...', key:'name' },
