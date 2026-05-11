@@ -2379,9 +2379,20 @@ def get_direct_reply(ctx):
         cache_set(f'weather:{loc}', result, 'weather')
         return result, False
 
-    if any(w in msg_lower for w in ['score','scores','game today','cowboys','rangers',
-                                     'mavs','mavericks','stars','nfl','nba','mlb','nhl',
-                                     'playoffs','standings']):
+    SCORE_INTENT = [
+        'score', 'scores', 'final score', 'did they win', 'did they lose',
+        'who won', 'game today', 'game tonight', 'game last night',
+        'standings', 'what was the score',
+    ]
+    SPORTS_TEAMS = [
+        'cowboys', 'rangers', 'mavs', 'mavericks', 'stars',
+        'nfl', 'nba', 'mlb', 'nhl', 'playoffs',
+    ]
+    has_score_intent = any(w in msg_lower for w in SCORE_INTENT)
+    has_team = any(w in msg_lower for w in SPORTS_TEAMS)
+    if has_score_intent and has_team:
+        return fetch_sports_direct(msg_lower), False
+    if has_score_intent and not has_team:
         return fetch_sports_direct(msg_lower), False
 
     if any(w in msg_lower for w in ['bitcoin','ethereum','solana','crypto','btc','eth',
