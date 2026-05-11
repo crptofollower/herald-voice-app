@@ -1313,6 +1313,7 @@ def build_about_me(profile):
     learned_facts = profile.get("learned_facts", [])
     query_counts  = profile.get("query_counts", {})
     created       = profile.get("created_at", "")
+    user_id       = profile.get("user_id", "")
 
     days_known = 0
     if created:
@@ -1326,13 +1327,57 @@ def build_about_me(profile):
     facts_str = "; ".join([f"{f['value']} ({f['category']})" for f in learned_facts[-20:]]) \
                 if learned_facts else "none yet"
 
+    # Pull life moments for build_about_me
+    moments_str = ""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("""
+            SELECT summary, days_ago FROM life_moments
+            WHERE user_id = ? AND active = 1
+            ORDER BY weight DESC, created_at DESC LIMIT 6
+        """, (user_id,))
+        rows = c.fetchall()
+        conn.close()
+        if rows:
+            parts = []
+            for summary, days_ago in rows:
+                if days_ago == 0: age = "today"
+                elif days_ago == 1: age = "yesterday"
+                elif days_ago < 7: age = f"{days_ago} days ago"
+                elif days_ago < 30: age = f"{days_ago // 7} weeks ago"
+                else: age = f"{days_ago // 30} months ago"
+                parts.append(f"{summary} ({age})")
+            moments_str = "; ".join(parts)
+    except Exception:
+        pass
+
+    # Pull life tracker items
+    tracker_str = ""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("""
+            SELECT item_name, next_due_date FROM life_tracker
+            WHERE user_id = ? AND active = 1
+            ORDER BY next_due_date ASC LIMIT 5
+        """, (user_id,))
+        trows = c.fetchall()
+        conn.close()
+        if trows:
+            tracker_str = "; ".join([f"{name} (due {nxt})" for name, nxt in trows])
+    except Exception:
+        pass
+
     profile_context = (
         f"Name: {name or 'not yet known'}\n"
         f"Location: {location or 'not yet known'}\n"
         f"Days we have known each other: {days_known}\n"
         f"Things they have told me: {'; '.join(all_notes) if all_notes else 'none yet'}\n"
         f"Facts learned from conversation: {facts_str}\n"
-        f"Most asked about: {', '.join(top_cats) if top_cats else 'not yet known'}"
+        f"Most asked about: {', '.join(top_cats) if top_cats else 'not yet known'}\n"
+        f"Life moments shared: {moments_str if moments_str else 'none captured yet'}\n"
+        f"Life tracker items: {tracker_str if tracker_str else 'none tracked yet'}"
     )
 
     prompt = [
@@ -1968,7 +2013,76 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
 
     watcher_context = _build_watcher_context(profile)
 
-    context_parts = [p for p in [notes_line, prefs_line, facts_line] if p]
+    # ── LIFE TRACKER injection (v7.10) ────────────────────────────────────────
+    life_tracker_line = ""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("""
+            SELECT category, item_name, last_date, next_due_date, interval_days
+            FROM life_tracker
+            WHERE user_id = ? AND active = 1
+            ORDER BY next_due_date ASC
+            LIMIT 8
+        """, (profile.get("user_id", ""),))
+        tracker_rows = c.fetchall()
+        conn.close()
+        if tracker_rows:
+            today = date.today()
+            due_items = []
+            for cat, name, last, nxt, interval in tracker_rows:
+                try:
+                    due = date.fromisoformat(nxt)
+                    days_until = (due - today).days
+                    if days_until <= 14:
+                        if days_until < 0:
+                            due_items.append(f"{name} is overdue by {abs(days_until)} days")
+                        elif days_until == 0:
+                            due_items.append(f"{name} is due today")
+                        else:
+                            due_items.append(f"{name} is due in {days_until} days")
+                    elif days_until <= 30:
+                        due_items.append(f"{name} coming up in {days_until} days")
+                except Exception:
+                    pass
+            if due_items:
+                life_tracker_line = "Life tracker reminders due soon: " + "; ".join(due_items) + ". Mention these naturally if relevant to the conversation."
+    except Exception:
+        pass
+
+    # ── EPISODIC MEMORY injection (v7.10) ─────────────────────────────────────
+    episodic_line = ""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("""
+            SELECT summary, category, emotion, days_ago
+            FROM life_moments
+            WHERE user_id = ? AND active = 1
+            ORDER BY weight DESC, created_at DESC
+            LIMIT 6
+        """, (profile.get("user_id", ""),))
+        moment_rows = c.fetchall()
+        conn.close()
+        if moment_rows:
+            moment_lines = []
+            for summary, cat, emotion, days_ago in moment_rows:
+                if days_ago == 0:
+                    age = "today"
+                elif days_ago == 1:
+                    age = "yesterday"
+                elif days_ago < 7:
+                    age = f"{days_ago} days ago"
+                elif days_ago < 30:
+                    age = f"{days_ago // 7} week{'s' if days_ago >= 14 else ''} ago"
+                else:
+                    age = f"{days_ago // 30} month{'s' if days_ago >= 60 else ''} ago"
+                moment_lines.append(f"{summary} ({age})")
+            episodic_line = "Life moments this user has shared: " + "; ".join(moment_lines) + ". Reference these naturally like a friend who remembers -- never robotically."
+    except Exception:
+        pass
+
+    context_parts = [p for p in [notes_line, prefs_line, facts_line, life_tracker_line, episodic_line] if p]
     context_block = "\n".join(context_parts) if context_parts else "Still learning about this user."
     empire_section = f"\n\n{empire}" if owner and empire else ""
     watcher_section = f"\n\n{watcher_context}" if watcher_context else ""
@@ -2003,6 +2117,8 @@ YOUR RULES:
 - You speak out loud via text-to-speech. Format ALL responses for listening, not reading.
 - You are {ai_name}. That is your only identity.
 - Never comment on how many times something has been asked.
+- You have rich context about this user -- their life moments, tracker reminders, facts, and preferences. Weave these in naturally when relevant. Don't wait to be asked. A good friend brings things up. So do you.
+- If a life tracker item is due soon, mention it naturally at the end of your response when it fits. Never force it. Never list it robotically.
 
 VOICE FORMATTING -- CRITICAL:
 You speak through a text-to-speech engine. Follow these rules for every response:
