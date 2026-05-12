@@ -2474,7 +2474,8 @@ def get_direct_reply(ctx):
         else:
             # Specific -- location, topic, or open-ended "what's going on"
             # Route to LLM + web search so it can use the user's profile context
-            # The LLM already has their interests, life moments,
+            # The LLM already has their interests, life moments, and location
+            return None, None
 
     if any(w in msg_lower for w in ['movie','film','imdb','rotten tomatoes','what to watch','watch tonight']):
         for kw in ['about ','review of ','tell me about ']:
