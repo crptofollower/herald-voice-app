@@ -17,6 +17,7 @@ import os, json, re, random, string, time, http.client, ssl, sqlite3, threading,
 import urllib.request, urllib.error, urllib.parse
 from datetime import datetime, timedelta, date
 
+from apscheduler.schedulers.background import BackgroundScheduler
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -1418,6 +1419,8 @@ def build_about_me(profile):
 
 
 def get_trial_status(profile):
+    if profile.get("is_owner"):
+        return {"status": "paid", "days_remaining": 999, "show_wall": False}
     if profile.get("paid"):
         return {"status": "paid", "days_remaining": 999, "show_wall": False}
     created_raw = profile.get("created_at")
@@ -2534,7 +2537,7 @@ def _trial_fields(trial):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "7.6",
+        "status": "ok", "server": "herald-api", "version": "7.9",
         "proactive_loop": "enabled (/proactive/{user_id} -- poll on app open + resume)",
         "watcher_cron": "enabled (/cron/watchers -- call every 30min with WEBHOOK_SECRET)",
         "learning_loop": "enabled (LLM extraction after every response)",
@@ -3254,7 +3257,11 @@ def startup():
     init_db()
     load_profiles()
     load_invites()
-    print(f"[HERALD API v7.6] FastAPI + uvicorn + SQLite + proactive loop LIVE")
+    scheduler = BackgroundScheduler(timezone="America/New_York")
+    scheduler.add_job(morning_briefing_job, "cron", hour=7, minute=0)
+    scheduler.start()
+    print(f"[HERALD] Morning briefing scheduler started -- fires 7am ET daily")
+    print(f"[HERALD API v7.9] FastAPI + uvicorn + SQLite + proactive loop LIVE")
     print(f"[HERALD API] OpenRouter:    {'YES' if OPENROUTER_KEY else 'MISSING -- required'}")
     print(f"[HERALD API] Model routing: Haiku ({HAIKU_MODEL}) / Sonnet ({SONNET_MODEL})")
     print(f"[HERALD API] Brave Search:  {'YES' if BRAVE_KEY else 'NOT SET -- add BRAVE_SEARCH_KEY'}")
@@ -3276,6 +3283,135 @@ def startup():
     print(f"[HERALD API] Watcher:       ENABLED -- explicit + implicit + gas + travel/task/research")
     print(f"[HERALD API] Built caps:    {BUILT_CAPABILITIES}")
 
+# ── MORNING BRIEFING JOB (v7.9) ───────────────────────────────────────────────
+
+def build_freddie_morning_block(empire: dict) -> str:
+    if not empire:
+        return ""
+    regime   = empire.get("regime", "unknown").capitalize()
+    window   = empire.get("window_type", empire.get("window", "unknown")).lower()
+    gate_p   = empire.get("gate_progress", empire.get("gate", {}).get("progress", 0))
+    gate_t   = empire.get("gate_target",   empire.get("gate", {}).get("target",   20))
+    health   = empire.get("swarm_health", empire.get("health", "unknown"))
+    nm_list  = empire.get("near_miss_setups", empire.get("near_miss", []))
+    nm_str   = "no setups near threshold"
+    if nm_list:
+        top    = nm_list[0]
+        nm_str = f"{top.get('asset','')} {top.get('best_dir', top.get('direction',''))} {top.get('score','')}"
+    health_str = "Swarm healthy" if str(health).lower() == "healthy" else f"Swarm {health}"
+    return (
+        f"Freddie: {regime} regime, {window} window. "
+        f"Gate {gate_p} of {gate_t}. {nm_str}. {health_str}."
+    )
+
+
+def morning_briefing_job():
+    """
+    Runs daily at 7am Eastern via APScheduler.
+    Builds a personalised morning message and writes it to the
+    owner's proactive_queue so Herald speaks it on app open.
+    """
+    print("[HERALD] Morning briefing job starting...")
+    try:
+        # ── Find owner profile ────────────────────────────────────────────────
+        owner_id = OWNER_ID
+        if not owner_id:
+            # Fall back to scanning profiles for is_owner flag
+            for uid, prof in user_profiles.items():
+                if prof.get("is_owner"):
+                    owner_id = uid
+                    break
+        if not owner_id:
+            print("[HERALD] Morning briefing: no owner profile found, skipping.")
+            return
+
+        profile  = get_profile(owner_id)
+        name     = profile.get("name", "Mike")
+        location = profile.get("location", "Plano, TX")
+
+        # ── Weather ───────────────────────────────────────────────────────────
+        weather_line = ""
+        try:
+            weather = fetch_weather_direct(location)
+            if weather:
+                weather_line = weather.split(".")[0].strip() + "."
+        except Exception as e:
+            print(f"[HERALD] Briefing weather failed: {e}")
+
+        # ── Life moments (top 2 hot items) ────────────────────────────────────
+        moments_line = ""
+        try:
+            conn = sqlite3.connect(DB_FILE)
+            c    = conn.cursor()
+            c.execute("""
+                SELECT summary FROM life_moments
+                WHERE user_id = ? AND active = 1
+                ORDER BY weight DESC, created_at DESC LIMIT 2
+            """, (owner_id,))
+            rows = c.fetchall()
+            conn.close()
+            if rows:
+                moments_line = " Also on my mind: " + ". ".join(r[0] for r in rows) + "."
+        except Exception as e:
+            print(f"[HERALD] Briefing moments failed: {e}")
+
+        # ── Life tracker (anything due within 7 days) ─────────────────────────
+        tracker_line = ""
+        try:
+            conn = sqlite3.connect(DB_FILE)
+            c    = conn.cursor()
+            c.execute("""
+                SELECT item_name, next_due_date FROM life_tracker
+                WHERE user_id = ? AND active = 1
+                  AND date(next_due_date) <= date('now', '+7 days')
+                ORDER BY next_due_date ASC LIMIT 2
+            """, (owner_id,))
+            trows = c.fetchall()
+            conn.close()
+            if trows:
+                items = ", ".join(f"{n} on {d}" for n, d in trows)
+                tracker_line = f" Coming up: {items}."
+        except Exception as e:
+            print(f"[HERALD] Briefing tracker failed: {e}")
+
+        # ── Freddie block (owner only) ─────────────────────────────────────────
+        freddie_line = ""
+        try:
+            empire = fetch_empire()
+            if empire:
+                freddie_line = " " + build_freddie_morning_block(empire)
+        except Exception as e:
+            print(f"[HERALD] Briefing Freddie failed: {e}")
+
+        # ── Assemble and queue ────────────────────────────────────────────────
+        now_hour = datetime.now().hour
+        if now_hour < 12:
+            salutation = "Good morning"
+        elif now_hour < 17:
+            salutation = "Good afternoon"
+        else:
+            salutation = "Good evening"
+
+        briefing = (
+            f"{salutation} {name}. {weather_line}"
+            f"{moments_line}{tracker_line}{freddie_line}"
+        ).strip()
+
+        proactive_queue = profile.get("proactive_queue", [])
+        proactive_queue.append({
+            "id":         str(uuid.uuid4())[:8],
+            "type":       "morning_briefing",
+            "text":       briefing,
+            "created_at": datetime.utcnow().isoformat(),
+        })
+        if len(proactive_queue) > 10:
+            proactive_queue = proactive_queue[-10:]
+        profile["proactive_queue"] = proactive_queue
+        save_profile(owner_id, profile)
+        print(f"[HERALD] Morning briefing queued for {owner_id}: {briefing[:80]}...")
+
+    except Exception as e:
+        print(f"[HERALD] Morning briefing job error: {e}")
 
 if __name__ == "__main__":
     uvicorn.run("herald_api:app", host="0.0.0.0", port=PORT, reload=False)
