@@ -2395,8 +2395,13 @@ def get_direct_reply(ctx):
     if has_score_intent and not has_team:
         return fetch_sports_direct(msg_lower), False
 
-    if any(w in msg_lower for w in ['bitcoin','ethereum','solana','crypto','btc','eth',
-                                     'sol price','crypto price']):
+    # Word-boundary crypto detection -- prevents 'teeth' matching 'eth', etc.
+    import re as _re
+    _crypto_pat = _re.compile(
+        r'\b(bitcoin|ethereum|solana|crypto|btc|eth|sol|sol price|crypto price)\b',
+        _re.IGNORECASE
+    )
+    if _crypto_pat.search(msg_lower):
         cached = cache_get('crypto', 'crypto')
         if cached:
             return cached, False
@@ -2404,14 +2409,72 @@ def get_direct_reply(ctx):
         cache_set('crypto', result, 'crypto')
         return result, False
 
-    if any(w in msg_lower for w in ['news','headlines','top stories',
-                                     'what is happening','what happened today']):
-        cached = cache_get('news_top', 'news')
-        if cached:
-            return cached, False
-        result = fetch_news_direct()
-        cache_set('news_top', result, 'news')
-        return result, False
+    # ── SMART NEWS + CONTEXT ROUTING (v7.10.1) ───────────────────────────────
+    # Rule: generic "what's in the news" → fast API
+    # Rule: anything with a location, topic, or "what's going on" → LLM + web search
+    # The LLM sees the user's profile (interests, life moments) and search results
+    # together -- so "what's going on in Destin" + "loves roses" + rose festival
+    # in search results = Herald mentions the festival naturally like a friend would.
+
+    NEWS_TRIGGERS = [
+        'news', 'headlines', 'top stories', 'what is happening',
+        'what happened today', 'what is going on', "what's going on",
+        'going on in', 'happening in', 'happening with', 'going on with',
+        'latest on', 'update on', 'what about', 'tell me about',
+        'what is the situation', 'whats new', "what's new",
+        'current events', 'briefing', 'morning news',
+    ]
+
+    GENERIC_ONLY = [
+        'top stories', 'latest news', 'headlines today', 'news today',
+        'morning news', 'what is in the news', "what's in the news",
+        'what happened today', 'current events',
+    ]
+
+    # Location words signal a specific place query
+    LOCATION_WORDS = [
+        ' in ', ' at ', ' near ', ' around ', ' about ', ' for ',
+    ]
+
+    # Topic signal words -- "what's going on with the economy"
+    TOPIC_WORDS = [
+        'economy', 'market', 'business', 'sector', 'industry',
+        'politics', 'election', 'congress', 'government', 'president',
+        'world', 'global', 'international', 'national', 'local',
+        'weather', 'hurricane', 'storm', 'fire', 'flood',
+        'sports', 'nba', 'nfl', 'nhl', 'mlb', 'playoffs',
+        'stock', 'crypto', 'bitcoin', 'oil', 'gas',
+        'health', 'medical', 'hospital', 'covid', 'flu',
+        'crime', 'police', 'shooting', 'accident',
+        'festival', 'event', 'concert', 'show', 'opening',
+        'real estate', 'housing', 'mortgage', 'rates',
+        'jobs', 'unemployment', 'layoffs', 'hiring',
+    ]
+
+    has_news_trigger = any(w in msg_lower for w in NEWS_TRIGGERS)
+
+    if has_news_trigger:
+        is_generic = any(w in msg_lower for w in GENERIC_ONLY)
+        has_location = any(w in msg_lower for w in LOCATION_WORDS)
+        has_topic = any(w in msg_lower for w in TOPIC_WORDS)
+
+        # Also check if user's profile location appears in the message
+        user_location = profile.get("location", "").lower()
+        if user_location and user_location.split(",")[0].strip() in msg_lower:
+            has_location = True
+
+        if is_generic and not has_location and not has_topic:
+            # Pure generic -- "what's the news today" -- fast API
+            cached = cache_get('news_top', 'news')
+            if cached:
+                return cached, False
+            result = fetch_news_direct()
+            cache_set('news_top', result, 'news')
+            return result, False
+        else:
+            # Specific -- location, topic, or open-ended "what's going on"
+            # Route to LLM + web search so it can use the user's profile context
+            # The LLM already has their interests, life moments,
 
     if any(w in msg_lower for w in ['movie','film','imdb','rotten tomatoes','what to watch','watch tonight']):
         for kw in ['about ','review of ','tell me about ']:
