@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald PWA Backend -- Railway Cloud Server
-# v7.6 -- Proactive loop + gas price watcher + /proactive endpoint
+# v8.0 -- Proactive loop + gas price watcher + /proactive endpoint
 #
 # WHAT CHANGED vs v7.5.1:
 #   - Added:   EIA_KEY config variable (EIA_API_KEY env var)
@@ -17,6 +17,12 @@ import os, json, re, random, string, time, http.client, ssl, sqlite3, threading,
 import urllib.request, urllib.error, urllib.parse
 from datetime import datetime, timedelta, date
 
+import sentry_sdk
+sentry_sdk.init(
+    dsn=os.environ.get("SENTRY_DSN", ""),
+    traces_sample_rate=0.1,
+    send_default_pii=False,
+)
 from apscheduler.schedulers.background import BackgroundScheduler
 import uvicorn
 from fastapi import FastAPI, Request
@@ -340,6 +346,8 @@ def init_db():
     try:
         os.makedirs("/data", exist_ok=True)
         conn = sqlite3.connect(DB_FILE)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
         c = conn.cursor()
         c.execute("""
             CREATE TABLE IF NOT EXISTS profiles (
@@ -2537,7 +2545,7 @@ def _trial_fields(trial):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "7.9",
+        "status": "ok", "server": "herald-api", "version": "8.0",
         "proactive_loop": "enabled (/proactive/{user_id} -- poll on app open + resume)",
         "watcher_cron": "enabled (/cron/watchers -- call every 30min with WEBHOOK_SECRET)",
         "learning_loop": "enabled (LLM extraction after every response)",
@@ -3261,7 +3269,7 @@ def startup():
     scheduler.add_job(morning_briefing_job, "cron", hour=7, minute=0)
     scheduler.start()
     print(f"[HERALD] Morning briefing scheduler started -- fires 7am ET daily")
-    print(f"[HERALD API v7.9] FastAPI + uvicorn + SQLite + proactive loop LIVE")
+    print(f"[HERALD API v8.0] FastAPI + uvicorn + SQLite + proactive loop LIVE")
     print(f"[HERALD API] OpenRouter:    {'YES' if OPENROUTER_KEY else 'MISSING -- required'}")
     print(f"[HERALD API] Model routing: Haiku ({HAIKU_MODEL}) / Sonnet ({SONNET_MODEL})")
     print(f"[HERALD API] Brave Search:  {'YES' if BRAVE_KEY else 'NOT SET -- add BRAVE_SEARCH_KEY'}")
@@ -3283,7 +3291,7 @@ def startup():
     print(f"[HERALD API] Watcher:       ENABLED -- explicit + implicit + gas + travel/task/research")
     print(f"[HERALD API] Built caps:    {BUILT_CAPABILITIES}")
 
-# ── MORNING BRIEFING JOB (v7.9) ───────────────────────────────────────────────
+# ── MORNING BRIEFING JOB (v8.0) ───────────────────────────────────────────────
 
 def build_freddie_morning_block(empire: dict) -> str:
     if not empire:
