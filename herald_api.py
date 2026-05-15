@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald PWA Backend -- Railway Cloud Server
-# v8.1 -- Proactive loop + gas price watcher + /proactive endpoint
+# v8.2 -- Proactive loop + gas price watcher + /proactive endpoint
 #
 # WHAT CHANGED vs v7.5.1:
 #   - Added:   EIA_KEY config variable (EIA_API_KEY env var)
@@ -3475,6 +3475,185 @@ def morning_briefing_job():
 
     except Exception as e:
         print(f"[HERALD] Morning briefing job error: {e}")
+# ── CALENDAR SYNC (v8.2) ──────────────────────────────────────────────────────
+# Receives appointments from the Expo app's useCalendar hook.
+# Stores meaningful appointments in life_tracker so Herald remembers forever.
+# Herald can answer: "when was my last dentist?" a year from now.
 
+@app.post("/calendar/sync")
+async def calendar_sync(request: Request):
+    data         = await request.json()
+    user_id      = data.get("user_id", "").strip()
+    appointments = data.get("appointments", [])
+
+    if not user_id or not appointments:
+        return {"ok": True, "stored": 0}
+
+    stored = 0
+
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c    = conn.cursor()
+
+        # Ensure life_tracker table exists
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS life_tracker (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id      TEXT NOT NULL,
+                category     TEXT NOT NULL,
+                item_name    TEXT NOT NULL,
+                last_date    TEXT,
+                next_due_date TEXT,
+                interval_days INTEGER DEFAULT 0,
+                source       TEXT DEFAULT 'calendar',
+                active       INTEGER DEFAULT 1,
+                created_at   TEXT NOT NULL
+            )
+        """)
+
+        for appt in appointments:
+            title    = appt.get("title", "").strip()
+            date_str = appt.get("date", "")
+            category = appt.get("category", "appointment")
+            interval = appt.get("interval", 0)
+            notes    = appt.get("notes", "")
+
+            if not title or not date_str:
+                continue
+
+            # Parse date
+            try:
+                appt_date = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                appt_date_str = appt_date.strftime("%Y-%m-%d")
+            except Exception:
+                continue
+
+            # Calculate next due date based on interval
+            next_due = None
+            if interval > 0:
+                next_date = appt_date + timedelta(days=interval)
+                next_due  = next_date.strftime("%Y-%m-%d")
+
+            # Check if this appointment is already stored (avoid duplicates)
+            c.execute("""
+                SELECT id FROM life_tracker
+                WHERE user_id = ? AND item_name = ? AND last_date = ?
+            """, (user_id, title, appt_date_str))
+
+            if c.fetchone():
+                continue  # already have this one
+
+            # Store it
+            c.execute("""
+                INSERT INTO life_tracker
+                (user_id, category, item_name, last_date, next_due_date,
+                 interval_days, source, active, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, 'calendar', 1, ?)
+            """, (
+                user_id, category, title, appt_date_str,
+                next_due, interval, datetime.now().isoformat()
+            ))
+            stored += 1
+
+        conn.commit()
+        conn.close()
+
+        print(f"[HERALD] Calendar sync: {stored} new appointments stored for {user_id}")
+        return {"ok": True, "stored": stored, "received": len(appointments)}
+
+    except Exception as e:
+        print(f"[HERALD] Calendar sync error: {e}")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+# ── HEALTH SYNC (v8.2) ────────────────────────────────────────────────────────
+# Receives daily health summary from the Expo app's useHealthData hook.
+# Stores as a life_moment so Herald can reference health trends over time.
+# "You've been averaging 8,200 steps a day this week."
+
+@app.post("/health/sync")
+async def health_sync(request: Request):
+    data    = await request.json()
+    user_id = data.get("user_id", "").strip()
+    health  = data.get("health", {})
+
+    if not user_id or not health:
+        return {"ok": True}
+
+    steps    = health.get("steps_today", 0)
+    sleep    = health.get("sleep_hours_last", 0)
+    hr       = health.get("heart_rate_latest", 0)
+    calories = health.get("calories_today", 0)
+    distance = health.get("distance_today_km", 0)
+    today    = datetime.now().strftime("%Y-%m-%d")
+
+    # Build a natural summary line for life_moments
+    parts = []
+    if steps > 0:
+        parts.append(f"{steps:,} steps")
+    if sleep > 0:
+        parts.append(f"{sleep} hours of sleep")
+    if hr > 0:
+        parts.append(f"heart rate {hr} bpm")
+    if calories > 0:
+        parts.append(f"{calories:,} calories burned")
+
+    if not parts:
+        return {"ok": True}
+
+    summary = f"Health on {today}: " + ", ".join(parts)
+
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c    = conn.cursor()
+
+        # Ensure life_moments table exists
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS life_moments (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    TEXT NOT NULL,
+                summary    TEXT NOT NULL,
+                category   TEXT DEFAULT 'health',
+                emotion    TEXT DEFAULT 'neutral',
+                weight     INTEGER DEFAULT 3,
+                days_ago   INTEGER DEFAULT 0,
+                active     INTEGER DEFAULT 1,
+                source     TEXT DEFAULT 'health_connect',
+                created_at TEXT NOT NULL
+            )
+        """)
+
+        # Check if we already stored health for today
+        c.execute("""
+            SELECT id FROM life_moments
+            WHERE user_id = ? AND source = 'health_connect'
+              AND date(created_at) = date('now')
+        """, (user_id,))
+
+        if c.fetchone():
+            # Update today's entry
+            c.execute("""
+                UPDATE life_moments SET summary = ?
+                WHERE user_id = ? AND source = 'health_connect'
+                  AND date(created_at) = date('now')
+            """, (summary, user_id))
+        else:
+            # Insert new entry
+            c.execute("""
+                INSERT INTO life_moments
+                (user_id, summary, category, emotion, weight, days_ago,
+                 active, source, created_at)
+                VALUES (?, ?, 'health', 'neutral', 3, 0, 1, 'health_connect', ?)
+            """, (user_id, summary, datetime.now().isoformat()))
+
+        conn.commit()
+        conn.close()
+
+        print(f"[HERALD] Health sync stored for {user_id}: {summary[:60]}")
+        return {"ok": True}
+
+    except Exception as e:
+        print(f"[HERALD] Health sync error: {e}")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 if __name__ == "__main__":
     uvicorn.run("herald_api:app", host="0.0.0.0", port=PORT, reload=False)
