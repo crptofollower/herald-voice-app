@@ -315,7 +315,7 @@
 const RAILWAY_URL    = 'https://web-production-b4083.up.railway.app';
 const STRIPE_MONTHLY = 'PLACEHOLDER_MONTHLY';
 const STRIPE_ANNUAL  = 'PLACEHOLDER_ANNUAL';
-const VERSION        = 'V55.96';
+const VERSION        = 'V55.97';
 
 let userId           = localStorage.getItem('herald_uid') || '';
 let authCode         = localStorage.getItem('herald_auth') || '';
@@ -673,6 +673,29 @@ async function getLocation() {
         () => resolve(), { timeout: 4000, enableHighAccuracy: true }
       ));
     } catch(e) {}
+  }
+
+  // Validate GPS is within continental US bounds.
+  // Guards against Capacitor returning 0,0 or garbage (e.g. "Murcia, Spain").
+  // Lat 24-50, Lng -125 to -66 covers all 48 contiguous states + Alaska/Hawaii buffer.
+  if (lat !== null && lng !== null) {
+    const inConus = lat >= 24 && lat <= 72 && lng >= -180 && lng <= -66;
+    if (!inConus) {
+      console.warn('[Herald] GPS out of bounds, discarding:', lat, lng);
+      lat = null;
+      lng = null;
+    }
+  }
+
+  // Validate GPS is within US/Alaska/Hawaii bounds.
+  // Guards against Capacitor returning 0,0 → "Murcia, Spain".
+  if (lat !== null && lng !== null) {
+    const inBounds = lat >= 24 && lat <= 72 && lng >= -180 && lng <= -66;
+    if (!inBounds) {
+      console.warn('[Herald] GPS out of bounds, discarding:', lat, lng);
+      lat = null;
+      lng = null;
+    }
   }
 
   // Geocode to human-readable label
