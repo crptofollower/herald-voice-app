@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald PWA Backend -- Railway Cloud Server
-# v8.0 -- Proactive loop + gas price watcher + /proactive endpoint
+# v8.1 -- Proactive loop + gas price watcher + /proactive endpoint
 #
 # WHAT CHANGED vs v7.5.1:
 #   - Added:   EIA_KEY config variable (EIA_API_KEY env var)
@@ -2545,7 +2545,7 @@ def _trial_fields(trial):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.0",
+        "status": "ok", "server": "herald-api", "version": "8.1",
         "proactive_loop": "enabled (/proactive/{user_id} -- poll on app open + resume)",
         "watcher_cron": "enabled (/cron/watchers -- call every 30min with WEBHOOK_SECRET)",
         "learning_loop": "enabled (LLM extraction after every response)",
@@ -2678,7 +2678,49 @@ async def auth(request: Request):
     else:
         return JSONResponse({"error": "invalid code"}, status_code=401)
 
+@app.post("/onboard")
+async def onboard(request: Request):
+    data        = await request.json()
+    name        = data.get("name", "").strip()
+    persona     = data.get("persona", "city").strip()
+    music_app   = data.get("music_app", "spotify").strip()
+    access_code = data.get("access_code", "").strip().lower()
 
+    valid_codes = [ACCESS_CODE.lower()] if ACCESS_CODE else []
+    owner_codes = [OWNER_CODE.lower()] if OWNER_CODE else []
+    is_owner_req = access_code in owner_codes
+
+    if access_code not in valid_codes + owner_codes:
+        return JSONResponse({"error": "invalid access code"}, status_code=401)
+
+    if is_owner_req and OWNER_ID:
+        user_id = OWNER_ID
+        owner_user_ids.add(user_id)
+    else:
+        user_id = f"u_{uuid.uuid4().hex[:12]}"
+
+    profile = get_profile(user_id)
+    if name:
+        profile["name"] = name
+    if persona:
+        profile["persona"] = persona
+    if music_app:
+        profile["music_app"] = music_app
+    if is_owner_req:
+        profile["is_owner"] = True
+    if not profile.get("created_at"):
+        profile["created_at"] = datetime.now().isoformat()
+
+    save_profile(user_id, profile)
+    print(f"[HERALD] /onboard: {name} | persona={persona} | owner={is_owner_req} | id={user_id}")
+
+    return {
+        "ok":      True,
+        "user_id": user_id,
+        "is_owner": is_owner_req,
+        "ai_name": profile.get("ai_name", "Herald"),
+        "name":    profile.get("name", ""),
+    }
 @app.post("/ask")
 def ask(request: Request):
     import asyncio
@@ -2880,9 +2922,22 @@ async def greeting(request: Request):
     ai_name = profile.get("ai_name", "Herald")
 
     try:
-        hour = datetime.now().hour
+        if local_time:
+            # Regex parse -- handles any toLocaleString format variation
+            # e.g. "Thursday, May 14, 2026 at 1:37 PM CDT"
+            _tm = re.search(r'(\d{1,2}):(\d{2})\s*(AM|PM)', local_time, re.IGNORECASE)
+            if _tm:
+                hour = int(_tm.group(1))
+                if _tm.group(3).upper() == 'PM' and hour != 12:
+                    hour += 12
+                elif _tm.group(3).upper() == 'AM' and hour == 12:
+                    hour = 0
+            else:
+                hour = datetime.now().hour
+        else:
+            hour = datetime.now().hour
     except Exception:
-        hour = 9
+        hour = datetime.now().hour
     if hour < 12:
         salutation = "Good morning"
     elif hour < 17:
@@ -3269,7 +3324,7 @@ def startup():
     scheduler.add_job(morning_briefing_job, "cron", hour=7, minute=0)
     scheduler.start()
     print(f"[HERALD] Morning briefing scheduler started -- fires 7am ET daily")
-    print(f"[HERALD API v8.0] FastAPI + uvicorn + SQLite + proactive loop LIVE")
+    print(f"[HERALD API v8.1] FastAPI + uvicorn + SQLite + proactive loop LIVE")
     print(f"[HERALD API] OpenRouter:    {'YES' if OPENROUTER_KEY else 'MISSING -- required'}")
     print(f"[HERALD API] Model routing: Haiku ({HAIKU_MODEL}) / Sonnet ({SONNET_MODEL})")
     print(f"[HERALD API] Brave Search:  {'YES' if BRAVE_KEY else 'NOT SET -- add BRAVE_SEARCH_KEY'}")
@@ -3291,7 +3346,7 @@ def startup():
     print(f"[HERALD API] Watcher:       ENABLED -- explicit + implicit + gas + travel/task/research")
     print(f"[HERALD API] Built caps:    {BUILT_CAPABILITIES}")
 
-# ── MORNING BRIEFING JOB (v8.0) ───────────────────────────────────────────────
+# ── MORNING BRIEFING JOB (v8.1) ───────────────────────────────────────────────
 
 def build_freddie_morning_block(empire: dict) -> str:
     if not empire:
