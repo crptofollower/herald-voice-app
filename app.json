@@ -1,0 +1,46 @@
+{
+  "expo": {
+    "name": "Herald",
+    "slug": "herald",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0D1117"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "ai.apexempire.herald",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Herald uses your microphone to hear your voice.",
+        "NSSpeechRecognitionUsageDescription": "Herald uses speech recognition to understand you."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0D1117"
+      },
+      "package": "ai.apexempire.herald"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-font",
+      "expo-router"
+    ],
+    "scheme": "herald",
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "8a15ab41-fe80-424c-b68f-53330f90026c"
+      }
+    },
+    "owner": "apexempires-organization"
+  }
+}
