@@ -2545,7 +2545,7 @@ def _trial_fields(trial):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.1",
+        "status": "ok", "server": "herald-api", "version": "8.2",
         "proactive_loop": "enabled (/proactive/{user_id} -- poll on app open + resume)",
         "watcher_cron": "enabled (/cron/watchers -- call every 30min with WEBHOOK_SECRET)",
         "learning_loop": "enabled (LLM extraction after every response)",
@@ -3324,7 +3324,7 @@ def startup():
     scheduler.add_job(morning_briefing_job, "cron", hour=7, minute=0)
     scheduler.start()
     print(f"[HERALD] Morning briefing scheduler started -- fires 7am ET daily")
-    print(f"[HERALD API v8.1] FastAPI + uvicorn + SQLite + proactive loop LIVE")
+    print(f"[HERALD API v8.2] FastAPI + uvicorn + SQLite + proactive loop LIVE")
     print(f"[HERALD API] OpenRouter:    {'YES' if OPENROUTER_KEY else 'MISSING -- required'}")
     print(f"[HERALD API] Model routing: Haiku ({HAIKU_MODEL}) / Sonnet ({SONNET_MODEL})")
     print(f"[HERALD API] Brave Search:  {'YES' if BRAVE_KEY else 'NOT SET -- add BRAVE_SEARCH_KEY'}")
@@ -3346,7 +3346,7 @@ def startup():
     print(f"[HERALD API] Watcher:       ENABLED -- explicit + implicit + gas + travel/task/research")
     print(f"[HERALD API] Built caps:    {BUILT_CAPABILITIES}")
 
-# ── MORNING BRIEFING JOB (v8.1) ───────────────────────────────────────────────
+# ── MORNING BRIEFING JOB (v8.2) ───────────────────────────────────────────────
 
 def build_freddie_morning_block(empire: dict) -> str:
     if not empire:
