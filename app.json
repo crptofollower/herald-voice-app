@@ -27,18 +27,12 @@
         "backgroundColor": "#FBF9F7"
       },
       "package": "ai.apexempire.herald",
-    
       "permissions": [
         "android.permission.RECORD_AUDIO",
         "android.permission.READ_CALENDAR",
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.health.READ_STEPS",
-        "android.permission.health.READ_SLEEP",
-        "android.permission.health.READ_HEART_RATE",
-        "android.permission.health.READ_DISTANCE",
-        "android.permission.health.READ_TOTAL_CALORIES_BURNED"
+        "android.permission.ACCESS_COARSE_LOCATION"
       ]
     },
     "web": {
@@ -49,13 +43,6 @@
       "expo-router",
       "expo-font",
       "expo-calendar",
-      [
-        "react-native-health-connect",
-        {
-          "package": "ai.apexempire.herald",
-          "minSdkVersion": 26
-        }
-      ],
       [
         "expo-location",
         {

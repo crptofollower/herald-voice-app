@@ -77,8 +77,7 @@ export default function ChatScreen() {
   const { speak, stop, isSpeaking } = useSpeech();
   useProactiveQueue(); // polls /proactive on open + resume, debounced
 useCalendar();
-  const health = useHealthData();
-  const { lat, lng, label: locationLabel } = useLocation();
+    const { lat, lng, label: locationLabel } = useLocation();
   // Show proactive panel when new items arrive.
   useEffect(() => {
     if (unreadCount > 0) setShowProactive(true);
