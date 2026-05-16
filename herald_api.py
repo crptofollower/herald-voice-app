@@ -1404,11 +1404,11 @@ def build_about_me(profile):
     ]
 
     try:
-        result = call_openrouter(prompt, use_search=False, model=HAIKU_MODEL)
+        result = call_openrouter(prompt, use_search=False, model=HAIKU_MODEL, timeout=8)
         if result and len(result) > 20:
             return result
     except Exception as e:
-        print(f"[HERALD] build_about_me LLM failed, using fallback: {e}")
+        print(f"[HERALD] build_about_me LLM failed (timeout/error), using fallback: {e}")
 
     first_name = name if name else "friend"
     parts = [f"Here is what I know so far, {first_name}."]
@@ -2144,19 +2144,34 @@ You speak through a text-to-speech engine. Follow these rules for every response
 THE STANDARD: Would the smartest, most resourceful friend this person knows answer
 this question confidently and warmly? Yes. Then so do you. Always.
 
-ACTION TAGS -- append silently at end, never explain them:
-- Local business or directions: MAPS: [business name and city]
-- Phone number: PHONE: [digits only]
-- Play music/song/artist/genre: MUSIC: [search query]
+ACTION TAGS -- append silently at end of response, never explain or mention them:
+- Local business, directions, address: MAPS: [place name and city]
+- Make a phone call: PHONE: [digits only]
+- Send a text message: SMS: [contact name]|[message to send]
+- Play music/song/artist: MUSIC: [search query]
 - Play radio station: RADIO: [station name]
-- Set reminder/calendar event: CALENDAR: [event title]|[YYYY-MM-DD]|[HH:MM or blank]
+- Add to calendar: CALENDAR: [event title]|[YYYY-MM-DD]|[HH:MM or blank]
+- Search flights, hotels, travel: FLIGHTS: [route or destination query]
+- Web search: SEARCH: [search query]
+- Open an app: LAUNCH: [app name]
 - Set alarm: ALARM: [HH:MM]|[label]
-- Find videos or social content: SEARCH: [search query]
-- Open social app: LAUNCH: [app name]
-- One action tag maximum per response.
-- Action tags MUST appear on their own line at the very end of the response, after all spoken text. Never inline.
-- When using an action tag, end your response with a short natural verbal offer to open it.
-- Never give a flat one-sentence answer to a personal or conversational question."""
+
+CRITICAL ACTION TAG RULES -- READ THESE:
+You OFFER the action. You do NOT claim to have done it. You cannot do it -- the app does it when the user confirms.
+
+WRONG: "Done, I set that on your calendar."
+WRONG: "I sent the text to Sarah."
+WRONG: "I've added that reminder for you."
+
+RIGHT: "I can put Dr. Smithy on your calendar for Tuesday at 1pm. Want me to do that?"
+RIGHT: "I can text Sarah for you with that message. Want me to send it?"
+RIGHT: "There's a Chase Bank on Legacy and Main. Want me to open the map?"
+RIGHT: "I can search Google Flights for that route. Want me to pull it up?"
+
+The user taps yes. The app executes. You offer. Never claim.
+One action tag per response. Tag on its own line at the very end, after all spoken text. Never inline.
+Calculate actual dates from the current time in the system prompt. Never put placeholder text like [date] in a tag.
+For 'text my daughter' type requests -- extract the name from the message context."""
 
 
 # ── LLM CALLS ─────────────────────────────────────────────────────────────────
@@ -2164,7 +2179,8 @@ ACTION TAGS -- append silently at end, never explain them:
 def parse_action(reply):
     for tag, atype in [('MAPS:', 'maps'), ('PHONE:', 'phone'), ('MUSIC:', 'music'),
                        ('RADIO:', 'radio'), ('CALENDAR:', 'calendar'), ('ALARM:', 'alarm'),
-                       ('SEARCH:', 'search'), ('LAUNCH:', 'launch')]:
+                       ('SEARCH:', 'search'), ('LAUNCH:', 'launch'),
+                       ('SMS:', 'sms'), ('FLIGHTS:', 'flights')]:
         if tag in reply:
             parts = reply.split(tag, 1)
             clean = parts[0].strip()
@@ -2172,7 +2188,7 @@ def parse_action(reply):
             return clean, {'type': atype, 'value': value}
     return reply, None
 
-def call_openrouter(messages, use_search=True, model=None):
+with urllib.request.urlopen(req, timeout=25) as resp:
     if not OPENROUTER_KEY:
         return "Configuration error: API key not set on server."
     if model is None:
@@ -2185,7 +2201,7 @@ def call_openrouter(messages, use_search=True, model=None):
         "X-Title": "Herald Personal AI"
     }, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=25) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             return data["choices"][0]["message"]["content"]
     except urllib.error.HTTPError:
@@ -2545,7 +2561,7 @@ def _trial_fields(trial):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.2",
+        "status": "ok", "server": "herald-api", "version": "8.3",
         "proactive_loop": "enabled (/proactive/{user_id} -- poll on app open + resume)",
         "watcher_cron": "enabled (/cron/watchers -- call every 30min with WEBHOOK_SECRET)",
         "learning_loop": "enabled (LLM extraction after every response)",
@@ -2722,9 +2738,8 @@ async def onboard(request: Request):
         "name":    profile.get("name", ""),
     }
 @app.post("/ask")
-def ask(request: Request):
-    import asyncio
-    data = asyncio.run(request.json())
+async def ask(request: Request):
+    data = await request.json()
 
     ctx, err = build_ask_context(data)
     if err:
@@ -3324,7 +3339,7 @@ def startup():
     scheduler.add_job(morning_briefing_job, "cron", hour=7, minute=0)
     scheduler.start()
     print(f"[HERALD] Morning briefing scheduler started -- fires 7am ET daily")
-    print(f"[HERALD API v8.2] FastAPI + uvicorn + SQLite + proactive loop LIVE")
+    print(f"[HERALD API v8.3] FastAPI + uvicorn + SQLite + intent system LIVE")
     print(f"[HERALD API] OpenRouter:    {'YES' if OPENROUTER_KEY else 'MISSING -- required'}")
     print(f"[HERALD API] Model routing: Haiku ({HAIKU_MODEL}) / Sonnet ({SONNET_MODEL})")
     print(f"[HERALD API] Brave Search:  {'YES' if BRAVE_KEY else 'NOT SET -- add BRAVE_SEARCH_KEY'}")
