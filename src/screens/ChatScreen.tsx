@@ -34,14 +34,17 @@ import {
 import { useMutation } from "@tanstack/react-query";
 import { useStore } from "../store/useStore";
 import { PERSONAS } from "../constants/personas";
-import { askHerald, markProactiveRead, type Message } from "../api/herald";
+import { askHerald, markProactiveRead, fetchGreeting, type Message } from "../api/herald";
 import { useSpeech } from "../hooks/useSpeech";
 import { useProactiveQueue } from "../hooks/useProactiveQueue";
+
 import { PersonaBackground } from "../components/PersonaBackground";
 import { MessageBubble } from "../components/MessageBubble";
 import { ProactiveCard } from "../components/ProactiveCard";
 import { generateId } from "../utils/id"; // ← extracted from inline def
-
+import { useCalendar } from "../hooks/useCalendar";
+import { useHealthData } from "../hooks/useHealthData";
+import { useLocation } from "../hooks/useLocation";
 export default function ChatScreen() {
   // ─── Store ─────────────────────────────────────────────────────────────────
   // isLoading + setLoading REMOVED — these no longer exist in useStore.
@@ -65,19 +68,46 @@ export default function ChatScreen() {
   const persona = PERSONAS[personaKey];
 
   // ─── Local UI state ────────────────────────────────────────────────────────
-  const [inputText, setInputText]       = useState("");
+  const [inputText, setInputText]         = useState("");
   const [showProactive, setShowProactive] = useState(false);
-  const flatListRef = useRef<FlatList>(null);
+  const flatListRef  = useRef<FlatList>(null);
+  const sendingRef   = useRef(false); // double-send guard
 
   // ─── Hooks ─────────────────────────────────────────────────────────────────
   const { speak, stop, isSpeaking } = useSpeech();
   useProactiveQueue(); // polls /proactive on open + resume, debounced
-
+useCalendar();
+  const health = useHealthData();
+  const { lat, lng, label: locationLabel } = useLocation();
   // Show proactive panel when new items arrive.
   useEffect(() => {
     if (unreadCount > 0) setShowProactive(true);
   }, [unreadCount]);
-
+// Fire greeting once on first open (no messages yet).
+  useEffect(() => {
+    if (!userId || messages.length > 0) return;
+    const local_time = new Date().toLocaleTimeString("en-US", {
+      hour: "numeric", minute: "2-digit", hour12: true,
+    });
+    fetchGreeting({
+      user_id: userId,
+      local_time,
+      lat:            lat ?? undefined,
+      lng:            lng ?? undefined,
+      location_label: locationLabel ?? undefined,
+    })
+      .then((data) => {
+        if (!data.greeting) return;
+        addMessage({
+          id: generateId("msg"),
+          role: "assistant",
+          content: data.greeting,
+          timestamp: Date.now(),
+        });
+        speak(data.greeting);
+      })
+      .catch(() => { /* non-critical -- static empty state handles it */ });
+  }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps
   // Scroll to bottom whenever the message list grows.
   useEffect(() => {
     if (messages.length > 0) {
@@ -106,6 +136,9 @@ export default function ChatScreen() {
         message: text,
         history: messages.map(({ role, content }) => ({ role, content })),
         persona: personaKey,
+        lat:            lat ?? undefined,
+        lng:            lng ?? undefined,
+        location_label: locationLabel ?? undefined,
       });
     },
     onSuccess: (data) => {
@@ -127,14 +160,14 @@ export default function ChatScreen() {
   // ─── Handlers ──────────────────────────────────────────────────────────────
   const handleSend = useCallback(() => {
     const text = inputText.trim();
-    if (!text || sendMutation.isPending) return;
-
+    if (!text || sendMutation.isPending || sendingRef.current) return;
+    sendingRef.current = true;
+    setTimeout(() => { sendingRef.current = false; }, 1000);
     setInputText("");
     setError(null);
-    stop(); // cancel any in-progress TTS before the new response arrives
-    // setLoading(true) — REMOVED (Bug 10 fix); sendMutation.isPending handles this
+    stop();
     sendMutation.mutate(text);
-  }, [inputText, sendMutation, setError, stop]); // setLoading removed from deps
+  }, [inputText, sendMutation, setError, stop]);
 
   const handleDismissProactive = useCallback(
     (id: string) => {
@@ -170,7 +203,7 @@ export default function ChatScreen() {
       <SafeAreaView style={styles.safe}>
         <KeyboardAvoidingView
           style={styles.flex}
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
           keyboardVerticalOffset={0}
         >
           {/* ── Header ──────────────────────────────────────────────────── */}
@@ -251,13 +284,13 @@ export default function ChatScreen() {
           )}
 
           {/* ── Message list / empty state ──────────────────────────────── */}
-          {messages.length === 0 ? (
+          {messages.length === 0 && !sendMutation.isPending ? (
             <View style={styles.emptyState}>
               <Text style={[styles.emptyGreeting, { color: persona.colors.text }]}>
-                {persona.greeting}
+                {name ? `Good to see you, ${name}.` : "Good to see you."}
               </Text>
               <Text style={[styles.emptyName, { color: persona.colors.textMuted }]}>
-                {name ? `Good to see you, ${name}.` : "What's on your mind?"}
+                What's on your mind?
               </Text>
             </View>
           ) : (
@@ -271,6 +304,16 @@ export default function ChatScreen() {
               onContentSizeChange={() =>
                 flatListRef.current?.scrollToEnd({ animated: false })
               }
+              ListFooterComponent={
+                sendMutation.isPending ? (
+                  <View style={styles.typingRow}>
+                    <ActivityIndicator size="small" color={persona.colors.accent} />
+                    <Text style={[styles.typingText, { color: "rgba(255,255,255,0.6)" }]}>
+                      Herald is thinking...
+                    </Text>
+                  </View>
+                ) : null
+              }
             />
           )}
 
@@ -282,22 +325,21 @@ export default function ChatScreen() {
             style={[
               styles.inputBar,
               {
-                backgroundColor: persona.colors.surfaceElevated,
+                backgroundColor: "rgba(0,0,0,0.75)",
                 borderTopColor:  persona.colors.border,
               },
             ]}
           >
             <TextInput
-              style={[styles.textInput, { color: persona.colors.text }]}
+              style={[styles.textInput, { color: "#FFFFFF" }]}
               placeholder="Ask anything..."
-              placeholderTextColor={persona.colors.textMuted}
+              placeholderTextColor="rgba(255,255,255,0.45)"
               value={inputText}
               onChangeText={setInputText}
               multiline
               maxLength={2000}
-              returnKeyType="send"
+              returnKeyType="default"
               blurOnSubmit={false}
-              onSubmitEditing={handleSend}
               accessibilityLabel="Message input"
             />
             <TouchableOpacity
@@ -422,17 +464,22 @@ const styles = StyleSheet.create({
     paddingHorizontal: 40,
   },
   emptyGreeting: {
-    fontSize:      26,
+    fontSize:      28,
     fontWeight:    "700",
     textAlign:     "center",
     marginBottom:  12,
     letterSpacing: -0.3,
-    lineHeight:    34,
+    lineHeight:    36,
+    color:         "#FFFFFF",
+    textShadowColor: "rgba(0,0,0,0.5)",
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
   },
   emptyName: {
-    fontSize:   16,
+    fontSize:   17,
     textAlign:  "center",
     lineHeight: 24,
+    color:      "rgba(255,255,255,0.7)",
   },
   errorText: {
     color:             "#C4622D",
@@ -447,7 +494,7 @@ const styles = StyleSheet.create({
     alignItems:        "flex-end",
     paddingHorizontal: 12,
     paddingTop:        10,
-    paddingBottom:     Platform.OS === "ios" ? 10 : 32,
+    paddingBottom:     Platform.OS === "ios" ? 10 : 28,
     borderTopWidth:    1,
     gap:               8,
   },
@@ -460,15 +507,27 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
   },
   sendBtn: {
-    width:          52,
-    height:         52,
-    borderRadius:   26,
+    width:          44,
+    height:         44,
+    borderRadius:   22,
     alignItems:     "center",
     justifyContent: "center",
+    marginBottom:   2,
   },
   sendArrow: {
     color:      "#FFFFFF",
-    fontSize:   18,
+    fontSize:   20,
     fontWeight: "700",
+  },
+  typingRow: {
+    flexDirection:  "row",
+    alignItems:     "center",
+    paddingHorizontal: 20,
+    paddingVertical:   12,
+    gap: 10,
+  },
+  typingText: {
+    fontSize:   15,
+    fontStyle:  "italic",
   },
 });

@@ -2,45 +2,71 @@
   "expo": {
     "name": "Herald",
     "slug": "herald",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
-      "backgroundColor": "#0D1117"
+      "backgroundColor": "#FBF9F7"
     },
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "ai.apexempire.herald",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Herald uses your microphone to hear your voice.",
-        "NSSpeechRecognitionUsageDescription": "Herald uses speech recognition to understand you."
+        "NSSpeechRecognitionUsageDescription": "Herald uses speech recognition to understand you.",
+        "NSCalendarsUsageDescription": "Herald reads your calendar to remember important appointments.",
+        "NSHealthShareUsageDescription": "Herald reads your health data to give you personalized insights."
       }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#0D1117"
+        "backgroundColor": "#FBF9F7"
       },
-      "package": "ai.apexempire.herald"
+      "package": "ai.apexempire.herald",
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_CALENDAR",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.health.READ_STEPS",
+        "android.permission.health.READ_SLEEP",
+        "android.permission.health.READ_HEART_RATE",
+        "android.permission.health.READ_DISTANCE",
+        "android.permission.health.READ_TOTAL_CALORIES_BURNED"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png",
       "bundler": "metro"
     },
     "plugins": [
+      "expo-router",
       "expo-font",
-      "expo-router"
+      "expo-calendar",
+      [
+        "react-native-health-connect",
+        {
+          "package": "ai.apexempire.herald"
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Herald uses your location for weather and local info.",
+          "locationWhenInUsePermission": "Herald uses your location for weather and local info."
+        }
+      ]
     ],
     "scheme": "herald",
     "extra": {
-      "router": {},
       "eas": {
         "projectId": "8a15ab41-fe80-424c-b68f-53330f90026c"
       }
-    },
-    "owner": "apexempires-organization"
+    }
   }
 }

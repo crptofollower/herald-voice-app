@@ -29,6 +29,9 @@ export interface AskPayload {
   history: Pick<Message, "role" | "content">[];
   persona?: string;
   location?: string;
+  lat?: number;
+  lng?: number;
+  location_label?: string;
   access_code?: string;
   owner_code?: string;
 }
@@ -224,4 +227,28 @@ export async function checkHealth(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+// ─── /greeting -- called once on app open ─────────────────────────────────────
+// Sends local time + location so Herald opens with a contextual greeting.
+// Non-critical -- if it fails, the static empty state shows instead.
+
+export interface GreetingPayload {
+  user_id: string;
+  local_time?: string;
+  lat?: number;
+  lng?: number;
+  location_label?: string;
+}
+
+export interface GreetingResponse {
+  greeting: string;
+}
+
+export async function fetchGreeting(
+  payload: GreetingPayload
+): Promise<GreetingResponse> {
+  return apiFetch<GreetingResponse>("/greeting", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
