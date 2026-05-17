@@ -1,20 +1,19 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.4 -- Freddie gated + smart search gate + threadpool + search fallback
+# v8.6 -- Location-aware search + Brave freshness + TTS speed + search fallback
 #
-# WHAT CHANGED vs v8.3:
-#   CHANGE 1: fetch_live_empire() now ONLY called on explicit Freddie intent.
-#             Previously ran on EVERY owner message -> 8s blocking VM call ->
-#             104s / 69s latency spikes. Normal messages now: zero VM call.
-#   CHANGE 2: needs_web_search() upgraded from keyword whitelist to
-#             recency + event detection. Fixes "Rousey fight" class of failures
-#             where Brave never ran because the gate blocked it.
-#   CHANGE 3: Search fallback chain confirmed: Brave -> OpenRouter :online.
-#             Neither dead-ends. System prompt already bans "I don't know" shrug.
-#   CHANGE 4: build_ask_context() wrapped in run_in_threadpool in /ask and
-#             /ask/stream. Sync SQLite + network work no longer blocks the
-#             event loop under any concurrency.
-#   All User-Agent strings bumped to 8.4. Version string 8.4 everywhere.
+# WHAT CHANGED vs v8.4:
+#   v8.5:
+#   - text_to_speech() accepts speed param (default 0.85, was 1.0 -- too fast)
+#   - /tts endpoint passes speed to OpenAI
+#   - Brave empty -> SEARCH action immediately (no :online hallucination or 60s wait)
+#   v8.6:
+#   - _localize_query(): rewrites "near me" -> "near The Colony TX" before Brave
+#     Fixes: burger places near me -> Tinley Park IL (wrong city, 890 miles away)
+#   - _get_freshness(): adds Brave freshness=pd for "last night" queries
+#     Fixes: Rousey "last night" returning 2013 UFC 157 articles -> hallucination
+#   - Both /ask and /ask/stream use localized query + freshness
+#   All User-Agent strings bumped to 8.6. Version string 8.6 everywhere.
 
 import os, json, re, random, string, time, http.client, ssl, sqlite3, threading, uuid
 import urllib.request, urllib.error, urllib.parse
@@ -847,7 +846,7 @@ def fetch_espn_scores(league: str) -> list:
     sport, league_slug = sport_map.get(league.lower(), ('basketball', 'nba'))
     try:
         url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league_slug}/scoreboard"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.4"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.6"})
         with urllib.request.urlopen(req, timeout=6) as r:
             data = json.loads(r.read().decode())
         games = []
@@ -876,7 +875,7 @@ def fetch_crypto_prices_batch() -> dict:
     try:
         url = ("https://api.coingecko.com/api/v3/simple/price"
                "?ids=bitcoin,ethereum,solana&vs_currencies=usd")
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.4"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.6"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         return {
@@ -996,7 +995,7 @@ def fetch_gas_price_eia():
             "&offset=0&length=2"
             "&sort[0][column]=period&sort[0][direction]=desc"
         )
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.4"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.6"})
         with urllib.request.urlopen(req, timeout=8) as r:
             data = json.loads(r.read().decode())
         rows = data.get("response", {}).get("data", [])
@@ -1171,6 +1170,58 @@ _FREDDIE_TRIGGERS = [
 def _is_freddie_msg(msg_lower: str) -> bool:
     """Returns True only when the message is explicitly about Freddie/trading."""
     return any(t in msg_lower for t in _FREDDIE_TRIGGERS)
+
+
+# v8.6: Brave freshness filter for recency queries.
+# "last night" -> freshness=pd (past day) -> no 2013 UFC results returned.
+# Without this, old articles about real past events (Rousey fights, old scores)
+# come back and the LLM presents them as if they happened last night.
+_DAY_FRESHNESS_WORDS = [
+    'last night', 'yesterday', 'this morning', 'today', 'tonight',
+    'just now', 'earlier today', 'this afternoon', 'this evening',
+]
+_WEEK_FRESHNESS_WORDS = [
+    'last week', 'this week', 'recently', 'past few days', 'past week',
+]
+
+def _get_freshness(msg_lower: str):
+    """Return Brave API freshness param based on recency words. None = no filter."""
+    if any(w in msg_lower for w in _DAY_FRESHNESS_WORDS):
+        return 'pd'   # past day
+    if any(w in msg_lower for w in _WEEK_FRESHNESS_WORDS):
+        return 'pw'   # past week
+    return None
+
+
+# v8.6: Location-aware Brave query.
+# "is there any good burger places near me" -> Brave searched it literally
+# -> returned Schoops Hamburgers in Tinley Park IL (890 miles from Mike).
+# Fix: rewrite "near me" to "near The Colony TX" before hitting Brave.
+_NEAR_ME_TERMS = [
+    'near me', 'nearby', 'around here', 'around me',
+    'close to me', 'close by', 'in my area', 'in my neighborhood',
+]
+
+def _localize_query(message: str, profile: dict, location_label: str = None) -> str:
+    """
+    v8.6: Replace 'near me'/'nearby' with actual user location before Brave.
+    Returns original message unchanged if no location is known.
+    """
+    location = location_label or profile.get("location", "")
+    if not location:
+        return message
+    msg_lower = message.lower()
+    if not any(t in msg_lower for t in _NEAR_ME_TERMS):
+        return message
+    result = message
+    for term in _NEAR_ME_TERMS:
+        replacement = f"near {location}"
+        # Case-insensitive replace
+        idx = result.lower().find(term)
+        while idx >= 0:
+            result = result[:idx] + replacement + result[idx + len(term):]
+            idx = result.lower().find(term, idx + len(replacement))
+    return result
 
 
 # v8.4 CHANGE 2: Recency + event detection replaces pure keyword whitelist.
@@ -1554,7 +1605,7 @@ def fetch_live_empire():
 
     try:
         url = "http://143.198.18.66:8080/api/status"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/8.4"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/8.6"})
         with urllib.request.urlopen(req, timeout=8) as r:
             data = json.loads(r.read().decode())
         positions     = data.get("positions", [])
@@ -1671,7 +1722,7 @@ def geocode_reverse(lat, lng):
         url = (f"https://maps.googleapis.com/maps/api/geocode/json"
                f"?latlng={lat},{lng}&result_type=locality|administrative_area_level_1"
                f"&key={GEOCODING_KEY}")
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/8.4"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/8.6"})
         with urllib.request.urlopen(req, timeout=4) as r:
             data = json.loads(r.read().decode())
         if data.get("results"):
@@ -1688,17 +1739,19 @@ def geocode_reverse(lat, lng):
 
 # ── BRAVE SEARCH ──────────────────────────────────────────────────────────────
 
-def fetch_brave_search(query, count=5):
+def fetch_brave_search(query, count=5, freshness=None):
     if not BRAVE_KEY:
         return None
     try:
         encoded = urllib.parse.quote(query)
         url = (f"https://api.search.brave.com/res/v1/web/search"
                f"?q={encoded}&count={count}&search_lang=en&country=us&text_decorations=false")
+        if freshness:
+            url += f"&freshness={freshness}"  # pd=past day, pw=past week, pm=past month
         req = urllib.request.Request(url, headers={
             "Accept": "application/json",
             "X-Subscription-Token": BRAVE_KEY,
-            "User-Agent": "HeraldAI/8.4"
+            "User-Agent": "HeraldAI/8.6"
         })
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
@@ -1733,7 +1786,7 @@ def fetch_weather_direct(location):
     try:
         clean_loc = location.strip().replace(' ', '+')
         url = f"https://wttr.in/{clean_loc}?format=j1"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.4"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.6"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         cur  = data["current_condition"][0]
@@ -1765,7 +1818,7 @@ def fetch_weather_backup(location):
     try:
         encoded = urllib.parse.quote(location)
         url = f"https://api.weatherapi.com/v1/forecast.json?key={WEATHER_KEY}&q={encoded}&days=1&aqi=no"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.4"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.6"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         cur  = data["current"]
@@ -1808,7 +1861,7 @@ def fetch_sports_direct(msg_lower):
                 sport, league = val
                 break
         url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.4"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.6"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         events = data.get("events", [])
@@ -1835,7 +1888,7 @@ def fetch_crypto_direct():
     try:
         url = ("https://api.coingecko.com/api/v3/simple/price"
                "?ids=bitcoin,ethereum,solana&vs_currencies=usd&include_24hr_change=true")
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.4"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.6"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         parts = []
@@ -1865,7 +1918,7 @@ def fetch_news_direct(query=None):
             url = f"https://gnews.io/api/v4/search?q={encoded}&lang=en&max=5&token={GNEWS_KEY}"
         else:
             url = f"https://gnews.io/api/v4/top-headlines?lang=en&country=us&max=5&token={GNEWS_KEY}"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.4"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.6"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         articles = data.get("articles", [])
@@ -1886,7 +1939,7 @@ def fetch_news_backup(query=None):
             url = f"https://newsdata.io/api/1/latest?apikey={NEWSDATA_KEY}&q={encoded}&language=en"
         else:
             url = f"https://newsdata.io/api/1/latest?apikey={NEWSDATA_KEY}&language=en&country=us"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.4"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.6"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         results = data.get("results", [])
@@ -1904,12 +1957,12 @@ def fetch_movie_direct(query):
     try:
         encoded = urllib.parse.quote(query)
         url = f"https://www.omdbapi.com/?t={encoded}&apikey={OMDB_KEY}"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.4"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.6"})
         with urllib.request.urlopen(req, timeout=5) as r:
             d = json.loads(r.read().decode())
         if d.get("Response") == "False":
             url2 = f"https://www.omdbapi.com/?s={encoded}&apikey={OMDB_KEY}"
-            req2 = urllib.request.Request(url2, headers={"User-Agent": "HeraldAI/8.4"})
+            req2 = urllib.request.Request(url2, headers={"User-Agent": "HeraldAI/8.6"})
             with urllib.request.urlopen(req2, timeout=5) as r2:
                 d2 = json.loads(r2.read().decode())
             results = d2.get("Search", [])
@@ -2040,7 +2093,7 @@ def fetch_stock_direct(symbol):
     try:
         url = (f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE"
                f"&symbol={symbol.upper()}&apikey={ALPHA_KEY}")
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.4"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.6"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         q = data.get("Global Quote", {})
@@ -2357,11 +2410,11 @@ def stream_from_openrouter(messages, use_search=True, model=None):
     finally:
         conn.close()
 
-def text_to_speech(text):
+def text_to_speech(text, speed=0.85):
     if not OPENAI_KEY:
         return None
     payload = json.dumps({"model": "tts-1", "input": text[:4096], "voice": "nova",
-                          "response_format": "mp3"}).encode("utf-8")
+                          "response_format": "mp3", "speed": speed}).encode("utf-8")
     req = urllib.request.Request(TTS_URL, data=payload, headers={
         "Content-Type": "application/json", "Authorization": f"Bearer {OPENAI_KEY}"
     }, method="POST")
@@ -2458,7 +2511,7 @@ def get_direct_reply(ctx):
         try:
             payload = json.dumps({"secret": WEBHOOK_SECRET}).encode("utf-8")
             req = urllib.request.Request(VM_WEBHOOK_URL, data=payload,
-                headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/8.4"},
+                headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/8.6"},
                 method="POST")
             with urllib.request.urlopen(req, timeout=35) as r:
                 result = json.loads(r.read().decode())
@@ -2753,7 +2806,7 @@ def morning_briefing_job():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.5",
+        "status": "ok", "server": "herald-api", "version": "8.6",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -2981,7 +3034,29 @@ async def ask(request: Request):
         messages[0]["content"] += f"\n\nINSTRUCTION: At the END of your response, naturally add: '{cap_offer}'"
 
     if use_search:
-        raw_reply, _ = call_openrouter_with_search(messages, message, model=routed_model)
+        if BRAVE_KEY:
+            # v8.6: localized query ("near me" -> "near The Colony TX")
+            # + freshness filter ("last night" -> past day only, no 2013 articles)
+            brave_query = _localize_query(message, profile, ctx["location_label"])
+            freshness   = _get_freshness(msg_lower)
+            search_ctx  = fetch_brave_search(brave_query, freshness=freshness)
+            if search_ctx:
+                augmented = messages.copy()
+                augmented[-1] = {
+                    "role": "user",
+                    "content": f"{brave_query}\n\n[Live web search results:\n{search_ctx}]"
+                }
+                raw_reply = call_openrouter(augmented, use_search=False, model=routed_model)
+            else:
+                # Brave empty -- return SEARCH action. No :online (hallucinates + slow).
+                search_q  = message.strip().rstrip("?.,!")
+                raw_reply = (
+                    f"I couldn't pull a live result for that one. "
+                    f"Want me to open a search for you?\n\nSEARCH: {search_q}"
+                )
+        else:
+            # No Brave key -- :online as last resort
+            raw_reply = call_openrouter(messages, use_search=True)
     else:
         raw_reply = call_openrouter(messages, use_search=False, model=routed_model)
 
@@ -3085,21 +3160,39 @@ async def ask_stream(request: Request):
 
         try:
             if use_search and BRAVE_KEY:
-                search_ctx = fetch_brave_search(message)
+                # v8.6: localized query + freshness before hitting Brave
+                brave_query = _localize_query(message, profile, ctx["location_label"])
+                freshness   = _get_freshness(msg_lower)
+                search_ctx  = fetch_brave_search(brave_query, freshness=freshness)
                 if search_ctx:
+                    # Brave hit -- augment and stream fast
                     augmented = messages.copy()
                     augmented[-1] = {
                         "role": "user",
-                        "content": f"{message}\n\n[Live web search results:\n{search_ctx}]"
+                        "content": f"{brave_query}\n\n[Live web search results:\n{search_ctx}]"
                     }
-                    yield from stream_with_sentences(stream_from_openrouter(augmented, use_search=False, model=routed_model))
+                    yield from stream_with_sentences(
+                        stream_from_openrouter(augmented, use_search=False, model=routed_model)
+                    )
                 else:
-                    # Brave empty -- fall through to :online (Change 3)
-                    yield from stream_with_sentences(stream_from_openrouter(messages, use_search=True))
+                    # Brave empty -- SEARCH action card, not :online (60s + hallucination)
+                    search_q = message.strip().rstrip("?.,!")
+                    fallback = (
+                        "I couldn't pull a live result for that one. "
+                        "Want me to open a search for you?"
+                    )
+                    yield f"data: {json.dumps({'t': fallback})}\n\n"
+                    yield f"data: {json.dumps({'t': '[S]'})}\n\n"
+                    search_action = {"type": "search", "value": search_q}
+                    yield f"data: {json.dumps({**base_done, 'full': fallback, 'action': search_action, 'used_search': True})}\n\n"
+                    return
             elif use_search:
+                # No Brave key -- :online as last resort
                 yield from stream_with_sentences(stream_from_openrouter(messages, use_search=True))
             else:
-                yield from stream_with_sentences(stream_from_openrouter(messages, use_search=False, model=routed_model))
+                yield from stream_with_sentences(
+                    stream_from_openrouter(messages, use_search=False, model=routed_model)
+                )
 
             reply, action = parse_action(full_text)
 
@@ -3239,11 +3332,12 @@ async def memory(request: Request):
 
 @app.post("/tts")
 async def tts(request: Request):
-    data = await request.json()
-    text = data.get("text", "").strip()
+    data  = await request.json()
+    text  = data.get("text", "").strip()
+    speed = float(data.get("speed", 0.85))  # v8.5+: client-controlled, default 0.85
     if not text:
         return JSONResponse({"error": "text required"}, status_code=400)
-    audio = text_to_speech(text)
+    audio = text_to_speech(text, speed=speed)
     if not audio:
         return JSONResponse({"error": "TTS unavailable"}, status_code=503)
     return Response(content=audio, media_type="audio/mpeg")
@@ -3509,7 +3603,7 @@ async def sync(request: Request):
     try:
         payload = json.dumps({"secret": WEBHOOK_SECRET}).encode("utf-8")
         req = urllib.request.Request(VM_WEBHOOK_URL, data=payload,
-            headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/8.4"},
+            headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/8.6"},
             method="POST")
         with urllib.request.urlopen(req, timeout=35) as r:
             result = json.loads(r.read().decode())
@@ -3689,7 +3783,7 @@ def startup():
     scheduler.add_job(morning_briefing_job, "cron", hour=7, minute=0)
     scheduler.start()
     print(f"[HERALD] Morning briefing scheduler started -- fires 7am ET daily")
-    print(f"[HERALD API v8.5] Search fallback + TTS speed LIVE")
+    print(f"[HERALD API v8.6] Location search + Brave freshness + TTS speed LIVE")
     print(f"[HERALD API] OpenRouter:    {'YES' if OPENROUTER_KEY else 'MISSING -- required'}")
     print(f"[HERALD API] Model routing: Haiku ({HAIKU_MODEL}) / Sonnet ({SONNET_MODEL})")
     print(f"[HERALD API] Brave Search:  {'YES' if BRAVE_KEY else 'NOT SET -- add BRAVE_SEARCH_KEY'}")
@@ -3704,10 +3798,10 @@ def startup():
     print(f"[HERALD API] WeatherAPI:    {'YES (backup)' if WEATHER_KEY else 'not set'}")
     print(f"[HERALD API] Database:      {DB_FILE}")
     print(f"[HERALD API] Owner code:    {'SET' if OWNER_CODE else 'NOT SET'}")
-    print(f"[HERALD API] FIX v8.4: Freddie VM call gated -- normal messages: zero VM call")
-    print(f"[HERALD API] FIX v8.4: needs_web_search() recency detection -- Rousey class fixed")
-    print(f"[HERALD API] FIX v8.4: Brave -> :online fallback confirmed")
-    print(f"[HERALD API] FIX v8.4: build_ask_context in run_in_threadpool")
+    print(f"[HERALD API] FIX v8.6: _localize_query -- near me -> near The Colony TX (burger fix)")
+    print(f"[HERALD API] FIX v8.6: _get_freshness -- last night -> pd filter (Rousey fix)")
+    print(f"[HERALD API] FIX v8.5: Brave empty -> SEARCH action (no :online hallucination)")
+    print(f"[HERALD API] FIX v8.5: TTS speed 0.85 -- Nova comfortable pace")
 
 
 if __name__ == "__main__":
