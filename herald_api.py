@@ -2753,7 +2753,7 @@ def morning_briefing_job():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.4",
+        "status": "ok", "server": "herald-api", "version": "8.5",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -3689,7 +3689,7 @@ def startup():
     scheduler.add_job(morning_briefing_job, "cron", hour=7, minute=0)
     scheduler.start()
     print(f"[HERALD] Morning briefing scheduler started -- fires 7am ET daily")
-    print(f"[HERALD API v8.4] Freddie gated + search gate fixed + threadpool LIVE")
+    print(f"[HERALD API v8.5] Search fallback + TTS speed LIVE")
     print(f"[HERALD API] OpenRouter:    {'YES' if OPENROUTER_KEY else 'MISSING -- required'}")
     print(f"[HERALD API] Model routing: Haiku ({HAIKU_MODEL}) / Sonnet ({SONNET_MODEL})")
     print(f"[HERALD API] Brave Search:  {'YES' if BRAVE_KEY else 'NOT SET -- add BRAVE_SEARCH_KEY'}")
