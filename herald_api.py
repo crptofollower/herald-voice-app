@@ -3121,6 +3121,20 @@ async def ask_stream(request: Request):
     routed_model = route_model(message)
     use_search   = needs_web_search(message) and routed_model != SONNET_MODEL
 
+    # v8.6+: Pre-fetch Brave BEFORE StreamingResponse.
+    # Previously Brave ran inside generate(), blocking before the first yield.
+    # Railway has a ~30s timeout before the first byte -- Brave (5s) +
+    # OpenRouter (25s) = 502. Now Brave runs here in a thread, result is
+    # ready when generate() starts, first token flows within 1-2 seconds.
+    brave_query = _localize_query(message, profile, ctx["location_label"])
+    freshness   = _get_freshness(msg_lower) if use_search else None
+    if use_search and BRAVE_KEY:
+        search_ctx = await run_in_threadpool(
+            lambda: fetch_brave_search(brave_query, freshness=freshness)
+        )
+    else:
+        search_ctx = None
+
     cap_offer = check_capability_offer(message, profile)
     if cap_offer:
         messages[0]["content"] += f"\n\nINSTRUCTION: At the END of your response, naturally add: '{cap_offer}'"
@@ -3135,6 +3149,10 @@ async def ask_stream(request: Request):
     }
 
     def generate():
+        # Send SSE keepalive immediately -- Railway sees data flowing and
+        # won't 502. Client parser ignores lines not starting with "data: ".
+        yield ": keepalive\n\n"
+
         if profile.get("pending_watch_offer"):
             save_profile_fields(user_id, {"pending_watch_offer": None})
 
@@ -3170,12 +3188,8 @@ async def ask_stream(request: Request):
 
         try:
             if use_search and BRAVE_KEY:
-                # v8.6: localized query + freshness before hitting Brave
-                brave_query = _localize_query(message, profile, ctx["location_label"])
-                freshness   = _get_freshness(msg_lower)
-                search_ctx  = fetch_brave_search(brave_query, freshness=freshness)
                 if search_ctx:
-                    # Brave hit -- augment and stream fast
+                    # Brave hit -- use pre-fetched results
                     augmented = messages.copy()
                     augmented[-1] = {
                         "role": "user",
@@ -3185,7 +3199,7 @@ async def ask_stream(request: Request):
                         stream_from_openrouter(augmented, use_search=False, model=routed_model)
                     )
                 else:
-                    # Brave empty -- SEARCH action card, not :online (60s + hallucination)
+                    # Brave empty -- SEARCH action card
                     search_q = message.strip().rstrip("?.,!")
                     fallback = (
                         "I couldn't pull a live result for that one. "
@@ -3197,7 +3211,6 @@ async def ask_stream(request: Request):
                     yield f"data: {json.dumps({**base_done, 'full': fallback, 'action': search_action, 'used_search': True})}\n\n"
                     return
             elif use_search:
-                # No Brave key -- :online as last resort
                 yield from stream_with_sentences(stream_from_openrouter(messages, use_search=True))
             else:
                 yield from stream_with_sentences(
