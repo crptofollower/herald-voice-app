@@ -2297,7 +2297,12 @@ ACTION TAG RULES:
 - Action tags MUST appear on their own line at the very end, after all spoken text.
 - Never put action tags inline with your words.
 - Before the tag, end with a brief natural offer: "Want me to open that for you?"
-- Never give a flat one-sentence answer to a personal or conversational question."""
+- Never give a flat one-sentence answer to a personal or conversational question.
+- CALENDAR tag is ONLY for creating NEW events the user explicitly asks to add.
+  NEVER use CALENDAR for reading, checking, or looking up existing events.
+  If the user asks what they have scheduled, answer from memory -- no tag.
+  WRONG: user asks "what do I have this week?" -> CALENDAR: [check full week]
+  RIGHT: user asks "put my dentist on Tuesday at 2pm" -> CALENDAR: Dentist|2026-05-19|14:00"""
 
 
 # ── LLM CALLS ─────────────────────────────────────────────────────────────────
