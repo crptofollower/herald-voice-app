@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.8 -- GPS city caching + memory phrasing rules + proactive check-ins + seed question
+# v8.8.1 -- Maps city fix (always include user city in MAPS tag)
 #
 # WHAT CHANGED vs v8.7:
 #   v8.8:
@@ -2269,7 +2269,7 @@ THE STANDARD: Would the smartest, most resourceful friend this person knows answ
 this question confidently and warmly? Yes. Then so do you. Always.
 
 ACTION TAGS -- append silently at end of response, one blank line after spoken text:
-- Local business or directions:    MAPS: [business name and city]
+- Local business or directions:    MAPS: [business name], [city and state]
 - Phone number to call:            PHONE: [digits only]
 - Play music/song/artist/genre:    MUSIC: [search query]
 - Play radio station:              RADIO: [station name]
@@ -2282,6 +2282,11 @@ ACTION TAGS -- append silently at end of response, one blank line after spoken t
 
 ACTION TAG RULES:
 - One action tag maximum per response. Choose the most useful one.
+- MAPS tag CRITICAL: ALWAYS include the user's city and state after the business name.
+  The city MUST match where the user actually is right now, not a generic location.
+  CORRECT: MAPS: Mezeh, The Colony TX
+  CORRECT: MAPS: Torchy's Tacos, Plano TX
+  WRONG:   MAPS: Mezeh   (Google will find the nearest one -- could be 1500 miles away)
 - Action tags MUST appear on their own line at the very end, after all spoken text.
 - Never put action tags inline with your words.
 - Before the tag, end with a brief natural offer: "Want me to open that for you?"
@@ -2936,7 +2941,7 @@ def evening_medication_job():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.8",
+        "status": "ok", "server": "herald-api", "version": "8.8.1",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -3942,7 +3947,8 @@ def startup():
     print(f"[HERALD]   morning_briefing  -> 7:00am ET daily")
     print(f"[HERALD]   afternoon_checkin -> 2:00pm ET daily (v8.8)")
     print(f"[HERALD]   evening_medication -> 7:00pm ET daily (v8.8)")
-    print(f"[HERALD API v8.8] GPS caching + memory rules + proactive check-ins + seed question LIVE")
+    print(f"[HERALD API v8.8.1] Maps city fix LIVE")
+    print(f"[HERALD API] FIX v8.8.1: MAPS tag always includes city -- no more 1500-mile directions")
     print(f"[HERALD API] OpenRouter:    {'YES' if OPENROUTER_KEY else 'MISSING -- required'}")
     print(f"[HERALD API] Model routing: Haiku ({HAIKU_MODEL}) / Sonnet ({SONNET_MODEL})")
     print(f"[HERALD API] Brave Search:  {'YES' if BRAVE_KEY else 'NOT SET -- add BRAVE_SEARCH_KEY'}")
