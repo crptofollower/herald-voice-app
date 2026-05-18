@@ -2944,6 +2944,7 @@ async def auth(request: Request):
 async def onboard(request: Request):
     data        = await request.json()
     name        = data.get("name", "").strip()
+    ai_name     = data.get("ai_name", "Herald").strip() or "Herald"  # v8.6: chosen AI name
     persona     = data.get("persona", "city").strip()
     music_app   = data.get("music_app", "spotify").strip()
     access_code = data.get("access_code", "").strip().lower()
@@ -2964,6 +2965,8 @@ async def onboard(request: Request):
     profile = get_profile(user_id)
     if name:
         profile["name"] = name
+    if ai_name:
+        profile["ai_name"] = ai_name  # v8.6: save chosen AI name
     if persona:
         profile["persona"] = persona
     if music_app:
@@ -3276,7 +3279,11 @@ async def greeting(request: Request):
         if fact.get("category") == "location":
             learned_location = fact.get("value", "")
             break
-    location = learned_location or location_label or profile.get("location", "")
+
+    # v8.6: live GPS (location_label) always wins over cached learned location.
+    # Previously learned_location overrode live GPS -- showed "Destin" when
+    # user was back home in Plano. Live coords are always more accurate.
+    location = location_label or profile.get("location", "") or learned_location
 
     weather_line = ""
     if location:
