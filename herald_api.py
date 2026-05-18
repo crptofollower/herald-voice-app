@@ -3000,10 +3000,11 @@ async def ask(request: Request):
     if err:
         return JSONResponse({"error": err}, status_code=400)
 
-    profile  = ctx["profile"]
-    messages = ctx["messages"]
-    message  = ctx["message"]
-    user_id  = ctx["user_id"]
+    profile   = ctx["profile"]
+    messages  = ctx["messages"]
+    message   = ctx["message"]
+    user_id   = ctx["user_id"]
+    msg_lower = ctx["msg_lower"]  # v8.6 fix: needed by _get_freshness()
 
     if is_about_me_query(message):
         reply = build_about_me(profile)
@@ -3107,6 +3108,7 @@ async def ask_stream(request: Request):
     messages   = ctx["messages"]
     message    = ctx["message"]
     user_id    = ctx["user_id"]
+    msg_lower  = ctx["msg_lower"]  # v8.6 fix: needed by _get_freshness() inside generate()
 
     routed_model = route_model(message)
     use_search   = needs_web_search(message) and routed_model != SONNET_MODEL
