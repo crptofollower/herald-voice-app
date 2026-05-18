@@ -249,7 +249,7 @@ TICKER_STOP_WORDS = {
 # ── RESPONSE CACHE ────────────────────────────────────────────────────────────
 
 _cache = {}
-CACHE_TTL = {'weather': 900, 'news': 600, 'crypto': 120, 'stock': 180, 'commodity': 180}
+CACHE_TTL = {'weather': 900, 'news': 600, 'crypto': 120, 'stock': 180, 'commodity': 180, 'brave_search': 120}
 
 # 60-second TTL cache for fetch_live_empire() -- no more 8s block per owner message
 _empire_live_cache: dict = {"data": None, "ts": 0.0}
@@ -282,7 +282,10 @@ LIVE_KEYWORDS = [
     'price', 'stock', 'bitcoin', 'crypto', 'market', 'rate', 'exchange rate',
     'score', 'standings', 'playoffs', 'game today', 'match', 'tickets',
     'traffic', 'delay', 'construction', 'concert', 'event', 'events', 'show', 'opening',
-    'calendar', 'schedule', 'festival', 'what is going on', "what's going on",
+    # NOTE: 'calendar' and 'schedule' intentionally removed v8.7 --
+    # personal calendar/appointment queries must NEVER hit Brave search.
+    # They are memory queries answered from profile context.
+    'festival', 'what is going on', "what's going on",
     'what is happening in', 'what to do', 'things to do', 'this month',
     'this morning', 'this afternoon', 'this evening',
     'what are people saying', 'what is everyone saying', 'what does everyone think',
@@ -305,6 +308,14 @@ FAST_OVERRIDES = [
     'open facebook', 'get my facebook', 'open fb',
     'launch x', 'launch instagram', 'launch youtube', 'launch tiktok',
     'remember that', 'remember this', "don't forget", 'make a note',
+    # v8.7: Personal calendar/appointment/medical queries -- always from memory,
+    # never from Brave. 'calendar' was in LIVE_KEYWORDS causing 40s responses.
+    'my calendar', 'my schedule', 'my appointments', 'my appointment',
+    'what do i have', "what's on my calendar", 'coming up on my calendar',
+    'coming up this week', 'coming up today', 'on my schedule',
+    'my medical', 'medical visits', 'doctor appointment', 'my doctors',
+    'my health', 'my medications', 'my prescriptions',
+    'what have i told you', 'what do you remember', 'tell me what you know',
 ]
 
 PREFERENCE_SIGNALS = {
@@ -846,7 +857,7 @@ def fetch_espn_scores(league: str) -> list:
     sport, league_slug = sport_map.get(league.lower(), ('basketball', 'nba'))
     try:
         url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league_slug}/scoreboard"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.6"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.7"})
         with urllib.request.urlopen(req, timeout=6) as r:
             data = json.loads(r.read().decode())
         games = []
@@ -875,7 +886,7 @@ def fetch_crypto_prices_batch() -> dict:
     try:
         url = ("https://api.coingecko.com/api/v3/simple/price"
                "?ids=bitcoin,ethereum,solana&vs_currencies=usd")
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.6"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.7"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         return {
@@ -995,7 +1006,7 @@ def fetch_gas_price_eia():
             "&offset=0&length=2"
             "&sort[0][column]=period&sort[0][direction]=desc"
         )
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.6"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.7"})
         with urllib.request.urlopen(req, timeout=8) as r:
             data = json.loads(r.read().decode())
         rows = data.get("response", {}).get("data", [])
@@ -1605,7 +1616,7 @@ def fetch_live_empire():
 
     try:
         url = "http://143.198.18.66:8080/api/status"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/8.6"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/8.7"})
         with urllib.request.urlopen(req, timeout=8) as r:
             data = json.loads(r.read().decode())
         positions     = data.get("positions", [])
@@ -1722,7 +1733,7 @@ def geocode_reverse(lat, lng):
         url = (f"https://maps.googleapis.com/maps/api/geocode/json"
                f"?latlng={lat},{lng}&result_type=locality|administrative_area_level_1"
                f"&key={GEOCODING_KEY}")
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/8.6"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/8.7"})
         with urllib.request.urlopen(req, timeout=4) as r:
             data = json.loads(r.read().decode())
         if data.get("results"):
@@ -1739,19 +1750,24 @@ def geocode_reverse(lat, lng):
 
 # ── BRAVE SEARCH ──────────────────────────────────────────────────────────────
 
-def fetch_brave_search(query, count=5, freshness=None):
+def fetch_brave_search(query, count=3, freshness=None):
     if not BRAVE_KEY:
         return None
+    # v8.7: cache Brave results 2 minutes -- same query asked twice = instant
+    cache_key = f"brave:{query[:60].lower()}"
+    cached = cache_get(cache_key, 'brave_search')
+    if cached:
+        return cached
     try:
         encoded = urllib.parse.quote(query)
         url = (f"https://api.search.brave.com/res/v1/web/search"
                f"?q={encoded}&count={count}&search_lang=en&country=us&text_decorations=false")
         if freshness:
-            url += f"&freshness={freshness}"  # pd=past day, pw=past week, pm=past month
+            url += f"&freshness={freshness}"
         req = urllib.request.Request(url, headers={
             "Accept": "application/json",
             "X-Subscription-Token": BRAVE_KEY,
-            "User-Agent": "HeraldAI/8.6"
+            "User-Agent": "HeraldAI/8.7"
         })
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
@@ -1759,12 +1775,17 @@ def fetch_brave_search(query, count=5, freshness=None):
         if not results:
             return None
         snippets = []
-        for result in results[:4]:
+        for result in results[:3]:   # v8.7: max 3 results (was 4)
             title = result.get("title", "")
             desc  = result.get("description", "")
             if desc:
-                snippets.append(f"{title}: {desc}")
-        return "\n".join(snippets) if snippets else None
+                # v8.7: trim to 100 chars -- smaller prompt = faster OpenRouter
+                trimmed = desc[:100].strip()
+                snippets.append(f"{title}: {trimmed}")
+        result_str = "\n".join(snippets) if snippets else None
+        if result_str:
+            cache_set(cache_key, result_str, 'brave_search')
+        return result_str
     except Exception as e:
         print(f"[HERALD] Brave search failed: {e}")
         return None
@@ -1786,7 +1807,7 @@ def fetch_weather_direct(location):
     try:
         clean_loc = location.strip().replace(' ', '+')
         url = f"https://wttr.in/{clean_loc}?format=j1"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.6"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.7"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         cur  = data["current_condition"][0]
@@ -1818,7 +1839,7 @@ def fetch_weather_backup(location):
     try:
         encoded = urllib.parse.quote(location)
         url = f"https://api.weatherapi.com/v1/forecast.json?key={WEATHER_KEY}&q={encoded}&days=1&aqi=no"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.6"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.7"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         cur  = data["current"]
@@ -1861,7 +1882,7 @@ def fetch_sports_direct(msg_lower):
                 sport, league = val
                 break
         url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.6"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.7"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         events = data.get("events", [])
@@ -1888,7 +1909,7 @@ def fetch_crypto_direct():
     try:
         url = ("https://api.coingecko.com/api/v3/simple/price"
                "?ids=bitcoin,ethereum,solana&vs_currencies=usd&include_24hr_change=true")
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.6"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.7"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         parts = []
@@ -1918,7 +1939,7 @@ def fetch_news_direct(query=None):
             url = f"https://gnews.io/api/v4/search?q={encoded}&lang=en&max=5&token={GNEWS_KEY}"
         else:
             url = f"https://gnews.io/api/v4/top-headlines?lang=en&country=us&max=5&token={GNEWS_KEY}"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.6"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.7"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         articles = data.get("articles", [])
@@ -1939,7 +1960,7 @@ def fetch_news_backup(query=None):
             url = f"https://newsdata.io/api/1/latest?apikey={NEWSDATA_KEY}&q={encoded}&language=en"
         else:
             url = f"https://newsdata.io/api/1/latest?apikey={NEWSDATA_KEY}&language=en&country=us"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.6"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.7"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         results = data.get("results", [])
@@ -1957,12 +1978,12 @@ def fetch_movie_direct(query):
     try:
         encoded = urllib.parse.quote(query)
         url = f"https://www.omdbapi.com/?t={encoded}&apikey={OMDB_KEY}"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.6"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.7"})
         with urllib.request.urlopen(req, timeout=5) as r:
             d = json.loads(r.read().decode())
         if d.get("Response") == "False":
             url2 = f"https://www.omdbapi.com/?s={encoded}&apikey={OMDB_KEY}"
-            req2 = urllib.request.Request(url2, headers={"User-Agent": "HeraldAI/8.6"})
+            req2 = urllib.request.Request(url2, headers={"User-Agent": "HeraldAI/8.7"})
             with urllib.request.urlopen(req2, timeout=5) as r2:
                 d2 = json.loads(r2.read().decode())
             results = d2.get("Search", [])
@@ -2053,6 +2074,44 @@ def extract_stock_symbol(message):
             return up
     return None
 
+def fetch_market_indices():
+    """
+    v8.7: Direct Yahoo Finance fetch for S&P 500, Dow Jones, NASDAQ.
+    "How is the stock market doing today" = 3-4 seconds, not 34 seconds.
+    No Brave. No OpenRouter. Just Yahoo Finance.
+    """
+    indices = [
+        ('^GSPC', 'the S and P five hundred'),
+        ('^DJI',  'the Dow Jones'),
+        ('^IXIC', 'NASDAQ'),
+    ]
+    results = []
+    for symbol, spoken_name in indices:
+        try:
+            url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+                   f"?interval=1d&range=1d")
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+            })
+            with urllib.request.urlopen(req, timeout=4) as r:
+                data = json.loads(r.read().decode())
+            meta   = data['chart']['result'][0]['meta']
+            price  = meta.get('regularMarketPrice', 0)
+            prev   = meta.get('previousClose') or meta.get('chartPreviousClose', 0)
+            change = price - prev if prev else 0
+            pct    = (change / prev * 100) if prev else 0
+            direc  = "up" if change >= 0 else "down"
+            results.append(
+                f"{spoken_name} is at {int(price):,} points, "
+                f"{direc} {abs(pct):.1f} percent"
+            )
+        except Exception as e:
+            print(f"[HERALD] fetch_market_indices {symbol} failed: {e}")
+    if not results:
+        return None
+    return "Here is how the markets look right now. " + ". ".join(results) + "."
+
+
 def fetch_yahoo_stock(symbol):
     try:
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol.upper()}?interval=1d&range=1d"
@@ -2093,7 +2152,7 @@ def fetch_stock_direct(symbol):
     try:
         url = (f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE"
                f"&symbol={symbol.upper()}&apikey={ALPHA_KEY}")
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.6"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.7"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         q = data.get("Global Quote", {})
@@ -2516,7 +2575,7 @@ def get_direct_reply(ctx):
         try:
             payload = json.dumps({"secret": WEBHOOK_SECRET}).encode("utf-8")
             req = urllib.request.Request(VM_WEBHOOK_URL, data=payload,
-                headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/8.6"},
+                headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/8.7"},
                 method="POST")
             with urllib.request.urlopen(req, timeout=35) as r:
                 result = json.loads(r.read().decode())
@@ -2542,6 +2601,26 @@ def get_direct_reply(ctx):
             {"role": "user", "content": message}
         ]
         return call_openrouter(freddie_prompt, use_search=False, model=HAIKU_MODEL), False
+
+    # v8.7: Market indices -- S&P, Dow, NASDAQ -- direct Yahoo fetch, no Brave needed.
+    # "how is the stock market doing today" was 34s via Brave+OpenRouter.
+    # Now 3-4 seconds. Most common financial query covered.
+    MARKET_TRIGGERS = [
+        'stock market', 'market today', 'market doing', 'market right now',
+        'dow jones', 'dow today', 'dow is', 'how is the dow',
+        's&p 500', 'sp500', 's and p', 'how is the s',
+        'nasdaq', 'market open', 'markets today', 'market this morning',
+        'how are stocks', 'how are markets', 'market performance',
+        'market up', 'market down', 'wall street',
+    ]
+    if any(t in msg_lower for t in MARKET_TRIGGERS):
+        cached = cache_get('market_indices', 'stock')
+        if cached:
+            return cached, False
+        result = fetch_market_indices()
+        if result:
+            cache_set('market_indices', result, 'stock')
+        return result, False
 
     if any(w in msg_lower for w in ['weather','forecast','temperature','rain','snow',
                                      'wind','sunny','humid','hot outside','cold outside','umbrella']):
@@ -2811,7 +2890,7 @@ def morning_briefing_job():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.6",
+        "status": "ok", "server": "herald-api", "version": "8.7",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -3121,19 +3200,11 @@ async def ask_stream(request: Request):
     routed_model = route_model(message)
     use_search   = needs_web_search(message) and routed_model != SONNET_MODEL
 
-    # v8.6+: Pre-fetch Brave BEFORE StreamingResponse.
-    # Previously Brave ran inside generate(), blocking before the first yield.
-    # Railway has a ~30s timeout before the first byte -- Brave (5s) +
-    # OpenRouter (25s) = 502. Now Brave runs here in a thread, result is
-    # ready when generate() starts, first token flows within 1-2 seconds.
     brave_query = _localize_query(message, profile, ctx["location_label"])
     freshness   = _get_freshness(msg_lower) if use_search else None
-    if use_search and BRAVE_KEY:
-        search_ctx = await run_in_threadpool(
-            lambda: fetch_brave_search(brave_query, freshness=freshness)
-        )
-    else:
-        search_ctx = None
+    # v8.7: Brave is fetched INSIDE generate() after the typing signal.
+    # Pre-fetching it here blocked the event loop for 3-5s before
+    # StreamingResponse even started, causing client timeout chains.
 
     cap_offer = check_capability_offer(message, profile)
     if cap_offer:
@@ -3149,9 +3220,11 @@ async def ask_stream(request: Request):
     }
 
     def generate():
-        # Send SSE keepalive immediately -- Railway sees data flowing and
-        # won't 502. Client parser ignores lines not starting with "data: ".
-        yield ": keepalive\n\n"
+        # v8.7: Send typing signal FIRST.
+        # Two jobs: (1) Railway sees data immediately -- no 502.
+        #           (2) Client clears its 12s first-token timeout so it
+        #               won't abort and double-fetch while Brave+OpenRouter work.
+        yield f"data: {json.dumps({'typing': True})}\n\n"
 
         if profile.get("pending_watch_offer"):
             save_profile_fields(user_id, {"pending_watch_offer": None})
@@ -3171,6 +3244,9 @@ async def ask_stream(request: Request):
             yield f"data: {json.dumps({**base_done, 'full': reply, 'action': action, 'used_search': False})}\n\n"
             return
 
+        # Fetch Brave here (sync, inside generate -- connection is alive via typing signal)
+        search_ctx = fetch_brave_search(brave_query, freshness=freshness) if (use_search and BRAVE_KEY) else None
+
         full_text    = ""
         sentence_buf = ""
 
@@ -3189,7 +3265,6 @@ async def ask_stream(request: Request):
         try:
             if use_search and BRAVE_KEY:
                 if search_ctx:
-                    # Brave hit -- use pre-fetched results
                     augmented = messages.copy()
                     augmented[-1] = {
                         "role": "user",
@@ -3199,7 +3274,6 @@ async def ask_stream(request: Request):
                         stream_from_openrouter(augmented, use_search=False, model=routed_model)
                     )
                 else:
-                    # Brave empty -- SEARCH action card
                     search_q = message.strip().rstrip("?.,!")
                     fallback = (
                         "I couldn't pull a live result for that one. "
@@ -3630,7 +3704,7 @@ async def sync(request: Request):
     try:
         payload = json.dumps({"secret": WEBHOOK_SECRET}).encode("utf-8")
         req = urllib.request.Request(VM_WEBHOOK_URL, data=payload,
-            headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/8.6"},
+            headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/8.7"},
             method="POST")
         with urllib.request.urlopen(req, timeout=35) as r:
             result = json.loads(r.read().decode())
@@ -3810,7 +3884,7 @@ def startup():
     scheduler.add_job(morning_briefing_job, "cron", hour=7, minute=0)
     scheduler.start()
     print(f"[HERALD] Morning briefing scheduler started -- fires 7am ET daily")
-    print(f"[HERALD API v8.6] Location search + Brave freshness + TTS speed LIVE")
+    print(f"[HERALD API v8.7] Market indices + typing signal + Brave cache + Brave freshness + TTS speed LIVE")
     print(f"[HERALD API] OpenRouter:    {'YES' if OPENROUTER_KEY else 'MISSING -- required'}")
     print(f"[HERALD API] Model routing: Haiku ({HAIKU_MODEL}) / Sonnet ({SONNET_MODEL})")
     print(f"[HERALD API] Brave Search:  {'YES' if BRAVE_KEY else 'NOT SET -- add BRAVE_SEARCH_KEY'}")
