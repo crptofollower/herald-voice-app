@@ -1,24 +1,26 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.6 -- Location-aware search + Brave freshness + TTS speed + search fallback
+# v8.8 -- GPS city caching + memory phrasing rules + proactive check-ins + seed question
 #
-# WHAT CHANGED vs v8.4:
-#   v8.5:
-#   - text_to_speech() accepts speed param (default 0.85, was 1.0 -- too fast)
-#   - /tts endpoint passes speed to OpenAI
-#   - Brave empty -> SEARCH action immediately (no :online hallucination or 60s wait)
-#   v8.6:
-#   - _localize_query(): rewrites "near me" -> "near The Colony TX" before Brave
-#     Fixes: burger places near me -> Tinley Park IL (wrong city, 890 miles away)
-#   - _get_freshness(): adds Brave freshness=pd for "last night" queries
-#     Fixes: Rousey "last night" returning 2013 UFC 157 articles -> hallucination
-#   - Both /ask and /ask/stream use localized query + freshness
-#   All User-Agent strings bumped to 8.6. Version string 8.6 everywhere.
+# WHAT CHANGED vs v8.7:
+#   v8.8:
+#   - /geocode: caches confirmed city label in profile (lat/lng tolerance ~20 miles)
+#     Fixes: "Arlington" showing instead of "The Colony" on every open
+#   - build_system(): MEMORY RULES added -- Herald never announces memory retrieval
+#     Herald never speaks raw GPS coordinates aloud
+#     "Your ribs are Tuesday, right?" not "I remember you mentioned ribs"
+#   - build_ask_context(): seed question injected for brand-new users (0-2 msgs, no memory)
+#     Makes Mickey's first session feel like Herald already wants to know him
+#   - afternoon_checkin_job(): 2pm ET daily -- "how's your afternoon going?"
+#     Only fires if user active in last 7 days but not in last 2 hours
+#   - evening_medication_job(): 7pm ET -- "did you take your medication?"
+#     Only fires if medication keywords found in memories
+#   - Version bumped to 8.8 throughout
 
-import os, json, re, random, string, time, http.client, ssl, sqlite3, threading, uuid
+import os, json, re, random, string, time, http.client, ssl, sqlite3, threading, uuid, math
 import urllib.request, urllib.error, urllib.parse
 from datetime import datetime, timedelta, date
-from starlette.concurrency import run_in_threadpool  # v8.4: threadpool for async routes
+from starlette.concurrency import run_in_threadpool
 
 import sentry_sdk
 sentry_sdk.init(
@@ -34,7 +36,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.4")
+app = FastAPI(title="Herald API", version="8.8")
 
 app.add_middleware(
     CORSMiddleware,
@@ -251,7 +253,6 @@ TICKER_STOP_WORDS = {
 _cache = {}
 CACHE_TTL = {'weather': 900, 'news': 600, 'crypto': 120, 'stock': 180, 'commodity': 180, 'brave_search': 120}
 
-# 60-second TTL cache for fetch_live_empire() -- no more 8s block per owner message
 _empire_live_cache: dict = {"data": None, "ts": 0.0}
 
 def cache_get(key, category='default'):
@@ -282,9 +283,6 @@ LIVE_KEYWORDS = [
     'price', 'stock', 'bitcoin', 'crypto', 'market', 'rate', 'exchange rate',
     'score', 'standings', 'playoffs', 'game today', 'match', 'tickets',
     'traffic', 'delay', 'construction', 'concert', 'event', 'events', 'show', 'opening',
-    # NOTE: 'calendar' and 'schedule' intentionally removed v8.7 --
-    # personal calendar/appointment queries must NEVER hit Brave search.
-    # They are memory queries answered from profile context.
     'festival', 'what is going on', "what's going on",
     'what is happening in', 'what to do', 'things to do', 'this month',
     'this morning', 'this afternoon', 'this evening',
@@ -308,8 +306,6 @@ FAST_OVERRIDES = [
     'open facebook', 'get my facebook', 'open fb',
     'launch x', 'launch instagram', 'launch youtube', 'launch tiktok',
     'remember that', 'remember this', "don't forget", 'make a note',
-    # v8.7: Personal calendar/appointment/medical queries -- always from memory,
-    # never from Brave. 'calendar' was in LIVE_KEYWORDS causing 40s responses.
     'my calendar', 'my schedule', 'my appointments', 'my appointment',
     'what do i have', "what's on my calendar", 'coming up on my calendar',
     'coming up this week', 'coming up today', 'on my schedule',
@@ -857,7 +853,7 @@ def fetch_espn_scores(league: str) -> list:
     sport, league_slug = sport_map.get(league.lower(), ('basketball', 'nba'))
     try:
         url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league_slug}/scoreboard"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.7"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.8"})
         with urllib.request.urlopen(req, timeout=6) as r:
             data = json.loads(r.read().decode())
         games = []
@@ -886,7 +882,7 @@ def fetch_crypto_prices_batch() -> dict:
     try:
         url = ("https://api.coingecko.com/api/v3/simple/price"
                "?ids=bitcoin,ethereum,solana&vs_currencies=usd")
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.7"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.8"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         return {
@@ -1006,7 +1002,7 @@ def fetch_gas_price_eia():
             "&offset=0&length=2"
             "&sort[0][column]=period&sort[0][direction]=desc"
         )
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.7"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.8"})
         with urllib.request.urlopen(req, timeout=8) as r:
             data = json.loads(r.read().decode())
         rows = data.get("response", {}).get("data", [])
@@ -1023,43 +1019,34 @@ def fetch_gas_price_eia():
 def check_gas_watch(watch: dict, gas_cache: dict) -> str:
     if _hours_since(watch.get("last_triggered")) < 24:
         return None
-
     if "us_regular" not in gas_cache:
         price, period = fetch_gas_price_eia()
         if price:
             gas_cache["us_regular"] = {"price": price, "period": period}
         else:
             return None
-
     current = gas_cache["us_regular"]["price"]
     params  = watch.setdefault("params", {})
-
     if params.get("last_price") is None:
         params["last_price"] = current
         print(f"[HERALD] Gas watch baseline set: ${current:.3f}/gal")
         return None
-
     last      = float(params["last_price"])
     change    = current - last
     threshold = float(params.get("threshold", 0.05))
-
     if abs(change) < threshold:
         return None
-
     direction_pref = params.get("direction", "any")
     if direction_pref == "down" and change >= 0:
         return None
     if direction_pref == "up" and change <= 0:
         return None
-
     params["last_price"] = current
-
     direction = "dropped" if change < 0 else "went up"
     cents     = round(abs(change) * 100)
     dol       = int(current)
     rem_cents = round((current - dol) * 100)
     price_str = f"{dol} dollars and {rem_cents} cents" if rem_cents else f"{dol} dollars"
-
     return (
         f"Gas prices {direction} {cents} cents since last week. "
         f"Regular is now averaging {price_str} per gallon nationally."
@@ -1108,7 +1095,6 @@ def _run_watcher_pipeline(message: str, profile: dict, user_id: str):
     try:
         changed = False
         pending_offer = None
-
         if has_watch_intent(message):
             watch_data = extract_explicit_watch(message)
             if watch_data:
@@ -1125,7 +1111,6 @@ def _run_watcher_pipeline(message: str, profile: dict, user_id: str):
                     })
                 changed = True
                 print(f"[HERALD] Explicit watch stored: {watch_data.get('description')}")
-
         classification = classify_topic(message, profile)
         if (classification
                 and classification.get("touch_worthy")
@@ -1134,7 +1119,6 @@ def _run_watcher_pipeline(message: str, profile: dict, user_id: str):
             interest_type = classification.get("interest_type", "ongoing")
             profile = log_topic_touch(profile, topic_label, interest_type)
             changed = True
-
             if not pending_offer and check_promotion_threshold(profile, topic_label, classification):
                 touches = profile.get("topic_touches", [])
                 touch = next((t for t in touches if t["topic_label"] == topic_label), {})
@@ -1153,23 +1137,18 @@ def _run_watcher_pipeline(message: str, profile: dict, user_id: str):
                     "offer_email": interest_type in ["trip_planning", "task_planning", "research"],
                 })
                 print(f"[HERALD] Implicit watch offer queued: {topic_label} ({interest_type})")
-
         if changed or pending_offer:
             save_profile_fields(user_id, {
                 "watches": profile.get("watches", []),
                 "topic_touches": profile.get("topic_touches", []),
                 "pending_watch_offer": pending_offer,
             })
-
     except Exception as e:
         print(f"[HERALD] _run_watcher_pipeline (non-fatal): {e}")
 
 
 # ── QUERY HELPERS ─────────────────────────────────────────────────────────────
 
-# v8.4 CHANGE 1: Freddie intent detection -- gates the VM call in build_ask_context.
-# Only messages explicitly about Freddie/trading trigger fetch_live_empire().
-# Everything else: zero VM call, instant response for the owner.
 _FREDDIE_TRIGGERS = [
     'freddie', 'how are our trades', 'trading status', 'open positions',
     'gate progress', 'win rate', 'what did freddie', 'how is freddie',
@@ -1179,14 +1158,8 @@ _FREDDIE_TRIGGERS = [
 ]
 
 def _is_freddie_msg(msg_lower: str) -> bool:
-    """Returns True only when the message is explicitly about Freddie/trading."""
     return any(t in msg_lower for t in _FREDDIE_TRIGGERS)
 
-
-# v8.6: Brave freshness filter for recency queries.
-# "last night" -> freshness=pd (past day) -> no 2013 UFC results returned.
-# Without this, old articles about real past events (Rousey fights, old scores)
-# come back and the LLM presents them as if they happened last night.
 _DAY_FRESHNESS_WORDS = [
     'last night', 'yesterday', 'this morning', 'today', 'tonight',
     'just now', 'earlier today', 'this afternoon', 'this evening',
@@ -1196,28 +1169,18 @@ _WEEK_FRESHNESS_WORDS = [
 ]
 
 def _get_freshness(msg_lower: str):
-    """Return Brave API freshness param based on recency words. None = no filter."""
     if any(w in msg_lower for w in _DAY_FRESHNESS_WORDS):
-        return 'pd'   # past day
+        return 'pd'
     if any(w in msg_lower for w in _WEEK_FRESHNESS_WORDS):
-        return 'pw'   # past week
+        return 'pw'
     return None
 
-
-# v8.6: Location-aware Brave query.
-# "is there any good burger places near me" -> Brave searched it literally
-# -> returned Schoops Hamburgers in Tinley Park IL (890 miles from Mike).
-# Fix: rewrite "near me" to "near The Colony TX" before hitting Brave.
 _NEAR_ME_TERMS = [
     'near me', 'nearby', 'around here', 'around me',
     'close to me', 'close by', 'in my area', 'in my neighborhood',
 ]
 
 def _localize_query(message: str, profile: dict, location_label: str = None) -> str:
-    """
-    v8.6: Replace 'near me'/'nearby' with actual user location before Brave.
-    Returns original message unchanged if no location is known.
-    """
     location = location_label or profile.get("location", "")
     if not location:
         return message
@@ -1227,27 +1190,11 @@ def _localize_query(message: str, profile: dict, location_label: str = None) -> 
     result = message
     for term in _NEAR_ME_TERMS:
         replacement = f"near {location}"
-        # Case-insensitive replace
         idx = result.lower().find(term)
         while idx >= 0:
             result = result[:idx] + replacement + result[idx + len(term):]
             idx = result.lower().find(term, idx + len(replacement))
     return result
-
-
-# v8.4 CHANGE 2: Recency + event detection replaces pure keyword whitelist.
-# Old version: `return any(kw in msg_lower for kw in LIVE_KEYWORDS)`
-# Problem:     "what happened in the fight last night" has zero LIVE_KEYWORDS
-#              -> needs_web_search() returned False -> Brave never ran ->
-#              Herald shrugged -> brand promise violated.
-# Fix:         Keep LIVE_KEYWORDS (still valid). Add recency layer on top.
-#              If any recency word is present and it's not a FAST_OVERRIDE,
-#              trigger search. Err toward searching -- a needless search costs
-#              ~1s; a wrong "I don't know" costs the brand.
-#
-# Note: Brave -> OpenRouter :online fallback is already wired in
-# call_openrouter_with_search() and the /ask/stream search path.
-# Fixing the gate lights up both for free. No new APIs, no new cost.
 
 _RECENCY_WORDS = [
     'last night', 'yesterday', 'this morning', 'today', 'tonight',
@@ -1263,29 +1210,15 @@ _EVENT_WORDS = [
 ]
 
 def needs_web_search(message: str) -> bool:
-    """
-    v8.4: Recency + event detection. Err toward searching.
-    Returns True when the message needs live web data.
-    """
     msg_lower = message.lower().strip()
-
-    # Personal/memory queries never need search -- fast path
     if any(kw in msg_lower for kw in FAST_OVERRIDES):
         return False
-
-    # Existing keyword list still catches direct live-data requests
     if any(kw in msg_lower for kw in LIVE_KEYWORDS):
         return True
-
-    # New: recency signal -- "last night", "yesterday", "what happened", etc.
-    # If any recency word is present, it's almost certainly a live-data request.
     if any(w in msg_lower for w in _RECENCY_WORDS):
         return True
-
-    # New: event word + question -- "did they win?", "who won the fight?"
     if any(w in msg_lower for w in _EVENT_WORDS) and '?' in message:
         return True
-
     return False
 
 
@@ -1373,16 +1306,13 @@ Rules:
 
         messages = [{"role": "user", "content": prompt}]
         result = call_openrouter(messages, use_search=False, model=HAIKU_MODEL, timeout=8)
-
         clean = result.strip().replace("```json", "").replace("```", "").strip()
         data  = json.loads(clean)
         facts = data.get("learned")
         if not facts:
             return
-
         profile = get_profile(user_id)
         learned = profile.setdefault("learned_facts", [])
-
         added = 0
         for fact in facts:
             cat  = fact.get("category", "").strip()
@@ -1401,13 +1331,11 @@ Rules:
                         "learned_at": datetime.now().isoformat()
                     })
                     added += 1
-
         profile["learned_facts"] = learned[-50:]
         save_profile(user_id, profile)
         if added:
             new_vals = [f["value"] for f in learned[-added:]]
             print(f"[HERALD] Learned {added} new fact(s) for {user_id}: {new_vals}")
-
     except Exception as e:
         print(f"[HERALD] extract_learned_facts (non-fatal): {e}")
 
@@ -1514,6 +1442,8 @@ def build_about_me(profile):
             "Write a natural, conversational 2 to 4 sentence response from memory. "
             "No bullet points, no lists, no markdown, no asterisks. "
             "Speak like a trusted friend who genuinely remembers things about this person. "
+            "IMPORTANT: Never say 'I remember' or 'I recall' or 'Based on what I know'. "
+            "Just know things naturally, the way a friend does. "
             "Format all numbers in words for text-to-speech. "
             f"{'Use their name once naturally.' if name else ''} "
             "If you know very little yet, say so warmly and invite them to share more."
@@ -1602,21 +1532,13 @@ def fetch_empire():
 
 
 def fetch_live_empire():
-    """
-    60-second TTL cache -- no more 8s block per owner message.
-    v8.4: This function is now ONLY called when _is_freddie_msg() returns True.
-    On cache hit: returns instantly.
-    On cache miss: fetches from VM, caches result, returns.
-    On VM failure: falls back to hourly snapshot (fetch_empire).
-    """
     global _empire_live_cache
     now = time.time()
     if _empire_live_cache["data"] and (now - _empire_live_cache["ts"]) < 60:
         return _empire_live_cache["data"]
-
     try:
         url = "http://143.198.18.66:8080/api/status"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/8.7"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/8.8"})
         with urllib.request.urlopen(req, timeout=8) as r:
             data = json.loads(r.read().decode())
         positions     = data.get("positions", [])
@@ -1696,7 +1618,6 @@ SYSTEM:
 """
         _empire_live_cache = {"data": result, "ts": time.time()}
         return result
-
     except Exception as e:
         empire = fetch_empire()
         if empire:
@@ -1733,7 +1654,7 @@ def geocode_reverse(lat, lng):
         url = (f"https://maps.googleapis.com/maps/api/geocode/json"
                f"?latlng={lat},{lng}&result_type=locality|administrative_area_level_1"
                f"&key={GEOCODING_KEY}")
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/8.7"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/8.8"})
         with urllib.request.urlopen(req, timeout=4) as r:
             data = json.loads(r.read().decode())
         if data.get("results"):
@@ -1753,7 +1674,6 @@ def geocode_reverse(lat, lng):
 def fetch_brave_search(query, count=3, freshness=None):
     if not BRAVE_KEY:
         return None
-    # v8.7: cache Brave results 2 minutes -- same query asked twice = instant
     cache_key = f"brave:{query[:60].lower()}"
     cached = cache_get(cache_key, 'brave_search')
     if cached:
@@ -1767,7 +1687,7 @@ def fetch_brave_search(query, count=3, freshness=None):
         req = urllib.request.Request(url, headers={
             "Accept": "application/json",
             "X-Subscription-Token": BRAVE_KEY,
-            "User-Agent": "HeraldAI/8.7"
+            "User-Agent": "HeraldAI/8.8"
         })
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
@@ -1775,11 +1695,10 @@ def fetch_brave_search(query, count=3, freshness=None):
         if not results:
             return None
         snippets = []
-        for result in results[:3]:   # v8.7: max 3 results (was 4)
+        for result in results[:3]:
             title = result.get("title", "")
             desc  = result.get("description", "")
             if desc:
-                # v8.7: trim to 100 chars -- smaller prompt = faster OpenRouter
                 trimmed = desc[:100].strip()
                 snippets.append(f"{title}: {trimmed}")
         result_str = "\n".join(snippets) if snippets else None
@@ -1807,7 +1726,7 @@ def fetch_weather_direct(location):
     try:
         clean_loc = location.strip().replace(' ', '+')
         url = f"https://wttr.in/{clean_loc}?format=j1"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.7"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.8"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         cur  = data["current_condition"][0]
@@ -1839,7 +1758,7 @@ def fetch_weather_backup(location):
     try:
         encoded = urllib.parse.quote(location)
         url = f"https://api.weatherapi.com/v1/forecast.json?key={WEATHER_KEY}&q={encoded}&days=1&aqi=no"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.7"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.8"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         cur  = data["current"]
@@ -1882,7 +1801,7 @@ def fetch_sports_direct(msg_lower):
                 sport, league = val
                 break
         url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.7"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.8"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         events = data.get("events", [])
@@ -1909,7 +1828,7 @@ def fetch_crypto_direct():
     try:
         url = ("https://api.coingecko.com/api/v3/simple/price"
                "?ids=bitcoin,ethereum,solana&vs_currencies=usd&include_24hr_change=true")
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.7"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.8"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         parts = []
@@ -1939,7 +1858,7 @@ def fetch_news_direct(query=None):
             url = f"https://gnews.io/api/v4/search?q={encoded}&lang=en&max=5&token={GNEWS_KEY}"
         else:
             url = f"https://gnews.io/api/v4/top-headlines?lang=en&country=us&max=5&token={GNEWS_KEY}"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.7"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.8"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         articles = data.get("articles", [])
@@ -1960,7 +1879,7 @@ def fetch_news_backup(query=None):
             url = f"https://newsdata.io/api/1/latest?apikey={NEWSDATA_KEY}&q={encoded}&language=en"
         else:
             url = f"https://newsdata.io/api/1/latest?apikey={NEWSDATA_KEY}&language=en&country=us"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.7"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.8"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         results = data.get("results", [])
@@ -1978,12 +1897,12 @@ def fetch_movie_direct(query):
     try:
         encoded = urllib.parse.quote(query)
         url = f"https://www.omdbapi.com/?t={encoded}&apikey={OMDB_KEY}"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.7"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.8"})
         with urllib.request.urlopen(req, timeout=5) as r:
             d = json.loads(r.read().decode())
         if d.get("Response") == "False":
             url2 = f"https://www.omdbapi.com/?s={encoded}&apikey={OMDB_KEY}"
-            req2 = urllib.request.Request(url2, headers={"User-Agent": "HeraldAI/8.7"})
+            req2 = urllib.request.Request(url2, headers={"User-Agent": "HeraldAI/8.8"})
             with urllib.request.urlopen(req2, timeout=5) as r2:
                 d2 = json.loads(r2.read().decode())
             results = d2.get("Search", [])
@@ -2075,11 +1994,6 @@ def extract_stock_symbol(message):
     return None
 
 def fetch_market_indices():
-    """
-    v8.7: Direct Yahoo Finance fetch for S&P 500, Dow Jones, NASDAQ.
-    "How is the stock market doing today" = 3-4 seconds, not 34 seconds.
-    No Brave. No OpenRouter. Just Yahoo Finance.
-    """
     indices = [
         ('^GSPC', 'the S and P five hundred'),
         ('^DJI',  'the Dow Jones'),
@@ -2152,7 +2066,7 @@ def fetch_stock_direct(symbol):
     try:
         url = (f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE"
                f"&symbol={symbol.upper()}&apikey={ALPHA_KEY}")
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.7"})
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.8"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         q = data.get("Global Quote", {})
@@ -2228,19 +2142,19 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
         if tracker_rows:
             today = date.today()
             due_items = []
-            for cat, name, last, nxt, interval in tracker_rows:
+            for cat, name_item, last, nxt, interval in tracker_rows:
                 try:
                     due = date.fromisoformat(nxt)
                     days_until = (due - today).days
                     if days_until <= 14:
                         if days_until < 0:
-                            due_items.append(f"{name} is overdue by {abs(days_until)} days")
+                            due_items.append(f"{name_item} is overdue by {abs(days_until)} days")
                         elif days_until == 0:
-                            due_items.append(f"{name} is due today")
+                            due_items.append(f"{name_item} is due today")
                         else:
-                            due_items.append(f"{name} is due in {days_until} days")
+                            due_items.append(f"{name_item} is due in {days_until} days")
                     elif days_until <= 30:
-                        due_items.append(f"{name} coming up in {days_until} days")
+                        due_items.append(f"{name_item} coming up in {days_until} days")
                 except Exception:
                     pass
             if due_items:
@@ -2317,6 +2231,21 @@ YOUR RULES:
 - You have rich context about this user -- their life moments, tracker reminders, facts, and preferences. Weave these in naturally when relevant. Don't wait to be asked. A good friend brings things up. So do you.
 - If a life tracker item is due soon, mention it naturally at the end of your response when it fits. Never force it. Never list it robotically.
 - If you searched for live data and it came back empty, say you'll look that up and offer a SEARCH: action. Never shrug. Never say "I don't have live updates." That is a banned phrase.
+
+MEMORY RULES -- how you use what you know (v8.8):
+- You NEVER say "I remember", "I recall", "Based on what I know about you",
+  "You mentioned", "According to my memory", or "I have noted in my records".
+  You simply know things, the way a close friend does.
+  SAY: "Your ribs are Tuesday at one pm, right?"
+  NOT: "I remember you mentioned ribs on Tuesday."
+  SAY: "You're a Mavericks fan -- they play tonight."
+  NOT: "Based on what I know about you, you follow the Mavericks."
+- You NEVER speak raw GPS coordinates, decimal numbers, or latitude/longitude values aloud.
+  If you need to reference location, say "your area" or the city name.
+  NEVER: "thirty-three point zero seven north, ninety-six point eight five west."
+  SAY: "your area" or "The Colony" or whatever city was detected.
+- You NEVER announce that you are retrieving, accessing, or checking your memory.
+- When you know something about the user, weave it in naturally. You do not perform memory. You just know.
 
 HERALD HONESTY CONTRACT (locked):
 You OFFER actions. The app EXECUTES them. You NEVER claim to have done something.
@@ -2403,11 +2332,6 @@ def call_openrouter(messages, use_search=True, model=None, timeout=25):
         return "I did not get a response in time, try again in a second."
 
 def call_openrouter_with_search(messages, query, model=None):
-    """
-    v8.4 CHANGE 3: Fallback chain confirmed -- Brave -> OpenRouter :online.
-    Neither path dead-ends. If Brave returns empty, :online picks it up.
-    The gate (needs_web_search) now correctly routes here for recency queries.
-    """
     if BRAVE_KEY:
         search_ctx = fetch_brave_search(query)
         if search_ctx:
@@ -2418,7 +2342,6 @@ def call_openrouter_with_search(messages, query, model=None):
             }
             result = call_openrouter(augmented, use_search=False, model=model)
             return result, False
-    # Brave unavailable or empty -- fall through to OpenRouter :online
     return call_openrouter(messages, use_search=True), True
 
 def stream_from_openrouter(messages, use_search=True, model=None):
@@ -2504,14 +2427,8 @@ def build_ask_context(data):
     location_label = data.get("location_label", None)
     auth_code      = data.get("auth_code", "").strip()
 
-    # v8.4 CHANGE 1: compute msg_lower early so _is_freddie_msg() can gate
-    # the empire fetch BEFORE we make any network call.
     msg_lower = message.lower()
     owner     = is_owner(user_id, auth_code)
-
-    # v8.4 CHANGE 1 (cont): Only fetch Freddie VM data when the message is
-    # explicitly about Freddie/trading. Every other owner message: empire=None,
-    # zero VM call, response time drops from 104s -> under 8s.
     empire = fetch_live_empire() if (owner and _is_freddie_msg(msg_lower)) else None
 
     profile = get_profile(user_id)
@@ -2555,6 +2472,22 @@ def build_ask_context(data):
     messages += history[-20:]
     messages.append({"role": "user", "content": message})
 
+    # v8.8: Seed question for brand-new users with no memory yet.
+    # Makes Mickey's first session feel like Herald wants to know him,
+    # not like talking to a blank slate.
+    msg_count     = profile.get("_msg_count", 0)
+    user_memories = profile.get("memories", [])
+    user_facts    = profile.get("learned_facts", [])
+    if msg_count <= 2 and not user_memories and not user_facts:
+        messages[0]["content"] += (
+            "\n\nNEW USER SEED INSTRUCTION: This user is brand new -- you know almost "
+            "nothing about them yet. After responding naturally to whatever they said, "
+            "ask ONE warm open-ended question at the end to learn something real about them. "
+            "Keep it completely conversational -- like 'So what's your day-to-day look like?' "
+            "or 'Tell me a bit about yourself -- what do you do, where are you based?' "
+            "Just one question, naturally placed, never forced. Make them feel welcome."
+        )
+
     return {
         "user_id": user_id, "message": message, "msg_lower": msg_lower,
         "history": history, "local_time": local_time,
@@ -2575,7 +2508,7 @@ def get_direct_reply(ctx):
         try:
             payload = json.dumps({"secret": WEBHOOK_SECRET}).encode("utf-8")
             req = urllib.request.Request(VM_WEBHOOK_URL, data=payload,
-                headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/8.7"},
+                headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/8.8"},
                 method="POST")
             with urllib.request.urlopen(req, timeout=35) as r:
                 result = json.loads(r.read().decode())
@@ -2602,9 +2535,6 @@ def get_direct_reply(ctx):
         ]
         return call_openrouter(freddie_prompt, use_search=False, model=HAIKU_MODEL), False
 
-    # v8.7: Market indices -- S&P, Dow, NASDAQ -- direct Yahoo fetch, no Brave needed.
-    # "how is the stock market doing today" was 34s via Brave+OpenRouter.
-    # Now 3-4 seconds. Most common financial query covered.
     MARKET_TRIGGERS = [
         'stock market', 'market today', 'market doing', 'market right now',
         'dow jones', 'dow today', 'dow is', 'how is the dow',
@@ -2668,17 +2598,12 @@ def get_direct_reply(ctx):
         'what is the situation', 'whats new', "what's new",
         'current events', 'briefing', 'morning news',
     ]
-
     GENERIC_ONLY = [
         'top stories', 'latest news', 'headlines today', 'news today',
         'morning news', 'what is in the news', "what's in the news",
         'what happened today', 'current events',
     ]
-
-    LOCATION_WORDS = [
-        ' in ', ' at ', ' near ', ' around ', ' about ', ' for ',
-    ]
-
+    LOCATION_WORDS = [' in ', ' at ', ' near ', ' around ', ' about ', ' for ']
     TOPIC_WORDS = [
         'economy', 'market', 'business', 'sector', 'industry',
         'politics', 'election', 'congress', 'government', 'president',
@@ -2692,18 +2617,14 @@ def get_direct_reply(ctx):
         'real estate', 'housing', 'mortgage', 'rates',
         'jobs', 'unemployment', 'layoffs', 'hiring',
     ]
-
     has_news_trigger = any(w in msg_lower for w in NEWS_TRIGGERS)
-
     if has_news_trigger:
         is_generic = any(w in msg_lower for w in GENERIC_ONLY)
         has_location = any(w in msg_lower for w in LOCATION_WORDS)
         has_topic = any(w in msg_lower for w in TOPIC_WORDS)
-
         user_location = profile.get("location", "").lower()
         if user_location and user_location.split(",")[0].strip() in msg_lower:
             has_location = True
-
         if is_generic and not has_location and not has_topic:
             cached = cache_get('news_top', 'news')
             if cached:
@@ -2883,6 +2804,131 @@ def morning_briefing_job():
         print(f"[HERALD] Morning briefing job error: {e}")
 
 
+# ── AFTERNOON CHECK-IN (v8.8) ─────────────────────────────────────────────────
+
+def afternoon_checkin_job():
+    """
+    v8.8: 2pm ET daily warm check-in for active users.
+    Fires a proactive message into the queue.
+    Skipped if user has been active in last 2 hours (don't interrupt a live conversation).
+    This is the ElliQ engagement mechanic -- scheduled human-feeling contact.
+    """
+    print("[HERALD] Afternoon check-in job starting...")
+    try:
+        cutoff_active = (datetime.now() - timedelta(days=7)).isoformat()
+        cutoff_recent = (datetime.now() - timedelta(hours=2)).isoformat()
+
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute(
+            "SELECT user_id, data FROM profiles WHERE updated_at > ? AND updated_at < ?",
+            (cutoff_active, cutoff_recent)
+        )
+        rows = c.fetchall()
+        conn.close()
+
+        fired = 0
+        for user_id, raw_data in rows:
+            try:
+                profile = json.loads(raw_data)
+                first_name = profile.get("name", "")
+                name_part  = f" {first_name}" if first_name else ""
+
+                msg = f"Hey{name_part} -- how is your afternoon going?"
+
+                proactive_queue = profile.get("proactive_queue", [])
+                proactive_queue.append({
+                    "id":         str(uuid.uuid4())[:8],
+                    "type":       "afternoon_checkin",
+                    "text":       msg,
+                    "created_at": datetime.utcnow().isoformat(),
+                })
+                if len(proactive_queue) > 10:
+                    proactive_queue = proactive_queue[-10:]
+                profile["proactive_queue"] = proactive_queue
+                save_profile(user_id, profile)
+                fired += 1
+            except Exception as e:
+                print(f"[HERALD] afternoon_checkin row error ({user_id}): {e}")
+
+        print(f"[HERALD] Afternoon check-in fired for {fired} users")
+
+    except Exception as e:
+        print(f"[HERALD] afternoon_checkin_job error: {e}")
+
+
+# ── EVENING MEDICATION PROMPT (v8.8) ─────────────────────────────────────────
+
+def evening_medication_job():
+    """
+    v8.8: 7pm ET daily medication check-in.
+    Only fires for users who have mentioned medications in their memories or learned facts.
+    This is the 65+ wedge killer feature -- no new data model needed.
+    Herald already stores what they tell it. We just ask once a day.
+    """
+    print("[HERALD] Evening medication job starting...")
+    try:
+        cutoff = (datetime.now() - timedelta(days=7)).isoformat()
+
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("SELECT user_id, data FROM profiles WHERE updated_at > ?", (cutoff,))
+        rows = c.fetchall()
+        conn.close()
+
+        # Keywords that suggest medication is part of this person's life
+        med_keywords = [
+            "mg", "pill", "medication", "prescription", "lisinopril", "metformin",
+            "atorvastatin", "blood pressure", "take daily", "morning pill",
+            "evening pill", "tablet", "dose", "pharmacy", "refill", "cholesterol",
+            "diabetes", "thyroid", "vitamin", "supplement", "inhaler",
+        ]
+
+        fired = 0
+        for user_id, raw_data in rows:
+            try:
+                profile = json.loads(raw_data)
+                memories      = profile.get("memories", [])
+                learned_facts = profile.get("learned_facts", [])
+                notes         = profile.get("notes", [])
+
+                # Combine all text we know about this person
+                all_text = " ".join(memories + notes).lower()
+                all_text += " ".join(
+                    f.get("value", "") for f in learned_facts
+                ).lower()
+
+                # Only fire if medication is mentioned anywhere
+                has_meds = any(kw in all_text for kw in med_keywords)
+                if not has_meds:
+                    continue
+
+                first_name = profile.get("name", "")
+                name_part  = f" {first_name}" if first_name else ""
+
+                msg = f"Hey{name_part} -- just checking in. Did you take your medication this evening?"
+
+                proactive_queue = profile.get("proactive_queue", [])
+                proactive_queue.append({
+                    "id":         str(uuid.uuid4())[:8],
+                    "type":       "medication_checkin",
+                    "text":       msg,
+                    "created_at": datetime.utcnow().isoformat(),
+                })
+                if len(proactive_queue) > 10:
+                    proactive_queue = proactive_queue[-10:]
+                profile["proactive_queue"] = proactive_queue
+                save_profile(user_id, profile)
+                fired += 1
+            except Exception as e:
+                print(f"[HERALD] evening_medication row error ({user_id}): {e}")
+
+        print(f"[HERALD] Evening medication check-in fired for {fired} users")
+
+    except Exception as e:
+        print(f"[HERALD] evening_medication_job error: {e}")
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # FASTAPI ROUTES
 # ═════════════════════════════════════════════════════════════════════════════
@@ -2890,7 +2936,7 @@ def morning_briefing_job():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.7",
+        "status": "ok", "server": "herald-api", "version": "8.8",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -2900,11 +2946,13 @@ def health():
         "search": f"brave={'configured' if BRAVE_KEY else 'NOT SET'} | fallback=haiku:online",
         "cache": f"{len(_cache)} entries active",
         "empire_cache": f"live={'fresh' if (time.time() - _empire_live_cache['ts']) < 60 else 'stale'}",
-        "changes_v8_4": [
-            "Freddie VM call gated behind _is_freddie_msg() -- normal messages: zero VM call",
-            "needs_web_search() upgraded: recency + event detection (fixes Rousey class failures)",
-            "Search fallback confirmed: Brave -> OpenRouter :online, never dead-ends",
-            "build_ask_context wrapped in run_in_threadpool -- no event-loop blocking",
+        "changes_v8_8": [
+            "GPS city caching in /geocode -- confirms city label in profile, 20-mile tolerance",
+            "Memory phrasing rules in system prompt -- Herald never announces memory retrieval",
+            "No raw GPS coordinates spoken aloud -- added to system prompt",
+            "Seed question for brand-new users (0-2 msgs, no memory) -- Mickey first session",
+            "afternoon_checkin_job: 2pm ET daily warm check-in for active users",
+            "evening_medication_job: 7pm ET medication prompt if meds in memory",
         ],
         "apis": {
             "weather":     "wttr.in (free) + weatherapi backup",
@@ -2940,10 +2988,53 @@ def get_proactive(user_id: str):
 
 
 @app.get("/geocode")
-def geocode(lat: str = None, lng: str = None):
+def geocode(lat: str = None, lng: str = None, user_id: str = None):
+    """
+    v8.8: Added user_id param and city caching.
+    Caches confirmed city label in profile after first successful geocode.
+    If user coordinates haven't moved more than ~20 miles, returns cached label.
+    Fixes: Google returning "Arlington" for The Colony TX coordinates.
+    """
     if not lat or not lng:
         return JSONResponse({"label": None, "error": "lat and lng required"}, status_code=400)
-    label = geocode_reverse(lat, lng)
+
+    try:
+        lat_f = float(lat)
+        lng_f = float(lng)
+    except Exception:
+        return JSONResponse({"label": None, "error": "invalid lat/lng"}, status_code=400)
+
+    # v8.8: Check profile cache before hitting Google
+    if user_id:
+        try:
+            profile     = get_profile(user_id)
+            cached_city = profile.get("confirmed_city")
+            cached_lat  = profile.get("confirmed_lat")
+            cached_lng  = profile.get("confirmed_lng")
+
+            if cached_city and cached_lat is not None and cached_lng is not None:
+                dist = math.sqrt((lat_f - cached_lat) ** 2 + (lng_f - cached_lng) ** 2)
+                if dist < 0.3:  # ~20 miles in decimal degrees -- user hasn't moved
+                    print(f"[HERALD] /geocode cache hit for {user_id}: {cached_city}")
+                    return {"label": cached_city}
+        except Exception as e:
+            print(f"[HERALD] /geocode cache check failed (non-fatal): {e}")
+
+    # Hit Google geocoding API
+    label = geocode_reverse(lat_f, lng_f)
+
+    # v8.8: Cache the result in the profile so next call is instant
+    if label and user_id:
+        try:
+            profile = get_profile(user_id)
+            profile["confirmed_city"] = label
+            profile["confirmed_lat"]  = lat_f
+            profile["confirmed_lng"]  = lng_f
+            save_profile(user_id, profile)
+            print(f"[HERALD] /geocode cached for {user_id}: {label}")
+        except Exception as e:
+            print(f"[HERALD] /geocode cache save failed (non-fatal): {e}")
+
     return {"label": label}
 
 
@@ -3028,7 +3119,7 @@ async def auth(request: Request):
 async def onboard(request: Request):
     data        = await request.json()
     name        = data.get("name", "").strip()
-    ai_name     = data.get("ai_name", "Herald").strip() or "Herald"  # v8.6: chosen AI name
+    ai_name     = data.get("ai_name", "Herald").strip() or "Herald"
     persona     = data.get("persona", "city").strip()
     music_app   = data.get("music_app", "spotify").strip()
     access_code = data.get("access_code", "").strip().lower()
@@ -3050,7 +3141,7 @@ async def onboard(request: Request):
     if name:
         profile["name"] = name
     if ai_name:
-        profile["ai_name"] = ai_name  # v8.6: save chosen AI name
+        profile["ai_name"] = ai_name
     if persona:
         profile["persona"] = persona
     if music_app:
@@ -3061,7 +3152,7 @@ async def onboard(request: Request):
         profile["created_at"] = datetime.now().isoformat()
 
     save_profile(user_id, profile)
-    print(f"[HERALD] /onboard: {name} | persona={persona} | owner={is_owner_req} | id={user_id}")
+    print(f"[HERALD] /onboard: {name} | ai_name={ai_name} | persona={persona} | owner={is_owner_req} | id={user_id}")
 
     return {
         "ok":      True,
@@ -3074,13 +3165,6 @@ async def onboard(request: Request):
 
 @app.post("/ask")
 async def ask(request: Request):
-    """
-    v8.4 CHANGE 4: build_ask_context() wrapped in run_in_threadpool.
-    build_ask_context() is synchronous and does SQLite reads + potential
-    network calls. Calling it directly inside an async handler blocks the
-    event loop for all concurrent requests. run_in_threadpool() hands it
-    off to a thread, keeping the event loop free.
-    """
     data = await request.json()
 
     ctx, err = await run_in_threadpool(build_ask_context, data)
@@ -3091,7 +3175,7 @@ async def ask(request: Request):
     messages  = ctx["messages"]
     message   = ctx["message"]
     user_id   = ctx["user_id"]
-    msg_lower = ctx["msg_lower"]  # v8.6 fix: needed by _get_freshness()
+    msg_lower = ctx["msg_lower"]
 
     if is_about_me_query(message):
         reply = build_about_me(profile)
@@ -3123,8 +3207,6 @@ async def ask(request: Request):
 
     if use_search:
         if BRAVE_KEY:
-            # v8.6: localized query ("near me" -> "near The Colony TX")
-            # + freshness filter ("last night" -> past day only, no 2013 articles)
             brave_query = _localize_query(message, profile, ctx["location_label"])
             freshness   = _get_freshness(msg_lower)
             search_ctx  = fetch_brave_search(brave_query, freshness=freshness)
@@ -3136,14 +3218,12 @@ async def ask(request: Request):
                 }
                 raw_reply = call_openrouter(augmented, use_search=False, model=routed_model)
             else:
-                # Brave empty -- return SEARCH action. No :online (hallucinates + slow).
                 search_q  = message.strip().rstrip("?.,!")
                 raw_reply = (
                     f"I couldn't pull a live result for that one. "
                     f"Want me to open a search for you?\n\nSEARCH: {search_q}"
                 )
         else:
-            # No Brave key -- :online as last resort
             raw_reply = call_openrouter(messages, use_search=True)
     else:
         raw_reply = call_openrouter(messages, use_search=False, model=routed_model)
@@ -3179,12 +3259,6 @@ async def ask(request: Request):
 
 @app.post("/ask/stream")
 async def ask_stream(request: Request):
-    """
-    v8.4 CHANGE 4: build_ask_context() wrapped in run_in_threadpool.
-    Must be called BEFORE StreamingResponse is returned -- once we're
-    inside generate(), we're in a sync context and it's fine. Only the
-    pre-stream setup needs the threadpool treatment.
-    """
     data = await request.json()
 
     ctx, err = await run_in_threadpool(build_ask_context, data)
@@ -3195,16 +3269,13 @@ async def ask_stream(request: Request):
     messages   = ctx["messages"]
     message    = ctx["message"]
     user_id    = ctx["user_id"]
-    msg_lower  = ctx["msg_lower"]  # v8.6 fix: needed by _get_freshness() inside generate()
+    msg_lower  = ctx["msg_lower"]
 
     routed_model = route_model(message)
     use_search   = needs_web_search(message) and routed_model != SONNET_MODEL
 
     brave_query = _localize_query(message, profile, ctx["location_label"])
     freshness   = _get_freshness(msg_lower) if use_search else None
-    # v8.7: Brave is fetched INSIDE generate() after the typing signal.
-    # Pre-fetching it here blocked the event loop for 3-5s before
-    # StreamingResponse even started, causing client timeout chains.
 
     cap_offer = check_capability_offer(message, profile)
     if cap_offer:
@@ -3220,10 +3291,6 @@ async def ask_stream(request: Request):
     }
 
     def generate():
-        # v8.7: Send typing signal FIRST.
-        # Two jobs: (1) Railway sees data immediately -- no 502.
-        #           (2) Client clears its 12s first-token timeout so it
-        #               won't abort and double-fetch while Brave+OpenRouter work.
         yield f"data: {json.dumps({'typing': True})}\n\n"
 
         if profile.get("pending_watch_offer"):
@@ -3244,7 +3311,6 @@ async def ask_stream(request: Request):
             yield f"data: {json.dumps({**base_done, 'full': reply, 'action': action, 'used_search': False})}\n\n"
             return
 
-        # Fetch Brave here (sync, inside generate -- connection is alive via typing signal)
         search_ctx = fetch_brave_search(brave_query, freshness=freshness) if (use_search and BRAVE_KEY) else None
 
         full_text    = ""
@@ -3372,9 +3438,6 @@ async def greeting(request: Request):
             learned_location = fact.get("value", "")
             break
 
-    # v8.6: live GPS (location_label) always wins over cached learned location.
-    # Previously learned_location overrode live GPS -- showed "Destin" when
-    # user was back home in Plano. Live coords are always more accurate.
     location = location_label or profile.get("location", "") or learned_location
 
     weather_line = ""
@@ -3435,7 +3498,7 @@ async def memory(request: Request):
 async def tts(request: Request):
     data  = await request.json()
     text  = data.get("text", "").strip()
-    speed = float(data.get("speed", 0.85))  # v8.5+: client-controlled, default 0.85
+    speed = float(data.get("speed", 0.85))
     if not text:
         return JSONResponse({"error": "text required"}, status_code=400)
     audio = text_to_speech(text, speed=speed)
@@ -3704,7 +3767,7 @@ async def sync(request: Request):
     try:
         payload = json.dumps({"secret": WEBHOOK_SECRET}).encode("utf-8")
         req = urllib.request.Request(VM_WEBHOOK_URL, data=payload,
-            headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/8.7"},
+            headers={"Content-Type": "application/json", "User-Agent": "HeraldAPI/8.8"},
             method="POST")
         with urllib.request.urlopen(req, timeout=35) as r:
             result = json.loads(r.read().decode())
@@ -3727,11 +3790,9 @@ async def calendar_sync(request: Request):
         return {"ok": True, "stored": 0}
 
     stored = 0
-
     try:
         conn = sqlite3.connect(DB_FILE)
         c    = conn.cursor()
-
         c.execute("""
             CREATE TABLE IF NOT EXISTS life_tracker (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3746,35 +3807,28 @@ async def calendar_sync(request: Request):
                 created_at   TEXT NOT NULL
             )
         """)
-
         for appt in appointments:
             title    = appt.get("title", "").strip()
             date_str = appt.get("date", "")
             category = appt.get("category", "appointment")
             interval = appt.get("interval", 0)
-
             if not title or not date_str:
                 continue
-
             try:
                 appt_date = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
                 appt_date_str = appt_date.strftime("%Y-%m-%d")
             except Exception:
                 continue
-
             next_due = None
             if interval > 0:
                 next_date = appt_date + timedelta(days=interval)
                 next_due  = next_date.strftime("%Y-%m-%d")
-
             c.execute("""
                 SELECT id FROM life_tracker
                 WHERE user_id = ? AND item_name = ? AND last_date = ?
             """, (user_id, title, appt_date_str))
-
             if c.fetchone():
                 continue
-
             c.execute("""
                 INSERT INTO life_tracker
                 (user_id, category, item_name, last_date, next_due_date,
@@ -3785,13 +3839,10 @@ async def calendar_sync(request: Request):
                 next_due, interval, datetime.now().isoformat()
             ))
             stored += 1
-
         conn.commit()
         conn.close()
-
         print(f"[HERALD] Calendar sync: {stored} new appointments stored for {user_id}")
         return {"ok": True, "stored": stored, "received": len(appointments)}
-
     except Exception as e:
         print(f"[HERALD] Calendar sync error: {e}")
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
@@ -3826,7 +3877,6 @@ async def health_sync(request: Request):
     try:
         conn = sqlite3.connect(DB_FILE)
         c    = conn.cursor()
-
         c.execute("""
             CREATE TABLE IF NOT EXISTS life_moments (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3841,13 +3891,11 @@ async def health_sync(request: Request):
                 created_at TEXT NOT NULL
             )
         """)
-
         c.execute("""
             SELECT id FROM life_moments
             WHERE user_id = ? AND source = 'health_connect'
               AND date(created_at) = date('now')
         """, (user_id,))
-
         if c.fetchone():
             c.execute("""
                 UPDATE life_moments SET summary = ?
@@ -3861,13 +3909,10 @@ async def health_sync(request: Request):
                  active, source, created_at)
                 VALUES (?, ?, 'health', 'neutral', 3, 0, 1, 'health_connect', ?)
             """, (user_id, summary, datetime.now().isoformat()))
-
         conn.commit()
         conn.close()
-
         print(f"[HERALD] Health sync stored for {user_id}: {summary[:60]}")
         return {"ok": True}
-
     except Exception as e:
         print(f"[HERALD] Health sync error: {e}")
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
@@ -3881,10 +3926,23 @@ def startup():
     load_profiles()
     load_invites()
     scheduler = BackgroundScheduler(timezone="America/New_York")
-    scheduler.add_job(morning_briefing_job, "cron", hour=7, minute=0)
+
+    # Morning briefing -- 7am ET daily
+    scheduler.add_job(morning_briefing_job, "cron", hour=7, minute=0, id="morning_briefing")
+
+    # v8.8: Afternoon check-in -- 2pm ET daily
+    scheduler.add_job(afternoon_checkin_job, "cron", hour=14, minute=0, id="afternoon_checkin")
+
+    # v8.8: Evening medication prompt -- 7pm ET daily
+    scheduler.add_job(evening_medication_job, "cron", hour=19, minute=0, id="evening_medication")
+
     scheduler.start()
-    print(f"[HERALD] Morning briefing scheduler started -- fires 7am ET daily")
-    print(f"[HERALD API v8.7] Market indices + typing signal + Brave cache + Brave freshness + TTS speed LIVE")
+
+    print(f"[HERALD] Schedulers started:")
+    print(f"[HERALD]   morning_briefing  -> 7:00am ET daily")
+    print(f"[HERALD]   afternoon_checkin -> 2:00pm ET daily (v8.8)")
+    print(f"[HERALD]   evening_medication -> 7:00pm ET daily (v8.8)")
+    print(f"[HERALD API v8.8] GPS caching + memory rules + proactive check-ins + seed question LIVE")
     print(f"[HERALD API] OpenRouter:    {'YES' if OPENROUTER_KEY else 'MISSING -- required'}")
     print(f"[HERALD API] Model routing: Haiku ({HAIKU_MODEL}) / Sonnet ({SONNET_MODEL})")
     print(f"[HERALD API] Brave Search:  {'YES' if BRAVE_KEY else 'NOT SET -- add BRAVE_SEARCH_KEY'}")
@@ -3899,10 +3957,11 @@ def startup():
     print(f"[HERALD API] WeatherAPI:    {'YES (backup)' if WEATHER_KEY else 'not set'}")
     print(f"[HERALD API] Database:      {DB_FILE}")
     print(f"[HERALD API] Owner code:    {'SET' if OWNER_CODE else 'NOT SET'}")
-    print(f"[HERALD API] FIX v8.6: _localize_query -- near me -> near The Colony TX (burger fix)")
-    print(f"[HERALD API] FIX v8.6: _get_freshness -- last night -> pd filter (Rousey fix)")
-    print(f"[HERALD API] FIX v8.5: Brave empty -> SEARCH action (no :online hallucination)")
-    print(f"[HERALD API] FIX v8.5: TTS speed 0.85 -- Nova comfortable pace")
+    print(f"[HERALD API] FIX v8.8: GPS city caching -- confirmed_city in profile, 20mi tolerance")
+    print(f"[HERALD API] FIX v8.8: Memory rules -- no 'I remember', no raw GPS coords spoken")
+    print(f"[HERALD API] FIX v8.8: Seed question for new users -- makes first session feel alive")
+    print(f"[HERALD API] NEW  v8.8: afternoon_checkin_job -- 2pm ET daily")
+    print(f"[HERALD API] NEW  v8.8: evening_medication_job -- 7pm ET, medication users only")
 
 
 if __name__ == "__main__":
