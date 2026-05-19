@@ -30,7 +30,7 @@ sentry_sdk.init(
 )
 from apscheduler.schedulers.background import BackgroundScheduler
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
@@ -2946,11 +2946,33 @@ def evening_medication_job():
 # ═════════════════════════════════════════════════════════════════════════════
 # FASTAPI ROUTES
 # ═════════════════════════════════════════════════════════════════════════════
+@app.post("/transcribe")
+async def transcribe_audio(file: UploadFile = File(...)):
+    """Transcribe audio via OpenAI Whisper. Called by mic button in Expo app."""
+    try:
+        audio_bytes = await file.read()
+        import tempfile, os
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".m4a") as tmp:
+            tmp.write(audio_bytes)
+            tmp_path = tmp.name
+
+        import openai
+        client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
+        with open(tmp_path, "rb") as f:
+            result = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=f,
+                response_format="text"
+            )
+        os.unlink(tmp_path)
+        return {"text": result}
+    except Exception as e:
+        return {"text": "", "error": str(e)}
 
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.9",
+        "status": "ok", "server": "herald-api", "version": "8.10",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -4029,7 +4051,7 @@ def startup():
     print(f"[HERALD]   morning_briefing  -> 7:00am ET daily")
     print(f"[HERALD]   afternoon_checkin -> 2:00pm ET daily (v8.8)")
     print(f"[HERALD]   evening_medication -> 7:00pm ET daily (v8.8)")
-    print(f"[HERALD API v8.8.1] Maps city fix LIVE")
+    print(f"[HERALD API v8.10] /transcribe endpoint LIVE")
     print(f"[HERALD API] FIX v8.8.1: MAPS tag always includes city -- no more 1500-mile directions")
     print(f"[HERALD API] OpenRouter:    {'YES' if OPENROUTER_KEY else 'MISSING -- required'}")
     print(f"[HERALD API] Model routing: Haiku ({HAIKU_MODEL}) / Sonnet ({SONNET_MODEL})")
