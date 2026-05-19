@@ -628,6 +628,11 @@ def check_promotion_threshold(profile: dict, topic_label: str, classification: d
     interest_type = classification.get("interest_type", "ongoing")
     logistics = classification.get("logistics_signals", False)
     thresholds = {"ongoing": 7, "trip_planning": 4, "task_planning": 5, "research": 5}
+    # Lower threshold for price/score topics -- Mickey feedback May 19
+    # Gas price mentioned once, nothing happened. Swarm should feel present.
+    price_score_keywords = ['price', 'gas', 'score', 'stock', 'crypto', 'bitcoin', 'market']
+    if any(kw in topic_label.lower() for kw in price_score_keywords):
+        thresholds["ongoing"] = 2
     required = thresholds.get(interest_type, 7)
     if interest_type == "trip_planning":
         return count >= required and logistics
@@ -2411,9 +2416,105 @@ def stream_from_openrouter(messages, use_search=True, model=None):
     finally:
         conn.close()
 
+# ── TTS NORMALIZATION ─────────────────────────────────────────────────────────
+
+_TTS_ONES = [
+    "", "one", "two", "three", "four", "five", "six", "seven",
+    "eight", "nine", "ten", "eleven", "twelve", "thirteen",
+    "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen",
+]
+_TTS_TENS = ["", "", "twenty", "thirty", "forty", "fifty",
+             "sixty", "seventy", "eighty", "ninety"]
+_TTS_DIGITS = ["zero", "one", "two", "three", "four",
+               "five", "six", "seven", "eight", "nine"]
+
+
+def _int_to_words(n: int) -> str:
+    if n < 0:
+        return "negative " + _int_to_words(-n)
+    if n == 0:
+        return "zero"
+
+    def _below_1000(x):
+        if x == 0:
+            return ""
+        if x < 20:
+            return _TTS_ONES[x]
+        if x < 100:
+            o = _TTS_ONES[x % 10]
+            return _TTS_TENS[x // 10] + (" " + o if o else "")
+        rem = _below_1000(x % 100)
+        return _TTS_ONES[x // 100] + " hundred" + (" " + rem if rem else "")
+
+    parts = []
+    for threshold, label in [(1_000_000, "million"), (1_000, "thousand")]:
+        if n >= threshold:
+            parts.append(_below_1000(n // threshold) + " " + label)
+            n %= threshold
+    if n:
+        parts.append(_below_1000(n))
+    return " ".join(parts)
+
+
+def normalize_for_tts(text: str) -> str:
+    # Named index phrases -- must run before generic numeral conversion
+    text = re.sub(r'\bS&P\s*500\b', 'S and P five hundred', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bS&P\b', 'S and P', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bDOW\b', 'the Dow', text)
+
+    # Dollar amounts: $1,234.56 -> "one thousand two hundred thirty four dollars and fifty six cents"
+    def _dollars(m):
+        whole = int(m.group(1).replace(',', ''))
+        frac  = int((m.group(2) or '00').ljust(2, '0')[:2])
+        d     = _int_to_words(whole)
+        return f"{d} dollars and {_int_to_words(frac)} cents" if frac else f"{d} dollars"
+
+    text = re.sub(r'\$([\d,]+)\.(\d{1,2})', _dollars, text)
+    text = re.sub(
+        r'\$([\d,]+)',
+        lambda m: _int_to_words(int(m.group(1).replace(',', ''))) + ' dollars',
+        text,
+    )
+
+    # Percentages: 12.5% -> "twelve point five percent"
+    def _percent(m):
+        num = m.group(1)
+        if '.' in num:
+            i_str, d_str = num.split('.', 1)
+            i_words = _int_to_words(int(i_str)) if i_str.lstrip('0') else 'zero'
+            d_words = ' '.join(_TTS_DIGITS[int(c)] for c in d_str if c.isdigit())
+            return f"{i_words} point {d_words} percent"
+        return f"{_int_to_words(int(num))} percent"
+
+    text = re.sub(r'(\d+(?:\.\d+)?)\s*%', _percent, text)
+
+    # Comma-formatted numbers: 5,234 -> "five thousand two hundred thirty four"
+    text = re.sub(
+        r'\b\d{1,3}(?:,\d{3})+\b',
+        lambda m: _int_to_words(int(m.group().replace(',', ''))),
+        text,
+    )
+
+    # Large bare integers (>= 1000) not already converted
+    text = re.sub(
+        r'\b(\d{4,})\b',
+        lambda m: _int_to_words(int(m.group(1))),
+        text,
+    )
+
+    # Remaining ampersands
+    text = text.replace('&', ' and ')
+
+    # Collapse extra whitespace
+    text = re.sub(r'  +', ' ', text).strip()
+
+    return text
+
+
 def text_to_speech(text, speed=0.85):
     if not OPENAI_KEY:
         return None
+    text = normalize_for_tts(text)                        # ← TTS normalization
     payload = json.dumps({"model": "tts-1", "input": text[:4096], "voice": "nova",
                           "response_format": "mp3", "speed": speed}).encode("utf-8")
     req = urllib.request.Request(TTS_URL, data=payload, headers={
@@ -4052,7 +4153,7 @@ def startup():
     print(f"[HERALD]   afternoon_checkin -> 2:00pm ET daily (v8.8)")
     print(f"[HERALD]   evening_medication -> 7:00pm ET daily (v8.8)")
     print(f"[HERALD API v8.10] /transcribe endpoint LIVE")
-    print(f"[HERALD API] FIX v8.8.1: MAPS tag always includes city -- no more 1500-mile directions")
+    print(f"[HERALD API] FIX v8.11: MAPS tag always includes city -- no more 1500-mile directions")
     print(f"[HERALD API] OpenRouter:    {'YES' if OPENROUTER_KEY else 'MISSING -- required'}")
     print(f"[HERALD API] Model routing: Haiku ({HAIKU_MODEL}) / Sonnet ({SONNET_MODEL})")
     print(f"[HERALD API] Brave Search:  {'YES' if BRAVE_KEY else 'NOT SET -- add BRAVE_SEARCH_KEY'}")
