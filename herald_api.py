@@ -407,6 +407,15 @@ def init_db():
                 print(f"[HERALD] Migrated {len(old_invites)} invites from JSON to SQLite")
             except Exception as e:
                 print(f"[HERALD] Invite migration warning (non-fatal): {e}")
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS waitlist (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                email     TEXT UNIQUE NOT NULL,
+                source    TEXT DEFAULT 'landing',
+                created_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        conn.commit()
         conn.close()
         print(f"[HERALD] SQLite ready: {DB_FILE}")
     except Exception as e:
@@ -2941,7 +2950,7 @@ def evening_medication_job():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.8.1",
+        "status": "ok", "server": "herald-api", "version": "8.9",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -3554,6 +3563,79 @@ async def invite_list(request: Request):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     invite_list_data = sorted(invites.values(), key=lambda x: x.get("created_at",""), reverse=True)
     return {"ok": True, "invites": invite_list_data, "total": len(invite_list_data)}
+
+
+@app.post("/waitlist")
+async def waitlist(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid request"}, status_code=400)
+    email = (body.get("email") or "").strip().lower()
+    if not email or not re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", email):
+        return JSONResponse({"error": "Invalid email address"}, status_code=400)
+    source = (body.get("source") or "landing")[:32]
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("INSERT INTO waitlist (email, source) VALUES (?, ?)", (email, source))
+        conn.commit()
+        conn.close()
+        print(f"[HERALD] Waitlist signup: {email} via {source}")
+    except sqlite3.IntegrityError:
+        return JSONResponse({"status": "ok", "message": "You are on the list."})
+    except Exception as e:
+        print(f"[HERALD] Waitlist DB error: {e}")
+        return JSONResponse({"error": "Server error"}, status_code=500)
+    _send_waitlist_confirmation(email)
+    return JSONResponse({"status": "ok", "message": "You are on the list."})
+
+
+def _send_waitlist_confirmation(email: str):
+    sendgrid_key = os.environ.get("SENDGRID_API_KEY", "")
+    if not sendgrid_key:
+        return
+    try:
+        import urllib.request as _ur, json as _json
+        payload = {
+            "personalizations": [{"to": [{"email": email}]}],
+            "from": {"email": "herald@apexempire.ai", "name": "Herald"},
+            "subject": "You are on the Herald early access list.",
+            "content": [{"type": "text/plain", "value": (
+                "Thanks for signing up.\n\n"
+                "You are on the Herald early access list. "
+                "We will reach out when your spot is ready.\n\n"
+                "-- The Herald Team\napexempire.ai"
+            )}]
+        }
+        req = _ur.Request(
+            "https://api.sendgrid.com/v3/mail/send",
+            data=_json.dumps(payload).encode(),
+            headers={"Authorization": f"Bearer {sendgrid_key}", "Content-Type": "application/json"},
+            method="POST"
+        )
+        _ur.urlopen(req, timeout=5)
+        print(f"[HERALD] Waitlist confirmation sent to {email}")
+    except Exception as e:
+        print(f"[HERALD] Waitlist email failed (non-fatal): {e}")
+
+
+@app.get("/waitlist/list")
+async def waitlist_list(request: Request):
+    secret = request.query_params.get("secret", "")
+    if secret != os.environ.get("WEBHOOK_SECRET", ""):
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("SELECT email, source, created_at FROM waitlist ORDER BY created_at DESC")
+        rows = c.fetchall()
+        conn.close()
+        return JSONResponse({"count": len(rows), "emails": [
+            {"email": r[0], "source": r[1], "created_at": r[2]} for r in rows
+        ]})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @app.post("/cron/watchers")
