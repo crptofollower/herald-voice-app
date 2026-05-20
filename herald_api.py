@@ -2676,13 +2676,47 @@ def build_ask_context(data):
     messages += history[-20:]
     messages.append({"role": "user", "content": message})
 
+    # v8.12: Medical intake -- advance state if active, start if signal detected
+    intake_state = profile.get('medical_intake_state')
+    if intake_state:
+        profile = advance_medical_intake(profile, message, user_id)
+        save_profile(user_id, profile)
+        next_state = profile.get('medical_intake_state')
+        if next_state:
+            question = next_state.get('next_question', '')
+            messages[0]['content'] += (
+                f"\n\nMEDICAL INTAKE ACTIVE: You are gently gathering medical visit info "
+                f"one question at a time. Answer the user's message naturally first. "
+                f"Then at the very end, ask this ONE question conversationally: '{question}' "
+                f"Never say 'I am recording your medical history.' Just ask like a friend would. "
+                f"One question only. Never more than one."
+            )
+    else:
+        medical_signal = detect_medical_signal(message)
+        if medical_signal:
+            profile = start_medical_intake(profile, medical_signal)
+            if profile.get('medical_intake_state'):
+                save_profile(user_id, profile)
+                try:
+                    first_q = INTAKE_QUESTIONS[medical_signal][0][1]
+                except (KeyError, IndexError):
+                    first_q = ""
+                if first_q:
+                    messages[0]['content'] += (
+                        f"\n\nMEDICAL INTAKE STARTING: The user just mentioned a medical "
+                        f"{'visit' if medical_signal == 'visit' else 'medication'}. "
+                        f"Respond naturally to what they said. Then at the end, ask this ONE "
+                        f"question naturally: '{first_q}' "
+                        f"Keep it warm and conversational. One question only."
+                    )
+
     # v8.8: Seed question for brand-new users with no memory yet.
     # Makes Mickey's first session feel like Herald wants to know him,
     # not like talking to a blank slate.
     msg_count     = profile.get("_msg_count", 0)
     user_memories = profile.get("memories", [])
     user_facts    = profile.get("learned_facts", [])
-    if msg_count <= 2 and not user_memories and not user_facts:
+    if msg_count <= 2 and not user_memories and not user_facts and not profile.get('medical_intake_state'):
         messages[0]["content"] += (
             "\n\nNEW USER SEED INSTRUCTION: This user is brand new -- you know almost "
             "nothing about them yet. After responding naturally to whatever they said, "
@@ -3162,7 +3196,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", ""version": "8.12",
+        "status": "ok", "server": "herald-api", "version": "8.12",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
