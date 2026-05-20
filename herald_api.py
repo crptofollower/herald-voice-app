@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.8.1 -- Maps city fix (always include user city in MAPS tag)
+# v8.12 -- Medical memory system (always include user city in MAPS tag)
 #
 # WHAT CHANGED vs v8.7:
 #   v8.8:
@@ -312,6 +312,10 @@ FAST_OVERRIDES = [
     'my medical', 'medical visits', 'doctor appointment', 'my doctors',
     'my health', 'my medications', 'my prescriptions',
     'what have i told you', 'what do you remember', 'tell me what you know',
+    'my medical history', 'my medical records', 'my doctors',
+    'my medications', 'what medications am i on', 'my prescriptions',
+    'email my medical', 'send my medical history', 'my health summary',
+    'when did i see', 'last time i saw', 'my follow up',
 ]
 
 PREFERENCE_SIGNALS = {
@@ -413,6 +417,61 @@ def init_db():
                 email     TEXT UNIQUE NOT NULL,
                 source    TEXT DEFAULT 'landing',
                 created_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        # v8.12: Medical memory tables
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS medical_records (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id         TEXT NOT NULL,
+                doctor_name     TEXT,
+                specialty       TEXT,
+                practice        TEXT,
+                location        TEXT,
+                phone           TEXT,
+                visit_date      TEXT,
+                reason          TEXT,
+                outcome         TEXT,
+                follow_up_date  TEXT,
+                follow_up_notes TEXT,
+                medications     TEXT,
+                tests_ordered   TEXT,
+                results         TEXT,
+                active          INTEGER DEFAULT 1,
+                source          TEXT DEFAULT 'conversation',
+                created_at      TEXT NOT NULL
+            )
+        """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS medical_contacts (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id      TEXT NOT NULL,
+                doctor_name  TEXT NOT NULL,
+                specialty    TEXT,
+                practice     TEXT,
+                address      TEXT,
+                phone        TEXT,
+                last_seen    TEXT,
+                next_visit   TEXT,
+                notes        TEXT,
+                active       INTEGER DEFAULT 1,
+                created_at   TEXT NOT NULL,
+                UNIQUE(user_id, doctor_name)
+            )
+        """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS medication_log (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id       TEXT NOT NULL,
+                med_name      TEXT NOT NULL,
+                dose          TEXT,
+                prescriber    TEXT,
+                start_date    TEXT,
+                end_date      TEXT,
+                reason        TEXT,
+                refill_due    TEXT,
+                active        INTEGER DEFAULT 1,
+                created_at    TEXT NOT NULL
             )
         """)
         conn.commit()
@@ -1293,7 +1352,37 @@ def extract_memory_fact(message):
     return msg[:120]
 
 
-# ── LLM LEARNING LOOP ─────────────────────────────────────────────────────────
+# v8.12: Medical intake -- advance state if active, start if signal detected
+    intake_state = profile.get('medical_intake_state')
+    if intake_state:
+        profile = advance_medical_intake(profile, message, user_id)
+        save_profile(user_id, profile)
+        # Inject intake instruction into system prompt
+        next_state = profile.get('medical_intake_state')
+        if next_state:
+            question = next_state.get('next_question', '')
+            messages[0]['content'] += (
+                f"\n\nMEDICAL INTAKE ACTIVE: You are gently gathering medical visit info "
+                f"one question at a time. Answer the user's message naturally first. "
+                f"Then at the very end, ask this ONE question conversationally: '{question}' "
+                f"Never say 'I am recording your medical history.' Just ask like a friend would. "
+                f"One question only. Never more than one."
+            )
+    elif not intake_state:
+        medical_signal = detect_medical_signal(message)
+        if medical_signal:
+            profile = start_medical_intake(profile, medical_signal)
+            save_profile(user_id, profile)
+            first_q = INTAKE_QUESTIONS[medical_signal][0][1]
+            messages[0]['content'] += (
+                f"\n\nMEDICAL INTAKE STARTING: The user just mentioned a medical "
+                f"{'visit' if medical_signal == 'visit' else 'medication'}. "
+                f"Respond naturally to what they said. Then at the end, ask this ONE "
+                f"question naturally: '{first_q}' "
+                f"Keep it warm and conversational. One question only."
+            )
+
+    # v8.8: Seed question for brand-new users with no memory yet.
 
 def extract_learned_facts(user_id, user_message, herald_reply):
     try:
@@ -3073,7 +3162,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.10",
+        "status": "ok", "server": "herald-api", ""version": "8.12",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -4058,6 +4147,130 @@ async def calendar_sync(request: Request):
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 
+@app.get("/medical/summary")
+async def medical_summary(user_id: str, send_email: bool = False):
+    if not user_id:
+        return JSONResponse({"error": "user_id required"}, status_code=400)
+    profile = get_profile(user_id)
+    name    = profile.get("name", "there")
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c    = conn.cursor()
+        c.execute("""
+            SELECT doctor_name, specialty, practice, location,
+                   visit_date, reason, outcome, follow_up_date,
+                   tests_ordered, results
+            FROM medical_records
+            WHERE user_id = ? AND active = 1
+            ORDER BY visit_date ASC
+        """, (user_id,))
+        visits = c.fetchall()
+        c.execute("""
+            SELECT med_name, dose, prescriber, reason, start_date
+            FROM medication_log
+            WHERE user_id = ? AND active = 1 AND end_date IS NULL
+            ORDER BY start_date ASC
+        """, (user_id,))
+        meds = c.fetchall()
+        c.execute("""
+            SELECT item_name, next_due_date
+            FROM life_tracker
+            WHERE user_id = ? AND active = 1 AND category = 'medical'
+            ORDER BY next_due_date ASC
+        """, (user_id,))
+        followups = c.fetchall()
+        conn.close()
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+    lines = ["MEDICAL HISTORY SUMMARY",
+             f"Prepared by Herald for {name}",
+             f"Generated: {datetime.now().strftime('%B %d, %Y')}", ""]
+    if visits:
+        lines.append("MEDICAL VISITS")
+        lines.append("-" * 40)
+        for doc, spec, practice, loc, dt, reason, outcome, fu, tests, results in visits:
+            lines.append(f"Date:     {dt}")
+            lines.append(f"Doctor:   {doc}{' (' + spec + ')' if spec else ''}")
+            if practice: lines.append(f"Practice: {practice}{', ' + loc if loc else ''}")
+            if reason:   lines.append(f"Reason:   {reason}")
+            if outcome:  lines.append(f"Outcome:  {outcome}")
+            if tests:    lines.append(f"Tests:    {tests}")
+            if results:  lines.append(f"Results:  {results}")
+            if fu:       lines.append(f"Follow-up:{fu}")
+            lines.append("")
+    if meds:
+        lines.append("CURRENT MEDICATIONS")
+        lines.append("-" * 40)
+        for med_name, dose, prescriber, reason, start in meds:
+            line = f"{med_name}"
+            if dose:       line += f" {dose}"
+            if reason:     line += f" ({reason})"
+            if prescriber: line += f" — prescribed by {prescriber}"
+            if start:      line += f" since {start}"
+            lines.append(line)
+        lines.append("")
+    if followups:
+        lines.append("UPCOMING FOLLOW-UPS")
+        lines.append("-" * 40)
+        for item, due in followups:
+            lines.append(f"{item}: {due}")
+        lines.append("")
+    lines.append("This summary was compiled from conversations with Herald.")
+    lines.append("Always verify dates and details with your healthcare providers.")
+    summary_text = "\n".join(lines)
+
+    if send_email:
+        email = profile.get("email", "")
+        if email and SENDGRID_KEY:
+            _send_medical_summary_email(profile, summary_text)
+            return {"ok": True, "sent_to": email, "summary": summary_text}
+        return {"ok": False, "error": "No email on file", "summary": summary_text}
+    return {"ok": True, "summary": summary_text}
+
+
+def _send_medical_summary_email(profile: dict, summary_text: str):
+    email = profile.get("email", "")
+    name  = profile.get("name", "there")
+    if not email or not SENDGRID_KEY:
+        return
+    html_body = summary_text.replace("\n", "<br>")
+    html = (
+        f'<div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;'
+        f'padding:32px 24px;background:#fafafa;">'
+        f'<div style="border-left:3px solid #1A9B8A;padding-left:16px;margin-bottom:24px;">'
+        f'<p style="margin:0;color:#1A9B8A;font-size:12px;letter-spacing:0.1em;'
+        f'text-transform:uppercase;">Herald Medical Summary</p>'
+        f'<h2 style="margin:8px 0 0;color:#1a1a1a;font-size:20px;">Your Medical History</h2>'
+        f'</div>'
+        f'<div style="color:#333;line-height:1.8;font-size:15px;font-family:monospace;">'
+        f'{html_body}</div>'
+        f'<div style="margin-top:32px;padding-top:16px;border-top:1px solid #e5e5e5;">'
+        f'<p style="color:#999;font-size:12px;margin:0;">'
+        f'Sent by Herald &middot; herald@apexempire.ai<br>'
+        f'Always verify with your healthcare providers.</p>'
+        f'</div></div>'
+    )
+    payload = json.dumps({
+        "personalizations": [{"to": [{"email": email, "name": name}]}],
+        "from": {"email": "herald@apexempire.ai", "name": "Herald"},
+        "subject": "Your Medical History Summary — Herald",
+        "content": [{"type": "text/html", "value": html}]
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.sendgrid.com/v3/mail/send",
+        data=payload,
+        headers={"Content-Type": "application/json",
+                 "Authorization": f"Bearer {SENDGRID_KEY}"},
+        method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            print(f"[HERALD] Medical summary sent to {email} | {resp.status}")
+    except Exception as e:
+        print(f"[HERALD] Medical summary email failed: {e}")
+
+
 @app.post("/health/sync")
 async def health_sync(request: Request):
     data    = await request.json()
@@ -4152,7 +4365,7 @@ def startup():
     print(f"[HERALD]   morning_briefing  -> 7:00am ET daily")
     print(f"[HERALD]   afternoon_checkin -> 2:00pm ET daily (v8.8)")
     print(f"[HERALD]   evening_medication -> 7:00pm ET daily (v8.8)")
-    print(f"[HERALD API v8.10] /transcribe endpoint LIVE")
+    print(f"[HERALD API v8.12] /transcribe endpoint LIVE")
     print(f"[HERALD API] FIX v8.11: MAPS tag always includes city -- no more 1500-mile directions")
     print(f"[HERALD API] OpenRouter:    {'YES' if OPENROUTER_KEY else 'MISSING -- required'}")
     print(f"[HERALD API] Model routing: Haiku ({HAIKU_MODEL}) / Sonnet ({SONNET_MODEL})")
