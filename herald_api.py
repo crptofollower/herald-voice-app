@@ -300,6 +300,17 @@ FAST_OVERRIDES = [
     'who are you', 'what can you do', 'remind me', 'my name is', 'i live in',
     'i love', 'i like', 'call you', 'how do i get to', 'directions to',
     'navigate to', 'take me to',
+    # v8.12.3: Local business queries bypass Brave search entirely.
+    # Herald knows the city. LLM gives one confident rec + MAPS tag.
+    # Google Maps finds the actual business. Much faster than Brave.
+    'good place near', 'good restaurant near', 'good coffee near',
+    'restaurant near me', 'coffee near me', 'coffee shop near me',
+    'place to eat near', 'place near me', 'bar near me', 'cafe near me',
+    'food near me', 'eat near me', 'lunch near me', 'dinner near me',
+    'breakfast near me', 'burger near me', 'pizza near me', 'sushi near me',
+    'mexican near me', 'italian near me', 'chinese near me', 'thai near me',
+    'bbq near me', 'steak near me', 'seafood near me', 'tacos near me',
+    'gym near me', 'pharmacy near me', 'grocery near me', 'gas station near me',
     'open my x', 'open x', 'open twitter', 'get my x', 'get my twitter',
     'open instagram', 'get my instagram', 'open ig', 'get my ig',
     'open youtube', 'get my youtube', 'open tiktok', 'get my tiktok',
@@ -2301,6 +2312,11 @@ YOUR RULES:
   These phrases are BANNED. You have the user's profile, memories, and notes -- use them.
 - NEVER list sources or citations unless the user specifically asks.
 - For local business queries give ONE confident recommendation with a MAPS tag.
+  You know the user's city. Recommend confidently like a friend who knows the area.
+  Never say "I'd suggest searching for" -- just name a place and open Maps.
+  CORRECT: "Torchy's Tacos is great for Mexican -- want me to pull that up?"
+  BANNED:  "You might want to search for Mexican restaurants near you."
+  The MAPS tag will open Google Maps which finds the exact address automatically.
 - Be diplomatically honest -- tell the truth with warmth. Never make things up.
 - Never mention Claude, OpenAI, Anthropic, or any AI model. You are {ai_name}.
 - You speak out loud via text-to-speech. Format ALL responses for listening, not reading.
@@ -3145,7 +3161,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.12.2",
+        "status": "ok", "server": "herald-api", "version": "8.12.3",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
