@@ -2355,6 +2355,17 @@ def fetch_movie_direct(query):
 
 def detect_commodity(message):
     msg_lower = message.lower()
+    # v8.15: Exclude food/cooking oil queries before checking commodity map.
+    # "olive oil" contains "oil" which matched crude oil (CL=F). Never again.
+    FOOD_OIL_EXCLUSIONS = [
+        'olive oil', 'vegetable oil', 'canola oil', 'coconut oil',
+        'sesame oil', 'avocado oil', 'sunflower oil', 'cooking oil',
+        'extra virgin', 'tablespoon', 'teaspoon', 'cup of oil',
+        'calories', 'recipe', 'salad', 'frying', 'baking', 'dressing',
+        'nutrition', 'nutritional', 'how many calories', 'how much fat',
+    ]
+    if any(t in msg_lower for t in FOOD_OIL_EXCLUSIONS):
+        return None
     for name in sorted(COMMODITY_MAP.keys(), key=len, reverse=True):
         if name in msg_lower:
             return COMMODITY_MAP[name]
@@ -3061,7 +3072,6 @@ def build_ask_context(data):
         profile, briefing_confirm = apply_briefing_pref(profile, briefing_change)
         if briefing_confirm:
             profile["_briefing_confirm"] = briefing_confirm
-        save_profile(user_id, profile)
         print(f"[HERALD] Briefing pref updated for {user_id}: {briefing_change}")
 
     # v8.13: Emergency contact detection
@@ -3075,7 +3085,6 @@ def build_ask_context(data):
         profile.setdefault("emergency_contacts", [])
         # Mark message for LLM extraction on next learn cycle
         profile["_pending_emergency_extract"] = message[:200]
-        save_profile(user_id, profile)
         print(f"[HERALD] Emergency contact signal detected for {user_id}")
 
     if "call you" in msg_lower or "your name is" in msg_lower:
@@ -3150,6 +3159,27 @@ def get_direct_reply(ctx):
     profile   = ctx["profile"]
     owner     = ctx["owner"]
     empire    = ctx["empire"]
+
+    # v8.15: Profile fast path -- answer instantly from profile, no LLM needed.
+    # "What is my name" should NEVER take 5+ seconds. It comes from memory.
+    NAME_QUERIES = [
+        'what is my name', "what's my name", 'do you know my name',
+        'what do you call me', 'my name is what',
+    ]
+    if any(q in msg_lower for q in NAME_QUERIES):
+        name = profile.get('name', '')
+        if name:
+            return f"Your name is {name}.", False
+        return "I don't have your name yet -- what should I call you?", False
+
+    WHAT_TIME_QUERIES = ['what time is it', 'what is the time', "what's the time"]
+    if any(q in msg_lower for q in WHAT_TIME_QUERIES):
+        now = datetime.now()
+        hour = now.hour
+        minute = now.minute
+        ampm = "AM" if hour < 12 else "PM"
+        hour12 = hour if 1 <= hour <= 12 else (12 if hour == 0 else hour - 12)
+        return f"It is {hour12}:{minute:02d} {ampm}.", False
 
     SYNC_TRIGGERS = ['sync', 'refresh', 'update freddie', 'sync empire', 'refresh data']
     if owner and any(t in msg_lower for t in SYNC_TRIGGERS):
@@ -3644,7 +3674,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.14",
+        "status": "ok", "server": "herald-api", "version": "8.15",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
