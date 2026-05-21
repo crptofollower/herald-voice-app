@@ -1453,6 +1453,96 @@ INTAKE_QUESTIONS = {
 }
 
 
+
+# ── BRIEFING PREFERENCE SYSTEM (v8.14) ───────────────────────────────────────
+
+_BRIEFING_EXCLUDE = [
+    "don't mention", "dont mention", "leave out", "skip the",
+    "stop telling me", "remove from", "no more", "not in the morning",
+    "don't include", "dont include", "take out",
+]
+_BRIEFING_INCLUDE = [
+    "add to my morning", "include in my briefing", "tell me about in the morning",
+    "add the", "start including", "i want to hear",
+]
+_BRIEFING_TONE = [
+    "keep it short", "brief", "quick briefing", "just the essentials",
+    "more detail", "more information", "tell me more in the morning",
+]
+_BRIEFING_TOPIC_MAP = {
+    "medication": ["medication", "meds", "pills", "prescriptions"],
+    "weather":    ["weather", "forecast", "temperature"],
+    "calendar":   ["calendar", "appointments", "schedule"],
+    "tracker":    ["reminders", "tracker", "due items"],
+    "freddie":    ["freddie", "trading", "trades", "market update"],
+    "sports":     ["sports", "scores", "game results", "cowboys", "mavericks"],
+}
+_TOPIC_LABELS = {
+    "medication": "medications",   "weather": "weather",
+    "calendar":   "your calendar", "tracker": "reminders",
+    "freddie":    "Freddie updates", "sports": "sports scores",
+}
+
+
+def detect_briefing_pref_change(message: str) -> dict:
+    msg = message.lower()
+    result = {"action": None, "topic": None, "tone": None}
+    if any(s in msg for s in _BRIEFING_EXCLUDE):
+        result["action"] = "exclude"
+        for topic, keys in _BRIEFING_TOPIC_MAP.items():
+            if any(k in msg for k in keys):
+                result["topic"] = topic
+                break
+    elif any(s in msg for s in _BRIEFING_INCLUDE):
+        result["action"] = "include"
+        for topic, keys in _BRIEFING_TOPIC_MAP.items():
+            if any(k in msg for k in keys):
+                result["topic"] = topic
+                break
+    if any(s in msg for s in _BRIEFING_TONE):
+        result["tone"] = "brief" if any(
+            w in msg for w in ["short", "brief", "quick", "essential"]
+        ) else "detailed"
+    return result
+
+
+def apply_briefing_pref(profile: dict, change: dict) -> tuple:
+    prefs = profile.setdefault("briefing_prefs", {
+        "include_medication": True, "include_weather": True,
+        "include_calendar": True,   "include_tracker": True,
+        "include_freddie":  True,   "include_sports":  False,
+        "tone": "normal",           "custom_topics": [],
+    })
+    action = change.get("action")
+    topic  = change.get("topic")
+    tone   = change.get("tone")
+    confirm = ""
+    if action == "exclude" and topic:
+        prefs[f"include_{topic}"] = False
+        label = _TOPIC_LABELS.get(topic, topic)
+        confirm = (
+            f"Got it -- I'll leave {label} out of your morning briefing. "
+            f"Anything else you'd like to change?"
+        )
+    elif action == "include" and topic:
+        prefs[f"include_{topic}"] = True
+        label = _TOPIC_LABELS.get(topic, topic)
+        confirm = (
+            f"Done -- I'll include {label} in your morning briefing. "
+            f"Anything else?"
+        )
+    if tone:
+        prefs["tone"] = tone
+        if not confirm:
+            confirm = (
+                "Got it -- morning briefings will be short and to the point."
+                if tone == "brief"
+                else "Understood -- I'll give you more detail in the mornings."
+            )
+    profile["briefing_prefs"] = prefs
+    return profile, confirm
+
+
 def detect_medical_signal(message: str):
     msg_lower = message.lower()
     if any(s in msg_lower for s in MEDICAL_VISIT_SIGNALS):
