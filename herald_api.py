@@ -2427,6 +2427,44 @@ def fetch_stock_direct(symbol):
 
 # ── SYSTEM PROMPT ─────────────────────────────────────────────────────────────
 
+
+# ── DYNAMIC MEMORY WEIGHTING (v8.13) ─────────────────────────────────────────
+# Medical always beats food. Cancer diagnosis from 6 months ago
+# outscores restaurant preference from yesterday. Always.
+
+CATEGORY_PRIORITY = {
+    'medical':      10,
+    'medication':    9,
+    'family':        8,
+    'financial':     7,
+    'legal':         7,
+    'work':          6,
+    'routine':       5,
+    'travel':        4,
+    'food':          3,
+    'sports':        3,
+    'general':       2,
+}
+
+EMOTION_WEIGHT = {
+    'critical':   5,
+    'serious':    4,
+    'important':  3,
+    'neutral':    2,
+    'positive':   2,
+    'negative':   3,
+}
+
+
+def calculate_moment_weight(category: str, emotion: str,
+                             days_ago: int, times_referenced: int = 0) -> float:
+    base      = CATEGORY_PRIORITY.get(category, 2)
+    emotion_w = EMOTION_WEIGHT.get(emotion, 2)
+    recency   = max(0.2, math.exp(-days_ago / 90))   # halves every 90 days, never zero
+    ref_boost = 1 + (times_referenced * 0.25)         # each mention boosts it
+    return round(base * emotion_w * recency * ref_boost, 2)
+
+
 def build_system(profile, local_time=None, owner=False, empire=None, lat=None, lng=None, location_label=None):
     now      = local_time or datetime.now().strftime("%A, %B %d %Y %I:%M %p")
     name     = profile.get("name", "")
@@ -2505,14 +2543,21 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
         c.execute("""
-            SELECT summary, category, emotion, days_ago
+            SELECT summary, category, emotion, days_ago,
+                   COALESCE(times_referenced, 0) as refs
             FROM life_moments
             WHERE user_id = ? AND active = 1
-            ORDER BY weight DESC, created_at DESC
-            LIMIT 6
         """, (profile.get("user_id", ""),))
-        moment_rows = c.fetchall()
+        all_rows = c.fetchall()
         conn.close()
+        # Dynamic scoring -- medical from 6 months ago beats food from yesterday
+        scored = []
+        for row in all_rows:
+            summary, cat, emotion, days_ago, refs = row
+            score = calculate_moment_weight(cat, emotion or 'neutral', days_ago or 0, refs)
+            scored.append((score, summary, cat, emotion, days_ago))
+        scored.sort(reverse=True)
+        moment_rows = [(r[1], r[2], r[3], r[4]) for r in scored[:8]]
         if moment_rows:
             moment_lines = []
             for summary, cat, emotion, days_ago in moment_rows:
@@ -2537,6 +2582,18 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
     context_block = "\n".join(context_parts) if context_parts else "Still learning about this user."
     empire_section = f"\n\n{empire}" if owner and empire else ""
     watcher_section = f"\n\n{watcher_context}" if watcher_context else ""
+
+    # v8.13: Briefing confirm injection (fires once when pref changes)
+    briefing_confirm_section = ""
+    _bc = profile.get("_briefing_confirm", "")
+    if _bc:
+        briefing_confirm_section = (
+            f"\n\nBRIEFING PREFERENCE UPDATED: {_bc} "
+            f"Acknowledge this naturally and warmly at the END of your response. "
+            f"One sentence. Then ask if they'd like to change anything else."
+        )
+        # Clear it so it only fires once
+        profile["_briefing_confirm"] = ""
 
     return f"""You are {ai_name} -- a trusted personal AI companion.
 
@@ -2905,6 +2962,32 @@ def build_ask_context(data):
         profile["email"] = email_match.group(0).lower()
         print(f"[HERALD] Email saved for {user_id}")
 
+    # v8.13: Briefing preference detection
+    # "don't mention my meds in the morning" -> updates profile and
+    # injects confirmation instruction into system prompt
+    briefing_change = detect_briefing_pref_change(message)
+    briefing_confirm = ""
+    if briefing_change.get("action") or briefing_change.get("tone"):
+        profile, briefing_confirm = apply_briefing_pref(profile, briefing_change)
+        if briefing_confirm:
+            profile["_briefing_confirm"] = briefing_confirm
+        save_profile(user_id, profile)
+        print(f"[HERALD] Briefing pref updated for {user_id}: {briefing_change}")
+
+    # v8.13: Emergency contact detection
+    # "my daughter Sarah is my emergency contact, her number is 214-555-1234"
+    EMERGENCY_SIGNALS = [
+        'emergency contact', 'if something happens', 'in an emergency',
+        'call in emergency', 'contact if', 'reach out to',
+    ]
+    if any(s in msg_lower for s in EMERGENCY_SIGNALS):
+        # Store in profile -- the LLM will extract the details naturally
+        profile.setdefault("emergency_contacts", [])
+        # Mark message for LLM extraction on next learn cycle
+        profile["_pending_emergency_extract"] = message[:200]
+        save_profile(user_id, profile)
+        print(f"[HERALD] Emergency contact signal detected for {user_id}")
+
     if "call you" in msg_lower or "your name is" in msg_lower:
         try:
             key = "call you" if "call you" in msg_lower else "your name is"
@@ -3265,28 +3348,40 @@ def morning_briefing_job():
         else:
             salutation = "Good evening"
 
-        # v8.13: Enhanced briefing -- medication check + calendar items
-        medication_line = ""
-        try:
-            conn = sqlite3.connect(DB_FILE)
-            c = conn.cursor()
-            c.execute(
-                "SELECT med_name FROM medication_log "
-                "WHERE user_id=? AND active=1 AND end_date IS NULL LIMIT 3",
-                (owner_id,)
-            )
-            meds = [r[0] for r in c.fetchall()]
-            conn.close()
-            if meds:
-                med_str = ", ".join(meds)
-                medication_line = f" Medication reminder: {med_str}."
-        except Exception as e:
-            print(f"[HERALD] Briefing medication check failed: {e}")
+        # v8.13: Briefing respects user preferences
+        prefs = profile.get("briefing_prefs", {})
 
-        briefing = (
-            f"{salutation} {name}. {weather_line}"
-            f"{moments_line}{tracker_line}{medication_line}{freddie_line}"
-        ).strip()
+        medication_line = ""
+        if prefs.get("include_medication", True):
+            try:
+                conn = sqlite3.connect(DB_FILE)
+                c = conn.cursor()
+                c.execute(
+                    "SELECT med_name FROM medication_log "
+                    "WHERE user_id=? AND active=1 AND end_date IS NULL LIMIT 3",
+                    (owner_id,)
+                )
+                meds = [r[0] for r in c.fetchall()]
+                conn.close()
+                if meds:
+                    med_str = ", ".join(meds)
+                    medication_line = f" Medication reminder: {med_str}."
+            except Exception as e:
+                print(f"[HERALD] Briefing medication check failed: {e}")
+
+        weather_section  = weather_line  if prefs.get("include_weather",  True) else ""
+        moments_section  = moments_line  if prefs.get("include_tracker",  True) else ""
+        tracker_section  = tracker_line  if prefs.get("include_calendar", True) else ""
+        freddie_section  = freddie_line  if prefs.get("include_freddie",  True) else ""
+
+        # Brief tone -- just greeting + weather, skip the rest
+        if prefs.get("tone") == "brief":
+            briefing = f"{salutation} {name}. {weather_section}".strip()
+        else:
+            briefing = (
+                f"{salutation} {name}. {weather_section}"
+                f"{moments_section}{tracker_section}{medication_line}{freddie_section}"
+            ).strip()
 
         proactive_queue = profile.get("proactive_queue", [])
         proactive_queue.append({
@@ -3459,7 +3554,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.13",
+        "status": "ok", "server": "herald-api", "version": "8.14",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
