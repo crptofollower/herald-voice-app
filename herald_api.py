@@ -686,11 +686,17 @@ def check_promotion_threshold(profile: dict, topic_label: str, classification: d
         return False
     interest_type = classification.get("interest_type", "ongoing")
     logistics = classification.get("logistics_signals", False)
-    thresholds = {"ongoing": 7, "trip_planning": 4, "task_planning": 5, "research": 5}
-    # Lower threshold for price/score topics -- Mickey feedback May 19
-    # Gas price mentioned once, nothing happened. Swarm should feel present.
+    # v8.12.2: Lowered thresholds -- swarm should feel present faster.
+    # North star: Herald notices things the way a friend does -- quickly.
+    # Medical/family topics have lower threshold because they matter more.
+    thresholds = {"ongoing": 3, "trip_planning": 3, "task_planning": 3, "research": 3}
+    # Price/score topics fire even faster -- 2 touches and swarm offers to watch
     price_score_keywords = ['price', 'gas', 'score', 'stock', 'crypto', 'bitcoin', 'market']
     if any(kw in topic_label.lower() for kw in price_score_keywords):
+        thresholds["ongoing"] = 2
+    # Medical/family topics fire at 2 -- these matter most
+    priority_keywords = ['doctor', 'medication', 'prescription', 'family', 'finance', 'bill', 'insurance']
+    if any(kw in topic_label.lower() for kw in priority_keywords):
         thresholds["ongoing"] = 2
     required = thresholds.get(interest_type, 7)
     if interest_type == "trip_planning":
@@ -2727,7 +2733,15 @@ def get_direct_reply(ctx):
 
     if any(w in msg_lower for w in ['weather','forecast','temperature','rain','snow',
                                      'wind','sunny','humid','hot outside','cold outside','umbrella']):
-        loc = extract_weather_location(message, profile.get('location','Dallas TX'))
+        # SOURCE DISCIPLINE (v8.12.2): weather ONLY from confirmed GPS city or profile.
+        # Never extract location from conversation context (Albuquerque bug).
+        # If user asks "weather in Chicago" we honor that -- explicit override only.
+        confirmed_city = profile.get('confirmed_city', '')
+        profile_loc    = profile.get('location', '')
+        gps_loc        = confirmed_city or profile_loc or 'Dallas TX'
+        # Only use extract_weather_location if user explicitly names a different city
+        explicit_loc   = extract_weather_location(message, None)
+        loc = explicit_loc if explicit_loc and explicit_loc.lower() not in gps_loc.lower() else gps_loc
         cached = cache_get(f'weather:{loc}', 'weather')
         if cached:
             return cached, False
@@ -3131,7 +3145,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.12.1",
+        "status": "ok", "server": "herald-api", "version": "8.12.2",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -3486,7 +3500,13 @@ async def ask_stream(request: Request):
     }
 
     def generate():
-        yield f"data: {json.dumps({'typing': True})}\n\n"
+        # v8.12.2: Force Railway SSE buffer flush immediately.
+        # Railway buffers until ~4KB before sending to client.
+        # Padding pushes past the threshold so typing signal arrives instantly.
+        typing_payload = f"data: {json.dumps({'typing': True})}\n\n"
+        padding = ": " + ("x" * 4096) + "\n\n"  # SSE comment -- ignored by client
+        yield typing_payload
+        yield padding
 
         if profile.get("pending_watch_offer"):
             save_profile_fields(user_id, {"pending_watch_offer": None})
