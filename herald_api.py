@@ -3174,6 +3174,12 @@ def get_direct_reply(ctx):
 
     WHAT_TIME_QUERIES = ['what time is it', 'what is the time', "what's the time"]
     if any(q in msg_lower for q in WHAT_TIME_QUERIES):
+        # v8.15.1: Use local_time sent by the device, not server UTC (Railway is UTC).
+        # "It is 3:03 PM" when user sees 10:03 AM was because server clock was UTC.
+        local_time = ctx.get("local_time", "")
+        if local_time:
+            return f"It is {local_time}.", False
+        # Fallback if frontend didn't send local_time
         now = datetime.now()
         hour = now.hour
         minute = now.minute
@@ -3674,7 +3680,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.15",
+        "status": "ok", "server": "herald-api", "version": "8.15.1",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
