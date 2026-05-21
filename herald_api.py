@@ -1185,6 +1185,45 @@ def _run_watcher_pipeline(message: str, profile: dict, user_id: str):
     try:
         changed = False
         pending_offer = None
+
+        # v8.13: Watch acceptance handler -- fires before new watch detection
+        pending = profile.get("pending_watch_offer")
+        if pending:
+            accept_words = ['yes', 'yeah', 'sure', 'please', 'do it', 'go ahead',
+                            'absolutely', 'ok', 'okay', 'yep', 'yup', 'sounds good']
+            if any(w in message.lower() for w in accept_words):
+                try:
+                    offer = json.loads(pending) if isinstance(pending, str) else pending
+                    if offer.get("type") == "implicit_offer":
+                        topic    = offer.get("topic_label", "that")
+                        int_type = offer.get("interest_type", "ongoing")
+                        watch_obj = {
+                            "type":        int_type,
+                            "description": topic,
+                            "params":      {"topic": topic},
+                            "offer_email": offer.get("offer_email", False),
+                        }
+                        profile = store_watch(profile, watch_obj)
+                        profile = mark_topic_offered(profile, topic, accepted=True)
+                        if offer.get("offer_email") and profile.get("email"):
+                            content = generate_watch_content(watch_obj, profile)
+                            threading.Thread(
+                                target=send_watch_email,
+                                args=(profile, watch_obj, content),
+                                daemon=True
+                            ).start()
+                        profile["pending_watch_offer"] = None
+                        save_profile_fields(user_id, {
+                            "watches":             profile.get("watches", []),
+                            "topic_touches":       profile.get("topic_touches", []),
+                            "pending_watch_offer": None,
+                        })
+                        changed = True
+                        print(f"[HERALD] Watch accepted: {topic}")
+                        return  # Don't start a new watch on acceptance message
+                except Exception as e:
+                    print(f"[HERALD] Watch acceptance error (non-fatal): {e}")
+
         if has_watch_intent(message):
             watch_data = extract_explicit_watch(message)
             if watch_data:
@@ -1368,6 +1407,216 @@ def extract_memory_fact(message):
                 return fact[:120]
     return msg[:120]
 
+
+
+
+# ── MEDICAL INTAKE SYSTEM (v8.13) ─────────────────────────────────────────────
+
+MEDICAL_VISIT_SIGNALS = [
+    'saw my doctor', 'visited my doctor', 'went to the doctor',
+    'had an appointment', 'my appointment', 'just got back from',
+    'i was at the', 'just saw', 'met with my',
+    'my cardiologist', 'my dermatologist', 'my oncologist',
+    'my primary', 'my gp', 'my specialist', 'my surgeon',
+    'test came back', 'results came back', 'biopsy came back',
+    'my diagnosis', 'they found', 'the doctor said',
+    'follow up in', 'come back in', 'see me again in',
+    'prescribed', 'starting a new medication', 'they put me on',
+    'bone marrow', 'biopsy', 'mri', 'ct scan', 'blood work',
+    'colonoscopy', 'mammogram', 'echocardiogram',
+]
+
+MEDICATION_SIGNALS = [
+    'i take', 'my medication', 'my prescription', 'my pill',
+    'refill', 'pharmacy', 'lisinopril', 'metformin', 'atorvastatin',
+    'aspirin', 'blood pressure pill', 'cholesterol', 'thyroid',
+    'stopped taking', 'switched to', 'dose was changed', 'started taking',
+]
+
+INTAKE_QUESTIONS = {
+    'visit': [
+        ('doctor_name',   "What's the doctor's name?"),
+        ('specialty',     "What kind of doctor -- cardiologist, dermatologist, general?"),
+        ('practice',      "Do you know the practice name or location?"),
+        ('reason',        "What was the visit for?"),
+        ('outcome',       "How did it go -- anything they found or decided?"),
+        ('follow_up',     "Did they want to see you again? If so, when?"),
+        ('tests_ordered', "Any tests ordered or results you're waiting on?"),
+    ],
+    'medication': [
+        ('med_name',   "What's the medication called?"),
+        ('dose',       "Do you know the dose?"),
+        ('prescriber', "Who prescribed it?"),
+        ('reason',     "What's it for?"),
+        ('refill_due', "Do you know when you'll need a refill?"),
+    ]
+}
+
+
+def detect_medical_signal(message: str):
+    msg_lower = message.lower()
+    if any(s in msg_lower for s in MEDICAL_VISIT_SIGNALS):
+        return 'visit'
+    if any(s in msg_lower for s in MEDICATION_SIGNALS):
+        return 'medication'
+    return None
+
+
+def start_medical_intake(profile: dict, signal_type: str) -> dict:
+    questions = INTAKE_QUESTIONS.get(signal_type, [])
+    if not questions:
+        return profile
+    profile['medical_intake_state'] = {
+        'type':           signal_type,
+        'questions':      questions,
+        'current_index':  0,
+        'next_field':     questions[0][0],
+        'next_question':  questions[0][1],
+        'partial_record': {},
+        'started_at':     datetime.now().isoformat(),
+    }
+    return profile
+
+
+def advance_medical_intake(profile: dict, user_message: str, user_id: str) -> dict:
+    state = profile.get('medical_intake_state')
+    if not state:
+        return profile
+    current_field = state['next_field']
+    partial = state.get('partial_record', {})
+    partial[current_field] = user_message.strip()[:200]
+    state['partial_record'] = partial
+    next_idx = state['current_index'] + 1
+    questions = state['questions']
+    if next_idx >= len(questions):
+        _write_medical_record(user_id, state['type'], partial)
+        profile['medical_intake_state'] = None
+        print(f"[HERALD] Medical intake complete for {user_id}")
+    else:
+        state['current_index'] = next_idx
+        state['next_field'] = questions[next_idx][0]
+        state['next_question'] = questions[next_idx][1]
+        profile['medical_intake_state'] = state
+    return profile
+
+
+def _write_medical_record(user_id: str, record_type: str, data: dict):
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        if record_type == 'visit':
+            doctor = data.get('doctor_name', '').strip()
+            if doctor:
+                c.execute(
+                    "INSERT INTO medical_contacts "
+                    "(user_id, doctor_name, specialty, practice, address, phone, last_seen, next_visit, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(user_id, doctor_name) DO UPDATE SET "
+                    "specialty=excluded.specialty, practice=excluded.practice, "
+                    "last_seen=excluded.last_seen, next_visit=excluded.next_visit",
+                    (user_id, doctor, data.get('specialty',''), data.get('practice',''),
+                     data.get('location',''), data.get('phone',''),
+                     data.get('visit_date', datetime.now().strftime('%Y-%m-%d')),
+                     data.get('follow_up',''), datetime.now().isoformat())
+                )
+            c.execute(
+                "INSERT INTO medical_records "
+                "(user_id, doctor_name, specialty, practice, location, visit_date, reason, "
+                "outcome, follow_up_date, follow_up_notes, tests_ordered, results, source, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'conversation', ?)",
+                (user_id, data.get('doctor_name',''), data.get('specialty',''),
+                 data.get('practice',''), data.get('location',''),
+                 data.get('visit_date', datetime.now().strftime('%Y-%m-%d')),
+                 data.get('reason',''), data.get('outcome',''),
+                 data.get('follow_up',''), data.get('follow_up_notes',''),
+                 data.get('tests_ordered',''), data.get('results',''),
+                 datetime.now().isoformat())
+            )
+            if data.get('follow_up',''):
+                _create_followup_tracker(user_id, data, c)
+        elif record_type == 'medication':
+            c.execute(
+                "INSERT INTO medication_log "
+                "(user_id, med_name, dose, prescriber, reason, refill_due, active, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
+                (user_id, data.get('med_name',''), data.get('dose',''),
+                 data.get('prescriber',''), data.get('reason',''),
+                 data.get('refill_due',''), datetime.now().isoformat())
+            )
+        conn.commit()
+        conn.close()
+        print(f"[HERALD] Medical record written: {record_type} for {user_id}")
+    except Exception as e:
+        print(f"[HERALD] Medical record write error: {e}")
+
+
+def _create_followup_tracker(user_id: str, data: dict, cursor):
+    doctor = data.get('doctor_name', 'Doctor')
+    follow_up = data.get('follow_up', '')
+    today = datetime.now()
+    next_date = None
+    interval = 0
+    fu = follow_up.lower()
+    if '3 month' in fu or '90 day' in fu:
+        next_date = (today + timedelta(days=90)).strftime('%Y-%m-%d'); interval = 90
+    elif '6 month' in fu:
+        next_date = (today + timedelta(days=180)).strftime('%Y-%m-%d'); interval = 180
+    elif 'year' in fu or 'annual' in fu:
+        next_date = (today + timedelta(days=365)).strftime('%Y-%m-%d'); interval = 365
+    elif '2 week' in fu or 'two week' in fu:
+        next_date = (today + timedelta(days=14)).strftime('%Y-%m-%d'); interval = 14
+    elif 'month' in fu:
+        next_date = (today + timedelta(days=30)).strftime('%Y-%m-%d'); interval = 30
+    if next_date:
+        try:
+            cursor.execute(
+                "INSERT INTO life_tracker "
+                "(user_id, category, item_name, last_date, next_due_date, interval_days, source, active, created_at) "
+                "VALUES (?, 'medical', ?, ?, ?, ?, 'medical_intake', 1, ?)",
+                (user_id, f"Follow-up with {doctor}", today.strftime('%Y-%m-%d'),
+                 next_date, interval, datetime.now().isoformat())
+            )
+        except Exception as e:
+            print(f"[HERALD] Follow-up tracker error (non-fatal): {e}")
+
+
+def _build_medical_context(user_id: str) -> str:
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute(
+            "SELECT doctor_name, specialty, visit_date, outcome, follow_up_date "
+            "FROM medical_records WHERE user_id=? AND active=1 ORDER BY visit_date DESC LIMIT 5",
+            (user_id,)
+        )
+        visits = c.fetchall()
+        c.execute(
+            "SELECT med_name, dose, reason FROM medication_log "
+            "WHERE user_id=? AND active=1 AND end_date IS NULL",
+            (user_id,)
+        )
+        meds = c.fetchall()
+        conn.close()
+        lines = []
+        if visits:
+            parts = []
+            for doc, spec, dt, outcome, fu in visits:
+                part = doc
+                if spec: part += f" ({spec})"
+                if dt: part += f" on {dt}"
+                if outcome: part += f" -- {outcome}"
+                if fu: part += f", follow-up {fu}"
+                parts.append(part)
+            lines.append("Recent medical: " + "; ".join(parts))
+        if meds:
+            med_str = ", ".join([
+                f"{m[0]}{' ' + m[1] if m[1] else ''}{' for ' + m[2] if m[2] else ''}"
+                for m in meds
+            ])
+            lines.append("Medications: " + med_str)
+        return "\n".join(lines) if lines else ""
+    except Exception:
+        return ""
 
 
 def extract_learned_facts(user_id, user_message, herald_reply):
@@ -2282,7 +2531,9 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
     except Exception:
         pass
 
-    context_parts = [p for p in [notes_line, prefs_line, facts_line, life_tracker_line, episodic_line] if p]
+    # v8.13: Medical context (always top priority -- never gets wrong)
+    medical_context = _build_medical_context(profile.get("user_id", ""))
+    context_parts = [p for p in [medical_context, notes_line, prefs_line, facts_line, life_tracker_line, episodic_line] if p]
     context_block = "\n".join(context_parts) if context_parts else "Still learning about this user."
     empire_section = f"\n\n{empire}" if owner and empire else ""
     watcher_section = f"\n\n{watcher_context}" if watcher_context else ""
@@ -2667,6 +2918,35 @@ def build_ask_context(data):
     messages += history[-20:]
     messages.append({"role": "user", "content": message})
 
+    # v8.13: Medical intake -- advance state if active, start if signal detected
+    # Functions are now defined -- safe to call
+    intake_state = profile.get('medical_intake_state')
+    if intake_state:
+        profile = advance_medical_intake(profile, message, user_id)
+        save_profile(user_id, profile)
+        next_state = profile.get('medical_intake_state')
+        if next_state:
+            question = next_state.get('next_question', '')
+            messages[0]['content'] += (
+                f"\n\nMEDICAL INTAKE ACTIVE: You are gently gathering medical info "
+                f"one question at a time. Answer the user naturally first. "
+                f"Then at the very end ask this ONE question conversationally: '{question}' "
+                f"Never say you are recording anything. Ask like a friend. One question only."
+            )
+    elif not intake_state:
+        medical_signal = detect_medical_signal(message)
+        if medical_signal:
+            profile = start_medical_intake(profile, medical_signal)
+            save_profile(user_id, profile)
+            first_q = INTAKE_QUESTIONS.get(medical_signal, [('','')])[0][1]
+            if first_q:
+                messages[0]['content'] += (
+                    f"\n\nMEDICAL INTAKE STARTING: User mentioned a medical "
+                    f"{'visit' if medical_signal == 'visit' else 'medication'}. "
+                    f"Respond naturally first. Then at the end ask this ONE question: '{first_q}' "
+                    f"Warm, conversational, one question only."
+                )
+
     # v8.8: Seed question for brand-new users with no memory yet.
     # Makes Mickey's first session feel like Herald wants to know him,
     # not like talking to a blank slate.
@@ -2985,9 +3265,27 @@ def morning_briefing_job():
         else:
             salutation = "Good evening"
 
+        # v8.13: Enhanced briefing -- medication check + calendar items
+        medication_line = ""
+        try:
+            conn = sqlite3.connect(DB_FILE)
+            c = conn.cursor()
+            c.execute(
+                "SELECT med_name FROM medication_log "
+                "WHERE user_id=? AND active=1 AND end_date IS NULL LIMIT 3",
+                (owner_id,)
+            )
+            meds = [r[0] for r in c.fetchall()]
+            conn.close()
+            if meds:
+                med_str = ", ".join(meds)
+                medication_line = f" Medication reminder: {med_str}."
+        except Exception as e:
+            print(f"[HERALD] Briefing medication check failed: {e}")
+
         briefing = (
             f"{salutation} {name}. {weather_line}"
-            f"{moments_line}{tracker_line}{freddie_line}"
+            f"{moments_line}{tracker_line}{medication_line}{freddie_line}"
         ).strip()
 
         proactive_queue = profile.get("proactive_queue", [])
@@ -3161,7 +3459,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.12.3",
+        "status": "ok", "server": "herald-api", "version": "8.13",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
