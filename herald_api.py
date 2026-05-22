@@ -95,12 +95,13 @@ HAIKU_SIGNALS = [
 ]
 
 SONNET_SIGNALS = [
-    "should i", "what do you think", "advice", "help me figure",
-    "worried", "scared", "anxious", "sad", "upset", "struggling",
+    "should i take", "what should i do", "what do you think",
+    "advice on", "help me figure out",
+    "worried about", "scared", "anxious", "feeling", "sad", "upset", "struggling",
     "depressed", "lonely", "angry", "frustrated",
     "relationship", "marriage", "family", "kids", "divorce", "breakup",
     "career", "job", "fired", "quit", "boss",
-    "doctor", "diagnosis", "treatment", "medication", "surgery",
+    "my doctor said", "diagnosis", "treatment option", "change my medication", "surgery",
     "invest", "retire", "savings", "mortgage", "debt",
     "plan my", "thinking about", "considering",
     "what would you do", "how do i deal", "i don't know what to do",
@@ -353,9 +354,21 @@ PLACES_SIGNALS = [
     'best burger', 'best pizza', 'best coffee',
     'best restaurant', 'place to eat near',
     'where to eat', 'good food near',
+    'good burger', 'good pizza', 'good coffee',
+    'good restaurant', 'good food near',
+    'burger place', 'pizza place', 'coffee place',
+    'burger spot', 'food spot',
+    'good place to eat', 'where should i eat',
+    'recommend a restaurant', 'recommend a place',
+    'costco near', 'sams club near',
+    'walmart near', 'target near',
+    'pharmacy near', 'cvs near', 'walgreens near',
+    'gas station near', 'urgent care near',
+    'grocery near', 'grocery store near',
     'pharmacy near me', 'gas station near me',
     'urgent care near me', 'hospital near me',
     'grocery near me', 'walmart near me', 'target near me',
+    'any good', 'anywhere good near',
 ]
 
 PREFERENCE_SIGNALS = {
@@ -3338,6 +3351,26 @@ def build_ask_context(data):
         "profile": profile, "messages": messages, "category": category,
     }, None
 
+def _extract_places_keyword(signal: str, msg_lower: str) -> str:
+    kw = signal
+    for strip in (
+        'any good ', 'good ', ' places', ' place', ' spots', ' spot',
+        'near me', 'near by', 'nearby', 'recommend a ', 'anywhere ', 'best ', 'near ',
+    ):
+        kw = kw.replace(strip, ' ')
+    kw = ' '.join(kw.split()).strip()
+    if kw:
+        return kw
+    text = msg_lower
+    for strip in (
+        'any good ', 'good ', 'recommend a ', 'anywhere good ', 'anywhere ',
+        'where should i eat ', 'where to eat ', ' places', ' place',
+        ' spots', ' spot', ' near me', ' nearby', ' near by', ' near',
+    ):
+        text = text.replace(strip, ' ')
+    return ' '.join(text.split()).strip('?.!,')
+
+
 def get_places_reply(message: str, lat: float, lng: float,
                      ai_name: str) -> str | None:
     """
@@ -3349,7 +3382,7 @@ def get_places_reply(message: str, lat: float, lng: float,
     matched_keyword = None
     for signal in PLACES_SIGNALS:
         if signal in msg_lower:
-            matched_keyword = signal.replace(' near me', '').replace('best ', '')
+            matched_keyword = _extract_places_keyword(signal, msg_lower)
             break
     if not matched_keyword or not lat or not lng:
         return None
@@ -3913,7 +3946,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.22",
+        "status": "ok", "server": "herald-api", "version": "8.23",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -4251,37 +4284,38 @@ def _sse_event(payload: dict) -> str:
 async def ask_stream(request: Request):
     data = await request.json()
 
-    ctx, err = await run_in_threadpool(build_ask_context, data)
-    if err:
-        return JSONResponse({"error": err}, status_code=400)
-
-    profile    = ctx["profile"]
-    messages   = ctx["messages"]
-    message    = ctx["message"]
-    user_id    = ctx["user_id"]
-    msg_lower  = ctx["msg_lower"]
-
-    routed_model = route_model(message)
-    use_search   = needs_web_search(message) and routed_model != SONNET_MODEL
-
-    brave_query = _localize_query(message, profile, ctx["location_label"])
-    freshness   = _get_freshness(msg_lower) if use_search else None
-
-    cap_offer = check_capability_offer(message, profile)
-    if cap_offer:
-        messages[0]["content"] += f"\n\nINSTRUCTION: At the END of your response, naturally add: '{cap_offer}'"
-
-    trial = get_trial_status(profile)
-    base_done = {
-        "done": True,
-        "ai_name":      profile.get("ai_name", "Herald"),
-        "name":         profile.get("name", ""),
-        "model_used":   routed_model,
-        **_trial_fields(trial)
-    }
-
-    def generate():
+    async def generate():
         yield _sse_event({"typing": True})
+
+        ctx, err = await run_in_threadpool(build_ask_context, data)
+        if err:
+            yield _sse_event({"error": err})
+            return
+
+        profile    = ctx["profile"]
+        messages   = ctx["messages"]
+        message    = ctx["message"]
+        user_id    = ctx["user_id"]
+        msg_lower  = ctx["msg_lower"]
+
+        routed_model = route_model(message)
+        use_search   = needs_web_search(message) and routed_model != SONNET_MODEL
+
+        brave_query = _localize_query(message, profile, ctx["location_label"])
+        freshness   = _get_freshness(msg_lower) if use_search else None
+
+        cap_offer = check_capability_offer(message, profile)
+        if cap_offer:
+            messages[0]["content"] += f"\n\nINSTRUCTION: At the END of your response, naturally add: '{cap_offer}'"
+
+        trial = get_trial_status(profile)
+        base_done = {
+            "done": True,
+            "ai_name":      profile.get("ai_name", "Herald"),
+            "name":         profile.get("name", ""),
+            "model_used":   routed_model,
+            **_trial_fields(trial)
+        }
 
         if profile.get("pending_watch_offer"):
             save_profile_fields(user_id, {"pending_watch_offer": None})
@@ -4326,9 +4360,10 @@ async def ask_stream(request: Request):
                         "role": "user",
                         "content": f"{brave_query}\n\n[Live web search results:\n{search_ctx}]"
                     }
-                    yield from stream_with_sentences(
+                    for event in stream_with_sentences(
                         stream_from_openrouter(augmented, use_search=False, model=routed_model)
-                    )
+                    ):
+                        yield event
                 else:
                     search_q = message.strip().rstrip("?.,!")
                     fallback = (
@@ -4341,11 +4376,13 @@ async def ask_stream(request: Request):
                     yield _sse_event({**base_done, "full": fallback, "action": search_action, "used_search": True})
                     return
             elif use_search:
-                yield from stream_with_sentences(stream_from_openrouter(messages, use_search=True))
+                for event in stream_with_sentences(stream_from_openrouter(messages, use_search=True)):
+                    yield event
             else:
-                yield from stream_with_sentences(
+                for event in stream_with_sentences(
                     stream_from_openrouter(messages, use_search=False, model=routed_model)
-                )
+                ):
+                    yield event
 
             reply, action = parse_action(full_text)
 
