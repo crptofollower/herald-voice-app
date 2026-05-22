@@ -862,7 +862,13 @@ async function sendToHerald(messageText) {
         if (dataStr === '[DONE]') break;
         try {
           const data = JSON.parse(dataStr);
- 
+
+          if (data.typing) {
+            const label = thinkingEl.querySelector('.thinking-label');
+            if (label) label.textContent = 'typing...';
+            continue;
+          }
+
           if (data.t) {
             // [S] = sentence boundary marker -- speak and reset buffer, don't display
             if (data.t === '[S]') {

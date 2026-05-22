@@ -4074,6 +4074,19 @@ async def ask(request: Request):
             **_trial_fields(trial)}
 
 
+# Railway buffers SSE until ~4KB per write. Pad each event with an SSE comment
+# so every token crosses the threshold and reaches the client immediately.
+_RAILWAY_SSE_FLUSH = 4096
+
+
+def _sse_event(payload: dict) -> str:
+    event = f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+    pad = _RAILWAY_SSE_FLUSH - len(event) - 1
+    if pad > 0:
+        event += ": " + ("x" * pad) + "\n\n"
+    return event
+
+
 @app.post("/ask/stream")
 async def ask_stream(request: Request):
     data = await request.json()
@@ -4108,30 +4121,24 @@ async def ask_stream(request: Request):
     }
 
     def generate():
-        # v8.12.2: Force Railway SSE buffer flush immediately.
-        # Railway buffers until ~4KB before sending to client.
-        # Padding pushes past the threshold so typing signal arrives instantly.
-        typing_payload = f"data: {json.dumps({'typing': True})}\n\n"
-        padding = ": " + ("x" * 4096) + "\n\n"  # SSE comment -- ignored by client
-        yield typing_payload
-        yield padding
+        yield _sse_event({"typing": True})
 
         if profile.get("pending_watch_offer"):
             save_profile_fields(user_id, {"pending_watch_offer": None})
 
         if is_about_me_query(message):
             reply = build_about_me(profile)
-            yield f"data: {json.dumps({'t': reply})}\n\n"
-            yield f"data: {json.dumps({'t': '[S]'})}\n\n"
-            yield f"data: {json.dumps({**base_done, 'full': reply, 'action': None, 'used_search': False})}\n\n"
+            yield _sse_event({"t": reply})
+            yield _sse_event({"t": "[S]"})
+            yield _sse_event({**base_done, "full": reply, "action": None, "used_search": False})
             return
 
         direct_reply, _ = get_direct_reply(ctx)
         if direct_reply:
             reply, action = parse_action(direct_reply)
-            yield f"data: {json.dumps({'t': reply})}\n\n"
-            yield f"data: {json.dumps({'t': '[S]'})}\n\n"
-            yield f"data: {json.dumps({**base_done, 'full': reply, 'action': action, 'used_search': False})}\n\n"
+            yield _sse_event({"t": reply})
+            yield _sse_event({"t": "[S]"})
+            yield _sse_event({**base_done, "full": reply, "action": action, "used_search": False})
             return
 
         search_ctx = fetch_brave_search(brave_query, freshness=freshness) if (use_search and BRAVE_KEY) else None
@@ -4144,12 +4151,12 @@ async def ask_stream(request: Request):
             for token in token_source:
                 full_text    += token
                 sentence_buf += token
-                yield f"data: {json.dumps({'t': token})}\n\n"
+                yield _sse_event({"t": token})
                 if re.search(r'[.!?]\s', sentence_buf[-4:]):
-                    yield f"data: {json.dumps({'t': '[S]'})}\n\n"
+                    yield _sse_event({"t": "[S]"})
                     sentence_buf = ""
             if sentence_buf.strip():
-                yield f"data: {json.dumps({'t': '[S]'})}\n\n"
+                yield _sse_event({"t": "[S]"})
 
         try:
             if use_search and BRAVE_KEY:
@@ -4168,10 +4175,10 @@ async def ask_stream(request: Request):
                         "I couldn't pull a live result for that one. "
                         "Want me to open a search for you?"
                     )
-                    yield f"data: {json.dumps({'t': fallback})}\n\n"
-                    yield f"data: {json.dumps({'t': '[S]'})}\n\n"
+                    yield _sse_event({"t": fallback})
+                    yield _sse_event({"t": "[S]"})
                     search_action = {"type": "search", "value": search_q}
-                    yield f"data: {json.dumps({**base_done, 'full': fallback, 'action': search_action, 'used_search': True})}\n\n"
+                    yield _sse_event({**base_done, "full": fallback, "action": search_action, "used_search": True})
                     return
             elif use_search:
                 yield from stream_with_sentences(stream_from_openrouter(messages, use_search=True))
@@ -4197,15 +4204,15 @@ async def ask_stream(request: Request):
                     daemon=True
                 ).start()
 
-            yield f"data: {json.dumps({**base_done, 'full': reply, 'action': action, 'used_search': use_search})}\n\n"
+            yield _sse_event({**base_done, "full": reply, "action": action, "used_search": use_search})
 
         except Exception as e:
             print(f"[HERALD] /ask/stream error: {e}")
             if full_text.strip():
                 reply, action = parse_action(full_text)
-                yield f"data: {json.dumps({**base_done, 'full': reply, 'action': action, 'used_search': use_search, 'partial': True})}\n\n"
+                yield _sse_event({**base_done, "full": reply, "action": action, "used_search": use_search, "partial": True})
             else:
-                yield f"data: {json.dumps({'error': 'Stream interrupted. Try again.'})}\n\n"
+                yield _sse_event({"error": "Stream interrupted. Try again."})
 
     return StreamingResponse(
         generate(),
