@@ -589,6 +589,21 @@ def get_profile(user_id):
 
 def save_profile(user_id, profile):
     user_profiles[user_id] = profile
+    _write_profile_to_db(user_id, profile)
+
+
+def save_profile_async(user_id, profile):
+    """Update in-memory profile immediately; persist to SQLite in background."""
+    user_profiles[user_id] = profile
+    snapshot = json.loads(json.dumps(profile, ensure_ascii=False))
+    threading.Thread(
+        target=_write_profile_to_db,
+        args=(user_id, snapshot),
+        daemon=True,
+    ).start()
+
+
+def _write_profile_to_db(user_id, profile):
     try:
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
@@ -2623,6 +2638,44 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
 
     watcher_context = _build_watcher_context(profile)
 
+    calendar_line = ""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("""
+            SELECT item_name, COALESCE(next_due_date, last_date) AS event_date
+            FROM life_tracker
+            WHERE user_id = ? AND active = 1 AND source = 'calendar'
+              AND date(COALESCE(next_due_date, last_date)) >= date('now')
+              AND date(COALESCE(next_due_date, last_date)) <= date('now', '+14 days')
+            ORDER BY event_date ASC
+            LIMIT 12
+        """, (profile.get("user_id", ""),))
+        cal_rows = c.fetchall()
+        conn.close()
+        if cal_rows:
+            today = date.today()
+            cal_items = []
+            for name_item, event_date_str in cal_rows:
+                try:
+                    ed = date.fromisoformat(event_date_str)
+                    if ed == today:
+                        when = "today"
+                    elif ed == today + timedelta(days=1):
+                        when = "tomorrow"
+                    else:
+                        when = ed.strftime("%A %b %d")
+                    cal_items.append(f"{name_item} ({when})")
+                except Exception:
+                    cal_items.append(name_item)
+            calendar_line = (
+                "Upcoming calendar from device: "
+                + "; ".join(cal_items)
+                + ". Answer schedule questions from this list -- do not guess."
+            )
+    except Exception:
+        pass
+
     life_tracker_line = ""
     try:
         conn = sqlite3.connect(DB_FILE)
@@ -2630,7 +2683,7 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
         c.execute("""
             SELECT category, item_name, last_date, next_due_date, interval_days
             FROM life_tracker
-            WHERE user_id = ? AND active = 1
+            WHERE user_id = ? AND active = 1 AND source != 'calendar'
             ORDER BY next_due_date ASC
             LIMIT 8
         """, (profile.get("user_id", ""),))
@@ -2699,7 +2752,7 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
 
     # v8.13: Medical context (always top priority -- never gets wrong)
     medical_context = _build_medical_context(profile.get("user_id", ""))
-    context_parts = [p for p in [medical_context, notes_line, prefs_line, facts_line, life_tracker_line, episodic_line] if p]
+    context_parts = [p for p in [medical_context, calendar_line, notes_line, prefs_line, facts_line, life_tracker_line, episodic_line] if p]
     context_block = "\n".join(context_parts) if context_parts else "Still learning about this user."
     empire_section = f"\n\n{empire}" if owner and empire else ""
     watcher_section = f"\n\n{watcher_context}" if watcher_context else ""
@@ -3113,7 +3166,7 @@ def build_ask_context(data):
             profile["ai_name"] = message.split(key, 1)[1].strip().split()[0].rstrip(".,!?").title()
         except Exception: pass
 
-    save_profile(user_id, profile)
+    save_profile_async(user_id, profile)
 
     system   = build_system(profile, local_time, owner, empire, lat, lng, location_label)
     messages = [{"role": "system", "content": system}]
@@ -4662,7 +4715,7 @@ async def calendar_sync(request: Request):
                 appt_date_str = appt_date.strftime("%Y-%m-%d")
             except Exception:
                 continue
-            next_due = None
+            next_due = appt_date_str
             if interval > 0:
                 next_date = appt_date + timedelta(days=interval)
                 next_due  = next_date.strftime("%Y-%m-%d")
@@ -4671,6 +4724,12 @@ async def calendar_sync(request: Request):
                 WHERE user_id = ? AND item_name = ? AND last_date = ?
             """, (user_id, title, appt_date_str))
             if c.fetchone():
+                c.execute("""
+                    UPDATE life_tracker SET next_due_date = ?
+                    WHERE user_id = ? AND item_name = ? AND last_date = ?
+                      AND source = 'calendar'
+                      AND (next_due_date IS NULL OR next_due_date = '')
+                """, (next_due, user_id, title, appt_date_str))
                 continue
             c.execute("""
                 INSERT INTO life_tracker
