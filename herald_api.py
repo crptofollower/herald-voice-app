@@ -345,6 +345,19 @@ FAST_OVERRIDES = [
     'when did i see', 'last time i saw', 'my follow up',
 ]
 
+PLACES_SIGNALS = [
+    'burger near me', 'pizza near me', 'coffee near me',
+    'restaurant near me', 'food near me', 'tacos near me',
+    'sushi near me', 'breakfast near me', 'lunch near me',
+    'dinner near me', 'bar near me', 'pub near me',
+    'best burger', 'best pizza', 'best coffee',
+    'best restaurant', 'place to eat near',
+    'where to eat', 'good food near',
+    'pharmacy near me', 'gas station near me',
+    'urgent care near me', 'hospital near me',
+    'grocery near me', 'walmart near me', 'target near me',
+]
+
 PREFERENCE_SIGNALS = {
     'mexican':    ('food', 'mexican'),   'sushi':      ('food', 'sushi'),
     'italian':    ('food', 'italian'),   'chinese':    ('food', 'chinese'),
@@ -2120,6 +2133,40 @@ def build_empire_context(empire):
 
 # ── GEOCODING ─────────────────────────────────────────────────────────────────
 
+def fetch_google_places(lat: float, lng: float, keyword: str) -> list:
+    """
+    Call Google Places Nearby Search API.
+    Returns top 3 results as dicts with name, rating,
+    vicinity, open_now, place_id.
+    """
+    if not GEOCODING_KEY or not lat or not lng:
+        return []
+    try:
+        url = (
+            f"https://maps.googleapis.com/maps/api/place/nearbysearch/json"
+            f"?location={lat},{lng}&radius=5000"
+            f"&keyword={urllib.parse.quote(keyword)}"
+            f"&key={GEOCODING_KEY}"
+        )
+        req = urllib.request.Request(url, headers={"User-Agent": "Herald/8.22"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+        results = data.get("results", [])[:3]
+        places = []
+        for r in results:
+            places.append({
+                "name": r.get("name", ""),
+                "rating": r.get("rating", 0),
+                "vicinity": r.get("vicinity", ""),
+                "open_now": r.get("opening_hours", {}).get("open_now"),
+                "place_id": r.get("place_id", ""),
+            })
+        return places
+    except Exception as e:
+        print(f"[HERALD] Places API error: {e}")
+        return []
+
+
 def geocode_reverse(lat, lng):
     if not GEOCODING_KEY:
         return None
@@ -3291,6 +3338,45 @@ def build_ask_context(data):
         "profile": profile, "messages": messages, "category": category,
     }, None
 
+def get_places_reply(message: str, lat: float, lng: float,
+                     ai_name: str) -> str | None:
+    """
+    If message matches a places signal and lat/lng available,
+    fetch real Google Places data and return formatted reply.
+    Returns None if no match or no data.
+    """
+    msg_lower = message.lower()
+    matched_keyword = None
+    for signal in PLACES_SIGNALS:
+        if signal in msg_lower:
+            matched_keyword = signal.replace(' near me', '').replace('best ', '')
+            break
+    if not matched_keyword or not lat or not lng:
+        return None
+
+    places = fetch_google_places(lat, lng, matched_keyword)
+    if not places:
+        return None
+
+    lines = [f"Here are the top spots nearby:\n"]
+    for i, p in enumerate(places, 1):
+        status = ""
+        if p["open_now"] is True:
+            status = " — open now"
+        elif p["open_now"] is False:
+            status = " — closed now"
+        rating = f"{p['rating']} stars" if p["rating"] else ""
+        lines.append(
+            f"{i}. {p['name']}"
+            f"{' · ' + rating if rating else ''}"
+            f"{status}\n   {p['vicinity']}"
+        )
+    lines.append(
+        f"\nWant directions, more details, or should I open "
+        f"one of these in Maps?"
+    )
+    return "\n".join(lines)
+
 def get_direct_reply(ctx):
     message   = ctx["message"]
     msg_lower = ctx["msg_lower"]
@@ -3499,6 +3585,15 @@ def get_direct_reply(ctx):
             result = fetch_stock_direct(symbol)
             cache_set(f'stock:{symbol}', result, 'stock')
             return result, False
+
+    # Google Places fast path
+    lat = ctx.get("lat")
+    lng = ctx.get("lng")
+    ai_name = profile.get("ai_name", "Herald")
+    if lat and lng:
+        places_reply = get_places_reply(message, lat, lng, ai_name)
+        if places_reply:
+            return places_reply, False
 
     return None, None
 
@@ -3818,7 +3913,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.19",
+        "status": "ok", "server": "herald-api", "version": "8.22",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
