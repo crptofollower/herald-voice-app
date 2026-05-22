@@ -3168,6 +3168,14 @@ def build_ask_context(data):
     profile = get_profile(user_id)
     profile["user_id"] = user_id
 
+    if device_context and not (profile.get("name") or "").strip():
+        for line in device_context.splitlines():
+            if "name:" in line.lower():
+                extracted = line.split(":", 1)[1].strip()
+                if extracted:
+                    profile["name"] = extracted
+                    break
+
     profile = detect_preferences(message, profile)
     category = tag_query_category(message)
     profile = increment_query_count(category, profile)
@@ -4278,6 +4286,89 @@ async def ask_stream(request: Request):
     )
 
 
+# ── GREETING OPENERS ───────────────────────────────────────────────────────────
+
+_GREETING_BY_TIME = {
+    'morning': [
+        "Morning. What's the plan today?",
+        "Good morning. Coffee first, then what?",
+        "Morning. What do you need?",
+        "Hey. Ready when you are.",
+        "Morning. What's going on?",
+        "Good morning. What's up?",
+    ],
+    'afternoon': [
+        "Hey. What do you need?",
+        "Good afternoon. What's going on?",
+        "Afternoon. What's up?",
+        "Hey there. What can we do?",
+        "Afternoon. What's the move?",
+        "Good afternoon. What do you need?",
+    ],
+    'evening': [
+        "Evening. How'd the day go?",
+        "Good evening. What's up?",
+        "Evening. What do you need?",
+        "Hey. Winding down or still going?",
+        "Evening. What's on tonight?",
+        "Good evening. What's going on?",
+    ],
+}
+
+_DAY_GREETINGS = {
+    'monday': [
+        "Monday. What's on the list?",
+        "Monday. What's first today?",
+        "New week. What's the plan?",
+    ],
+    'friday': [
+        "Happy Friday. What are we doing?",
+        "Friday. What's the plan?",
+        "It's Friday. What's up?",
+    ],
+}
+
+
+def _time_of_day(hour):
+    if hour < 12:
+        return 'morning'
+    if hour < 17:
+        return 'afternoon'
+    return 'evening'
+
+
+def _weekday_from_local_time(local_time):
+    if local_time:
+        m = re.match(
+            r'^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)',
+            local_time, re.IGNORECASE,
+        )
+        if m:
+            days = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+            return days.index(m.group(1).lower())
+    return datetime.now().weekday()
+
+
+def pick_greeting_opener(hour, local_time=''):
+    bucket = _time_of_day(hour)
+    candidates = list(_GREETING_BY_TIME[bucket])
+    weekday = _weekday_from_local_time(local_time)
+    if weekday == 0:
+        candidates.extend(_DAY_GREETINGS['monday'])
+    elif weekday == 4:
+        candidates.extend(_DAY_GREETINGS['friday'])
+    return random.choice(candidates)
+
+
+def _greeting_with_name(opener, name):
+    if not name:
+        return opener
+    head, _, tail = opener.partition('. ')
+    if tail:
+        return f"{head}, {name}. {tail}"
+    return f"Hey {name}. {opener}"
+
+
 @app.post("/greeting")
 async def greeting(request: Request):
     data           = await request.json()
@@ -4310,14 +4401,8 @@ async def greeting(request: Request):
     except Exception:
         hour = datetime.now().hour
 
-    if hour < 12:
-        salutation = "Good morning"
-    elif hour < 17:
-        salutation = "Good afternoon"
-    else:
-        salutation = "Good evening"
-
-    name_part = f", {name}" if name else ""
+    opener = pick_greeting_opener(hour, local_time)
+    greeting_core = _greeting_with_name(opener, name)
 
     learned_location = ""
     for fact in profile.get("learned_facts", []):
@@ -4344,7 +4429,7 @@ async def greeting(request: Request):
     if all_notes:
         memory_hook = f" You mentioned {all_notes[-1]}."
 
-    greeting_text = f"{salutation}{name_part}.{weather_line}{memory_hook} What can I help you with today?"
+    greeting_text = f"{greeting_core}{weather_line}{memory_hook}"
 
     return {"ok": True, "greeting": greeting_text, "ai_name": ai_name, "name": name}
 
