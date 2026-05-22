@@ -9,7 +9,7 @@ export interface Persona {
   name:     string;
   tagline:  string;   // short evocative line shown in picker
   greeting: string;   // what Herald says on first open (TTS)
-  gradient: [string, string, string];
+  gradient: [string, string, string, string];
   colors: {
     background:      string;
     surface:         string;
@@ -30,7 +30,12 @@ export const PERSONAS: Record<PersonaKey, Persona> = {
     name:     "Beach",
     tagline:  "Warm breeze. Easy days.",
     greeting: "Good to see you.",
-    gradient: ["#0A1628", "#0B3D5E", "#1A5C6E"],
+    gradient: [
+      "rgba(2,24,40,0)",
+      "rgba(2,24,40,0)",
+      "rgba(2,24,40,0.65)",
+      "rgba(2,24,40,0.96)",
+    ],
     colors: {
       background: "#0A1628", surface: "#0F2040", surfaceElevated: "#1A3355",
       accent: "#00B4D8", accentMuted: "#00B4D822",
@@ -43,7 +48,12 @@ export const PERSONAS: Record<PersonaKey, Persona> = {
     name:     "Mountain",
     tagline:  "Fresh air. Clear head.",
     greeting: "Good to see you.",
-    gradient: ["#0D1F0D", "#1A3020", "#0F2818"],
+    gradient: [
+      "rgba(5,15,32,0)",
+      "rgba(5,15,32,0)",
+      "rgba(5,15,32,0.65)",
+      "rgba(5,15,32,0.96)",
+    ],
     colors: {
       background: "#0D1F0D", surface: "#142814", surfaceElevated: "#1E3A1E",
       accent: "#4CAF72", accentMuted: "#4CAF7222",
@@ -56,7 +66,12 @@ export const PERSONAS: Record<PersonaKey, Persona> = {
     name:     "City",
     tagline:  "Always moving. Always on.",
     greeting: "Good to see you.",
-    gradient: ["#0D1117", "#161B22", "#0A0E14"],
+    gradient: [
+      "rgba(10,4,2,0)",
+      "rgba(10,4,2,0)",
+      "rgba(10,4,2,0.65)",
+      "rgba(10,4,2,0.96)",
+    ],
     colors: {
       background: "#0D1117", surface: "#161B22", surfaceElevated: "#21262D",
       accent: "#1A9B8A", accentMuted: "#1A9B8A22",
@@ -69,7 +84,12 @@ export const PERSONAS: Record<PersonaKey, Persona> = {
     name:     "Country",
     tagline:  "Wide open. No rush.",
     greeting: "Good to see you.",
-    gradient: ["#1A1200", "#2B1E00", "#1A0E00"],
+    gradient: [
+      "rgba(30,14,2,0)",
+      "rgba(30,14,2,0)",
+      "rgba(30,14,2,0.65)",
+      "rgba(30,14,2,0.96)",
+    ],
     colors: {
       background: "#1A1200", surface: "#2B1E00", surfaceElevated: "#3D2D00",
       accent: "#C8960C", accentMuted: "#C8960C22",
@@ -82,7 +102,12 @@ export const PERSONAS: Record<PersonaKey, Persona> = {
     name:     "Desert",
     tagline:  "Sun and silence. All yours.",
     greeting: "Good to see you.",
-    gradient: ["#1A0A00", "#2D1500", "#3F1800"],
+    gradient: [
+      "rgba(21,7,4,0)",
+      "rgba(21,7,4,0)",
+      "rgba(21,7,4,0.65)",
+      "rgba(21,7,4,0.96)",
+    ],
     colors: {
       background: "#1A0A00", surface: "#2D1500", surfaceElevated: "#3F2000",
       accent: "#E07B39", accentMuted: "#E07B3922",
