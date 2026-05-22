@@ -2400,16 +2400,11 @@ def fetch_movie_direct(query):
 
 def detect_commodity(message):
     msg_lower = message.lower()
-    # v8.15: Exclude food/cooking oil queries before checking commodity map.
-    # "olive oil" contains "oil" which matched crude oil (CL=F). Never again.
-    FOOD_OIL_EXCLUSIONS = [
-        'olive oil', 'vegetable oil', 'canola oil', 'coconut oil',
-        'sesame oil', 'avocado oil', 'sunflower oil', 'cooking oil',
-        'extra virgin', 'tablespoon', 'teaspoon', 'cup of oil',
-        'calories', 'recipe', 'salad', 'frying', 'baking', 'dressing',
-        'nutrition', 'nutritional', 'how many calories', 'how much fat',
+    FINANCIAL_INTENT = [
+        'price', 'trading', 'trade', 'market', 'per ounce', 'per barrel',
+        'futures', 'commodity', 'trading at', 'how much is',
     ]
-    if any(t in msg_lower for t in FOOD_OIL_EXCLUSIONS):
+    if not any(w in msg_lower for w in FINANCIAL_INTENT):
         return None
     for name in sorted(COMMODITY_MAP.keys(), key=len, reverse=True):
         if name in msg_lower:
