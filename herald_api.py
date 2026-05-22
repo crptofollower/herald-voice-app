@@ -270,29 +270,38 @@ def cache_set(key, val, category='default'):
         _cache[key] = {'val': val, 'ts': time.time()}
 
 
+# Explicit live-data intents only. Bare time words (today, this week) and generic
+# nouns (food, event, market) were removed -- they fired search on casual chat.
+# Local "near me" queries are handled by FAST_OVERRIDES + MAPS, not Brave.
 LIVE_KEYWORDS = [
+    # Weather
     'weather', 'forecast', 'temperature', 'rain', 'snow', 'sunny', 'humid', 'wind',
-    'news', 'headline', 'breaking', 'latest', 'happening', 'update', 'briefing',
-    'open', 'closed', 'hours', 'close at', 'open till', 'open until', 'still open',
-    'what time does', 'when does', 'is it open', 'are they open',
-    'near me', 'nearby', 'closest', 'around here', 'around me',
-    'restaurant', 'food', 'eat', 'lunch', 'dinner', 'breakfast', 'coffee', 'cafe',
-    'bar', 'grocery', 'pharmacy', 'gas station', 'mechanic', 'car wash', 'locksmith',
-    'best place', 'good place', 'where can i', 'where should i',
-    'today', 'tonight', 'right now', 'currently', 'live', 'this week', 'this weekend',
-    'price', 'stock', 'bitcoin', 'crypto', 'market', 'rate', 'exchange rate',
-    'score', 'standings', 'playoffs', 'game today', 'match', 'tickets',
-    'traffic', 'delay', 'construction', 'concert', 'event', 'events', 'show', 'opening',
-    'festival', 'what is going on', "what's going on",
-    'what is happening in', 'what to do', 'things to do', 'this month',
-    'this morning', 'this afternoon', 'this evening',
-    'what are people saying', 'what is everyone saying', 'what does everyone think',
+    # News / current events (phrases, not bare "latest" or "update")
+    'news', 'headline', 'headlines', 'breaking news', 'top stories', 'current events',
+    'news today', 'news tonight', 'morning news', 'news briefing', 'morning briefing',
+    'what is going on', "what's going on", 'what is happening in', 'what happened in',
+    # Business hours / live venue status
+    'is it open', 'are they open', 'still open', 'what time does', 'when does',
+    'open till', 'open until', 'close at', 'hours today',
+    # Markets (specific phrases -- not bare "market" or "price")
+    'stock price', 'share price', 'trading at', 'price of', 'how much is',
+    'stock market', 'bitcoin', 'crypto', 'ethereum', 'solana', 'exchange rate',
+    'dow jones', 'nasdaq', 's&p 500', 's and p',
+    # Sports scores
+    'final score', 'game score', 'score today', 'score tonight', 'who won',
+    'standings', 'playoffs', 'game today', 'game tonight',
+    # Traffic / local events (specific)
+    'traffic', 'road closure', 'traffic delay',
+    'what to do this weekend', 'things to do in', 'events this weekend',
+    'concert tonight', 'tickets for',
+    # Social / video lookup
+    'trending on', 'going viral', 'what are people saying about',
+    'what is everyone saying about', 'what is the buzz about',
     'show me a video', 'video about', 'videos of', 'find a video',
-    'on twitter', 'on x', 'on youtube', 'on instagram', 'on tiktok',
-    'trending', 'viral', 'going viral', 'did you see', 'have you seen',
-    'what is the buzz', 'people are saying', 'twitter is saying',
-    'trades', 'position', 'gate', 'freddie', 'regime', 'empire status',
-    'how are our trades', 'trading status', 'open positions', 'last scan',
+    'on twitter', 'on x about', 'on youtube', 'on instagram', 'on tiktok',
+    # Freddie / empire (owner live data)
+    'freddie', 'empire status', 'trading status', 'open positions', 'last scan',
+    'how are our trades', 'gate progress',
 ]
 
 FAST_OVERRIDES = [
@@ -1327,13 +1336,21 @@ def _localize_query(message: str, profile: dict, location_label: str = None) -> 
 
 _RECENCY_WORDS = [
     'last night', 'yesterday', 'this morning', 'today', 'tonight',
-    'last week', 'recently', 'just now', 'this week', 'latest',
-    'happened', 'what happened', 'any news', 'update on', 'recap',
-    'right now', 'currently',
+    'last week', 'this week', 'just now', 'right now', 'currently',
+]
+
+# Recency alone must not trigger search ("rough day today"). Require a topic signal too.
+_SEARCH_INTENT_WORDS = [
+    'news', 'headline', 'headlines', 'breaking', 'happened', 'happening',
+    'score', 'game', 'election', 'stock', 'crypto', 'bitcoin', 'ethereum',
+    'weather', 'forecast', 'who won', 'result', 'results', 'recap',
+    'update on', 'latest on', 'any news', 'what happened',
+    'announced', 'released', 'launched', 'signed', 'traded', 'died',
+    'trending', 'viral', 'passed away',
 ]
 
 _EVENT_WORDS = [
-    'fight', 'match', 'game', 'won', 'win', 'lost', 'score', 'result',
+    'fight', 'match', 'game', 'won', 'lost', 'score', 'result',
     'results', 'election', 'announced', 'released', 'launched',
     'trending', 'viral', 'died', 'passed away', 'signed', 'traded',
 ]
@@ -1345,7 +1362,8 @@ def needs_web_search(message: str) -> bool:
     if any(kw in msg_lower for kw in LIVE_KEYWORDS):
         return True
     if any(w in msg_lower for w in _RECENCY_WORDS):
-        return True
+        if any(w in msg_lower for w in _SEARCH_INTENT_WORDS):
+            return True
     if any(w in msg_lower for w in _EVENT_WORDS) and '?' in message:
         return True
     return False
