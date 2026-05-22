@@ -1,11 +1,22 @@
 // src/api/herald.ts
 // Herald API client -- all backend calls live here. Nothing fetches outside this file.
-// Backend: https://web-production-b4083.up.railway.app (Railway, herald_api.py v7.8)
+// Backend: https://web-production-b4083.up.railway.app (Railway, herald_api.py v8.4)
 //
-// Changes May 12, 2026:
-//   - Added fetchWithTimeout() -- wraps every request, 30s abort
-//   - Added createProfile() -- called once at onboarding end
-//   - Freddie endpoints stay owner-gated (backend enforces, frontend mirrors)
+// Changes May 17, 2026 (streaming -- CORRECT format):
+//
+//   The backend /ask/stream emits Server-Sent Events:
+//     data: {"t": "word"}        <- a token (append to text)
+//     data: {"t": "[S]"}         <- SENTENCE COMPLETE (flush to TTS now)
+//     data: {"done": true, "full": "...", "action": {...}, ...}  <- end
+//     data: {"error": "..."}     <- failure
+//
+//   Previous bug: parser looked for parsed.token / parsed.reply.
+//   Backend sends parsed.t. Every token was silently discarded ->
+//   stream stayed open with nothing rendered -> the 2-minute hang.
+//
+//   This version reads parsed.t correctly AND uses [S] sentence markers
+//   to drive progressive TTS: Herald speaks sentence 1 while sentence 2
+//   is still generating. Words + voice flow together within ~1-2s.
 
 import {
   API_BASE,
@@ -27,6 +38,9 @@ export interface AskPayload {
   user_id: string;
   message: string;
   history: Pick<Message, "role" | "content">[];
+  local_time?: string;
+  local_date?: string;
+  device_context?: string;
   persona?: string;
   location?: string;
   lat?: number;
@@ -63,7 +77,6 @@ export interface ProactiveItem {
   metadata?: Record<string, unknown>;
   timestamp: number;
   read: boolean;
-  // Compatibility: backend may return older format with just `message`
   message?: string;
 }
 
@@ -73,11 +86,7 @@ export interface ProactiveResponse {
 }
 
 export interface FreddieStatus {
-  gate: {
-    progress: number;
-    target: number;
-    percent: number;
-  };
+  gate: { progress: number; target: number; percent: number };
   regime: string;
   window: string;
   fg: number;
@@ -104,9 +113,38 @@ export interface FreddieTradesResponse {
   total: number;
 }
 
-// ─── Timeout wrapper ──────────────────────────────────────────────────────────
-// Every fetch goes through this. Railway cold starts can spike; 30s abort
-// prevents the UI from hanging on dead requests.
+export interface GreetingPayload {
+  user_id: string;
+  local_time?: string;
+  lat?: number;
+  lng?: number;
+  location_label?: string;
+}
+
+export interface GreetingResponse {
+  ok: boolean;
+  greeting: string;
+  ai_name: string;
+  name: string;
+}
+
+// ─── Stream callbacks ──────────────────────────────────────────────────────────
+//
+// onToken    -- fired per token. Append to the visible bubble. [S] is stripped.
+// onSentence -- fired when a sentence completes ([S] marker). Drives progressive TTS.
+// onAction   -- fired once at the end with the parsed action (or null).
+// onDone     -- fired once at the end with the complete reply text.
+// onError    -- fired on failure.
+
+export interface StreamCallbacks {
+  onToken: (token: string) => void;
+  onSentence: (sentence: string) => void;
+  onAction: (action: AskResponse["action"]) => void;
+  onDone: (fullText: string) => void;
+  onError: (err: Error) => void;
+}
+
+// ─── Timeout wrapper (non-streaming requests) ─────────────────────────────────
 
 async function fetchWithTimeout(
   url: string,
@@ -125,85 +163,249 @@ async function fetchWithTimeout(
 
 async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
   const url = `${API_BASE}${path}`;
-
   const response = await fetchWithTimeout(url, {
-    headers: {
-      "Content-Type": "application/json",
-      ...options.headers,
-    },
+    headers: { "Content-Type": "application/json", ...options.headers },
     ...options,
   });
-
   if (!response.ok) {
     const text = await response.text().catch(() => "Unknown error");
     throw new Error(`Herald API ${response.status}: ${text.slice(0, 200)}`);
   }
-
   return response.json() as Promise<T>;
 }
 
-// ─── Profile -- called once at onboarding completion ─────────────────────────
-// Creates the user record on Railway SQLite.
-// Without this, the backend has no name/persona and falls back to defaults.
+// ─── askHeraldStream -- the real one ──────────────────────────────────────────
+//
+// Connects to /ask/stream and parses the backend's actual SSE format.
+// Tokens appear in ~1-2s. Sentence markers fire onSentence for progressive TTS.
+//
+// 12-second first-token deadline: if the backend sends nothing by then,
+// abort and fall back to /ask. (Backend is fast now; this is insurance.)
+//
+// Returns AbortController so the caller can cancel on unmount.
 
-export async function createProfile(payload: ProfilePayload): Promise<void> {
-  await apiFetch<void>("/profile", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+export function askHeraldStream(
+  payload: AskPayload,
+  callbacks: StreamCallbacks
+): AbortController {
+  const outerController = new AbortController();
+
+  const trimmedHistory = payload.history
+    .slice(-MAX_CONTEXT_MESSAGES)
+    .map(({ role, content }) => ({ role, content }));
+
+  const body = JSON.stringify({ ...payload, history: trimmedHistory });
+
+  (async () => {
+    const streamController = new AbortController();
+    outerController.signal.addEventListener("abort", () => streamController.abort());
+
+    let firstTokenReceived = false;
+    let streamFinished = false;
+
+    const firstTokenTimeout = setTimeout(() => {
+      if (!firstTokenReceived) streamController.abort();
+    }, 12_000);
+
+    let accumulated = ""; // full visible text (no [S] markers)
+    let sentenceBuf = ""; // current sentence being built (no [S])
+
+    const flushSentence = () => {
+      const s = sentenceBuf.trim();
+      if (s) callbacks.onSentence(s);
+      sentenceBuf = "";
+    };
+
+    try {
+      const response = await fetch(`${API_BASE}/ask/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+        signal: streamController.signal,
+      });
+
+      if (response.ok && response.body) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let buffer = "";
+
+        const handleEvent = (jsonStr: string) => {
+          let parsed: Record<string, unknown>;
+          try {
+            parsed = JSON.parse(jsonStr);
+          } catch {
+            return;
+          }
+
+          if (parsed.typing) {
+            firstTokenReceived = true;
+            clearTimeout(firstTokenTimeout);
+            return;
+          }
+
+          if (parsed.done) {
+            clearTimeout(firstTokenTimeout);
+            flushSentence();
+            callbacks.onAction(parsed.action as AskResponse["action"]);
+            const full =
+              typeof parsed.full === "string" && parsed.full
+                ? (parsed.full as string)
+                : accumulated;
+            callbacks.onDone(full);
+            streamFinished = true;
+            return;
+          }
+
+          if (parsed.error) {
+            clearTimeout(firstTokenTimeout);
+            callbacks.onError(new Error(String(parsed.error)));
+            streamFinished = true;
+            return;
+          }
+
+          const t = parsed.t;
+          if (typeof t === "string") {
+            if (t === "[S]") {
+              flushSentence();
+              return;
+            }
+            if (!firstTokenReceived) {
+              firstTokenReceived = true;
+              clearTimeout(firstTokenTimeout);
+            }
+            accumulated += t;
+            sentenceBuf += t;
+            callbacks.onToken(t);
+          }
+        };
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            if (trimmed.startsWith("data: ")) {
+              handleEvent(trimmed.slice(6).trim());
+            }
+          }
+        }
+
+        if (!streamFinished) {
+          clearTimeout(firstTokenTimeout);
+          flushSentence();
+          if (accumulated) {
+            callbacks.onDone(accumulated);
+            streamFinished = true;
+          }
+        }
+
+        reader.releaseLock();
+      }
+    } catch {
+      clearTimeout(firstTokenTimeout);
+      if (outerController.signal.aborted) return;
+    }
+
+    if (streamFinished) return;
+
+    // ── Fallback: /ask (only if stream produced nothing) ─────────────────────
+    try {
+      if (outerController.signal.aborted) return;
+
+      const fbController = new AbortController();
+      outerController.signal.addEventListener("abort", () => fbController.abort());
+      const fbTimeout = setTimeout(() => fbController.abort(), 45_000);
+
+      let response: Response;
+      try {
+        response = await fetch(`${API_BASE}/ask`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+          signal: fbController.signal,
+        });
+      } finally {
+        clearTimeout(fbTimeout);
+      }
+
+      if (!response.ok) {
+        const text = await response.text().catch(() => "Unknown error");
+        throw new Error(`Herald API ${response.status}: ${text.slice(0, 200)}`);
+      }
+
+      const data = (await response.json()) as AskResponse;
+      const reply = data.reply || "";
+
+      callbacks.onToken(reply);
+      callbacks.onSentence(reply);
+      callbacks.onAction(data.action);
+      callbacks.onDone(reply);
+    } catch (fbErr) {
+      if (outerController.signal.aborted) return;
+      callbacks.onError(fbErr instanceof Error ? fbErr : new Error(String(fbErr)));
+    }
+  })();
+
+  return outerController;
 }
 
-// ─── /ask -- main chat endpoint ───────────────────────────────────────────────
+// ─── /ask -- non-streaming (kept for internal callers) ────────────────────────
 
 export async function askHerald(payload: AskPayload): Promise<AskResponse> {
   const trimmedHistory = payload.history
     .slice(-MAX_CONTEXT_MESSAGES)
     .map(({ role, content }) => ({ role, content }));
-
   return apiFetch<AskResponse>("/ask", {
     method: "POST",
     body: JSON.stringify({ ...payload, history: trimmedHistory }),
   });
 }
 
-// ─── /proactive -- fetch queue on app open ────────────────────────────────────
+// ─── /profile ─────────────────────────────────────────────────────────────────
 
-export async function fetchProactiveQueue(
-  userId: string
-): Promise<ProactiveResponse> {
+export async function createProfile(payload: ProfilePayload): Promise<void> {
+  await apiFetch<void>("/profile", { method: "POST", body: JSON.stringify(payload) });
+}
+
+// ─── /greeting ────────────────────────────────────────────────────────────────
+//
+// Called on app open to get the personalised greeting (name + weather + memory hook).
+// Uses GPS coords if available so Herald can say "right now in Plano it is 84 degrees."
+
+export async function fetchGreeting(payload: GreetingPayload): Promise<GreetingResponse> {
+  return apiFetch<GreetingResponse>("/greeting", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+// ─── /proactive ───────────────────────────────────────────────────────────────
+
+export async function fetchProactiveQueue(userId: string): Promise<ProactiveResponse> {
   try {
-    const result = await apiFetch<ProactiveResponse | ProactiveItem[]>(
-      `/proactive/${userId}`
-    );
-    // Backend may return array or { items, count } -- normalize both
-    if (Array.isArray(result)) {
-      return { items: result, count: result.length };
-    }
+    const result = await apiFetch<ProactiveResponse | ProactiveItem[]>(`/proactive/${userId}`);
+    if (Array.isArray(result)) return { items: result, count: result.length };
     return result;
   } catch {
-    // Proactive is best-effort -- never crash the app if this fails
     return { items: [], count: 0 };
   }
 }
 
-export async function markProactiveRead(
-  userId: string,
-  itemId: string
-): Promise<void> {
+export async function markProactiveRead(userId: string, itemId: string): Promise<void> {
   try {
     await apiFetch(`/proactive/${userId}/${itemId}/read`, { method: "POST" });
-  } catch {
-    // Non-critical -- swallow silently
-  }
+  } catch {}
 }
 
-// ─── /freddie -- owner-gated endpoints ───────────────────────────────────────
-// Backend enforces is_owner() on every call.
-// Frontend should also check isOwner from store before calling these.
+// ─── /freddie ─────────────────────────────────────────────────────────────────
 
-export async function fetchFreddieStatus(
-  userId: string
-): Promise<FreddieStatus> {
+export async function fetchFreddieStatus(userId: string): Promise<FreddieStatus> {
   return apiFetch<FreddieStatus>(
     `/freddie/status?user_id=${userId}&auth_code=${OWNER_AUTH_CODE}`
   );
@@ -216,39 +418,4 @@ export async function fetchFreddieTrades(
   return apiFetch<FreddieTradesResponse>(
     `/freddie/trades?user_id=${userId}&auth_code=${OWNER_AUTH_CODE}&limit=${limit}`
   );
-}
-
-// ─── /health -- liveness check ────────────────────────────────────────────────
-
-export async function checkHealth(): Promise<boolean> {
-  try {
-    await apiFetch("/health");
-    return true;
-  } catch {
-    return false;
-  }
-}
-// ─── /greeting -- called once on app open ─────────────────────────────────────
-// Sends local time + location so Herald opens with a contextual greeting.
-// Non-critical -- if it fails, the static empty state shows instead.
-
-export interface GreetingPayload {
-  user_id: string;
-  local_time?: string;
-  lat?: number;
-  lng?: number;
-  location_label?: string;
-}
-
-export interface GreetingResponse {
-  greeting: string;
-}
-
-export async function fetchGreeting(
-  payload: GreetingPayload
-): Promise<GreetingResponse> {
-  return apiFetch<GreetingResponse>("/greeting", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
 }

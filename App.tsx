@@ -1,19 +1,21 @@
 // App.tsx -- Herald root
 // Navigation: Onboarding (first run) -> Chat (main loop)
-// Providers: React Query, Zustand (via store)
-// OneSignal initialized here
+//
+// CHANGE May 17 2026:
+//   Added _hasHydrated check before rendering any screen.
+//   Without this, Navigation briefly shows OnboardingScreen during
+//   the ~50ms AsyncStorage read, OnboardingScreen fires its speech,
+//   then hydration completes and ChatScreen loads with its own greeting.
+//   Both play simultaneously. Fix: render nothing until hydrated.
 
 import "react-native-gesture-handler";
 import React, { useEffect } from "react";
+import { View } from "react-native";
 import { NavigationContainer } from "@react-navigation/native";
 import { createStackNavigator } from "@react-navigation/stack";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StatusBar } from "expo-status-bar";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
-if (ONESIGNAL_APP_ID) {
-  OneSignal.initialize(ONESIGNAL_APP_ID);
-  OneSignal.Notifications.requestPermission(true);
-}
 import { useStore } from "./src/store/useStore";
 import OnboardingScreen from "./src/screens/OnboardingScreen";
 import ChatScreen from "./src/screens/ChatScreen";
@@ -28,18 +30,23 @@ const Stack = createStackNavigator<RootStackParamList>();
 
 const queryClient = new QueryClient({
   defaultOptions: {
-    queries: {
-      retry: 2,
-      staleTime: 30_000,
-    },
-    mutations: {
-      retry: 1,
-    },
+    queries:   { retry: 2, staleTime: 30_000 },
+    mutations: { retry: 1 },
   },
 });
 
 function Navigation() {
   const onboardingComplete = useStore((s) => s.onboardingComplete);
+  const _hasHydrated       = useStore((s) => s._hasHydrated);
+
+  // ── Wait for AsyncStorage to load before rendering any screen ─────────────
+  // Without this guard, OnboardingScreen mounts briefly (onboardingComplete
+  // is false before hydration), fires its TTS speech, then immediately
+  // unmounts when hydration sets onboardingComplete = true. ChatScreen then
+  // mounts and fires the greeting. Both voices play at the same time.
+  if (!_hasHydrated) {
+    return <View style={{ flex: 1, backgroundColor: "#0A1628" }} />;
+  }
 
   return (
     <NavigationContainer>
@@ -57,8 +64,11 @@ function Navigation() {
 export default function App() {
   useEffect(() => {
     if (ONESIGNAL_APP_ID) {
-      OneSignal.initialize(ONESIGNAL_APP_ID);
-      OneSignal.Notifications.requestPermission(true);
+      try {
+        const { default: OneSignal } = require("react-native-onesignal");
+        OneSignal.initialize(ONESIGNAL_APP_ID);
+        OneSignal.Notifications.requestPermission(true);
+      } catch {}
     }
   }, []);
 

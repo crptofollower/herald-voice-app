@@ -30,6 +30,7 @@
       "permissions": [
         "android.permission.RECORD_AUDIO",
         "android.permission.READ_CALENDAR",
+        "android.permission.WRITE_CALENDAR",
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.ACCESS_COARSE_LOCATION"
@@ -49,7 +50,8 @@
           "locationAlwaysAndWhenInUsePermission": "Herald uses your location for weather and local info.",
           "locationWhenInUsePermission": "Herald uses your location for weather and local info."
         }
-      ]
+      ],
+      "expo-sqlite"
     ],
     "scheme": "herald",
     "extra": {

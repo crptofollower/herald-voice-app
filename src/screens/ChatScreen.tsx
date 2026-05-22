@@ -1,24 +1,26 @@
-// src/screens/ChatScreen.tsx -- Herald main interface
+// src/screens/ChatScreen.tsx — Herald main interface
 //
-// FIXES APPLIED (May 12 2026):
+// CHANGES May 17, 2026 (scroll + ambient mode):
 //
-//   Bug 10 follow-on: useStore no longer exposes isLoading or setLoading
-//   (removed in the Bug 10 fix to eliminate the Zustand / React Query desync).
-//   ChatScreen was still destructuring both and calling setLoading() — this
-//   caused a TypeScript compile error and a runtime crash on every send.
-//   Fix: remove isLoading + setLoading entirely; sendMutation.isPending is
-//   the single source of truth for in-flight state throughout this component.
+//   SCROLL SNAP FIX:
+//     FlatList no longer snaps back to bottom when user scrolls up to read.
+//     isAtBottomRef tracks scroll position. Auto-scroll only fires when
+//     the user is already near the bottom (< 80px from end).
+//     User can now scroll up through a long Freddie response without
+//     being yanked back down by incoming tokens.
 //
-//   generateId extracted to src/utils/id.ts — identical behaviour, shared impl.
+//   AMBIENT MODE (idle resume):
+//     If Herald hasn't been used for 15 minutes, the next open shows a
+//     clean screen with a fresh greeting -- "Good evening Mike, 84 degrees
+//     in Plano, what's on your mind?" -- instead of a wall of old chat.
+//     Old messages are still in memory for API context. Only the display
+//     resets. lastInteractionRef tracks idle time across foreground/background.
 //
-// NO FUNCTIONAL CHANGES beyond the above two fixes.
+//   All prior features intact: streaming, progressive TTS, intent system,
+//   calendar/maps/sms, Honesty Contract, proactive panel, Freddie card.
 
-import React, {
-  useState,
-  useRef,
-  useCallback,
-  useEffect,
-} from "react";
+import { Animated } from "react-native";
+import React, { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import {
   View,
   Text,
@@ -28,30 +30,90 @@ import {
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
-  ActivityIndicator,
   SafeAreaView,
+  Linking,
+  AppState,
+  AppStateStatus,
 } from "react-native";
-import { useMutation } from "@tanstack/react-query";
+import * as Calendar from "expo-calendar";
 import { useStore } from "../store/useStore";
 import { PERSONAS } from "../constants/personas";
-import { askHerald, markProactiveRead, fetchGreeting, type Message } from "../api/herald";
+import {
+  askHeraldStream,
+  markProactiveRead,
+  fetchGreeting,
+  type Message,
+} from "../api/herald";
 import { useSpeech } from "../hooks/useSpeech";
 import { useProactiveQueue } from "../hooks/useProactiveQueue";
-
 import { PersonaBackground } from "../components/PersonaBackground";
 import { MessageBubble } from "../components/MessageBubble";
 import { ProactiveCard } from "../components/ProactiveCard";
-import { generateId } from "../utils/id"; // ← extracted from inline def
+import { IntentCard, type ActionStatus } from "../components/IntentCard";
+import { generateId } from "../utils/id";
 import { useCalendar } from "../hooks/useCalendar";
-import { useHealthData } from "../hooks/useHealthData";
 import { useLocation } from "../hooks/useLocation";
+// useMic removed -- mic button caused feedback loop with TTS and blocked input bar
+import { useHealthConnect } from "../hooks/useHealthConnect";
+import { useDeviceMemory, saveLocalProfile } from "../hooks/useDeviceMemory";
+
+interface IntentAction {
+  type: string;
+  value: string;
+}
+
+const IDLE_THRESHOLD_MS = 15 * 60 * 1000; // 15 minutes
+
+// ─── Bouncing dots ─────────────────────────────────────────────────────────────
+
+function BouncingDots({ color }: { color: string }) {
+  const dots = [
+    useRef(new Animated.Value(0)).current,
+    useRef(new Animated.Value(0)).current,
+    useRef(new Animated.Value(0)).current,
+  ];
+
+  useEffect(() => {
+    const animations = dots.map((dot, i) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(i * 140),
+          Animated.timing(dot, { toValue: -7, duration: 280, useNativeDriver: true }),
+          Animated.timing(dot, { toValue: 0, duration: 280, useNativeDriver: true }),
+          Animated.delay(420),
+        ])
+      )
+    );
+    animations.forEach((a) => a.start());
+    return () => animations.forEach((a) => a.stop());
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+      {dots.map((dot, i) => (
+        <Animated.View
+          key={i}
+          style={{
+            width: 9,
+            height: 9,
+            borderRadius: 5,
+            backgroundColor: color,
+            transform: [{ translateY: dot }],
+            opacity: 0.85,
+          }}
+        />
+      ))}
+    </View>
+  );
+}
+
+// ─── Component ────────────────────────────────────────────────────────────────
+
 export default function ChatScreen() {
-  // ─── Store ─────────────────────────────────────────────────────────────────
-  // isLoading + setLoading REMOVED — these no longer exist in useStore.
-  // Use sendMutation.isPending for all in-flight state checks in this file.
   const {
     userId,
     name,
+    aiName,
     persona: personaKey,
     messages,
     addMessage,
@@ -67,106 +129,519 @@ export default function ChatScreen() {
 
   const persona = PERSONAS[personaKey];
 
-  // ─── Local UI state ────────────────────────────────────────────────────────
-  const [inputText, setInputText]         = useState("");
+  const [inputText, setInputText] = useState("");
   const [showProactive, setShowProactive] = useState(false);
-  const flatListRef  = useRef<FlatList>(null);
-  const sendingRef   = useRef(false); // double-send guard
+  const [pendingAction, setPendingAction] = useState<IntentAction | null>(null);
+  const [actionStatus, setActionStatus] = useState<ActionStatus>("confirming");
 
-  // ─── Hooks ─────────────────────────────────────────────────────────────────
-  const { speak, stop, isSpeaking } = useSpeech();
-  useProactiveQueue(); // polls /proactive on open + resume, debounced
-useCalendar();
-    const { lat, lng, label: locationLabel } = useLocation();
-  // Show proactive panel when new items arrive.
+  const [streamingContent, setStreamingContent] = useState("");
+  const [isWaiting, setIsWaiting] = useState(false);
+  const [isStreaming, setIsStreaming] = useState(false);
+
+  // ── Ambient mode state ────────────────────────────────────────────────────
+  // sessionStart filters which messages are shown in the current session.
+  // Old messages stay in the store for API context but aren't rendered.
+  const [sessionStart, setSessionStart] = useState(() => Date.now());
+  const lastInteractionRef = useRef(Date.now());
+
+  const flatListRef = useRef<FlatList>(null);
+
+  const sendingRef = useRef(false);
+  const lastSentRef = useRef(0);
+  const streamAbortRef = useRef<AbortController | null>(null);
+
+  // ── Scroll snap prevention ────────────────────────────────────────────────
+  // Only auto-scroll to bottom when user is already near the bottom.
+  // If they've scrolled up to read (Freddie response etc.), leave them there.
+  const isAtBottomRef = useRef(true);
+
+  const { speak, enqueueSentence, resetSpeech, stop, isSpeaking } = useSpeech();
+  useProactiveQueue();
+  useCalendar();
+  // useHealthConnect(); // disabled until AndroidManifest entries added
+  const { lat, lng, label: locationLabel } = useLocation();
+  const {
+    saveMemory: saveDeviceMemory,
+    saveProfile: saveDeviceProfile,
+    getLocalGreeting,
+    getContextBlock,
+  } = useDeviceMemory();
+
+  // ── Filter messages for display (current session only) ───────────────────
+  const displayMessages = useMemo(
+    () => messages.filter((m) => m.timestamp >= sessionStart),
+    [messages, sessionStart]
+  );
+
+  // ── Idle resume handler ref (always fresh closure) ───────────────────────
+  const handleIdleResumeRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    handleIdleResumeRef.current = () => {
+      const newSessionStart = Date.now();
+      setSessionStart(newSessionStart);
+      // Scroll back to bottom for fresh session
+      isAtBottomRef.current = true;
+      if (!userId) return;
+      const local_time = new Date().toLocaleTimeString("en-US", {
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+      });
+      fetchGreeting({
+        user_id: userId,
+        local_time,
+        lat: lat ?? undefined,
+        lng: lng ?? undefined,
+        location_label: locationLabel ?? undefined,
+      })
+        .then((data) => {
+          if (!data.greeting) return;
+          addMessage({
+            id: generateId("msg"),
+            role: "assistant",
+            content: data.greeting,
+            timestamp: newSessionStart + 10, // ensure it's inside new session window
+          });
+          speak(data.greeting);
+        })
+        .catch(() => {});
+    };
+  }, [userId, lat, lng, locationLabel, addMessage, speak]);
+
+  // ── AppState listener (stable, uses ref) ──────────────────────────────────
+  useEffect(() => {
+    const subscription = AppState.addEventListener(
+      "change",
+      (nextState: AppStateStatus) => {
+        if (nextState === "active") {
+          const idleMs = Date.now() - lastInteractionRef.current;
+          if (idleMs > IDLE_THRESHOLD_MS) {
+            handleIdleResumeRef.current();
+          }
+        }
+        // Always update on any state change (background, inactive, active)
+        lastInteractionRef.current = Date.now();
+      }
+    );
+    return () => subscription.remove();
+  }, []); // stable -- no deps needed
+
+  useEffect(() => {
+    return () => {
+      streamAbortRef.current?.abort();
+    };
+  }, []);
+
   useEffect(() => {
     if (unreadCount > 0) setShowProactive(true);
   }, [unreadCount]);
-// Fire greeting once on first open (no messages yet).
+
+  // ── Greeting on first open ────────────────────────────────────────────────
+  // Use displayMessages not messages -- old sessions have messages.length > 0
+  // but displayMessages is always empty on mount (sessionStart = Date.now()).
   useEffect(() => {
-    if (!userId || messages.length > 0) return;
+    if (!userId || displayMessages.length > 0) return;
+
+    // ── INSTANT LOCAL GREETING (device-first, under 500ms) ───────────────────
+    // Build greeting from device SQLite immediately -- no network needed.
+    // Herald speaks before the internet is touched.
+    const localGreeting = getLocalGreeting(aiName || "Herald");
+    const greetingId = generateId("msg");
+    addMessage({
+      id: greetingId,
+      role: "assistant",
+      content: localGreeting,
+      timestamp: Date.now(),
+    });
+    speak(localGreeting);
+
+    // ── BACKGROUND LIVE ENHANCEMENT ──────────────────────────────────────────
+    // Fetch live greeting with weather from backend.
+    // If it returns something better, replace the local greeting silently.
     const local_time = new Date().toLocaleTimeString("en-US", {
-      hour: "numeric", minute: "2-digit", hour12: true,
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
     });
     fetchGreeting({
       user_id: userId,
       local_time,
-      lat:            lat ?? undefined,
-      lng:            lng ?? undefined,
+      lat: lat ?? undefined,
+      lng: lng ?? undefined,
       location_label: locationLabel ?? undefined,
     })
       .then((data) => {
         if (!data.greeting) return;
-        addMessage({
-          id: generateId("msg"),
-          role: "assistant",
-          content: data.greeting,
-          timestamp: Date.now(),
-        });
-        speak(data.greeting);
+        // Only upgrade if live greeting has weather (adds real value)
+        const hasWeather = /degrees|weather|forecast/i.test(data.greeting);
+        if (hasWeather) {
+          // Replace the local greeting message with the live one
+          addMessage({
+            id: generateId("msg"),
+            role: "assistant",
+            content: data.greeting,
+            timestamp: Date.now() + 1,
+          });
+          // Don't speak again -- user already heard the local greeting
+          // Cache city for next time
+          if (locationLabel) {
+            saveDeviceProfile("confirmed_city", locationLabel);
+          }
+        }
       })
-      .catch(() => { /* non-critical -- static empty state handles it */ });
+      .catch(() => {
+        // Local greeting already fired -- nothing to do
+      });
   }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps
-  // Scroll to bottom whenever the message list grows.
+
+  // ── Auto-scroll (only when user is at bottom) ─────────────────────────────
   useEffect(() => {
-    if (messages.length > 0) {
-      setTimeout(
-        () => flatListRef.current?.scrollToEnd({ animated: true }),
-        100
-      );
+    if ((displayMessages.length > 0 || streamingContent) && isAtBottomRef.current) {
+      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 80);
     }
-  }, [messages.length]);
+  }, [displayMessages.length, streamingContent]);
 
-  // ─── Send mutation ─────────────────────────────────────────────────────────
-  const sendMutation = useMutation({
-    mutationFn: async (text: string) => {
-      // Optimistic: add the user message to the list immediately so the UI
-      // feels instant. The server response will append the assistant message.
-      const userMsg: Message = {
-        id:        generateId("msg"),
-        role:      "user",
-        content:   text,
-        timestamp: Date.now(),
-      };
-      addMessage(userMsg);
+  const resetStreamState = useCallback(() => {
+    sendingRef.current = false;
+    setIsWaiting(false);
+    setIsStreaming(false);
+    setStreamingContent("");
+    streamAbortRef.current = null;
+  }, []);
 
-      return askHerald({
+  // ── Send ──────────────────────────────────────────────────────────────────
+
+  const handleSend = useCallback(() => {
+    const now = Date.now();
+    if (now - lastSentRef.current < 1000) return;
+    if (sendingRef.current) return;
+
+    const text = inputText.trim();
+    if (!text) return;
+
+    lastSentRef.current = now;
+    lastInteractionRef.current = now;
+    sendingRef.current = true;
+
+    addMessage({
+      id: generateId("msg"),
+      role: "user",
+      content: text,
+      timestamp: now,
+    });
+
+    setInputText("");
+    setError(null);
+    setPendingAction(null);
+    resetSpeech();
+
+    setIsWaiting(true);
+    setIsStreaming(true);
+    setStreamingContent("");
+    isAtBottomRef.current = true;
+
+    let firstToken = true;
+
+    // v8.15.1: Send device local time so backend answers "what time is it"
+    // correctly. Railway runs UTC -- without this the answer is 5 hours off.
+    const nowDate = new Date();
+    const local_time = nowDate.toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
+    const local_date = [
+      nowDate.getFullYear(),
+      String(nowDate.getMonth() + 1).padStart(2, "0"),
+      String(nowDate.getDate()).padStart(2, "0"),
+    ].join("-");
+
+    const abortController = askHeraldStream(
+      {
         user_id: userId,
         message: text,
         history: messages.map(({ role, content }) => ({ role, content })),
+        local_time,
+        local_date,
+        device_context: getContextBlock() || undefined,
         persona: personaKey,
-        lat:            lat ?? undefined,
-        lng:            lng ?? undefined,
+        lat: lat ?? undefined,
+        lng: lng ?? undefined,
         location_label: locationLabel ?? undefined,
-      });
-    },
-    onSuccess: (data) => {
-      const heraldMsg: Message = {
-        id:        generateId("msg"),
-        role:      "assistant",
-        content:   data.reply,
-        timestamp: Date.now(),
-      };
-      addMessage(heraldMsg);
-      speak(data.reply);
-    },
-    onError: (err: Error) => {
-      setError(err.message);
-    },
-    // onSettled: setLoading(false) — REMOVED (Bug 10 fix)
-  });
+      },
+      {
+        onToken: (token) => {
+          if (firstToken) { firstToken = false; setIsWaiting(false); }
+          setStreamingContent((prev) => prev + token);
+        },
+        onSentence: (sentence) => { enqueueSentence(sentence); },
+        onAction: (action) => {
+          if (action) { setPendingAction(action as IntentAction); setActionStatus("confirming"); }
+        },
+        onDone: (fullText) => {
+          if (fullText.trim()) {
+            addMessage({ id: generateId("msg"), role: "assistant", content: fullText, timestamp: Date.now() });
+          }
+          resetStreamState();
+        },
+        onError: (err) => { setError(err.message); resetStreamState(); },
+      }
+    );
 
-  // ─── Handlers ──────────────────────────────────────────────────────────────
-  const handleSend = useCallback(() => {
-    const text = inputText.trim();
-    if (!text || sendMutation.isPending || sendingRef.current) return;
-    sendingRef.current = true;
-    setTimeout(() => { sendingRef.current = false; }, 1000);
-    setInputText("");
-    setError(null);
-    stop();
-    sendMutation.mutate(text);
-  }, [inputText, sendMutation, setError, stop]);
+    streamAbortRef.current = abortController;
+  }, [inputText, userId, messages, personaKey, lat, lng, locationLabel, getContextBlock, addMessage, setError, resetSpeech, enqueueSentence, resetStreamState]);
+
+  // ── Intent execution ──────────────────────────────────────────────────────
+
+  const executeIntent = async (action: IntentAction) => {
+    setActionStatus("executing");
+    try {
+      switch (action.type) {
+        case "calendar":
+          await handleCalendarAction(action.value);
+          break;
+        case "maps":
+          await handleMapsAction(action.value);
+          break;
+        case "sms":
+          await handleSMSAction(action.value);
+          break;
+        case "phone":
+          await Linking.openURL(`tel:${action.value.replace(/\D/g, "")}`);
+          break;
+        case "flights":
+          await Linking.openURL(
+            `https://www.google.com/flights?q=${encodeURIComponent(action.value)}`
+          );
+          break;
+        case "search":
+          await Linking.openURL(
+            `https://www.google.com/search?q=${encodeURIComponent(action.value)}`
+          );
+          break;
+        case "launch":
+          await handleLaunchAction(action.value);
+          break;
+        case "music":
+          await Linking.openURL(
+            `https://open.spotify.com/search/${encodeURIComponent(action.value)}`
+          );
+          break;
+        case "radio":
+          await Linking.openURL(
+            `https://www.google.com/search?q=${encodeURIComponent(action.value + " radio stream")}`
+          );
+          break;
+        case "alarm": {
+          // Parse HH:MM|label format
+          const alarmParts = action.value.split("|");
+          const alarmTime  = alarmParts[0]?.trim() || "";
+          const alarmLabel = alarmParts[1]?.trim() || "Herald Alarm";
+          // Open clock app -- Android deep link
+          const alarmUrl = `intent://alarm#Intent;scheme=android.intent.action.SET_ALARM;S.android.intent.extra.alarm.MESSAGE=${encodeURIComponent(alarmLabel)};S.android.intent.extra.alarm.HOUR=${alarmTime.split(":")[0]};S.android.intent.extra.alarm.MINUTES=${alarmTime.split(":")[1]};end`;
+          try {
+            await Linking.openURL(alarmUrl);
+          } catch {
+            // Fallback -- open clock app
+            await Linking.openURL("intent://com.samsung.android.clockpackage#Intent;scheme=package;end");
+          }
+          addMessage({
+            id: generateId("msg"),
+            role: "assistant",
+            content: `Opening your clock app to set that alarm for ${alarmTime}.`,
+            timestamp: Date.now(),
+          });
+          break;
+        }
+        default:
+          throw new Error(`Unknown action type: ${action.type}`);
+      }
+      setActionStatus("done");
+      setTimeout(() => {
+        setPendingAction(null);
+        setActionStatus("confirming");
+      }, 2000);
+    } catch (err) {
+      console.error("[Herald] executeIntent failed:", err);
+      setActionStatus("error");
+      setTimeout(() => {
+        setPendingAction(null);
+        setActionStatus("confirming");
+      }, 3000);
+    }
+  };
+
+  // ── Calendar action ───────────────────────────────────────────────────────
+
+  const handleCalendarAction = async (value: string) => {
+    const parts = value.split("|");
+    const title = parts[0]?.trim() || "Appointment";
+    const dateStr = parts[1]?.trim() || "";
+    const timeStr = parts[2]?.trim() || "";
+
+    if (!timeStr || !/^\d{1,2}:\d{2}$/.test(timeStr)) {
+      addMessage({
+        id: generateId("msg"),
+        role: "assistant",
+        content: `What time should I put "${title}" on your calendar?`,
+        timestamp: Date.now(),
+      });
+      setPendingAction(null);
+      setActionStatus("confirming");
+      return;
+    }
+
+    const { status } = await Calendar.requestCalendarPermissionsAsync();
+    if (status !== "granted") {
+      addMessage({
+        id: generateId("msg"),
+        role: "assistant",
+        content:
+          "I need calendar access to do that. Open your phone Settings, find Herald, and turn on Calendar. Then ask me again.",
+        timestamp: Date.now(),
+      });
+      throw new Error("calendar permission denied");
+    }
+
+    const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
+    const writable = calendars.filter((c) => c.allowsModifications);
+    if (!writable.length) {
+      addMessage({
+        id: generateId("msg"),
+        role: "assistant",
+        content:
+          "I couldn't find a calendar I can write to. Make sure Google Calendar or Samsung Calendar is set up, then try again.",
+        timestamp: Date.now(),
+      });
+      throw new Error("no writable calendar");
+    }
+
+    const targetCal =
+      writable.find((c) => c.isPrimary) ||
+      writable.find((c) => c.source?.type === "com.google") ||
+      writable[0];
+
+    let startDate: Date;
+    try {
+      const [h, m] = timeStr.split(":").map(Number);
+      if (dateStr && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+        const [year, month, day] = dateStr.split("-").map(Number);
+        startDate = new Date();
+        startDate.setFullYear(year, month - 1, day);
+        startDate.setHours(h, m, 0, 0);
+      } else {
+        startDate = new Date();
+        startDate.setDate(startDate.getDate() + 1);
+        startDate.setHours(h || 9, m || 0, 0, 0);
+      }
+      if (isNaN(startDate.getTime())) throw new Error("invalid date");
+    } catch {
+      startDate = new Date();
+      startDate.setDate(startDate.getDate() + 1);
+      startDate.setHours(9, 0, 0, 0);
+    }
+
+    const endDate = new Date(startDate.getTime() + 60 * 60 * 1000);
+
+    await Calendar.createEventAsync(targetCal.id, {
+      title,
+      startDate,
+      endDate,
+      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      notes: "Added by Herald",
+    });
+
+    const timeDisplay = startDate.toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
+    const dateDisplay = startDate.toLocaleDateString("en-US", {
+      weekday: "long",
+      month: "long",
+      day: "numeric",
+    });
+    addMessage({
+      id: generateId("msg"),
+      role: "assistant",
+      content: `Done — "${title}" is on your calendar for ${dateDisplay} at ${timeDisplay}.`,
+      timestamp: Date.now(),
+    });
+  };
+
+  const handleMapsAction = async (query: string) => {
+    const encoded = encodeURIComponent(query);
+    const googleApp = `comgooglemaps://?q=${encoded}`;
+    const googleWeb = `https://maps.google.com/maps?q=${encoded}`;
+    try {
+      const canGoogle = await Linking.canOpenURL(googleApp);
+      await Linking.openURL(canGoogle ? googleApp : googleWeb);
+    } catch {
+      await Linking.openURL(googleWeb);
+    }
+  };
+
+  const handleSMSAction = async (value: string) => {
+    const pipeIdx = value.indexOf("|");
+    const contactName = pipeIdx >= 0 ? value.substring(0, pipeIdx).trim() : value.trim();
+    const messageText = pipeIdx >= 0 ? value.substring(pipeIdx + 1).trim() : "";
+    const body = encodeURIComponent(messageText);
+    const smsUrl = Platform.OS === "ios" ? `sms:&body=${body}` : `sms:?body=${body}`;
+    await Linking.openURL(smsUrl);
+    if (contactName) {
+      addMessage({
+        id: generateId("msg"),
+        role: "assistant",
+        content: `Your messages app is open with that ready. Just pick ${contactName} and hit send.`,
+        timestamp: Date.now(),
+      });
+    }
+  };
+
+  const handleLaunchAction = async (appName: string) => {
+    const lower = appName.toLowerCase().trim();
+    const deepLinks: Record<string, string> = {
+      spotify: "spotify://",
+      youtube: "youtube://",
+      instagram: "instagram://",
+      twitter: "twitter://",
+      x: "twitter://",
+      facebook: "fb://",
+      tiktok: "tiktok://",
+      "google maps": "comgooglemaps://",
+      maps: "comgooglemaps://",
+      gmail: "googlegmail://",
+      "samsung health": "com.sec.android.app.shealth://",
+      "health connect": "com.google.android.apps.healthdata://",
+      health: "com.sec.android.app.shealth://",
+      walking: "com.sec.android.app.shealth://",
+      workout: "com.sec.android.app.shealth://",
+      steps: "com.sec.android.app.shealth://",
+    };
+    const link = deepLinks[lower];
+    if (link) {
+      try {
+        const canOpen = await Linking.canOpenURL(link);
+        if (canOpen) {
+          await Linking.openURL(link);
+          return;
+        }
+      } catch {}
+    }
+    await Linking.openURL(
+      `https://www.google.com/search?q=${encodeURIComponent(appName)}`
+    );
+  };
+
+  const handleConfirmIntent = useCallback(async () => {
+    if (!pendingAction || actionStatus === "executing") return;
+    await executeIntent(pendingAction);
+  }, [pendingAction, actionStatus]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleDismissIntent = useCallback(() => {
+    setPendingAction(null);
+    setActionStatus("confirming");
+  }, []);
 
   const handleDismissProactive = useCallback(
     (id: string) => {
@@ -181,10 +656,7 @@ useCalendar();
       markRead(id);
       try {
         await markProactiveRead(userId, id);
-      } catch {
-        // Best effort — the local mark is the user-facing state; server sync
-        // failing silently is acceptable for proactive notifications.
-      }
+      } catch {}
     },
     [markRead, userId]
   );
@@ -196,7 +668,8 @@ useCalendar();
     [persona]
   );
 
-  // ─── Render ────────────────────────────────────────────────────────────────
+  // ── Render ────────────────────────────────────────────────────────────────
+
   return (
     <PersonaBackground persona={personaKey}>
       <SafeAreaView style={styles.safe}>
@@ -205,19 +678,23 @@ useCalendar();
           behavior={Platform.OS === "ios" ? "padding" : "height"}
           keyboardVerticalOffset={0}
         >
-          {/* ── Header ──────────────────────────────────────────────────── */}
           <View style={styles.header}>
             <Text style={[styles.wordmark, { color: persona.colors.text }]}>
-              Herald
+              {aiName || "Herald"}
             </Text>
             <View style={styles.headerRight}>
               {isSpeaking && (
                 <TouchableOpacity
                   onPress={stop}
-                  style={styles.speakingDot}
+                  style={styles.speakingIndicator}
                   accessibilityLabel="Stop speaking"
                 >
-                  <ActivityIndicator size="small" color={persona.colors.accent} />
+                  <View
+                    style={[
+                      styles.speakingDot,
+                      { backgroundColor: persona.colors.accent },
+                    ]}
+                  />
                 </TouchableOpacity>
               )}
               {unreadCount > 0 && (
@@ -232,7 +709,6 @@ useCalendar();
             </View>
           </View>
 
-          {/* ── Proactive panel ─────────────────────────────────────────── */}
           {showProactive && proactiveItems.filter((i) => !i.read).length > 0 && (
             <View style={styles.proactivePanel}>
               <View style={styles.proactiveHeader}>
@@ -262,14 +738,13 @@ useCalendar();
             </View>
           )}
 
-          {/* ── Freddie status card (owner only) ────────────────────────── */}
           {isOwner && freddieStatus && (
             <View
               style={[
                 styles.freddieCard,
                 {
                   backgroundColor: persona.colors.accentMuted,
-                  borderColor:     persona.colors.accent + "30",
+                  borderColor: persona.colors.accent + "30",
                 },
               ]}
             >
@@ -282,8 +757,7 @@ useCalendar();
             </View>
           )}
 
-          {/* ── Message list / empty state ──────────────────────────────── */}
-          {messages.length === 0 && !sendMutation.isPending ? (
+          {displayMessages.length === 0 && !isStreaming ? (
             <View style={styles.emptyState}>
               <Text style={[styles.emptyGreeting, { color: persona.colors.text }]}>
                 {name ? `Good to see you, ${name}.` : "Good to see you."}
@@ -295,37 +769,72 @@ useCalendar();
           ) : (
             <FlatList
               ref={flatListRef}
-              data={messages}
+              data={displayMessages}
               renderItem={renderMessage}
               keyExtractor={(item) => item.id}
               contentContainerStyle={styles.messageList}
               showsVerticalScrollIndicator={false}
-              onContentSizeChange={() =>
-                flatListRef.current?.scrollToEnd({ animated: false })
-              }
+              // ── Scroll snap fix: track position, only auto-scroll at bottom ──
+              scrollEventThrottle={100}
+              onScroll={({ nativeEvent: { layoutMeasurement, contentOffset, contentSize } }) => {
+                const distFromBottom =
+                  contentSize.height - contentOffset.y - layoutMeasurement.height;
+                isAtBottomRef.current = distFromBottom < 80;
+              }}
+              onContentSizeChange={() => {
+                if (isAtBottomRef.current) {
+                  flatListRef.current?.scrollToEnd({ animated: false });
+                }
+              }}
               ListFooterComponent={
-                sendMutation.isPending ? (
-                  <View style={styles.typingRow}>
-                    <ActivityIndicator size="small" color={persona.colors.accent} />
-                    <Text style={[styles.typingText, { color: "rgba(255,255,255,0.6)" }]}>
-                      Herald is thinking...
-                    </Text>
-                  </View>
-                ) : null
+                <>
+                  {isWaiting && (
+                    <View style={styles.typingRow}>
+                      <BouncingDots color={persona.colors.accent} />
+                      <Text
+                        style={[
+                          styles.typingText,
+                          { color: "rgba(255,255,255,0.6)" },
+                        ]}
+                      >
+                        {aiName} is thinking...
+                      </Text>
+                    </View>
+                  )}
+                  {!isWaiting && streamingContent ? (
+                    <MessageBubble
+                      message={{
+                        id: "streaming",
+                        role: "assistant",
+                        content: streamingContent,
+                        timestamp: Date.now(),
+                      }}
+                      persona={persona}
+                    />
+                  ) : null}
+                </>
               }
             />
           )}
 
-          {/* ── Error banner ────────────────────────────────────────────── */}
           {error && <Text style={styles.errorText}>{error}</Text>}
 
-          {/* ── Input bar ───────────────────────────────────────────────── */}
+          {pendingAction && (
+            <IntentCard
+              action={pendingAction}
+              status={actionStatus}
+              persona={persona}
+              onConfirm={handleConfirmIntent}
+              onDismiss={handleDismissIntent}
+            />
+          )}
+
           <View
             style={[
               styles.inputBar,
               {
                 backgroundColor: "rgba(0,0,0,0.75)",
-                borderTopColor:  persona.colors.border,
+                borderTopColor: persona.colors.border,
               },
             ]}
           >
@@ -340,27 +849,30 @@ useCalendar();
               returnKeyType="default"
               blurOnSubmit={false}
               accessibilityLabel="Message input"
+              onFocus={() => {
+                // Stop Herald speaking when user taps to type.
+                // Prevents feedback loop: user corrects → mic hears Herald talking.
+                stop();
+              }}
             />
+            {/* Mic button removed -- caused TTS feedback loop.
+                Use Samsung keyboard mic (has echo cancellation). */}
             <TouchableOpacity
               style={[
                 styles.sendBtn,
                 {
                   backgroundColor:
-                    inputText.trim() && !sendMutation.isPending
+                    inputText.trim() && !isStreaming
                       ? persona.colors.accent
                       : persona.colors.border,
                 },
               ]}
               onPress={handleSend}
-              disabled={!inputText.trim() || sendMutation.isPending}
+              disabled={!inputText.trim() || isStreaming}
               accessibilityRole="button"
               accessibilityLabel="Send message"
             >
-              {sendMutation.isPending ? (
-                <ActivityIndicator size="small" color="#FFFFFF" />
-              ) : (
-                <Text style={styles.sendArrow}>↑</Text>
-              )}
+              <Text style={styles.sendArrow}>↑</Text>
             </TouchableOpacity>
           </View>
         </KeyboardAvoidingView>
@@ -369,164 +881,132 @@ useCalendar();
   );
 }
 
-// ─── Styles ───────────────────────────────────────────────────────────────────
-
 const styles = StyleSheet.create({
-  safe:  { flex: 1 },
-  flex:  { flex: 1 },
+  safe: { flex: 1 },
+  flex: { flex: 1 },
 
   header: {
-    flexDirection:  "row",
-    justifyContent: "space-between",
-    alignItems:     "center",
-    paddingHorizontal: 20,
-    paddingTop:        12,
-    paddingBottom:     8,
-  },
-  wordmark: {
-    fontSize:      20,
-    fontWeight:    "700",
-    letterSpacing: -0.3,
-  },
-  headerRight: {
     flexDirection: "row",
-    alignItems:    "center",
-    gap:           10,
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    paddingTop: Platform.OS === "android" ? 40 : 12,
+    paddingBottom: 8,
   },
-  speakingDot: {
-    width:          32,
-    height:         32,
-    alignItems:     "center",
+  wordmark: { fontSize: 20, fontWeight: "700", letterSpacing: -0.3 },
+  headerRight: { flexDirection: "row", alignItems: "center", gap: 10 },
+  speakingIndicator: {
+    width: 32,
+    height: 32,
+    alignItems: "center",
     justifyContent: "center",
   },
+  speakingDot: { width: 10, height: 10, borderRadius: 5, opacity: 0.85 },
   badge: {
-    minWidth:       26,
-    height:         26,
-    borderRadius:   13,
-    alignItems:     "center",
+    minWidth: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 8,
   },
-  badgeText: {
-    color:      "#FFFFFF",
-    fontSize:   13,
-    fontWeight: "700",
-  },
+  badgeText: { color: "#FFFFFF", fontSize: 13, fontWeight: "700" },
 
-  proactivePanel: {
-    paddingHorizontal: 16,
-    paddingBottom:     4,
-  },
+  proactivePanel: { paddingHorizontal: 16, paddingBottom: 4 },
   proactiveHeader: {
-    flexDirection:  "row",
+    flexDirection: "row",
     justifyContent: "space-between",
-    alignItems:     "center",
-    marginBottom:   8,
+    alignItems: "center",
+    marginBottom: 8,
   },
   proactiveTitle: {
-    fontSize:      12,
-    fontWeight:    "600",
+    fontSize: 12,
+    fontWeight: "600",
     letterSpacing: 0.4,
     textTransform: "uppercase",
   },
-  clearAll: {
-    fontSize:   13,
-    fontWeight: "500",
-  },
+  clearAll: { fontSize: 13, fontWeight: "500" },
 
   freddieCard: {
     marginHorizontal: 16,
-    marginBottom:     8,
-    padding:          12,
-    borderRadius:     12,
-    borderWidth:      1,
+    marginBottom: 8,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
   },
   freddieLabel: {
-    fontSize:      10,
-    fontWeight:    "700",
+    fontSize: 10,
+    fontWeight: "700",
     letterSpacing: 0.8,
-    marginBottom:  4,
+    marginBottom: 4,
   },
-  freddieText: {
-    fontSize:   13,
-    lineHeight: 18,
-  },
+  freddieText: { fontSize: 13, lineHeight: 18 },
 
-  messageList: {
-    paddingTop:    8,
-    paddingBottom: 16,
-  },
+  messageList: { paddingTop: 8, paddingBottom: 16 },
   emptyState: {
-    flex:              1,
-    justifyContent:    "center",
-    alignItems:        "center",
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
     paddingHorizontal: 40,
   },
   emptyGreeting: {
-    fontSize:      28,
-    fontWeight:    "700",
-    textAlign:     "center",
-    marginBottom:  12,
+    fontSize: 28,
+    fontWeight: "700",
+    textAlign: "center",
+    marginBottom: 12,
     letterSpacing: -0.3,
-    lineHeight:    36,
-    color:         "#FFFFFF",
+    lineHeight: 36,
+    color: "#FFFFFF",
     textShadowColor: "rgba(0,0,0,0.5)",
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 4,
   },
   emptyName: {
-    fontSize:   17,
-    textAlign:  "center",
+    fontSize: 17,
+    textAlign: "center",
     lineHeight: 24,
-    color:      "rgba(255,255,255,0.7)",
+    color: "rgba(255,255,255,0.7)",
   },
   errorText: {
-    color:             "#C4622D",
-    fontSize:          13,
-    textAlign:         "center",
+    color: "#C4622D",
+    fontSize: 13,
+    textAlign: "center",
     paddingHorizontal: 20,
-    paddingVertical:   6,
+    paddingVertical: 6,
   },
 
   inputBar: {
-    flexDirection:     "row",
-    alignItems:        "flex-end",
+    flexDirection: "row",
+    alignItems: "flex-end",
     paddingHorizontal: 12,
-    paddingTop:        10,
-    paddingBottom:     Platform.OS === "ios" ? 10 : 28,
-    borderTopWidth:    1,
-    gap:               8,
+    paddingTop: 10,
+    paddingBottom: Platform.OS === "ios" ? 10 : 52,  // 52 clears Android gesture nav bar
+    borderTopWidth: 1,
+    gap: 8,
   },
   textInput: {
-    flex:        1,
-    fontSize:    17,
-    lineHeight:  24,
-    maxHeight:   120,
-    paddingTop:  8,
+    flex: 1,
+    fontSize: 17,
+    lineHeight: 24,
+    maxHeight: 120,
+    paddingTop: 8,
     paddingBottom: 8,
   },
   sendBtn: {
-    width:          44,
-    height:         44,
-    borderRadius:   22,
-    alignItems:     "center",
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
     justifyContent: "center",
-    marginBottom:   2,
+    marginBottom: 2,
   },
-  sendArrow: {
-    color:      "#FFFFFF",
-    fontSize:   20,
-    fontWeight: "700",
-  },
+  sendArrow: { color: "#FFFFFF", fontSize: 20, fontWeight: "700" },
   typingRow: {
-    flexDirection:  "row",
-    alignItems:     "center",
+    flexDirection: "row",
+    alignItems: "center",
     paddingHorizontal: 20,
-    paddingVertical:   12,
+    paddingVertical: 12,
     gap: 10,
   },
-  typingText: {
-    fontSize:   15,
-    fontStyle:  "italic",
-  },
+  typingText: { fontSize: 15, fontStyle: "italic" },
 });

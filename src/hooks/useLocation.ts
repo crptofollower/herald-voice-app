@@ -7,11 +7,15 @@
 //   - CONUS guard rejects garbage coords before they hit the backend
 //   - Falls back to profile location string if GPS unavailable
 //   - Returns { lat, lng, label, available } -- callers check available first
+//
+// v8.8: reverseGeocode() now passes user_id so backend can cache confirmed city.
+//       Fixes "Arlington" showing instead of "The Colony" on every open.
 
 import { useEffect, useState } from "react";
 import * as Location from "expo-location";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { API_BASE } from "../constants/api";
+import { useStore } from "../store/useStore";
 
 const CACHE_KEY = "herald_location_cache";
 const CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
@@ -58,9 +62,10 @@ async function setCachedLocation(result: LocationResult): Promise<void> {
   }
 }
 
-async function reverseGeocode(lat: number, lng: number): Promise<string | null> {
+async function reverseGeocode(lat: number, lng: number, userId?: string): Promise<string | null> {
   try {
-    const res = await fetch(`${API_BASE}/geocode?lat=${lat}&lng=${lng}`);
+    const userParam = userId ? `&user_id=${userId}` : "";
+    const res = await fetch(`${API_BASE}/geocode?lat=${lat}&lng=${lng}${userParam}`);
     if (!res.ok) return null;
     const data = await res.json();
     return data.label ?? null; // e.g. "The Colony, TX"
@@ -74,6 +79,7 @@ export function useLocation(): LocationResult {
 
   useEffect(() => {
     let cancelled = false;
+    const userId = useStore.getState().userId;
 
     async function fetchLocation() {
       // 1. Return cached result immediately if fresh
@@ -111,8 +117,8 @@ export function useLocation(): LocationResult {
         return;
       }
 
-      // 5. Reverse geocode via backend
-      const label = await reverseGeocode(lat, lng);
+      // 5. Reverse geocode via backend -- passes user_id for city caching (v8.8)
+      const label = await reverseGeocode(lat, lng, userId);
 
       const result: LocationResult = {
         lat,
