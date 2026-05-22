@@ -599,35 +599,44 @@ export default function ChatScreen() {
   };
 
   const handleLaunchAction = async (appName: string) => {
-    const lower = appName.toLowerCase().trim();
-    const deepLinks: Record<string, string> = {
-      spotify: "spotify://",
-      youtube: "youtube://",
-      instagram: "instagram://",
-      twitter: "twitter://",
-      x: "twitter://",
-      facebook: "fb://",
-      tiktok: "tiktok://",
-      "google maps": "comgooglemaps://",
-      maps: "comgooglemaps://",
-      gmail: "googlegmail://",
-      "samsung health": "com.sec.android.app.shealth://",
-      "health connect": "com.google.android.apps.healthdata://",
-      health: "com.sec.android.app.shealth://",
-      walking: "com.sec.android.app.shealth://",
-      workout: "com.sec.android.app.shealth://",
-      steps: "com.sec.android.app.shealth://",
+    const key = appName.toLowerCase().trim().replace(/\s+/g, "");
+    const launchApps: Record<string, { deep: string | string[]; fallback?: string }> = {
+      youtube: { deep: "youtube://", fallback: "https://youtube.com" },
+      tiktok: { deep: "tiktok://", fallback: "https://tiktok.com" },
+      twitter: { deep: "twitter://", fallback: "https://twitter.com" },
+      x: { deep: "twitter://", fallback: "https://twitter.com" },
+      instagram: { deep: "instagram://", fallback: "https://instagram.com" },
+      health: { deep: "com.sec.android.app.shealth://" },
+      shealth: { deep: "com.sec.android.app.shealth://" },
+      samsunghealth: { deep: "com.sec.android.app.shealth://" },
+      walking: { deep: "com.sec.android.app.shealth://" },
+      workout: { deep: "com.sec.android.app.shealth://" },
+      steps: { deep: "com.sec.android.app.shealth://" },
+      spotify: { deep: "spotify://", fallback: "https://open.spotify.com" },
+      facebook: { deep: "fb://", fallback: "https://facebook.com" },
+      googlemaps: { deep: "comgooglemaps://", fallback: "https://maps.google.com" },
+      maps: { deep: "comgooglemaps://", fallback: "https://maps.google.com" },
+      gmail: { deep: "googlegmail://", fallback: "https://mail.google.com" },
+      healthconnect: { deep: "com.google.android.apps.healthdata://" },
     };
-    const link = deepLinks[lower];
-    if (link) {
-      try {
-        const canOpen = await Linking.canOpenURL(link);
-        if (canOpen) {
+
+    const app = launchApps[key];
+    if (app) {
+      const links = Array.isArray(app.deep) ? app.deep : [app.deep];
+      for (const link of links) {
+        try {
           await Linking.openURL(link);
           return;
+        } catch {
+          // try next deep link or web fallback
         }
-      } catch {}
+      }
+      if (app.fallback) {
+        await Linking.openURL(app.fallback);
+        return;
+      }
     }
+
     await Linking.openURL(
       `https://www.google.com/search?q=${encodeURIComponent(appName)}`
     );
