@@ -2606,7 +2606,7 @@ def calculate_moment_weight(category: str, emotion: str,
     return round(base * emotion_w * recency * ref_boost, 2)
 
 
-def build_system(profile, local_time=None, owner=False, empire=None, lat=None, lng=None, location_label=None):
+def build_system(profile, local_time=None, owner=False, empire=None, lat=None, lng=None, location_label=None, local_date=None, device_context=None):
     now      = local_time or datetime.now().strftime("%A, %B %d %Y %I:%M %p")
     name     = profile.get("name", "")
     ai_name  = profile.get("ai_name", "Herald")
@@ -2626,6 +2626,8 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
         loc_line = f"User is located in {location}. For local searches use '{location} [thing]'."
     else:
         loc_line = "Location not yet learned -- ask naturally when relevant. NEVER say you do not have GPS access or cannot see location. You simply do not know it yet."
+
+    date_line = f"Today is {local_date}." if local_date else ""
 
     all_memory = list(dict.fromkeys((memories + notes)[-12:]))
     notes_line = ("What this user has told you (remember and use naturally): "
@@ -2753,6 +2755,7 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
 
     context_parts = [p for p in [medical_context, calendar_line, notes_line, prefs_line, facts_line, life_tracker_line, episodic_line] if p]
     context_block = "\n".join(context_parts) if context_parts else "Still learning about this user."
+    device_line = f"\nDevice memory: {device_context}" if device_context else ""
     empire_section = f"\n\n{empire}" if owner and empire else ""
     watcher_section = f"\n\n{watcher_context}" if watcher_context else ""
 
@@ -2772,7 +2775,8 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
 
 {user_line}
 {loc_line}
-{context_block}
+{date_line}
+{device_line}{context_block}
 
 Current time: {now}{empire_section}{watcher_section}
 
@@ -3098,6 +3102,8 @@ def build_ask_context(data):
 
     history        = data.get("history", [])
     local_time     = data.get("local_time", None)
+    local_date     = data.get("local_date", None)
+    device_context = data.get("device_context", None)
     lat            = data.get("lat", None)
     lng            = data.get("lng", None)
     location_label = data.get("location_label", None)
@@ -3167,7 +3173,7 @@ def build_ask_context(data):
 
     save_profile_async(user_id, profile)
 
-    system   = build_system(profile, local_time, owner, empire, lat, lng, location_label)
+    system   = build_system(profile, local_time, owner, empire, lat, lng, location_label, local_date=local_date, device_context=device_context)
     messages = [{"role": "system", "content": system}]
     messages += history[-20:]
     messages.append({"role": "user", "content": message})
@@ -3752,7 +3758,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.17",
+        "status": "ok", "server": "herald-api", "version": "8.18",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
