@@ -3752,7 +3752,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.16",
+        "status": "ok", "server": "herald-api", "version": "8.17",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
