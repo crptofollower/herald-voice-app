@@ -1710,23 +1710,25 @@ def _create_followup_tracker(user_id: str, data: dict, cursor):
             print(f"[HERALD] Follow-up tracker error (non-fatal): {e}")
 
 
-def _build_medical_context(user_id: str) -> str:
+def _build_medical_context(user_id: str, cursor=None) -> str:
+    owns_conn = cursor is None
+    conn = None
     try:
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute(
+        if owns_conn:
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+        cursor.execute(
             "SELECT doctor_name, specialty, visit_date, outcome, follow_up_date "
             "FROM medical_records WHERE user_id=? AND active=1 ORDER BY visit_date DESC LIMIT 5",
             (user_id,)
         )
-        visits = c.fetchall()
-        c.execute(
+        visits = cursor.fetchall()
+        cursor.execute(
             "SELECT med_name, dose, reason FROM medication_log "
             "WHERE user_id=? AND active=1 AND end_date IS NULL",
             (user_id,)
         )
-        meds = c.fetchall()
-        conn.close()
+        meds = cursor.fetchall()
         lines = []
         if visits:
             parts = []
@@ -1747,6 +1749,9 @@ def _build_medical_context(user_id: str) -> str:
         return "\n".join(lines) if lines else ""
     except Exception:
         return ""
+    finally:
+        if owns_conn and conn:
+            conn.close()
 
 
 def extract_learned_facts(user_id, user_message, herald_reply):
@@ -2644,9 +2649,15 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
     watcher_context = _build_watcher_context(profile)
 
     calendar_line = ""
+    life_tracker_line = ""
+    episodic_line = ""
+    medical_context = ""
+    user_id = profile.get("user_id", "")
+    conn = None
     try:
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
+
         c.execute("""
             SELECT item_name, COALESCE(next_due_date, last_date) AS event_date
             FROM life_tracker
@@ -2655,9 +2666,8 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
               AND date(COALESCE(next_due_date, last_date)) <= date('now', '+14 days')
             ORDER BY event_date ASC
             LIMIT 12
-        """, (profile.get("user_id", ""),))
+        """, (user_id,))
         cal_rows = c.fetchall()
-        conn.close()
         if cal_rows:
             today = date.today()
             cal_items = []
@@ -2678,22 +2688,15 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
                 + "; ".join(cal_items)
                 + ". Answer schedule questions from this list -- do not guess."
             )
-    except Exception:
-        pass
 
-    life_tracker_line = ""
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
         c.execute("""
             SELECT category, item_name, last_date, next_due_date, interval_days
             FROM life_tracker
             WHERE user_id = ? AND active = 1 AND source != 'calendar'
             ORDER BY next_due_date ASC
             LIMIT 8
-        """, (profile.get("user_id", ""),))
+        """, (user_id,))
         tracker_rows = c.fetchall()
-        conn.close()
         if tracker_rows:
             today = date.today()
             due_items = []
@@ -2714,49 +2717,45 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
                     pass
             if due_items:
                 life_tracker_line = "Life tracker reminders due soon: " + "; ".join(due_items) + ". Mention these naturally if relevant to the conversation."
-    except Exception:
-        pass
 
-    episodic_line = ""
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
         c.execute("""
             SELECT summary, category, emotion, days_ago,
                    COALESCE(times_referenced, 0) as refs
             FROM life_moments
             WHERE user_id = ? AND active = 1
-        """, (profile.get("user_id", ""),))
+        """, (user_id,))
         all_rows = c.fetchall()
-        conn.close()
-        # Dynamic scoring -- medical from 6 months ago beats food from yesterday
-        scored = []
-        for row in all_rows:
-            summary, cat, emotion, days_ago, refs = row
-            score = calculate_moment_weight(cat, emotion or 'neutral', days_ago or 0, refs)
-            scored.append((score, summary, cat, emotion, days_ago))
-        scored.sort(reverse=True)
-        moment_rows = [(r[1], r[2], r[3], r[4]) for r in scored[:8]]
-        if moment_rows:
-            moment_lines = []
-            for summary, cat, emotion, days_ago in moment_rows:
-                if days_ago == 0:
-                    age = "today"
-                elif days_ago == 1:
-                    age = "yesterday"
-                elif days_ago < 7:
-                    age = f"{days_ago} days ago"
-                elif days_ago < 30:
-                    age = f"{days_ago // 7} week{'s' if days_ago >= 14 else ''} ago"
-                else:
-                    age = f"{days_ago // 30} month{'s' if days_ago >= 60 else ''} ago"
-                moment_lines.append(f"{summary} ({age})")
-            episodic_line = "Life moments this user has shared: " + "; ".join(moment_lines) + ". Reference these naturally like a friend who remembers -- never robotically."
+        if all_rows:
+            scored = []
+            for row in all_rows:
+                summary, cat, emotion, days_ago, refs = row
+                score = calculate_moment_weight(cat, emotion or 'neutral', days_ago or 0, refs)
+                scored.append((score, summary, cat, emotion, days_ago))
+            scored.sort(reverse=True)
+            moment_rows = [(r[1], r[2], r[3], r[4]) for r in scored[:8]]
+            if moment_rows:
+                moment_lines = []
+                for summary, cat, emotion, days_ago in moment_rows:
+                    if days_ago == 0:
+                        age = "today"
+                    elif days_ago == 1:
+                        age = "yesterday"
+                    elif days_ago < 7:
+                        age = f"{days_ago} days ago"
+                    elif days_ago < 30:
+                        age = f"{days_ago // 7} week{'s' if days_ago >= 14 else ''} ago"
+                    else:
+                        age = f"{days_ago // 30} month{'s' if days_ago >= 60 else ''} ago"
+                    moment_lines.append(f"{summary} ({age})")
+                episodic_line = "Life moments this user has shared: " + "; ".join(moment_lines) + ". Reference these naturally like a friend who remembers -- never robotically."
+
+        medical_context = _build_medical_context(user_id, c)
     except Exception:
         pass
+    finally:
+        if conn:
+            conn.close()
 
-    # v8.13: Medical context (always top priority -- never gets wrong)
-    medical_context = _build_medical_context(profile.get("user_id", ""))
     context_parts = [p for p in [medical_context, calendar_line, notes_line, prefs_line, facts_line, life_tracker_line, episodic_line] if p]
     context_block = "\n".join(context_parts) if context_parts else "Still learning about this user."
     empire_section = f"\n\n{empire}" if owner and empire else ""
