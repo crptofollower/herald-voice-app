@@ -2123,6 +2123,12 @@ def build_empire_context(empire):
 def geocode_reverse(lat, lng):
     if not GEOCODING_KEY:
         return None
+    city_type_priority = (
+        "locality",
+        "postal_town",
+        "sublocality_level_1",
+        "administrative_area_level_2",
+    )
     try:
         url = (f"https://maps.googleapis.com/maps/api/geocode/json"
                f"?latlng={lat},{lng}&result_type=locality|administrative_area_level_1"
@@ -2130,13 +2136,36 @@ def geocode_reverse(lat, lng):
         req = urllib.request.Request(url, headers={"User-Agent": "HeraldAPI/8.8"})
         with urllib.request.urlopen(req, timeout=4) as r:
             data = json.loads(r.read().decode())
-        if data.get("results"):
-            components = data["results"][0]["address_components"]
-            city  = next((c["long_name"]  for c in components if "locality" in c["types"]), None)
-            state = next((c["short_name"] for c in components if "administrative_area_level_1" in c["types"]), None)
+        results = data.get("results") or []
+        if not results:
+            return None
+
+        found_locality_type = False
+        city_only = None
+        for result in results:
+            components = result.get("address_components") or []
+            city = None
+            for city_type in city_type_priority:
+                for component in components:
+                    if city_type in component.get("types", []):
+                        city = component["long_name"]
+                        found_locality_type = True
+                        break
+                if city:
+                    break
+            if city and city_only is None:
+                city_only = city
+            state = next(
+                (c["short_name"] for c in components if "administrative_area_level_1" in c.get("types", [])),
+                None,
+            )
             if city and state:
                 return f"{city}, {state}"
-            return data["results"][0].get("formatted_address")
+
+        if city_only:
+            return city_only
+        if not found_locality_type:
+            return results[0].get("formatted_address")
     except Exception as e:
         print(f"[HERALD] Geocode failed: {e}")
     return None
@@ -2606,6 +2635,60 @@ def calculate_moment_weight(category: str, emotion: str,
     return round(base * emotion_w * recency * ref_boost, 2)
 
 
+_CALENDAR_CACHE_TTL = 300  # 5 minutes
+_calendar_cache = {}  # user_id -> (timestamp, result)
+
+
+def _get_calendar_line(user_id: str) -> str:
+    """Return formatted upcoming calendar line, cached per user for 5 minutes."""
+    if not user_id:
+        return ""
+    cached = _calendar_cache.get(user_id)
+    if cached:
+        ts, result = cached
+        if time.time() - ts < _CALENDAR_CACHE_TTL:
+            return result
+    calendar_line = ""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute("""
+            SELECT item_name, COALESCE(next_due_date, last_date) AS event_date
+            FROM life_tracker
+            WHERE user_id = ? AND active = 1 AND source = 'calendar'
+              AND date(COALESCE(next_due_date, last_date)) >= date('now')
+              AND date(COALESCE(next_due_date, last_date)) <= date('now', '+14 days')
+            ORDER BY event_date ASC
+            LIMIT 12
+        """, (user_id,))
+        cal_rows = c.fetchall()
+        conn.close()
+        if cal_rows:
+            today = date.today()
+            cal_items = []
+            for name_item, event_date_str in cal_rows:
+                try:
+                    ed = date.fromisoformat(event_date_str)
+                    if ed == today:
+                        when = "today"
+                    elif ed == today + timedelta(days=1):
+                        when = "tomorrow"
+                    else:
+                        when = ed.strftime("%A %b %d")
+                    cal_items.append(f"{name_item} ({when})")
+                except Exception:
+                    cal_items.append(name_item)
+            calendar_line = (
+                "Upcoming calendar from device: "
+                + "; ".join(cal_items)
+                + ". Answer schedule questions from this list -- do not guess."
+            )
+    except Exception:
+        pass
+    _calendar_cache[user_id] = (time.time(), calendar_line)
+    return calendar_line
+
+
 def build_system(profile, local_time=None, owner=False, empire=None, lat=None, lng=None, location_label=None, local_date=None, device_context=None):
     now      = local_time or datetime.now().strftime("%A, %B %d %Y %I:%M %p")
     name     = profile.get("name", "")
@@ -2645,46 +2728,15 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
 
     watcher_context = _build_watcher_context(profile)
 
-    calendar_line = ""
+    user_id = profile.get("user_id", "")
+    calendar_line = _get_calendar_line(user_id)
     life_tracker_line = ""
     episodic_line = ""
     medical_context = ""
-    user_id = profile.get("user_id", "")
     conn = None
     try:
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
-
-        c.execute("""
-            SELECT item_name, COALESCE(next_due_date, last_date) AS event_date
-            FROM life_tracker
-            WHERE user_id = ? AND active = 1 AND source = 'calendar'
-              AND date(COALESCE(next_due_date, last_date)) >= date('now')
-              AND date(COALESCE(next_due_date, last_date)) <= date('now', '+14 days')
-            ORDER BY event_date ASC
-            LIMIT 12
-        """, (user_id,))
-        cal_rows = c.fetchall()
-        if cal_rows:
-            today = date.today()
-            cal_items = []
-            for name_item, event_date_str in cal_rows:
-                try:
-                    ed = date.fromisoformat(event_date_str)
-                    if ed == today:
-                        when = "today"
-                    elif ed == today + timedelta(days=1):
-                        when = "tomorrow"
-                    else:
-                        when = ed.strftime("%A %b %d")
-                    cal_items.append(f"{name_item} ({when})")
-                except Exception:
-                    cal_items.append(name_item)
-            calendar_line = (
-                "Upcoming calendar from device: "
-                + "; ".join(cal_items)
-                + ". Answer schedule questions from this list -- do not guess."
-            )
 
         c.execute("""
             SELECT category, item_name, last_date, next_due_date, interval_days
@@ -3758,7 +3810,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.18",
+        "status": "ok", "server": "herald-api", "version": "8.19",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
