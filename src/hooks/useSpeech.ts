@@ -89,8 +89,9 @@ export function useSpeech() {
   const audioQueueRef = useRef<string[]>([]);
   const fetchingRef   = useRef(false);
   const playingRef    = useRef(false);
-  const soundRef      = useRef<Audio.Sound | null>(null);
-  const genRef        = useRef(0); // incremented on reset to abandon stale loops
+  const soundRef         = useRef<Audio.Sound | null>(null);
+  const genRef           = useRef(0); // incremented on reset to abandon stale loops
+  const expoSpeakingRef  = useRef(false); // guards overlapping expo-speech fallbacks
 
   const configureAudio = useCallback(async () => {
     try {
@@ -110,6 +111,7 @@ export function useSpeech() {
     audioQueueRef.current = [];
     fetchingRef.current   = false;
     playingRef.current    = false;
+    expoSpeakingRef.current = false;
     setIsSpeaking(false);
 
     if (soundRef.current) {
@@ -174,7 +176,7 @@ export function useSpeech() {
     }
 
     playingRef.current = false;
-    if (gen === genRef.current) setIsSpeaking(false);
+    if (gen === genRef.current && !expoSpeakingRef.current) setIsSpeaking(false);
   }, []);
 
   // ── Fetch loop ─────────────────────────────────────────────────────────────
@@ -194,9 +196,22 @@ export function useSpeech() {
         audioQueueRef.current.push(uri);
       } catch {
         // Nova failed -- expo-speech fallback for this sentence
-        if (gen === genRef.current) {
-          ExpoSpeech.speak(clean, { rate: 0.9, pitch: 1.0 });
-        }
+        if (gen !== genRef.current || expoSpeakingRef.current) continue;
+        expoSpeakingRef.current = true;
+        ExpoSpeech.stop();
+        setIsSpeaking(true);
+        ExpoSpeech.speak(clean, {
+          rate: 0.9,
+          pitch: 1.0,
+          onDone: () => {
+            expoSpeakingRef.current = false;
+            if (!playingRef.current) setIsSpeaking(false);
+          },
+          onError: () => {
+            expoSpeakingRef.current = false;
+            if (!playingRef.current) setIsSpeaking(false);
+          },
+        });
       }
     }
 
