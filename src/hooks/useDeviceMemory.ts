@@ -55,6 +55,14 @@ export interface LocalProfile {
   email: string;
 }
 
+export interface LocalMedical {
+  type: string;
+  summary: string;
+  detail: string;
+  date: string;
+  created_at: string;
+}
+
 // ─── Database singleton ───────────────────────────────────────────────────────
 
 let _db: SQLite.SQLiteDatabase | null = null;
@@ -221,6 +229,30 @@ export function saveLocalMedical(type: string, summary: string, detail?: string,
   }
 }
 
+export function getLocalMedical(type?: string): LocalMedical[] {
+  try {
+    const db = getDb();
+    if (type) {
+      return db.getAllSync<LocalMedical>(
+        `SELECT type, summary, detail, date, created_at
+         FROM local_medical
+         WHERE active = 1 AND type = ?
+         ORDER BY date DESC, created_at DESC`,
+        [type]
+      );
+    }
+    return db.getAllSync<LocalMedical>(
+      `SELECT type, summary, detail, date, created_at
+       FROM local_medical
+       WHERE active = 1
+       ORDER BY date DESC, created_at DESC`
+    );
+  } catch (e) {
+    console.warn("[Herald] getLocalMedical failed:", e);
+    return [];
+  }
+}
+
 // ─── Instant local greeting ───────────────────────────────────────────────────
 //
 // Builds a greeting entirely from device data.
@@ -318,6 +350,10 @@ export function useDeviceMemory() {
     []
   );
 
+  const getLocalMedicalRecords = useCallback((type?: string) => {
+    return getLocalMedical(type);
+  }, []);
+
   const getTopMemories = useCallback((limit?: number) => {
     return getTopLocalMemories(limit);
   }, []);
@@ -339,6 +375,7 @@ export function useDeviceMemory() {
     saveProfile,
     savePreference,
     saveMedical,
+    getLocalMedical: getLocalMedicalRecords,
     getTopMemories,
     getProfile,
     getLocalGreeting,
