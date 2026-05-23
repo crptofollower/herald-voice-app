@@ -57,6 +57,7 @@ import { useLocation } from "../hooks/useLocation";
 import { useMic } from "../hooks/useMic";
 import { useHealthConnect } from "../hooks/useHealthConnect";
 import { useDeviceMemory, saveLocalProfile } from "../hooks/useDeviceMemory";
+import { answerFromDevice } from '../utils/localAnswers';
 
 interface IntentAction {
   type: string;
@@ -342,6 +343,28 @@ export default function ChatScreen() {
     if (!text) return;
 
     lastSentRef.current = now;
+
+    // ── Device-first interceptor -- answer personal queries from SQLite ──────
+    // Zero network. Zero OpenRouter cost. Under 200ms. Works offline.
+    const localAnswer = answerFromDevice(text);
+    if (localAnswer) {
+      addMessage({
+        id: generateId("msg"),
+        role: "user",
+        content: text,
+        timestamp: now,
+      });
+      addMessage({
+        id: generateId("msg"),
+        role: "assistant",
+        content: localAnswer,
+        timestamp: now + 1,
+      });
+      speak(localAnswer);
+      sendingRef.current = false;
+      setInputText("");
+      return;
+    }
     lastInteractionRef.current = now;
     sendingRef.current = true;
 
