@@ -51,7 +51,8 @@
           "locationWhenInUsePermission": "Herald uses your location for weather and local info."
         }
       ],
-      "expo-sqlite"
+      "expo-sqlite",
+      "expo-audio"
     ],
     "scheme": "herald",
     "extra": {
