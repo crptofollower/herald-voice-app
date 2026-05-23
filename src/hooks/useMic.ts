@@ -1,43 +1,36 @@
 import { useState, useRef } from 'react';
-import { Audio } from 'expo-av';
+import { useAudioRecorder, RecordingPresets, AudioModule } from 'expo-audio';
 import { API_BASE } from '../constants/api';
 
 export function useMic(onTranscript: (text: string) => void) {
   const [isRecording, setIsRecording] = useState(false);
-  const recordingRef = useRef<Audio.Recording | null>(null);
   const silenceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const meteringIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const meteringInterval = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
 
   async function startRecording() {
     try {
-      await Audio.requestPermissionsAsync();
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-      });
-
-      const { recording } = await Audio.Recording.createAsync({
-        ...Audio.RecordingOptionsPresets.HIGH_QUALITY,
-        isMeteringEnabled: true,
-      });
-
-      recordingRef.current = recording;
+      const status = await AudioModule.requestRecordingPermissionsAsync();
+      if (!status.granted) {
+        console.error('Mic permission denied');
+        return;
+      }
+      await recorder.prepareToRecordAsync();
+      recorder.record();
       setIsRecording(true);
 
       const SILENCE_THRESHOLD = -50;
       const SILENCE_DURATION  = 1500;
-      let   silentMs = 0;
+      let silentMs = 0;
 
-      meteringIntervalRef.current = setInterval(async () => {
-        if (!recordingRef.current) return clearInterval(meteringIntervalRef.current!);
-        const status = await recordingRef.current.getStatusAsync();
-        if (!status.isRecording) return clearInterval(meteringIntervalRef.current!);
-        const db = status.metering ?? -160;
+      meteringInterval.current = setInterval(() => {
+        const db = recorder.currentMetering ?? -160;
         if (db < SILENCE_THRESHOLD) {
           silentMs += 100;
           if (silentMs >= SILENCE_DURATION) {
-            clearInterval(meteringIntervalRef.current!);
-            meteringIntervalRef.current = null;
+            clearInterval(meteringInterval.current!);
+            meteringInterval.current = null;
             stopRecording();
           }
         } else {
@@ -47,24 +40,19 @@ export function useMic(onTranscript: (text: string) => void) {
 
       silenceTimer.current = setTimeout(() => stopRecording(), 30000);
     } catch (e) {
+      setIsRecording(false);
       console.error('Mic start failed:', e);
     }
   }
 
   async function stopRecording() {
-    if (silenceTimer.current) clearTimeout(silenceTimer.current);
-    if (meteringIntervalRef.current) {
-      clearInterval(meteringIntervalRef.current);
-      meteringIntervalRef.current = null;
-    }
-    if (!recordingRef.current) return;
-
+    if (silenceTimer.current) { clearTimeout(silenceTimer.current); silenceTimer.current = null; }
+    if (meteringInterval.current) { clearInterval(meteringInterval.current); meteringInterval.current = null; }
+    if (!isRecording) return;
     try {
       setIsRecording(false);
-      await recordingRef.current.stopAndUnloadAsync();
-      const uri = recordingRef.current.getURI();
-      recordingRef.current = null;
-
+      await recorder.stop();
+      const uri = recorder.uri;
       if (uri) await transcribe(uri);
     } catch (e) {
       console.error('Mic stop failed:', e);
@@ -79,12 +67,10 @@ export function useMic(onTranscript: (text: string) => void) {
         type: 'audio/m4a',
         name: 'recording.m4a',
       } as any);
-
       const res = await fetch(`${API_BASE}/transcribe`, {
         method: 'POST',
         body: formData,
       });
-
       const data = await res.json();
       if (data.text?.trim()) {
         onTranscript(data.text.trim());
