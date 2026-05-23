@@ -4005,7 +4005,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.25",
+        "status": "ok", "server": "herald-api", "version": "8.26",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -5315,6 +5315,22 @@ async def admin_clear_profile_field(request: Request):
     save_profile(user_id, profile)
     print(f"[HERALD] /admin/clear_profile_field: {user_id}.{field} cleared (was: {old_val})")
     return {"ok": True, "user_id": user_id, "field": field, "cleared_value": str(old_val)}
+
+@app.get("/admin/find_user")
+async def admin_find_user(secret: str, name: str = ""):
+    if not WEBHOOK_SECRET or secret != WEBHOOK_SECRET:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    results = []
+    for uid, profile in user_profiles.items():
+        profile_name = profile.get("name", "").lower()
+        if not name or name.lower() in profile_name:
+            results.append({
+                "user_id": uid,
+                "name": profile.get("name", ""),
+                "ai_name": profile.get("ai_name", ""),
+                "confirmed_city": profile.get("confirmed_city", ""),
+            })
+    return {"count": len(results), "users": results}
 
 @app.on_event("startup")
 def startup():
