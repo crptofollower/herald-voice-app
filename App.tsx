@@ -9,7 +9,7 @@
 //   Both play simultaneously. Fix: render nothing until hydrated.
 
 import "react-native-gesture-handler";
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { View } from "react-native";
 import { NavigationContainer } from "@react-navigation/native";
 import { createStackNavigator } from "@react-navigation/stack";
@@ -20,6 +20,7 @@ import { useStore } from "./src/store/useStore";
 import OnboardingScreen from "./src/screens/OnboardingScreen";
 import ChatScreen from "./src/screens/ChatScreen";
 import { ONESIGNAL_APP_ID } from "./src/constants/api";
+import { runMigrations } from './src/migrations/runMigrations';
 
 export type RootStackParamList = {
   Onboarding: undefined;
@@ -62,6 +63,16 @@ function Navigation() {
 }
 
 export default function App() {
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    const init = async () => {
+      await runMigrations();
+      setReady(true);
+    };
+    init();
+  }, []);
+
   useEffect(() => {
     if (ONESIGNAL_APP_ID) {
       try {
@@ -71,6 +82,8 @@ export default function App() {
       } catch {}
     }
   }, []);
+
+  if (!ready) return null;
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
