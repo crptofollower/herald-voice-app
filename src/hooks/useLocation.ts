@@ -39,6 +39,11 @@ function isValidCONUS(lat: number, lng: number): boolean {
   return lat >= 18 && lat <= 72 && lng >= -180 && lng <= -66;
 }
 
+// Tighter bounds for watchPosition updates (continental US core)
+function isValidWatchRegion(lat: number, lng: number): boolean {
+  return lat >= 24 && lat <= 50 && lng >= -125 && lng <= -66;
+}
+
 async function getCachedLocation(): Promise<LocationResult | null> {
   try {
     const raw = await AsyncStorage.getItem(CACHE_KEY);
@@ -50,6 +55,20 @@ async function getCachedLocation(): Promise<LocationResult | null> {
     return null;
   }
 }
+
+// Hydrate before first hook render so returning users get stale coords immediately.
+const cacheRef: { current: LocationResult | null } = { current: null };
+let cacheHydrationPromise: Promise<void> | null = null;
+
+function hydrateCacheRef(): Promise<void> {
+  if (!cacheHydrationPromise) {
+    cacheHydrationPromise = getCachedLocation().then((cached) => {
+      if (cached) cacheRef.current = cached;
+    });
+  }
+  return cacheHydrationPromise;
+}
+hydrateCacheRef();
 
 async function setCachedLocation(result: LocationResult): Promise<void> {
   try {
@@ -75,24 +94,27 @@ async function reverseGeocode(lat: number, lng: number, userId?: string): Promis
 }
 
 export function useLocation(): LocationResult {
-  const [location, setLocation] = useState<LocationResult>(UNAVAILABLE);
+  const [location, setLocation] = useState<LocationResult>(
+    () => cacheRef.current ?? UNAVAILABLE
+  );
 
   useEffect(() => {
     let cancelled = false;
+    let watchSubscription: Location.LocationSubscription | null = null;
     const userId = useStore.getState().userId;
 
     async function fetchLocation() {
-      // 1. Return cached result immediately if fresh
-      const cached = await getCachedLocation();
-      if (cached && !cancelled) {
-        setLocation(cached);
-        return;
+      // 1. Load cached result immediately if fresh, then refresh GPS in background
+      await hydrateCacheRef();
+      const cached = cacheRef.current ?? (await getCachedLocation());
+      if (cached) {
+        cacheRef.current = cached;
+        if (!cancelled) setLocation(cached);
       }
 
       // 2. Request foreground permission
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== "granted") {
-        if (!cancelled) setLocation(UNAVAILABLE);
         return;
       }
 
@@ -104,7 +126,6 @@ export function useLocation(): LocationResult {
         });
         coords = pos.coords;
       } catch {
-        if (!cancelled) setLocation(UNAVAILABLE);
         return;
       }
 
@@ -113,7 +134,6 @@ export function useLocation(): LocationResult {
       // 4. CONUS guard
       if (!isValidCONUS(lat, lng)) {
         console.warn(`[Herald] GPS rejected: out of CONUS bounds (${lat}, ${lng})`);
-        if (!cancelled) setLocation(UNAVAILABLE);
         return;
       }
 
@@ -127,13 +147,39 @@ export function useLocation(): LocationResult {
         available: true,
       };
 
-      // 6. Cache + return
+      // 6. Cache + update
+      cacheRef.current = result;
       await setCachedLocation(result);
       if (!cancelled) setLocation(result);
+
+      // 7. Watch for movement after initial fix
+      if (!cancelled) {
+        watchSubscription = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.Balanced,
+            distanceInterval: 1600,
+            timeInterval: 300000,
+          },
+          (newLocation) => {
+            if (cancelled) return;
+            const { latitude: watchLat, longitude: watchLng } = newLocation.coords;
+            if (!isValidWatchRegion(watchLat, watchLng)) return;
+            setLocation({
+              lat: watchLat,
+              lng: watchLng,
+              label: null,
+              available: true,
+            });
+          }
+        );
+      }
     }
 
     fetchLocation();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      watchSubscription?.remove();
+    };
   }, []);
 
   return location;

@@ -37,6 +37,7 @@ import {
 } from "react-native";
 import * as Calendar from "expo-calendar";
 import { useStore } from "../store/useStore";
+import { API_BASE } from "../constants/api";
 import { PERSONAS } from "../constants/personas";
 import {
   askHeraldStream,
@@ -149,6 +150,9 @@ export default function ChatScreen() {
   const sendingRef = useRef(false);
   const lastSentRef = useRef(0);
   const streamAbortRef = useRef<AbortController | null>(null);
+  const greetingSentRef = useRef(false);
+  const greetingMountRef = useRef(Date.now());
+  const needsLocationGreetingRef = useRef(true);
 
   // ── Scroll snap prevention ────────────────────────────────────────────────
   // Only auto-scroll to bottom when user is already near the bottom.
@@ -159,7 +163,7 @@ export default function ChatScreen() {
   useProactiveQueue();
   useCalendar();
   // useHealthConnect(); // disabled until AndroidManifest entries added
-  const { lat, lng, label: locationLabel } = useLocation();
+  const { lat, lng, label: locationLabel, available } = useLocation();
   const {
     saveMemory: saveDeviceMemory,
     saveProfile: saveDeviceProfile,
@@ -236,15 +240,53 @@ export default function ChatScreen() {
     if (unreadCount > 0) setShowProactive(true);
   }, [unreadCount]);
 
+  const upgradeLiveGreeting = useCallback(
+    (greetingLat?: number, greetingLng?: number, greetingLabel?: string) => {
+      const local_time = new Date().toLocaleTimeString("en-US", {
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+      });
+      return fetchGreeting({
+        user_id: userId,
+        local_time,
+        lat: greetingLat ?? undefined,
+        lng: greetingLng ?? undefined,
+        location_label: greetingLabel ?? undefined,
+      })
+        .then((data) => {
+          if (!data.greeting) return;
+          const hasWeather = /degrees|weather|forecast/i.test(data.greeting);
+          if (hasWeather) {
+            addMessage({
+              id: generateId("msg"),
+              role: "assistant",
+              content: data.greeting,
+              timestamp: Date.now() + 1,
+            });
+            if (greetingLabel) {
+              saveDeviceProfile("confirmed_city", greetingLabel);
+            }
+          }
+        })
+        .catch(() => {});
+    },
+    [userId, addMessage, saveDeviceProfile]
+  );
+
   // ── Greeting on first open ────────────────────────────────────────────────
   // Use displayMessages not messages -- old sessions have messages.length > 0
   // but displayMessages is always empty on mount (sessionStart = Date.now()).
   useEffect(() => {
     if (!userId || displayMessages.length > 0) return;
+    if (greetingSentRef.current) return;
+    greetingSentRef.current = true;
+
+    if (lat != null && lng != null) {
+      needsLocationGreetingRef.current = false;
+    }
 
     // ── INSTANT LOCAL GREETING (device-first, under 500ms) ───────────────────
-    // Build greeting from device SQLite immediately -- no network needed.
-    // Herald speaks before the internet is touched.
     const localGreeting = getLocalGreeting(aiName || "Herald");
     const greetingId = generateId("msg");
     addMessage({
@@ -256,43 +298,23 @@ export default function ChatScreen() {
     speak(localGreeting);
 
     // ── BACKGROUND LIVE ENHANCEMENT ──────────────────────────────────────────
-    // Fetch live greeting with weather from backend.
-    // If it returns something better, replace the local greeting silently.
-    const local_time = new Date().toLocaleTimeString("en-US", {
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-    });
-    fetchGreeting({
-      user_id: userId,
-      local_time,
-      lat: lat ?? undefined,
-      lng: lng ?? undefined,
-      location_label: locationLabel ?? undefined,
-    })
-      .then((data) => {
-        if (!data.greeting) return;
-        // Only upgrade if live greeting has weather (adds real value)
-        const hasWeather = /degrees|weather|forecast/i.test(data.greeting);
-        if (hasWeather) {
-          // Replace the local greeting message with the live one
-          addMessage({
-            id: generateId("msg"),
-            role: "assistant",
-            content: data.greeting,
-            timestamp: Date.now() + 1,
-          });
-          // Don't speak again -- user already heard the local greeting
-          // Cache city for next time
-          if (locationLabel) {
-            saveDeviceProfile("confirmed_city", locationLabel);
-          }
-        }
-      })
-      .catch(() => {
-        // Local greeting already fired -- nothing to do
-      });
-  }, [userId]); // eslint-disable-line react-hooks/exhaustive-deps
+    upgradeLiveGreeting(lat ?? undefined, lng ?? undefined, locationLabel ?? undefined);
+  }, [userId, available, lat, lng, locationLabel, displayMessages.length, getLocalGreeting, aiName, addMessage, speak, upgradeLiveGreeting]);
+
+  // If GPS resolves within 3s of open, re-fetch greeting with real coords.
+  useEffect(() => {
+    if (!userId || !available || lat == null || lng == null) return;
+    if (Date.now() - greetingMountRef.current > 3000) return;
+    if (!needsLocationGreetingRef.current) return;
+    needsLocationGreetingRef.current = false;
+    upgradeLiveGreeting(lat, lng, locationLabel ?? undefined);
+  }, [userId, available, lat, lng, locationLabel, upgradeLiveGreeting]);
+
+  // Silent profile location update when GPS becomes available.
+  useEffect(() => {
+    if (!available || !userId || lat == null || lng == null) return;
+    fetch(`${API_BASE}/geocode?lat=${lat}&lng=${lng}&user_id=${userId}`).catch(() => {});
+  }, [available, userId, lat, lng]);
 
   // ── Auto-scroll (only when user is at bottom) ─────────────────────────────
   useEffect(() => {
