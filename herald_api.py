@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.16 -- Tighter web-search triggers (casual chat no longer hits Brave/:online)
+# v8.25 -- Mickey location fix + alarm fast path + system prompt hardening
 #
 # v8.12 -- Medical memory system (always include user city in MAPS tag)
 #
@@ -38,7 +38,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.16")
+app = FastAPI(title="Herald API", version="8.25")
 
 app.add_middleware(
     CORSMiddleware,
@@ -2953,6 +2953,11 @@ MEMORY RULES -- how you use what you know (v8.8):
   SAY: "your area" or "The Colony" or whatever city was detected.
 - You NEVER announce that you are retrieving, accessing, or checking your memory.
 - When you know something about the user, weave it in naturally. You do not perform memory. You just know.
+- NEVER describe your own backend, database, config files, code, or architecture to the user.
+- NEVER reference the developer by name or imply someone else needs to fix a problem.
+- NEVER tell the user a problem is outside your control or requires a third party to resolve.
+- If your location data seems wrong: say "Let me recalibrate -- where are you right now?" Use what they tell you. Do not explain the technical reason.
+- If anything feels broken, own it: "Let me try that a different way." You are the product. Act like it.
 
 HERALD HONESTY CONTRACT (locked):
 You OFFER actions. The app EXECUTES them. You NEVER claim to have done something.
@@ -3460,6 +3465,44 @@ def get_direct_reply(ctx):
         hour12 = hour if 1 <= hour <= 12 else (12 if hour == 0 else hour - 12)
         return f"It is {hour12}:{minute:02d} {ampm}.", False
 
+    # v8.25 Alarm fast path -- relative time parsed server-side, no LLM needed.
+    # Fixes: 45-second delay + wrong time ("three o'clock" for "thirty minutes").
+    # "set alarm for thirty minutes" at 2:32pm → ALARM: 15:02|30 minutes timer
+    _ALARM_RELATIVE = re.compile(
+        r'(?:set|create|put)?\s*(?:an?\s+)?(?:alarm|timer)\s*(?:for|in)?\s*(\d+)\s*(minute|min|hour|hr)',
+        re.IGNORECASE
+    )
+    _WAKE_RELATIVE = re.compile(
+        r'(?:wake\s+me\s+(?:up\s+)?in|remind\s+me\s+in)\s+(\d+)\s*(minute|min|hour|hr)',
+        re.IGNORECASE
+    )
+    _alarm_match = _ALARM_RELATIVE.search(msg_lower) or _WAKE_RELATIVE.search(msg_lower)
+    if _alarm_match:
+        _amount  = int(_alarm_match.group(1))
+        _unit    = _alarm_match.group(2).lower()
+        _minutes = _amount if _unit.startswith('m') else _amount * 60
+        _local_time_str = ctx.get("local_time", "")
+        _now_dt = None
+        if _local_time_str:
+            try:
+                _tm = re.search(r'(\d{1,2}):(\d{2})\s*(AM|PM)', _local_time_str, re.IGNORECASE)
+                if _tm:
+                    _h = int(_tm.group(1)); _mn = int(_tm.group(2))
+                    if _tm.group(3).upper() == 'PM' and _h != 12: _h += 12
+                    elif _tm.group(3).upper() == 'AM' and _h == 12: _h = 0
+                    _now_dt = datetime.now().replace(hour=_h, minute=_mn, second=0, microsecond=0)
+            except Exception:
+                pass
+        if _now_dt is None:
+            _now_dt = datetime.now()
+        _alarm_dt   = _now_dt + timedelta(minutes=_minutes)
+        _alarm_hhmm = _alarm_dt.strftime("%H:%M")
+        _spoken     = (f"{_amount} {'minute' if _amount == 1 else 'minutes'}"
+                       if _unit.startswith('m') else
+                       f"{_amount} {'hour' if _amount == 1 else 'hours'}")
+        _reply_text = f"I can set that for {_spoken} from now -- want me to do that?"
+        return f"{_reply_text}\n\nALARM: {_alarm_hhmm}|{_spoken} timer", False
+
     SYNC_TRIGGERS = ['sync', 'refresh', 'update freddie', 'sync empire', 'refresh data']
     if owner and any(t in msg_lower for t in SYNC_TRIGGERS):
         try:
@@ -3962,7 +4005,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.24",
+        "status": "ok", "server": "herald-api", "version": "8.25",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -5242,6 +5285,36 @@ async def health_sync(request: Request):
 
 
 # ── STARTUP ───────────────────────────────────────────────────────────────────
+
+@app.post("/admin/clear_profile_field")
+async def admin_clear_profile_field(request: Request):
+    """
+    v8.25: One-shot admin tool to clear a bad cached profile field.
+    Use case: Mickey's confirmed_city stuck as 'Gobbi, Liguria'.
+    Auth: requires WEBHOOK_SECRET.
+    """
+    data   = await request.json()
+    secret = data.get("secret", "")
+    if not WEBHOOK_SECRET or secret != WEBHOOK_SECRET:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    user_id = data.get("user_id", "").strip()
+    field   = data.get("field", "").strip()
+    if not user_id or not field:
+        return JSONResponse({"error": "user_id and field required"}, status_code=400)
+    CLEARABLE = {
+        "confirmed_city", "confirmed_lat", "confirmed_lng",
+        "location", "_briefing_confirm", "pending_watch_offer"
+    }
+    if field not in CLEARABLE:
+        return JSONResponse(
+            {"error": f"field '{field}' not clearable via this endpoint"},
+            status_code=400
+        )
+    profile = get_profile(user_id)
+    old_val = profile.pop(field, None)
+    save_profile(user_id, profile)
+    print(f"[HERALD] /admin/clear_profile_field: {user_id}.{field} cleared (was: {old_val})")
+    return {"ok": True, "user_id": user_id, "field": field, "cleared_value": str(old_val)}
 
 @app.on_event("startup")
 def startup():
