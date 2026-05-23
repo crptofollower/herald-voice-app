@@ -267,9 +267,18 @@ export function buildLocalGreeting(aiName: string): string {
 
 export function buildLocalContextBlock(): string {
   try {
+    const lines: string[] = [];
+
+    const profile = getLocalProfile();
+    if (profile.name)           lines.push(`name: ${profile.name}`);
+    if (profile.ai_name)        lines.push(`ai_name: ${profile.ai_name}`);
+    if (profile.confirmed_city) lines.push(`location: ${profile.confirmed_city}`);
+    else if (profile.location)  lines.push(`location: ${profile.location}`);
+
     const memories = getTopLocalMemories(8);
-    if (!memories.length) return "";
-    return memories.map((m) => m.summary).join("; ");
+    for (const m of memories) lines.push(m.summary);
+
+    return lines.join("\n");
   } catch {
     return "";
   }
