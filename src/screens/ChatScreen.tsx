@@ -54,7 +54,7 @@ import { IntentCard, type ActionStatus } from "../components/IntentCard";
 import { generateId } from "../utils/id";
 import { useCalendar } from "../hooks/useCalendar";
 import { useLocation } from "../hooks/useLocation";
-// useMic removed -- mic button caused feedback loop with TTS and blocked input bar
+import { useMic } from "../hooks/useMic";
 import { useHealthConnect } from "../hooks/useHealthConnect";
 import { useDeviceMemory, saveLocalProfile } from "../hooks/useDeviceMemory";
 
@@ -160,6 +160,8 @@ export default function ChatScreen() {
   const isAtBottomRef = useRef(true);
 
   const { speak, enqueueSentence, resetSpeech, stop, isSpeaking } = useSpeech();
+  const [handsFreeMode, setHandsFreeMode] = useState(false);
+  const handsFreeRef = useRef(false);
   useProactiveQueue();
   useCalendar();
   // useHealthConnect(); // disabled until AndroidManifest entries added
@@ -333,12 +335,10 @@ export default function ChatScreen() {
 
   // ── Send ──────────────────────────────────────────────────────────────────
 
-  const handleSend = useCallback(() => {
+  const sendMessage = useCallback((text: string) => {
     const now = Date.now();
     if (now - lastSentRef.current < 1000) return;
     if (sendingRef.current) return;
-
-    const text = inputText.trim();
     if (!text) return;
 
     lastSentRef.current = now;
@@ -352,7 +352,6 @@ export default function ChatScreen() {
       timestamp: now,
     });
 
-    setInputText("");
     setError(null);
     setPendingAction(null);
     resetSpeech();
@@ -411,7 +410,29 @@ export default function ChatScreen() {
     );
 
     streamAbortRef.current = abortController;
-  }, [inputText, userId, messages, personaKey, lat, lng, locationLabel, getContextBlock, addMessage, setError, resetSpeech, enqueueSentence, resetStreamState]);
+    setInputText("");
+  }, [userId, messages, personaKey, lat, lng, locationLabel, getContextBlock, addMessage, setError, resetSpeech, enqueueSentence, resetStreamState]);
+
+  const handleSend = useCallback(() => {
+    sendMessage(inputText.trim());
+  }, [inputText, sendMessage]);
+
+  const handleTranscript = useCallback((transcript: string) => {
+    if (!transcript.trim()) return;
+    sendMessage(transcript.trim());
+  }, [sendMessage]);
+  const { isRecording, startRecording, stopRecording } = useMic(handleTranscript);
+
+  useEffect(() => {
+    handsFreeRef.current = handsFreeMode;
+  }, [handsFreeMode]);
+
+  useEffect(() => {
+    if (!isSpeaking && handsFreeRef.current && !isStreaming) {
+      const timer = setTimeout(() => startRecording(), 300);
+      return () => clearTimeout(timer);
+    }
+  }, [isSpeaking]);
 
   // ── Intent execution ──────────────────────────────────────────────────────
 
