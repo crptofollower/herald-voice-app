@@ -907,8 +907,35 @@ export default function ChatScreen() {
                 stop();
               }}
             />
-            {/* Mic button removed -- caused TTS feedback loop.
-                Use Samsung keyboard mic (has echo cancellation). */}
+            <TouchableOpacity
+              style={[
+                styles.sendBtn,
+                {
+                  backgroundColor: handsFreeMode
+                    ? persona.colors.accent
+                    : isRecording
+                    ? '#cc3333'
+                    : 'transparent',
+                  borderWidth: handsFreeMode || isRecording ? 0 : 1,
+                  borderColor: persona.colors.accent,
+                  marginRight: 6,
+                },
+              ]}
+              onPress={() => {
+                if (handsFreeMode) {
+                  setHandsFreeMode(false);
+                  stopRecording();
+                } else {
+                  setHandsFreeMode(true);
+                  startRecording();
+                }
+              }}
+              accessibilityLabel={handsFreeMode ? "Stop hands-free mode" : "Start hands-free mode"}
+            >
+              <Text style={[styles.sendArrow, { color: handsFreeMode || isRecording ? '#fff' : persona.colors.accent }]}>
+                {isRecording ? '⏹' : '🎤'}
+              </Text>
+            </TouchableOpacity>
             <TouchableOpacity
               style={[
                 styles.sendBtn,
