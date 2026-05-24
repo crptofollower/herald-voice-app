@@ -1,83 +1,78 @@
-import { useState, useRef } from 'react';
-import { useAudioRecorder, RecordingPresets, AudioModule } from 'expo-audio';
-import { API_BASE } from '../constants/api';
+import { useRef, useState } from 'react';
+import {
+  ExpoSpeechRecognitionModule,
+  useSpeechRecognitionEvent,
+} from 'expo-speech-recognition';
 
 export function useMic(onTranscript: (text: string) => void) {
   const [isRecording, setIsRecording] = useState(false);
-  const silenceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const meteringInterval = useRef<ReturnType<typeof setInterval> | null>(null);
+  const maxTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  useSpeechRecognitionEvent('result', (event) => {
+    if (event.isFinal) {
+      const text = event.results[0]?.transcript?.trim();
+      if (text) {
+        onTranscript(text);
+      }
+      setIsRecording(false);
+      if (maxTimer.current) {
+        clearTimeout(maxTimer.current);
+        maxTimer.current = null;
+      }
+    }
+  });
+
+  useSpeechRecognitionEvent('error', (event) => {
+    if (event.error !== 'no-speech') {
+      console.error('[useMic] Speech recognition error:', event.error);
+    }
+    setIsRecording(false);
+    if (maxTimer.current) {
+      clearTimeout(maxTimer.current);
+      maxTimer.current = null;
+    }
+  });
+
+  useSpeechRecognitionEvent('end', () => {
+    setIsRecording(false);
+    if (maxTimer.current) {
+      clearTimeout(maxTimer.current);
+      maxTimer.current = null;
+    }
+  });
 
   async function startRecording() {
     try {
-      const status = await AudioModule.requestRecordingPermissionsAsync();
-      if (!status.granted) {
-        console.error('Mic permission denied');
+      const { granted } =
+        await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+      if (!granted) {
+        console.error('[useMic] Mic permission denied');
         return;
       }
-      await recorder.prepareToRecordAsync();
-      recorder.record();
+      ExpoSpeechRecognitionModule.start({
+        lang: 'en-US',
+        interimResults: false,
+        continuous: false,
+      });
       setIsRecording(true);
-
-      const SILENCE_THRESHOLD = -50;
-      const SILENCE_DURATION  = 1500;
-      let silentMs = 0;
-
-      meteringInterval.current = setInterval(() => {
-        const db = recorder.currentMetering ?? -160;
-        if (db < SILENCE_THRESHOLD) {
-          silentMs += 100;
-          if (silentMs >= SILENCE_DURATION) {
-            clearInterval(meteringInterval.current!);
-            meteringInterval.current = null;
-            stopRecording();
-          }
-        } else {
-          silentMs = 0;
-        }
-      }, 100);
-
-      silenceTimer.current = setTimeout(() => stopRecording(), 30000);
+      maxTimer.current = setTimeout(() => stopRecording(), 30000);
     } catch (e) {
+      console.error('[useMic] start failed:', e);
       setIsRecording(false);
-      console.error('Mic start failed:', e);
     }
   }
 
   async function stopRecording() {
-    if (silenceTimer.current) { clearTimeout(silenceTimer.current); silenceTimer.current = null; }
-    if (meteringInterval.current) { clearInterval(meteringInterval.current); meteringInterval.current = null; }
-    if (!isRecording) return;
-    try {
-      setIsRecording(false);
-      await recorder.stop();
-      const uri = recorder.uri;
-      if (uri) await transcribe(uri);
-    } catch (e) {
-      console.error('Mic stop failed:', e);
+    if (maxTimer.current) {
+      clearTimeout(maxTimer.current);
+      maxTimer.current = null;
     }
-  }
-
-  async function transcribe(uri: string) {
     try {
-      const formData = new FormData();
-      formData.append('file', {
-        uri,
-        type: 'audio/m4a',
-        name: 'recording.m4a',
-      } as any);
-      const res = await fetch(`${API_BASE}/transcribe`, {
-        method: 'POST',
-        body: formData,
-      });
-      const data = await res.json();
-      if (data.text?.trim()) {
-        onTranscript(data.text.trim());
-      }
+      ExpoSpeechRecognitionModule.stop();
     } catch (e) {
-      console.error('Transcribe failed:', e);
+      console.error('[useMic] stop failed:', e);
     }
+    setIsRecording(false);
   }
 
   return { isRecording, startRecording, stopRecording };
