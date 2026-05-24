@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.25 -- Mickey location fix + alarm fast path + system prompt hardening
+# v8.27 -- Calendar direct reply fast path (no LLM, SQLite only)
 #
 # v8.12 -- Medical memory system (always include user city in MAPS tag)
 #
@@ -3465,6 +3465,55 @@ def get_direct_reply(ctx):
         hour12 = hour if 1 <= hour <= 12 else (12 if hour == 0 else hour - 12)
         return f"It is {hour12}:{minute:02d} {ampm}.", False
 
+    # v8.27 Calendar fast path -- answer from SQLite directly, no LLM.
+    # "what's on my calendar" was taking 45s because LLM was reading
+    # calendar data we already had. Now returns in under 2s.
+    _CALENDAR_TRIGGERS = [
+        "what do i have", "what's on my calendar", "whats on my calendar",
+        "what is on my calendar", "my calendar", "my schedule",
+        "what do i have today", "what do i have tomorrow",
+        "what do i have this week", "anything on my calendar",
+        "anything on my schedule", "am i free", "what's coming up",
+        "whats coming up", "coming up today", "coming up this week",
+        "show my calendar", "show my schedule", "my agenda",
+        "my appointments", "my appointment", "on my schedule",
+        "what do i have on", "do i have anything",
+    ]
+    if any(t in msg_lower for t in _CALENDAR_TRIGGERS):
+        _user_id = profile.get("user_id", "")
+        _cal_line = _get_calendar_line(_user_id) if _user_id else ""
+        _name = profile.get("name", "")
+        _name_part = f", {_name}" if _name else ""
+        if _cal_line:
+            # Strip the instruction suffix -- only keep the event list
+            _events_raw = _cal_line.replace(
+                ". Answer schedule questions from this list -- do not guess.", ""
+            ).replace("Upcoming calendar from device: ", "").strip()
+            # Convert semicolons to natural spoken list
+            _event_items = [e.strip() for e in _events_raw.split(";") if e.strip()]
+            if len(_event_items) == 0:
+                _cal_reply = f"Nothing on your calendar in the next two weeks{_name_part}."
+            elif len(_event_items) == 1:
+                _cal_reply = f"You have one thing coming up{_name_part}: {_event_items[0]}."
+            elif len(_event_items) == 2:
+                _cal_reply = (
+                    f"You have two things coming up{_name_part}: "
+                    f"{_event_items[0]}, and {_event_items[1]}."
+                )
+            else:
+                _first = ", ".join(_event_items[:-1])
+                _last = _event_items[-1]
+                _cal_reply = (
+                    f"Here is what you have coming up{_name_part}: "
+                    f"{_first}, and {_last}."
+                )
+        else:
+            _cal_reply = (
+                f"I don't see anything on your calendar in the next two weeks"
+                f"{_name_part}. If you have events they may not have synced yet."
+            )
+        return _cal_reply, False
+
     # v8.25 Alarm fast path -- relative time parsed server-side, no LLM needed.
     # Fixes: 45-second delay + wrong time ("three o'clock" for "thirty minutes").
     # "set alarm for thirty minutes" at 2:32pm → ALARM: 15:02|30 minutes timer
@@ -4005,7 +4054,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.26",
+        "status": "ok", "server": "herald-api", "version": "8.27",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
