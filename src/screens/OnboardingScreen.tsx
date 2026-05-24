@@ -157,6 +157,7 @@ export default function OnboardingScreen() {
   const handleFinish = async () => {
     const trimmedName   = name.trim() || "Friend";
     const trimmedAiName = aiName.trim() || "Herald";  // default to Herald if blank
+    saveLocalProfile("ai_name", trimmedAiName);
     setSubmitting(true);
     Speech.stop();
     try {

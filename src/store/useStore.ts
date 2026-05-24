@@ -87,7 +87,7 @@ type Store = UserState & ChatState & ProactiveState & FreddieState & HydrationSt
 
 export const useStore = create<Store>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       // ── User ──────────────────────────────────────────────────────────────
       userId: Crypto.randomUUID(),
       name: "",
@@ -106,7 +106,14 @@ export const useStore = create<Store>()(
       setUser:               (userId, name) => set({ userId, name }),
       setAiName:             (aiName)       => set({ aiName: aiName || "Herald" }),
       setPersona:            (persona)      => set({ persona }),
-      setOnboardingComplete: ()             => set({ onboardingComplete: true }),
+      setOnboardingComplete: () => {
+        const { userId, name } = get();
+        if (!userId || !name || userId.trim() === '' || name.trim() === '') {
+          console.warn('[useStore] setOnboardingComplete blocked -- userId or name missing');
+          return;
+        }
+        set({ onboardingComplete: true });
+      },
       toggleVoice:           ()             => set((s) => ({ voiceEnabled: !s.voiceEnabled })),
       toggleTTS:             ()             => set((s) => ({ ttsEnabled:   !s.ttsEnabled })),
       toggleMute:            ()             => set((s) => ({ isMuted:      !s.isMuted })),

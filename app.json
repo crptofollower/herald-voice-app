@@ -52,7 +52,15 @@
         }
       ],
       "expo-sqlite",
-      "expo-audio"
+      "expo-audio",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Herald uses your microphone to hear your voice.",
+          "speechRecognitionPermission": "Herald uses speech recognition to understand you.",
+          "androidSpeechServicePackages": ["com.google.android.googlequicksearchbox"]
+        }
+      ]
     ],
     "scheme": "herald",
     "extra": {

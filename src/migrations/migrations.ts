@@ -25,9 +25,28 @@ export const MIGRATIONS: Migration[] = [
     description: 'Clear stuck onboardingComplete flag when userId is absent. ' +
                  'Fixes: fresh APK install skips onboarding because old flag persists.',
     run: async () => {
-      const userId = await AsyncStorage.getItem('userId');
-      if (!userId) {
-        await AsyncStorage.removeItem('onboardingComplete');
+      // The Zustand store persists as one JSON blob under
+      // 'herald-store-v3'. On reinstall, this blob survives
+      // with onboardingComplete: true but the server profile
+      // is gone. This migration detects that and resets the flag.
+      try {
+        const raw = await AsyncStorage.getItem('herald-store-v3');
+        if (!raw) return; // fresh install -- nothing to fix
+        const store = JSON.parse(raw);
+        const state  = store?.state ?? {};
+        const userId = (state.userId ?? '').trim();
+        const name   = (state.name   ?? '').trim();
+        if (!userId || !name) {
+          // userId or name missing -- onboarding was never completed
+          store.state.onboardingComplete = false;
+          await AsyncStorage.setItem(
+            'herald-store-v3',
+            JSON.stringify(store)
+          );
+          console.log('[Migration] v8.16_fix_onboarding_flag: reset stuck flag');
+        }
+      } catch (e) {
+        console.error('[Migration] v8.16_fix_onboarding_flag (non-fatal):', e);
       }
     },
   },
