@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.28 -- Pre-check fast paths before build_ask_context
+# v8.29 -- Alarm pre-check in /ask and /ask/stream
 #
 # v8.12 -- Medical memory system (always include user city in MAPS tag)
 #
@@ -38,7 +38,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.28")
+app = FastAPI(title="Herald API", version="8.29")
 
 app.add_middleware(
     CORSMiddleware,
@@ -4054,7 +4054,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.28",
+        "status": "ok", "server": "herald-api", "version": "8.29",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -4358,6 +4358,62 @@ async def ask(request: Request):
             **_trial_fields(_pre_trial),
         }
 
+    # Alarm pre-check -- relative time, server-side math
+    _PRE_ALARM_REL = re.compile(
+        r'(?:set|create|put)?\s*(?:an?\s+)?(?:alarm|timer)\s*'
+        r'(?:for|in)?\s*(\d+)\s*(minute|min|hour|hr)',
+        re.IGNORECASE
+    )
+    _PRE_WAKE_REL = re.compile(
+        r'(?:wake\s+me\s+(?:up\s+)?in|remind\s+me\s+in)'
+        r'\s+(\d+)\s*(minute|min|hour|hr)',
+        re.IGNORECASE
+    )
+    _alarm_match = _PRE_ALARM_REL.search(_pre_lower) or \
+                   _PRE_WAKE_REL.search(_pre_lower)
+    if _alarm_match:
+        _a_amount  = int(_alarm_match.group(1))
+        _a_unit    = _alarm_match.group(2).lower()
+        _a_minutes = _a_amount if _a_unit.startswith('m') else _a_amount * 60
+        _a_time_str = data.get("local_time", "")
+        _a_now = None
+        if _a_time_str:
+            try:
+                _atm = re.search(
+                    r'(\d{1,2}):(\d{2})\s*(AM|PM)',
+                    _a_time_str, re.IGNORECASE
+                )
+                if _atm:
+                    _ah = int(_atm.group(1)); _am = int(_atm.group(2))
+                    if _atm.group(3).upper() == 'PM' and _ah != 12: _ah += 12
+                    elif _atm.group(3).upper() == 'AM' and _ah == 12: _ah = 0
+                    _a_now = datetime.now().replace(
+                        hour=_ah, minute=_am, second=0, microsecond=0
+                    )
+            except Exception:
+                pass
+        if _a_now is None:
+            _a_now = datetime.now()
+        _a_alarm_dt   = _a_now + timedelta(minutes=_a_minutes)
+        _a_alarm_hhmm = _a_alarm_dt.strftime("%H:%M")
+        _a_spoken     = (
+            f"{_a_amount} {'minute' if _a_amount == 1 else 'minutes'}"
+            if _a_unit.startswith('m') else
+            f"{_a_amount} {'hour' if _a_amount == 1 else 'hours'}"
+        )
+        _a_reply = (
+            f"I can set that for {_a_spoken} from now"
+            f"{_pre_namepart} -- want me to do that?"
+        )
+        _a_action_val = f"{_a_alarm_hhmm}|{_a_spoken} timer"
+        return {
+            "reply": _a_reply,
+            "action": {"type": "alarm", "value": _a_action_val},
+            "ai_name": _pre_ai_name, "name": _pre_name,
+            "used_search": False,
+            **_trial_fields(_pre_trial),
+        }
+
     ctx, err = await run_in_threadpool(build_ask_context, data)
     if err:
         return JSONResponse({"error": err}, status_code=400)
@@ -4546,6 +4602,65 @@ async def ask_stream(request: Request):
             yield _sse_event({"t": _ptime_reply})
             yield _sse_event({"t": "[S]"})
             yield _sse_event({**_pre_done, "full": _ptime_reply, "action": None, "used_search": False})
+            return
+
+        # Alarm pre-check -- relative time, server-side math
+        _PRE_ALARM_REL = re.compile(
+            r'(?:set|create|put)?\s*(?:an?\s+)?(?:alarm|timer)\s*'
+            r'(?:for|in)?\s*(\d+)\s*(minute|min|hour|hr)',
+            re.IGNORECASE
+        )
+        _PRE_WAKE_REL = re.compile(
+            r'(?:wake\s+me\s+(?:up\s+)?in|remind\s+me\s+in)'
+            r'\s+(\d+)\s*(minute|min|hour|hr)',
+            re.IGNORECASE
+        )
+        _alarm_match = _PRE_ALARM_REL.search(_pre_lower) or \
+                       _PRE_WAKE_REL.search(_pre_lower)
+        if _alarm_match:
+            _a_amount  = int(_alarm_match.group(1))
+            _a_unit    = _alarm_match.group(2).lower()
+            _a_minutes = _a_amount if _a_unit.startswith('m') else _a_amount * 60
+            _a_time_str = data.get("local_time", "")
+            _a_now = None
+            if _a_time_str:
+                try:
+                    _atm = re.search(
+                        r'(\d{1,2}):(\d{2})\s*(AM|PM)',
+                        _a_time_str, re.IGNORECASE
+                    )
+                    if _atm:
+                        _ah = int(_atm.group(1)); _am = int(_atm.group(2))
+                        if _atm.group(3).upper() == 'PM' and _ah != 12: _ah += 12
+                        elif _atm.group(3).upper() == 'AM' and _ah == 12: _ah = 0
+                        _a_now = datetime.now().replace(
+                            hour=_ah, minute=_am, second=0, microsecond=0
+                        )
+                except Exception:
+                    pass
+            if _a_now is None:
+                _a_now = datetime.now()
+            _a_alarm_dt   = _a_now + timedelta(minutes=_a_minutes)
+            _a_alarm_hhmm = _a_alarm_dt.strftime("%H:%M")
+            _a_spoken     = (
+                f"{_a_amount} {'minute' if _a_amount == 1 else 'minutes'}"
+                if _a_unit.startswith('m') else
+                f"{_a_amount} {'hour' if _a_amount == 1 else 'hours'}"
+            )
+            _a_reply = (
+                f"I can set that for {_a_spoken} from now"
+                f"{_pre_namepart} -- want me to do that?"
+            )
+            _a_action_val = f"{_a_alarm_hhmm}|{_a_spoken} timer"
+            _a_full = f"{_a_reply}\n\nALARM: {_a_action_val}"
+            yield _sse_event({"t": _a_reply})
+            yield _sse_event({"t": "[S]"})
+            yield _sse_event({
+                **_pre_done,
+                "full":        _a_full,
+                "action":      {"type": "alarm", "value": _a_action_val},
+                "used_search": False,
+            })
             return
 
         ctx, err = await run_in_threadpool(build_ask_context, data)
