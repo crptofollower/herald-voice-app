@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.27 -- Calendar direct reply fast path (no LLM, SQLite only)
+# v8.28 -- Pre-check fast paths before build_ask_context
 #
 # v8.12 -- Medical memory system (always include user city in MAPS tag)
 #
@@ -38,7 +38,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.25")
+app = FastAPI(title="Herald API", version="8.28")
 
 app.add_middleware(
     CORSMiddleware,
@@ -4054,7 +4054,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.27",
+        "status": "ok", "server": "herald-api", "version": "8.28",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -4285,6 +4285,79 @@ async def onboard(request: Request):
 async def ask(request: Request):
     data = await request.json()
 
+    # v8.28 PRE-CHECK: bypass build_ask_context for fast path queries
+    _pre_user_id  = data.get("user_id", "").strip()
+    _pre_message  = data.get("message", "").strip()
+    _pre_lower    = _pre_message.lower()
+    _pre_profile  = get_profile(_pre_user_id)
+    _pre_name     = _pre_profile.get("name", "")
+    _pre_namepart = f", {_pre_name}" if _pre_name else ""
+    _pre_ai_name  = _pre_profile.get("ai_name", "Herald")
+    _pre_trial    = get_trial_status(_pre_profile)
+
+    _PRE_CAL = [
+        "what do i have", "what's on my calendar", "whats on my calendar",
+        "what is on my calendar", "my calendar", "my schedule",
+        "what do i have today", "what do i have tomorrow",
+        "what do i have this week", "anything on my calendar",
+        "anything on my schedule", "am i free", "what's coming up",
+        "whats coming up", "coming up today", "coming up this week",
+        "show my calendar", "show my schedule", "my agenda",
+        "my appointments", "my appointment", "on my schedule",
+        "what do i have on", "do i have anything",
+    ]
+    if any(t in _pre_lower for t in _PRE_CAL):
+        _pcal_line = _get_calendar_line(_pre_user_id) if _pre_user_id else ""
+        if _pcal_line:
+            _pcal_raw   = _pcal_line.replace(
+                ". Answer schedule questions from this list -- do not guess.", ""
+            ).replace("Upcoming calendar from device: ", "").strip()
+            _pcal_items = [e.strip() for e in _pcal_raw.split(";") if e.strip()]
+            if len(_pcal_items) == 0:
+                _pcal_reply = f"Nothing on your calendar in the next two weeks{_pre_namepart}."
+            elif len(_pcal_items) == 1:
+                _pcal_reply = f"You have one thing coming up{_pre_namepart}: {_pcal_items[0]}."
+            elif len(_pcal_items) == 2:
+                _pcal_reply = (
+                    f"You have two things coming up{_pre_namepart}: "
+                    f"{_pcal_items[0]}, and {_pcal_items[1]}."
+                )
+            else:
+                _pcal_first = ", ".join(_pcal_items[:-1])
+                _pcal_reply = (
+                    f"Here is what you have coming up{_pre_namepart}: "
+                    f"{_pcal_first}, and {_pcal_items[-1]}."
+                )
+        else:
+            _pcal_reply = (
+                f"I don't see anything on your calendar in the next "
+                f"two weeks{_pre_namepart}. Events may not have synced yet."
+            )
+        return {
+            "reply": _pcal_reply, "action": None,
+            "ai_name": _pre_ai_name, "name": _pre_name,
+            "used_search": False,
+            **_trial_fields(_pre_trial),
+        }
+
+    _PRE_TIME = ['what time is it', 'what is the time', "what's the time"]
+    if any(q in _pre_lower for q in _PRE_TIME):
+        _ptime_str = data.get("local_time", "")
+        if _ptime_str:
+            _ptime_reply = f"It is {_ptime_str}."
+        else:
+            _pnow = datetime.now()
+            _ph   = _pnow.hour; _pm = _pnow.minute
+            _pa   = "AM" if _ph < 12 else "PM"
+            _ph12 = _ph if 1 <= _ph <= 12 else (12 if _ph == 0 else _ph - 12)
+            _ptime_reply = f"It is {_ph12}:{_pm:02d} {_pa}."
+        return {
+            "reply": _ptime_reply, "action": None,
+            "ai_name": _pre_ai_name, "name": _pre_name,
+            "used_search": False,
+            **_trial_fields(_pre_trial),
+        }
+
     ctx, err = await run_in_threadpool(build_ask_context, data)
     if err:
         return JSONResponse({"error": err}, status_code=400)
@@ -4394,6 +4467,86 @@ async def ask_stream(request: Request):
 
     async def generate():
         yield _sse_event({"typing": True})
+
+        # v8.28 PRE-CHECK: fast path queries bypass build_ask_context entirely.
+        # build_ask_context takes 15-20s (SQLite x4). Calendar, alarm, and time
+        # queries should never wait for it. Check them first.
+        _pre_user_id  = data.get("user_id", "").strip()
+        _pre_message  = data.get("message", "").strip()
+        _pre_lower    = _pre_message.lower()
+        _pre_profile  = get_profile(_pre_user_id)
+        _pre_name     = _pre_profile.get("name", "")
+        _pre_namepart = f", {_pre_name}" if _pre_name else ""
+        _pre_ai_name  = _pre_profile.get("ai_name", "Herald")
+        _pre_trial    = get_trial_status(_pre_profile)
+        _pre_done     = {
+            "done": True,
+            "ai_name":      _pre_ai_name,
+            "name":         _pre_name,
+            "model_used":   MODEL_FAST,
+            **_trial_fields(_pre_trial),
+        }
+
+        # Calendar pre-check
+        _PRE_CAL = [
+            "what do i have", "what's on my calendar", "whats on my calendar",
+            "what is on my calendar", "my calendar", "my schedule",
+            "what do i have today", "what do i have tomorrow",
+            "what do i have this week", "anything on my calendar",
+            "anything on my schedule", "am i free", "what's coming up",
+            "whats coming up", "coming up today", "coming up this week",
+            "show my calendar", "show my schedule", "my agenda",
+            "my appointments", "my appointment", "on my schedule",
+            "what do i have on", "do i have anything",
+        ]
+        if any(t in _pre_lower for t in _PRE_CAL):
+            _pcal_line = _get_calendar_line(_pre_user_id) if _pre_user_id else ""
+            if _pcal_line:
+                _pcal_raw   = _pcal_line.replace(
+                    ". Answer schedule questions from this list -- do not guess.", ""
+                ).replace("Upcoming calendar from device: ", "").strip()
+                _pcal_items = [e.strip() for e in _pcal_raw.split(";") if e.strip()]
+                if len(_pcal_items) == 0:
+                    _pcal_reply = f"Nothing on your calendar in the next two weeks{_pre_namepart}."
+                elif len(_pcal_items) == 1:
+                    _pcal_reply = f"You have one thing coming up{_pre_namepart}: {_pcal_items[0]}."
+                elif len(_pcal_items) == 2:
+                    _pcal_reply = (
+                        f"You have two things coming up{_pre_namepart}: "
+                        f"{_pcal_items[0]}, and {_pcal_items[1]}."
+                    )
+                else:
+                    _pcal_first = ", ".join(_pcal_items[:-1])
+                    _pcal_reply = (
+                        f"Here is what you have coming up{_pre_namepart}: "
+                        f"{_pcal_first}, and {_pcal_items[-1]}."
+                    )
+            else:
+                _pcal_reply = (
+                    f"I don't see anything on your calendar in the next "
+                    f"two weeks{_pre_namepart}. Events may not have synced yet."
+                )
+            yield _sse_event({"t": _pcal_reply})
+            yield _sse_event({"t": "[S]"})
+            yield _sse_event({**_pre_done, "full": _pcal_reply, "action": None, "used_search": False})
+            return
+
+        # Time pre-check
+        _PRE_TIME = ['what time is it', 'what is the time', "what's the time"]
+        if any(q in _pre_lower for q in _PRE_TIME):
+            _ptime_str = data.get("local_time", "")
+            if _ptime_str:
+                _ptime_reply = f"It is {_ptime_str}."
+            else:
+                _pnow = datetime.now()
+                _ph   = _pnow.hour; _pm = _pnow.minute
+                _pa   = "AM" if _ph < 12 else "PM"
+                _ph12 = _ph if 1 <= _ph <= 12 else (12 if _ph == 0 else _ph - 12)
+                _ptime_reply = f"It is {_ph12}:{_pm:02d} {_pa}."
+            yield _sse_event({"t": _ptime_reply})
+            yield _sse_event({"t": "[S]"})
+            yield _sse_event({**_pre_done, "full": _ptime_reply, "action": None, "used_search": False})
+            return
 
         ctx, err = await run_in_threadpool(build_ask_context, data)
         if err:
