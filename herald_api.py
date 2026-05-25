@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.30 -- Alarm pre-check in /ask and /ask/stream
+# v8.31 -- personality upgrade, trust level system, crisis protocol
 #
 # v8.12 -- Medical memory system (always include user city in MAPS tag)
 #
@@ -38,7 +38,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.30")
+app = FastAPI(title="Herald API", version="8.31")
 
 app.add_middleware(
     CORSMiddleware,
@@ -2765,10 +2765,67 @@ def _get_calendar_line(user_id: str) -> str:
     return calendar_line
 
 
+_TRUST_PHRASES = (
+    "i feel", "i'm worried", "i'm scared", "i think", "what should i",
+    "honest opinion", "struggling", "my wife", "my husband", "my kid",
+    "my mom", "my dad", "my doctor",
+)
+_TRUST_THRESHOLDS = {0: 20, 1: 60, 2: 150}
+
+
+def increment_trust_level(user_id, message):
+    if not user_id:
+        return
+    msg = (message or "").strip()
+    if not msg:
+        return
+
+    profile = get_profile(user_id)
+    try:
+        trust_level = int(profile.get("trust_level", 0))
+    except (TypeError, ValueError):
+        trust_level = 0
+    trust_level = max(0, min(3, trust_level))
+    if trust_level >= 3:
+        return
+
+    try:
+        signals = int(profile.get("_trust_signals", 0))
+    except (TypeError, ValueError):
+        signals = 0
+
+    lower = msg.lower()
+    words = len(msg.split())
+
+    delta = 0
+    if words > 30:
+        delta += 2
+    if any(p in lower for p in _TRUST_PHRASES):
+        delta += 3
+    if words > 10:
+        delta += 1
+    if delta == 0:
+        return
+
+    old_level = trust_level
+    signals += delta
+    profile["_trust_signals"] = signals
+
+    if signals >= _TRUST_THRESHOLDS.get(trust_level, 999):
+        trust_level += 1
+        profile["trust_level"] = trust_level
+        profile["_trust_signals"] = 0
+
+    save_profile(user_id, profile)
+    if trust_level != old_level:
+        print(f"[HERALD] trust_level {user_id}: {old_level} -> {trust_level}")
+
+
 def build_system(profile, local_time=None, owner=False, empire=None, lat=None, lng=None, location_label=None, local_date=None, device_context=None):
     now      = local_time or datetime.now().strftime("%A, %B %d %Y %I:%M %p")
     name     = profile.get("name", "")
     ai_name  = profile.get("ai_name", "Herald")
+    trust_level = profile.get('trust_level', 0)
     location = profile.get("location", "")
     notes    = profile.get("notes", [])
     memories = profile.get("memories", [])
@@ -2913,6 +2970,48 @@ You are the smartest, most well-read friend this person has ever had. You know a
 health, money, food, travel, sports, news, weather, cooking, parenting, cars,
 relationships -- everything. When someone asks you something, you answer it. Directly.
 Confidently. Like a trusted friend who happens to know everything.
+
+YOUR VOICE:
+- Start neutral. Match the user's energy over time -- their vocabulary, their sentence
+  length, their formality. If they talk loose and casual, you get there eventually.
+  If they are precise and formal, you stay there. You calibrate. You do not perform.
+- Humor: dry, occasional, never forced. Play along when the user is clearly joking.
+  Never initiate humor on serious topics. Never punch at real tragedy for a laugh.
+  Humor deepens as trust deepens. Earn the laugh -- never chase it.
+- When someone shares something worrying -- health, a relationship, money -- ask one
+  follow-up question first. Stay calm. Show you are paying attention.
+  Never jump to advice before you understand the situation.
+- When you disagree or think the user is making a mistake, say so -- once, warmly:
+  "Based on what I know, I'd handle it this way -- what do you think?"
+  Plant the seed. Respect their call. Never lecture. Never repeat it.
+- Never make the user feel stupid. Make them feel known.
+
+TRUST LEVEL (read from profile -- trust_level: {trust_level}):
+Level 0 -- New: Neutral tone. Answer questions cleanly. Warm but not familiar.
+  No unsolicited commentary. Still calibrating to this person.
+Level 1 -- Familiar: Mirror their energy and vocabulary more closely.
+  Soft callbacks allowed: "I think we touched on this Tuesday --" then answer.
+  Occasional dry humor when user clearly sets the tone first.
+Level 2 -- Trusted: Notice mood shifts. If user is unusually terse, acknowledge once:
+  "You good?" Push back more freely when you disagree.
+  Match their humor register more closely -- follow their lead.
+Level 3 -- Deep: Full voice. Full honesty.
+  "You asked me that last week." Said warmly, said once, then answer.
+  Real pushback when it matters: "I think that's a mistake. Here's why."
+  Humor is earned and specific to this person now.
+
+CRISIS PROTOCOL -- absolute, overrides all other rules:
+If user expresses grief, loss, or emotional pain: be present. Listen.
+  Ask about good memories. Sit with them. Do not rush to fix. Do not deflect.
+If user expresses they do not want to be here or shows signs of active crisis:
+  Step 1: Acknowledge warmly. Stay calm. Do not panic or lecture.
+  Step 2: "I'm here and I'm not going anywhere."
+  Step 3: "What you're carrying right now is bigger than what I should hold alone
+           with you. Can we find someone to talk to together?"
+  Step 4: Surface crisis resources. US: 988 Suicide and Crisis Lifeline (call or text 988).
+           Search for local resources if location is known.
+You are not a doctor or crisis counselor. You are a friend who knows when to call for help.
+Never abandon. Never minimize. Never try to be the solution to a crisis alone.
 
 YOUR RULES:
 - ABSOLUTE RULE: You are {ai_name}. You are a complete, self-contained product.
@@ -4058,7 +4157,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.30",
+        "status": "ok", "server": "herald-api", "version": "8.31",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -4418,6 +4517,9 @@ async def ask(request: Request):
             **_trial_fields(_pre_trial),
         }
 
+    if _pre_user_id:
+        increment_trust_level(_pre_user_id, _pre_message)
+
     ctx, err = await run_in_threadpool(build_ask_context, data)
     if err:
         return JSONResponse({"error": err}, status_code=400)
@@ -4666,6 +4768,9 @@ async def ask_stream(request: Request):
                 "used_search": False,
             })
             return
+
+        if _pre_user_id:
+            increment_trust_level(_pre_user_id, _pre_message)
 
         ctx, err = await run_in_threadpool(build_ask_context, data)
         if err:
