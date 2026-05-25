@@ -38,7 +38,7 @@ import {
 import * as Calendar from "expo-calendar";
 import { useStore } from "../store/useStore";
 import { API_BASE } from "../constants/api";
-import { PERSONAS } from "../constants/personas";
+import { PERSONAS, DEFAULT_PERSONA } from "../constants/personas";
 import {
   askHeraldStream,
   markProactiveRead,
@@ -129,7 +129,7 @@ export default function ChatScreen() {
     status: freddieStatus,
   } = useStore();
 
-  const persona = PERSONAS[personaKey];
+  const persona = PERSONAS[personaKey] ?? PERSONAS[DEFAULT_PERSONA];
 
   const [inputText, setInputText] = useState("");
   const [showProactive, setShowProactive] = useState(false);
@@ -204,6 +204,8 @@ export default function ChatScreen() {
       })
         .then((data) => {
           if (!data.greeting) return;
+          if (liveGreetingAddedRef.current) return;
+          liveGreetingAddedRef.current = true;
           addMessage({
             id: generateId("msg"),
             role: "assistant",
