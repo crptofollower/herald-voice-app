@@ -28,27 +28,21 @@ import * as Location from "expo-location";
 import * as Speech from "expo-speech";
 import { Audio } from "expo-av";
 import { PERSONAS, type PersonaKey } from "../constants/personas";
+import { PERSONA_IMAGES } from "../constants/personaImages";
+import PersonaConfirmScreen from "./PersonaConfirmScreen";
 import { useStore } from "../store/useStore";
 import { API_BASE } from "../constants/api";
 import { saveLocalProfile } from "../hooks/useDeviceMemory";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Step = "intro" | "mic" | "location" | "notify" | "code" | "name" | "ainame" | "persona";
+type Step = "intro" | "mic" | "location" | "notify" | "code" | "name" | "ainame" | "persona" | "confirm";
 
 const PERSONA_KEYS = Object.keys(PERSONAS) as PersonaKey[];
 
 const BG_TOP    = "#0A1628";
 const BG_BOTTOM = "#0D2440";
 const ACCENT    = "#1A9B8A";
-
-const PERSONA_IMAGES: Record<PersonaKey, ReturnType<typeof require>> = {
-  beach:    require("../../assets/beach.jpg"),
-  mountain: require("../../assets/mountain.jpg"),
-  city:     require("../../assets/city.jpg"),
-  country:  require("../../assets/country.jpg"),
-  desert:   require("../../assets/desert.jpg"),
-};
 
 const HERALD_SPEECH: Record<string, string> = {
   intro:    "Hi. I am Herald. Your personal AI. Always on, always ready. Let me get you set up. It will only take a minute.",
@@ -525,7 +519,7 @@ export default function OnboardingScreen() {
                 marginHorizontal: 0,
               },
             ]}
-            onPress={handleFinish}
+            onPress={() => setStep("confirm")}
             disabled={isSubmitting}
           >
             {isSubmitting ? (
@@ -538,6 +532,16 @@ export default function OnboardingScreen() {
           </TouchableOpacity>
         </ScrollView>
       </LinearGradient>
+    );
+  }
+
+  if (step === "confirm") {
+    return (
+      <PersonaConfirmScreen
+        personaKey={persona}
+        aiName={aiName.trim() || "Herald"}
+        onComplete={handleFinish}
+      />
     );
   }
 
