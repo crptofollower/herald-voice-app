@@ -62,6 +62,39 @@ export const MIGRATIONS: Migration[] = [
     },
   },
 
+  // ─── v8.17.0 ──────────────────────────────────────────────────────────────
+  {
+    id: 'v8_17_force_onboarding_reset',
+    description:
+      'Reset onboardingComplete when onboarding was marked done but aiName or name ' +
+      'are still defaults (missing or "Herald").',
+    run: async () => {
+      try {
+        const raw = await AsyncStorage.getItem('herald-store-v3');
+        if (!raw) return;
+        const store = JSON.parse(raw);
+        const state = store?.state ?? {};
+        const onboardingComplete = state.onboardingComplete === true;
+        const aiName = (state.aiName ?? '').trim();
+        const name = (state.name ?? '').trim();
+
+        const aiNameIsDefault = !aiName || aiName === 'Herald';
+        const nameIsDefault = !name || name === 'Herald';
+
+        const shouldReset =
+          (onboardingComplete && aiNameIsDefault) || nameIsDefault;
+
+        if (!shouldReset) return;
+
+        store.state.onboardingComplete = false;
+        await AsyncStorage.setItem('herald-store-v3', JSON.stringify(store));
+        console.log('[Migration] v8_17_force_onboarding_reset: reset onboarding flag');
+      } catch (e) {
+        console.error('[Migration] v8_17_force_onboarding_reset (non-fatal):', e);
+      }
+    },
+  },
+
   // ─── FUTURE MIGRATIONS GO HERE ────────────────────────────────────────────
   // Example pattern -- uncomment and fill when needed:
   //
