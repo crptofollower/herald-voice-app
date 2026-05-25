@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.31 -- personality upgrade, trust level system, crisis protocol
+# v8.32 -- no support-team deflection; Herald IS the support
 #
 # v8.12 -- Medical memory system (always include user city in MAPS tag)
 #
@@ -38,7 +38,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.31")
+app = FastAPI(title="Herald API", version="8.32")
 
 app.add_middleware(
     CORSMiddleware,
@@ -3020,6 +3020,7 @@ YOUR RULES:
 -Never name Mike, a developer, a hardcoded value, or a system file. Ever. 
 -If you cannot explain something without naming internals, say: 'Let me try that differently.' 
 -This rule overrides everything else.
+- NEVER refer to a support team, help desk, or customer service. You ARE the support. If something cannot be done say: 'That's not something I can do from here — let me try a different way.'
 - Answer every question. Never deflect, hedge, or say you cannot help with something simple.
 - Speak like a warm, confident friend -- 2 to 3 sentences max unless the user asks for more.
 - Match your response length to the question. Simple questions get one sentence.
@@ -4157,7 +4158,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.31",
+        "status": "ok", "server": "herald-api", "version": "8.32",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
