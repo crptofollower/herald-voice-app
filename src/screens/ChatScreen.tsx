@@ -216,11 +216,28 @@ export default function ChatScreen() {
     };
   }, [userId, lat, lng, locationLabel, addMessage, speak]);
 
+  const resetStreamState = useCallback(() => {
+    sendingRef.current = false;
+    setIsWaiting(false);
+    setIsStreaming(false);
+    setStreamingContent("");
+    if ((streamAbortRef.current as any)?._maxTimer) {
+      clearTimeout((streamAbortRef.current as any)._maxTimer);
+    }
+    streamAbortRef.current = null;
+  }, []);
+
   // ── AppState listener (stable, uses ref) ──────────────────────────────────
   useEffect(() => {
     const subscription = AppState.addEventListener(
       "change",
       (nextState: AppStateStatus) => {
+        if (nextState === "background" || nextState === "inactive") {
+          if (streamAbortRef.current) {
+            streamAbortRef.current.abort();
+            resetStreamState();
+          }
+        }
         if (nextState === "active") {
           const idleMs = Date.now() - lastInteractionRef.current;
           if (idleMs > IDLE_THRESHOLD_MS) {
@@ -236,9 +253,12 @@ export default function ChatScreen() {
 
   useEffect(() => {
     return () => {
-      streamAbortRef.current?.abort();
+      if (streamAbortRef.current) {
+        streamAbortRef.current.abort();
+        resetStreamState();
+      }
     };
-  }, []);
+  }, [resetStreamState]);
 
   useEffect(() => {
     if (unreadCount > 0) setShowProactive(true);
@@ -329,14 +349,6 @@ export default function ChatScreen() {
     }
   }, [displayMessages.length, streamingContent]);
 
-  const resetStreamState = useCallback(() => {
-    sendingRef.current = false;
-    setIsWaiting(false);
-    setIsStreaming(false);
-    setStreamingContent("");
-    streamAbortRef.current = null;
-  }, []);
-
   // ── Send ──────────────────────────────────────────────────────────────────
 
   const sendMessage = useCallback((text: string) => {
@@ -418,7 +430,18 @@ export default function ChatScreen() {
       },
       {
         onToken: (token) => {
-          if (firstToken) { firstToken = false; setIsWaiting(false); }
+          if (firstToken) {
+            firstToken = false;
+            setIsWaiting(false);
+            const maxStreamTimer = setTimeout(() => {
+              if (streamAbortRef.current) {
+                streamAbortRef.current.abort();
+                resetStreamState();
+                setError('Response timed out. Try again.');
+              }
+            }, 60_000);
+            streamAbortRef.current && (streamAbortRef.current as any)._maxTimer = maxStreamTimer;
+          }
           setStreamingContent((prev) => prev + token);
         },
         onSentence: (sentence) => { enqueueSentence(sentence); },
