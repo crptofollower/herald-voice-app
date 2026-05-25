@@ -105,6 +105,16 @@ export default function OnboardingScreen() {
   const [persona, setPersonaKey]      = useState<PersonaKey>("city");
   const [isSubmitting, setSubmitting] = useState(false);
 
+  const scaleAnims = useRef(
+    PERSONA_KEYS.reduce(
+      (acc, k) => ({
+        ...acc,
+        [k]: new Animated.Value(k === "city" ? 1.01 : 1),
+      }),
+      {} as Record<PersonaKey, Animated.Value>
+    )
+  ).current;
+
   const { setUser, setPersona, setOnboardingComplete, setOwner, setAiName: storeSetAiName } = useStore();
 
   // Speak on step change
@@ -428,10 +438,19 @@ export default function OnboardingScreen() {
   // ─── STEP 8: Persona ─────────────────────────────────────────────────────
   if (step === "persona") {
     const chosenAiName = aiName.trim() || "Herald";
+    const handlePersonaSelect = (key: PersonaKey) => {
+      Animated.spring(scaleAnims[key], { toValue: 1.01, useNativeDriver: true, friction: 8 }).start();
+      PERSONA_KEYS.filter((k) => k !== key).forEach((k) =>
+        Animated.spring(scaleAnims[k], { toValue: 1, useNativeDriver: true, friction: 8 }).start()
+      );
+      setPersonaKey(key);
+    };
     return (
       <LinearGradient colors={[BG_TOP, BG_BOTTOM]} style={styles.container}>
         <ScrollView contentContainerStyle={styles.personaScroll} bounces={false}>
-          <Text style={styles.stepHeadline}>Pick your world.</Text>
+          <Text style={[styles.stepHeadline, { fontFamily: "SourceSerif4-Medium" }]}>
+            Pick your look.
+          </Text>
           <Text style={[styles.stepBody, { marginBottom: 24 }]}>
             {chosenAiName} takes its look from where{"\n"}
             you feel most at home.
@@ -442,33 +461,56 @@ export default function OnboardingScreen() {
               const p = PERSONAS[key];
               const selected = persona === key;
               return (
-                <TouchableOpacity
-                  key={key}
-                  style={[
-                    styles.tile,
-                    selected && { borderColor: p.colors.accent, borderWidth: 3 },
-                  ]}
-                  onPress={() => setPersonaKey(key)}
-                  activeOpacity={0.8}
-                  accessibilityRole="radio"
-                  accessibilityState={{ checked: selected }}
-                >
-                  <Image
-                    source={PERSONA_IMAGES[key]}
-                    style={styles.tileImage}
-                    resizeMode="cover"
-                  />
-                  <View style={styles.tileOverlay} />
-                  <View style={styles.tileLabelRow}>
-                    <Text style={styles.tileName}>{p.name}</Text>
-                    <Text style={styles.tileTagline}>{p.tagline}</Text>
-                  </View>
-                  {selected && (
-                    <View style={[styles.tileCheck, { backgroundColor: p.colors.accent }]}>
-                      <Text style={styles.tileCheckMark}>✓</Text>
+                <Animated.View key={key} style={{ transform: [{ scale: scaleAnims[key] }] }}>
+                  <TouchableOpacity
+                    style={[
+                      styles.tile,
+                      selected && {
+                        borderColor: p.accent,
+                        borderWidth: 2,
+                        shadowColor: p.accent,
+                        shadowOffset: { width: 0, height: 8 },
+                        shadowOpacity: 0.55,
+                        shadowRadius: 22,
+                        elevation: 12,
+                      },
+                    ]}
+                    onPress={() => handlePersonaSelect(key)}
+                    activeOpacity={0.8}
+                    accessibilityRole="radio"
+                    accessibilityState={{ checked: selected }}
+                  >
+                    <Image
+                      source={PERSONA_IMAGES[key]}
+                      style={styles.tileImage}
+                      resizeMode="cover"
+                    />
+                    <LinearGradient
+                      colors={["rgba(13,18,23,0.92)", "rgba(13,18,23,0.55)", "rgba(13,18,23,0.15)"]}
+                      start={{ x: 0, y: 0.5 }}
+                      end={{ x: 1, y: 0.5 }}
+                      style={StyleSheet.absoluteFill}
+                    />
+                    <View style={[StyleSheet.absoluteFill, { backgroundColor: p.surfaceTint }]} />
+                    <View style={styles.tileLabelRow}>
+                      <Text style={styles.tileName}>{p.name}</Text>
+                      <Text style={styles.tileTagline}>{p.tagline}</Text>
+                      <View style={{ flexDirection: "row", gap: 5, marginTop: 6 }}>
+                        {p.palette.map((color, i) => (
+                          <View
+                            key={i}
+                            style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: color }}
+                          />
+                        ))}
+                      </View>
                     </View>
-                  )}
-                </TouchableOpacity>
+                    {selected && (
+                      <View style={[styles.tileCheck, { backgroundColor: p.accent }]}>
+                        <Text style={[styles.tileCheckMark, { color: "#0d1217" }]}>✓</Text>
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                </Animated.View>
               );
             })}
           </View>
@@ -477,7 +519,7 @@ export default function OnboardingScreen() {
             style={[
               styles.bigBtn,
               {
-                backgroundColor: PERSONAS[persona].colors.accent,
+                backgroundColor: "#2dd4bf",
                 opacity: isSubmitting ? 0.7 : 1,
                 marginTop: 8,
                 marginHorizontal: 0,
@@ -489,8 +531,8 @@ export default function OnboardingScreen() {
             {isSubmitting ? (
               <ActivityIndicator size="small" color="#FFFFFF" />
             ) : (
-              <Text style={styles.bigBtnText}>
-                {name.trim() ? `Let's go, ${name.trim()} →` : "Let's go →"}
+              <Text style={[styles.bigBtnText, { color: "#0a1f1a", fontFamily: "Inter-Bold" }]}>
+                Continue
               </Text>
             )}
           </TouchableOpacity>
@@ -586,7 +628,7 @@ const styles = StyleSheet.create({
 
   tileGrid: { gap: 12 },
   tile: {
-    width: "100%", height: 110, borderRadius: 16,
+    width: "100%", height: 130, borderRadius: 18,
     overflow: "hidden", borderWidth: 0, borderColor: "transparent",
     marginBottom: 4,
   },
@@ -603,13 +645,14 @@ const styles = StyleSheet.create({
   },
   tileName: {
     fontSize: 20, fontWeight: "700", color: "#FFFFFF", letterSpacing: -0.2,
+    fontFamily: "SourceSerif4-Medium",
   },
   tileTagline: {
     fontSize: 13, color: "rgba(255,255,255,0.75)", marginTop: 2,
   },
   tileCheck: {
     position: "absolute", top: 12, right: 12,
-    width: 26, height: 26, borderRadius: 13,
+    width: 28, height: 28, borderRadius: 14,
     alignItems: "center", justifyContent: "center",
   },
   tileCheckMark: { color: "#FFFFFF", fontSize: 14, fontWeight: "700" },
