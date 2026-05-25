@@ -15,6 +15,19 @@ import { NavigationContainer } from "@react-navigation/native";
 import { createStackNavigator } from "@react-navigation/stack";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StatusBar } from "expo-status-bar";
+import * as Font from "expo-font";
+import {
+  SourceSerif4_300Light,
+  SourceSerif4_400Regular,
+  SourceSerif4_500Medium,
+  SourceSerif4_600SemiBold,
+} from "@expo-google-fonts/source-serif-4";
+import {
+  Inter_400Regular,
+  Inter_500Medium,
+  Inter_600SemiBold,
+  Inter_700Bold,
+} from "@expo-google-fonts/inter";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { useStore } from "./src/store/useStore";
 import OnboardingScreen from "./src/screens/OnboardingScreen";
@@ -68,6 +81,20 @@ export default function App() {
   useEffect(() => {
     const init = async () => {
       await runMigrations();
+      try {
+        await Font.loadAsync({
+          "SourceSerif4-Light":    SourceSerif4_300Light,
+          "SourceSerif4-Regular":  SourceSerif4_400Regular,
+          "SourceSerif4-Medium":   SourceSerif4_500Medium,
+          "SourceSerif4-SemiBold": SourceSerif4_600SemiBold,
+          "Inter-Regular":         Inter_400Regular,
+          "Inter-Medium":          Inter_500Medium,
+          "Inter-SemiBold":        Inter_600SemiBold,
+          "Inter-Bold":            Inter_700Bold,
+        });
+      } catch (e) {
+        console.warn("[Herald] Font load failed:", e);
+      }
       setReady(true);
     };
     init();
