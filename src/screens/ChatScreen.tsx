@@ -121,6 +121,7 @@ export default function ChatScreen() {
     persona: personaKey,
     messages,
     addMessage,
+    setMessages,
     setError,
     error,
     items: proactiveItems,
@@ -157,6 +158,7 @@ export default function ChatScreen() {
   const greetingMountRef = useRef(Date.now());
   const needsLocationGreetingRef = useRef(true);
   const liveGreetingAddedRef = useRef(false);
+  const greetingIdRef = useRef<string>("");
 
   // ── Scroll snap prevention ────────────────────────────────────────────────
   // Only auto-scroll to bottom when user is already near the bottom.
@@ -288,6 +290,9 @@ export default function ChatScreen() {
           if (hasWeather) {
             if (liveGreetingAddedRef.current) return;
             liveGreetingAddedRef.current = true;
+            setMessages(
+              useStore.getState().messages.filter((m) => m.id !== greetingIdRef.current)
+            );
             addMessage({
               id: generateId("msg"),
               role: "assistant",
@@ -301,7 +306,7 @@ export default function ChatScreen() {
         })
         .catch(() => {});
     },
-    [userId, addMessage, saveDeviceProfile]
+    [userId, addMessage, setMessages, saveDeviceProfile]
   );
 
   // ── Greeting on first open ────────────────────────────────────────────────
@@ -319,6 +324,7 @@ export default function ChatScreen() {
     // ── INSTANT LOCAL GREETING (device-first, under 500ms) ───────────────────
     const localGreeting = getLocalGreeting(aiName || "Herald");
     const greetingId = generateId("msg");
+    greetingIdRef.current = greetingId;
     addMessage({
       id: greetingId,
       role: "assistant",
