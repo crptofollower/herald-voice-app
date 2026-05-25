@@ -1,5 +1,5 @@
 // Herald Service Worker v3.0
-const CACHE_NAME = 'herald-v13';
+const CACHE_NAME = 'herald-v14';
 const ASSETS = [
   './',
   './index.html',

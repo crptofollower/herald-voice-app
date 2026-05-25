@@ -995,6 +995,32 @@ function addThinking() {
 function scrollBottom() { const m=document.getElementById('messages'); m.scrollTop=m.scrollHeight; }
 function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
+function openAppDeepLink(deepLinks, fallbackUrl) {
+  const links = (Array.isArray(deepLinks) ? deepLinks : [deepLinks]).filter(Boolean);
+  let idx = 0;
+  const tryNext = () => {
+    if (idx >= links.length) {
+      if (fallbackUrl) window.open(fallbackUrl, '_blank');
+      return;
+    }
+    const deepLink = links[idx++];
+    let opened = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onHide);
+      window.removeEventListener('pagehide', onHide);
+      window.removeEventListener('blur', onHide);
+    };
+    const onHide = () => { opened = true; cleanup(); };
+    document.addEventListener('visibilitychange', onHide);
+    window.addEventListener('pagehide', onHide);
+    window.addEventListener('blur', onHide);
+    const timer = setTimeout(() => { cleanup(); if (!opened) tryNext(); }, 1500);
+    window.location.href = deepLink;
+  };
+  tryNext();
+}
+
 function buildActionCard(action, replyText) {
   if (!action||!action.type) return null;
   const {type,value} = action;
@@ -1028,10 +1054,23 @@ function buildActionCard(action, replyText) {
     }); return wrap;
   }
   if (type==='launch') {
-    const appMap={'x':['https://x.com','#000','✕ Open X'],'twitter':['https://x.com','#000','✕ Open X'],'instagram':['https://instagram.com','linear-gradient(45deg,#405DE6,#E1306C)','📷 Instagram'],'youtube':['https://youtube.com','#FF0000','▶ YouTube'],'tiktok':['https://tiktok.com','#010101','🎵 TikTok'],'facebook':['https://facebook.com','#1877F2','Facebook']};
+    const healthDeep = ['com.sec.android.app.shealth://', 'content://com.sec.android.app.shealth'];
+    const appMap={
+      'x':         {deep:'twitter://',           fallback:'https://twitter.com',    bg:'#000', label:'✕ Open X'},
+      'twitter':   {deep:'twitter://',           fallback:'https://twitter.com',    bg:'#000', label:'✕ Open X'},
+      'instagram': {deep:'instagram://',         fallback:'https://instagram.com',  bg:'linear-gradient(45deg,#405DE6,#E1306C)', label:'📷 Instagram'},
+      'youtube':   {deep:'youtube://',           fallback:'https://youtube.com',    bg:'#FF0000', label:'▶ YouTube'},
+      'tiktok':    {deep:'tiktok://',            fallback:'https://tiktok.com',     bg:'#010101', label:'🎵 TikTok'},
+      'facebook':  {deep:null,                 fallback:'https://facebook.com',   bg:'#1877F2', label:'Facebook'},
+      'health':    {deep:healthDeep,             fallback:null,                    bg:'#0066CC', label:'❤️ Samsung Health'},
+      'shealth':   {deep:healthDeep,             fallback:null,                    bg:'#0066CC', label:'❤️ Samsung Health'},
+      'samsunghealth':{deep:healthDeep,          fallback:null,                    bg:'#0066CC', label:'❤️ Samsung Health'},
+    };
     const key=value.toLowerCase().replace(/\s+/g,'');
-    const info=appMap[key]||[`https://www.google.com/search?q=${encodeURIComponent(value)}`,'#333',`Open ${value}`];
-    const btn=document.createElement('a'); btn.className='search-card'; btn.href=info[0]; btn.target='_blank'; btn.style.background=info[1]; btn.textContent=info[2];
+    const info=appMap[key];
+    const btn=document.createElement('a'); btn.className='search-card'; btn.href='#';
+    btn.style.background=info?info.bg:'#333'; btn.textContent=info?info.label:`Open ${value}`;
+    btn.onclick=(e)=>{ e.preventDefault(); if (info) openAppDeepLink(info.deep,info.fallback); else window.open(`https://www.google.com/search?q=${encodeURIComponent(value)}`,'_blank'); };
     const wrap=document.createElement('div'); wrap.className='search-cards'; wrap.appendChild(btn); return wrap;
   }
   if (type==='alarm'||type==='calendar') {
