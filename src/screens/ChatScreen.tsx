@@ -36,6 +36,7 @@ import {
   AppStateStatus,
 } from "react-native";
 import * as Calendar from "expo-calendar";
+import * as Network from "expo-network";
 import { useStore } from "../store/useStore";
 import { API_BASE } from "../constants/api";
 import { PERSONAS, DEFAULT_PERSONA } from "../constants/personas";
@@ -366,6 +367,59 @@ export default function ChatScreen() {
     if (!text) return;
 
     lastSentRef.current = now;
+
+    // ── Offline check -- skip network, answer from device or give warm message ──
+    const networkState = await Network.getNetworkStateAsync();
+    const isOffline = !networkState.isConnected || !networkState.isInternetReachable;
+    if (isOffline) {
+      // Try calendar first (async, needs expo-calendar)
+      const calPatterns = [
+        /what('s| is) on my calendar/i,
+        /what do i have (today|tomorrow|this week)/i,
+        /any (appointments|meetings|events) (today|tomorrow)/i,
+        /my schedule (today|tomorrow|this week)/i,
+        /what('s| is) (scheduled|planned) (today|tomorrow)/i,
+      ];
+      if (calPatterns.some((p) => p.test(text))) {
+        try {
+          const calPerms = await Calendar.getCalendarPermissionsAsync();
+          if (calPerms.status === 'granted') {
+            const isTomorrow = /tomorrow/i.test(text);
+            const isThisWeek = /this week/i.test(text);
+            const start = new Date(); start.setHours(0,0,0,0);
+            const end = new Date(start);
+            if (isThisWeek) { end.setDate(end.getDate() + 7); }
+            else if (isTomorrow) { start.setDate(start.getDate() + 1); end.setDate(end.getDate() + 1); }
+            end.setHours(23,59,59,999);
+            const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
+            const events = await Calendar.getEventsAsync(calendars.map(c => c.id), start, end);
+            const sorted = events.filter(e => e.title).sort((a,b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime());
+            const dayLabel = isTomorrow ? 'tomorrow' : isThisWeek ? 'this week' : 'today';
+            const calAnswer = sorted.length === 0
+              ? `Your calendar is clear ${dayLabel}.`
+              : sorted.length === 1
+                ? `You have ${sorted[0].title} at ${new Date(sorted[0].startDate).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})} ${dayLabel}.`
+                : `${dayLabel.charAt(0).toUpperCase()+dayLabel.slice(1)} you have: ${sorted.map(e=>`${e.title} at ${new Date(e.startDate).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}`).join(', ')}.`;
+            addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+            addMessage({ id: generateId('msg'), role: 'assistant', content: calAnswer, timestamp: Date.now() });
+            speak(calAnswer);
+            setInputText('');
+            sendingRef.current = false;
+            return;
+          }
+        } catch { /* fall through */ }
+      }
+      // Try device memory next
+      const localAnswer = answerFromDevice(text);
+      const offlineReply = localAnswer ??
+        "I'm offline right now, but I can still help — ask me about your calendar, schedule, medications, or anything personal.";
+      addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+      addMessage({ id: generateId('msg'), role: 'assistant', content: offlineReply, timestamp: Date.now() });
+      speak(offlineReply);
+      setInputText('');
+      sendingRef.current = false;
+      return;
+    }
 
     // ── Calendar on-device -- read expo-calendar directly, zero network ────
     const calendarPatterns = [
