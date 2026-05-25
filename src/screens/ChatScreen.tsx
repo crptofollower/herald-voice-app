@@ -561,7 +561,9 @@ export default function ChatScreen() {
                 setError('Response timed out. Try again.');
               }
             }, 60_000);
-            streamAbortRef.current && (streamAbortRef.current as any)._maxTimer = maxStreamTimer;
+            if (streamAbortRef.current) {
+              (streamAbortRef.current as any)._maxTimer = maxStreamTimer;
+            }
           }
           setStreamingContent((prev) => prev + token);
         },
