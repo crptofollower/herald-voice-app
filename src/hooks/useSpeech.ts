@@ -35,6 +35,10 @@ import { Audio } from "expo-av";
 import * as ExpoSpeech from "expo-speech";
 import { API_BASE } from "../constants/api";
 
+// ON_DEVICE_TTS: true = expo-speech for all responses (instant, no network)
+// false = Nova primary with expo-speech fallback (higher quality, 3-5s delay)
+const ON_DEVICE_TTS = true;
+
 const TTS_ENDPOINT = `${API_BASE}/tts`;
 const TTS_SPEED = 0.88; // v8.7: bumped from 0.85 -- slightly more energy, less "low key"
 const SENTENCE_PAUSE_MS = 200; // breath between sentences
@@ -224,7 +228,7 @@ export function useSpeech() {
       const clean = cleanForSpeech(text);
       if (!clean) return;
 
-      if (isShortOrOneSentence(clean)) {
+      if (ON_DEVICE_TTS || isShortOrOneSentence(clean)) {
         setIsSpeaking(true);
         configureAudio();
         ExpoSpeech.speak(clean, {
@@ -260,7 +264,7 @@ export function useSpeech() {
       const clean = cleanForSpeech(text);
       if (!clean) return;
 
-      if (isShortOrOneSentence(clean)) {
+      if (ON_DEVICE_TTS || isShortOrOneSentence(clean)) {
         setIsSpeaking(true);
         await configureAudio();
         ExpoSpeech.speak(clean, {
