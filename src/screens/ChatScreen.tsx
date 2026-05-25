@@ -154,6 +154,7 @@ export default function ChatScreen() {
   const greetingSentRef = useRef(false);
   const greetingMountRef = useRef(Date.now());
   const needsLocationGreetingRef = useRef(true);
+  const liveGreetingAddedRef = useRef(false);
 
   // ── Scroll snap prevention ────────────────────────────────────────────────
   // Only auto-scroll to bottom when user is already near the bottom.
@@ -261,6 +262,8 @@ export default function ChatScreen() {
           if (!data.greeting) return;
           const hasWeather = /degrees|weather|forecast/i.test(data.greeting);
           if (hasWeather) {
+            if (liveGreetingAddedRef.current) return;
+            liveGreetingAddedRef.current = true;
             addMessage({
               id: generateId("msg"),
               role: "assistant",
@@ -455,7 +458,7 @@ export default function ChatScreen() {
       const timer = setTimeout(() => startRecording(), 300);
       return () => clearTimeout(timer);
     }
-  }, [isSpeaking]);
+  }, [isSpeaking, isStreaming, startRecording]);
 
   // ── Intent execution ──────────────────────────────────────────────────────
 
