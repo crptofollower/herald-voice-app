@@ -29,6 +29,7 @@ import {
   FlatList,
   StyleSheet,
   KeyboardAvoidingView,
+  Keyboard,
   Platform,
   SafeAreaView,
   Linking,
@@ -1129,6 +1130,7 @@ export default function ChatScreen() {
                   setHandsFreeMode(false);
                   stopRecording();
                 } else {
+                  Keyboard.dismiss();
                   setHandsFreeMode(true);
                   startRecording();
                 }
