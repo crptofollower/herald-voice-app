@@ -95,6 +95,7 @@ export function useSpeech() {
   const playingRef    = useRef(false);
   const soundRef         = useRef<Audio.Sound | null>(null);
   const genRef           = useRef(0); // incremented on reset to abandon stale loops
+  const expoQueueRef = useRef<string[]>([]);
   const expoSpeakingRef  = useRef(false); // guards overlapping expo-speech fallbacks
 
   const configureAudio = useCallback(async () => {
@@ -126,6 +127,8 @@ export function useSpeech() {
       soundRef.current = null;
     }
     ExpoSpeech.stop();
+    expoQueueRef.current = [];
+    expoSpeakingRef.current = false;
   }, []);
 
   const resetSpeech = stop;
@@ -222,6 +225,28 @@ export function useSpeech() {
     fetchingRef.current = false;
   }, []);
 
+  const drainExpoQueue = useCallback(() => {
+    if (expoSpeakingRef.current) return;
+    const next = expoQueueRef.current.shift();
+    if (!next) {
+      setIsSpeaking(false);
+      return;
+    }
+    expoSpeakingRef.current = true;
+    ExpoSpeech.speak(next, {
+      rate: 0.9,
+      pitch: 1.0,
+      onDone: () => {
+        expoSpeakingRef.current = false;
+        drainExpoQueue();
+      },
+      onError: () => {
+        expoSpeakingRef.current = false;
+        drainExpoQueue();
+      },
+    });
+  }, []);
+
   // ── enqueueSentence -- streaming entry point ───────────────────────────────
   const enqueueSentence = useCallback(
     (text: string) => {
@@ -230,13 +255,8 @@ export function useSpeech() {
 
       if (ON_DEVICE_TTS || isShortOrOneSentence(clean)) {
         setIsSpeaking(true);
-        configureAudio();
-        ExpoSpeech.speak(clean, {
-          rate: 0.9,
-          pitch: 1.0,
-          onDone: () => setIsSpeaking(false),
-          onError: () => setIsSpeaking(false),
-        });
+        expoQueueRef.current.push(clean);
+        drainExpoQueue();
         return;
       }
 
