@@ -341,7 +341,13 @@ export default function ChatScreen() {
   // Silent profile location update when GPS becomes available.
   useEffect(() => {
     if (!available || !userId || lat == null || lng == null) return;
-    fetch(`${API_BASE}/geocode?lat=${lat}&lng=${lng}&user_id=${userId}`).catch(() => {});
+    const geocodeController = new AbortController();
+    const geocodeTimer = setTimeout(() => geocodeController.abort(), 8000);
+    fetch(`${API_BASE}/geocode?lat=${lat}&lng=${lng}&user_id=${userId}`, {
+      signal: geocodeController.signal,
+    })
+      .then(() => clearTimeout(geocodeTimer))
+      .catch(() => clearTimeout(geocodeTimer));
   }, [available, userId, lat, lng]);
 
   // ── Auto-scroll (only when user is at bottom) ─────────────────────────────
@@ -353,13 +359,72 @@ export default function ChatScreen() {
 
   // ── Send ──────────────────────────────────────────────────────────────────
 
-  const sendMessage = useCallback((text: string) => {
+  const sendMessage = useCallback(async (text: string) => {
     const now = Date.now();
     if (now - lastSentRef.current < 1000) return;
     if (sendingRef.current) return;
     if (!text) return;
 
     lastSentRef.current = now;
+
+    // ── Calendar on-device -- read expo-calendar directly, zero network ────
+    const calendarPatterns = [
+      /what('s| is) on my calendar/i,
+      /what do i have (today|tomorrow|this week)/i,
+      /any (appointments|meetings|events) (today|tomorrow)/i,
+      /my schedule (today|tomorrow|this week)/i,
+      /what('s| is) (scheduled|planned) (today|tomorrow)/i,
+    ];
+    if (calendarPatterns.some((p) => p.test(text))) {
+      try {
+        const calPerms = await Calendar.getCalendarPermissionsAsync();
+        if (calPerms.status === 'granted') {
+          const start = new Date();
+          start.setHours(0, 0, 0, 0);
+          const isTomorrow = /tomorrow/i.test(text);
+          const isThisWeek = /this week/i.test(text);
+          const end = new Date(start);
+          if (isThisWeek) {
+            end.setDate(end.getDate() + 7);
+          } else if (isTomorrow) {
+            start.setDate(start.getDate() + 1);
+            end.setDate(end.getDate() + 1);
+          }
+          end.setHours(23, 59, 59, 999);
+          const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
+          const calIds = calendars.map((c) => c.id);
+          const events = await Calendar.getEventsAsync(calIds, start, end);
+          const sorted = events
+            .filter((e) => e.title)
+            .sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime());
+          const dayLabel = isTomorrow ? 'tomorrow' : isThisWeek ? 'this week' : 'today';
+          let calAnswer: string;
+          if (sorted.length === 0) {
+            calAnswer = `Your calendar is clear ${dayLabel}.`;
+          } else {
+            const lines = sorted.map((e) => {
+              const t = new Date(e.startDate).toLocaleTimeString([], {
+                hour: 'numeric', minute: '2-digit',
+              });
+              return isThisWeek
+                ? `${e.title} on ${new Date(e.startDate).toLocaleDateString([], { weekday: 'long' })} at ${t}`
+                : `${e.title} at ${t}`;
+            });
+            calAnswer = lines.length === 1
+              ? `You have ${lines[0]} ${dayLabel}.`
+              : `${dayLabel.charAt(0).toUpperCase() + dayLabel.slice(1)} you have: ${lines.join(', ')}.`;
+          }
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          addMessage({ id: generateId('msg'), role: 'assistant', content: calAnswer, timestamp: Date.now() });
+          speak(calAnswer);
+          setInputText('');
+          sendingRef.current = false;
+          return;
+        }
+      } catch {
+        // fall through to network
+      }
+    }
 
     // ── Device-first interceptor -- answer personal queries from SQLite ──────
     // Zero network. Zero OpenRouter cost. Under 200ms. Works offline.
@@ -453,6 +518,7 @@ export default function ChatScreen() {
         onDone: (fullText) => {
           if (fullText.trim()) {
             addMessage({ id: generateId("msg"), role: "assistant", content: fullText, timestamp: Date.now() });
+            saveDeviceMemory(`Conversation: ${text.slice(0, 80)} → ${fullText.slice(0, 120)}`, 'conversation');
           }
           resetStreamState();
         },
