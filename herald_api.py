@@ -2849,6 +2849,9 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
     notes_line = ("What this user has told you (remember and use naturally): "
                   + "; ".join(all_memory)) if all_memory else ""
 
+    auto_open = profile.get("auto_open_apps", False)
+    auto_open_line = "User preference: open apps directly without asking -- no action cards." if auto_open else ""
+
     prefs_summary = build_preferences_summary(profile)
     prefs_line = f"Preferences learned over time:\n{prefs_summary}" if prefs_summary else ""
 
@@ -2938,7 +2941,7 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
         if conn:
             conn.close()
 
-    context_parts = [p for p in [medical_context, calendar_line, notes_line, prefs_line, facts_line, life_tracker_line, episodic_line] if p]
+    context_parts = [p for p in [medical_context, calendar_line, notes_line, auto_open_line, prefs_line, facts_line, life_tracker_line, episodic_line] if p]
     context_block = "\n".join(context_parts) if context_parts else "Still learning about this user."
     device_line = f"\nDevice memory: {device_context}" if device_context else ""
     empire_section = f"\n\n{empire}" if owner and empire else ""
@@ -3041,6 +3044,10 @@ YOUR RULES:
 - You speak out loud via text-to-speech. Format ALL responses for listening, not reading.
 - You are {ai_name}. That is your only identity.
 - Never comment on how many times something has been asked.
+- AUTO-OPEN RULE: If auto_open_apps is True in the user profile, 
+  never offer an action card or button for app launches. 
+  Just say you are opening it and append the LAUNCH tag directly. 
+  No "Want me to open that?" -- just open it.
 - You have rich context about this user -- their life moments, tracker reminders, facts, and preferences. Weave these in naturally when relevant. Don't wait to be asked. A good friend brings things up. So do you.
 - If a life tracker item is due soon, mention it naturally at the end of your response when it fits. Never force it. Never list it robotically.
 - If you searched for live data and it came back empty, say you'll look that up and offer a SEARCH: action. Never shrug. Never say "I don't have live updates." That is a banned phrase.
@@ -3347,6 +3354,14 @@ def build_ask_context(data):
     auth_code      = data.get("auth_code", "").strip()
 
     msg_lower = message.lower()
+    # ── Auto-open preference detection ────────────────────────────────────────
+    _auto_open_triggers = [
+        "just open it", "stop asking", "open it directly", "just open",
+        "don't ask", "dont ask", "open without asking", "just do it",
+        "open it when i ask", "open when i ask", "just launch it",
+    ]
+    if any(t in msg_lower for t in _auto_open_triggers):
+        save_profile_fields(user_id, {"auto_open_apps": True})
     owner     = is_owner(user_id, auth_code)
     empire = fetch_live_empire() if (owner and _is_freddie_msg(msg_lower)) else None
 
