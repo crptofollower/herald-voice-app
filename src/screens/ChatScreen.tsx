@@ -113,6 +113,21 @@ function BouncingDots({ color }: { color: string }) {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
+const THINKING_PHRASES = [
+  "Let me find that...",
+  "Good question, one sec...",
+  "On it...",
+  "Let me look that up...",
+  "Checking on that...",
+  "Give me a second...",
+  "Working on it...",
+  "One moment...",
+  "Looking into it...",
+  "Hang tight...",
+  "Right on it...",
+  "Let me think through that...",
+];
+
 export default function ChatScreen() {
   const {
     userId,
@@ -142,6 +157,7 @@ export default function ChatScreen() {
   const [streamingContent, setStreamingContent] = useState("");
   const [isWaiting, setIsWaiting] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [thinkingPhrase, setThinkingPhrase] = useState(THINKING_PHRASES[0]);
 
   // ── Ambient mode state ────────────────────────────────────────────────────
   // sessionStart filters which messages are shown in the current session.
@@ -270,6 +286,16 @@ export default function ChatScreen() {
     if (unreadCount > 0) setShowProactive(true);
   }, [unreadCount]);
 
+  useEffect(() => {
+    if (!isWaiting) return;
+    let index = 0;
+    const interval = setInterval(() => {
+      index = (index + 1) % THINKING_PHRASES.length;
+      setThinkingPhrase(THINKING_PHRASES[index]);
+    }, 1800);
+    return () => clearInterval(interval);
+  }, [isWaiting]);
+
   const upgradeLiveGreeting = useCallback(
     (greetingLat?: number, greetingLng?: number, greetingLabel?: string) => {
       const local_time = new Date().toLocaleTimeString("en-US", {
@@ -361,7 +387,7 @@ export default function ChatScreen() {
   // ── Auto-scroll (only when user is at bottom) ─────────────────────────────
   useEffect(() => {
     if ((displayMessages.length > 0 || streamingContent) && isAtBottomRef.current) {
-      setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 80);
+      flatListRef.current?.scrollToEnd({ animated: false });
     }
   }, [displayMessages.length, streamingContent]);
 
@@ -521,6 +547,18 @@ export default function ChatScreen() {
     setError(null);
     setPendingAction(null);
     resetSpeech();
+    const _bridgePhrases = [
+      "One second, let me get that...",
+      "Good question, hang on...",
+      "Let me find that for you...",
+      "On it, give me a sec...",
+      "Right on it...",
+      "Give me just a moment...",
+    ];
+    speak(
+      _bridgePhrases[Math.floor(Math.random() * _bridgePhrases.length)],
+      { rate: 0.95 }
+    );
 
     setIsWaiting(true);
     setIsStreaming(true);
@@ -560,7 +598,9 @@ export default function ChatScreen() {
         onToken: (token) => {
           if (firstToken) {
             firstToken = false;
+            stop();
             setIsWaiting(false);
+            flatListRef.current?.scrollToEnd({ animated: false });
             const maxStreamTimer = setTimeout(() => {
               if (streamAbortRef.current) {
                 streamAbortRef.current.abort();
@@ -1059,7 +1099,7 @@ export default function ChatScreen() {
                           { color: "rgba(255,255,255,0.6)" },
                         ]}
                       >
-                        {aiName} is thinking...
+                        {thinkingPhrase}
                       </Text>
                     </View>
                   )}
