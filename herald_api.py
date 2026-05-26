@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.36 -- no support-team deflection; Herald IS the support
+# v8.37 -- no support-team deflection; Herald IS the support
 #
 # v8.12 -- Medical memory system (always include user city in MAPS tag)
 #
@@ -38,7 +38,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.36")
+app = FastAPI(title="Herald API", version="8.37")
 
 app.add_middleware(
     CORSMiddleware,
@@ -4283,7 +4283,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.36",
+        "status": "ok", "server": "herald-api", "version": "8.37",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
