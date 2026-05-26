@@ -38,6 +38,7 @@ import {
 } from "react-native";
 import * as Calendar from "expo-calendar";
 import * as Network from "expo-network";
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useStore } from "../store/useStore";
 import { API_BASE } from "../constants/api";
 import { PERSONAS, DEFAULT_PERSONA } from "../constants/personas";
@@ -175,6 +176,7 @@ export default function ChatScreen() {
   const needsLocationGreetingRef = useRef(true);
   const liveGreetingAddedRef = useRef(false);
   const greetingIdRef = useRef<string>("");
+  const autoOpenAppsRef = useRef(false);
 
   // ── Scroll snap prevention ────────────────────────────────────────────────
   // Only auto-scroll to bottom when user is already near the bottom.
@@ -285,6 +287,12 @@ export default function ChatScreen() {
   useEffect(() => {
     if (unreadCount > 0) setShowProactive(true);
   }, [unreadCount]);
+
+  useEffect(() => {
+    AsyncStorage.getItem('auto_open_apps').then(val => {
+      if (val === 'true') autoOpenAppsRef.current = true;
+    });
+  }, []);
 
   useEffect(() => {
     if (!isWaiting) return;
@@ -400,6 +408,16 @@ export default function ChatScreen() {
     if (!text) return;
 
     lastSentRef.current = now;
+
+    const _autoOpenTriggers = [
+      "just open it", "stop asking", "open it directly", "just open",
+      "don't ask", "dont ask", "open without asking", "just do it",
+      "open it when i ask", "open when i ask", "just launch it",
+    ];
+    if (_autoOpenTriggers.some(t => text.toLowerCase().includes(t))) {
+      autoOpenAppsRef.current = true;
+      AsyncStorage.setItem('auto_open_apps', 'true');
+    }
 
     // ── Offline check -- skip network, answer from device or give warm message ──
     const networkState = await Network.getNetworkStateAsync();
@@ -616,7 +634,13 @@ export default function ChatScreen() {
         },
         onSentence: (sentence) => { enqueueSentence(sentence); },
         onAction: (action) => {
-          if (action) { setPendingAction(action as IntentAction); setActionStatus("confirming"); }
+          if (!action) return;
+          if (autoOpenAppsRef.current && action.type === "launch") {
+            executeIntent(action as IntentAction);
+            return;
+          }
+          setPendingAction(action as IntentAction);
+          setActionStatus("confirming");
         },
         onDone: (fullText) => {
           if (fullText.trim()) {
