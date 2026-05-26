@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.39 -- no support-team deflection; Herald IS the support
+# v8.40 -- no support-team deflection; Herald IS the support
 #
 # v8.12 -- Medical memory system (always include user city in MAPS tag)
 #
@@ -38,7 +38,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.39")
+app = FastAPI(title="Herald API", version="8.40")
 
 app.add_middleware(
     CORSMiddleware,
@@ -3694,8 +3694,8 @@ def get_direct_reply(ctx):
                 )
         else:
             _cal_reply = (
-                f"I don't see anything on your calendar in the next two weeks"
-                f"{_name_part}. If you have events they may not have synced yet."
+                f"Your calendar looks clear for the next two weeks{_name_part}. "
+                f"If you're expecting something to show up, give it a moment to sync."
             )
         return _cal_reply, False
 
@@ -4288,7 +4288,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.39",
+        "status": "ok", "server": "herald-api", "version": "8.40",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -4581,8 +4581,8 @@ async def ask(request: Request):
                 )
         else:
             _pcal_reply = (
-                f"I don't see anything on your calendar in the next "
-                f"two weeks{_pre_namepart}. Events may not have synced yet."
+                f"Your calendar looks clear for the next two weeks{_pre_namepart}. "
+                f"If you're expecting something to show up, give it a moment to sync."
             )
         return {
             "reply": _pcal_reply, "action": None,
@@ -4591,7 +4591,11 @@ async def ask(request: Request):
             **_trial_fields(_pre_trial),
         }
 
-    _PRE_TIME = ['what time is it', 'what is the time', "what's the time"]
+    _PRE_TIME = [
+        'what time is it', 'what is the time', "what's the time",
+        'what time is it right now', 'current time', 'time right now',
+        'do you know the time', 'tell me the time',
+    ]
     if any(q in _pre_lower for q in _PRE_TIME):
         _ptime_str = data.get("local_time", "")
         if _ptime_str:
@@ -4850,16 +4854,49 @@ async def ask_stream(request: Request):
                     )
             else:
                 _pcal_reply = (
-                    f"I don't see anything on your calendar in the next "
-                    f"two weeks{_pre_namepart}. Events may not have synced yet."
+                    f"Your calendar looks clear for the next two weeks{_pre_namepart}. "
+                    f"If you're expecting something to show up, give it a moment to sync."
                 )
             yield _sse_event({"t": _pcal_reply})
             yield _sse_event({"t": "[S]"})
             yield _sse_event({**_pre_done, "full": _pcal_reply, "action": None, "used_search": False})
             return
 
+        # Weather pre-check -- bypasses build_ask_context for weather queries
+        _PRE_WEATHER_TRIGGERS = [
+            'weather', 'forecast', 'temperature outside', 'how hot',
+            'how cold', 'will it rain', 'chance of rain', 'is it raining',
+            'what is it like outside', 'whats it like outside',
+            "what's it like outside",
+        ]
+        if any(t in _pre_lower for t in _PRE_WEATHER_TRIGGERS):
+            _pw_profile  = _pre_profile
+            _pw_city     = _pw_profile.get('confirmed_city') or _pw_profile.get('location') or 'Dallas TX'
+            _pw_explicit = extract_weather_location(_pre_message, None)
+            _PRE_TIME_WORDS = {"the", "a", "an", "this", "that", "today", "tomorrow",
+                               "morning", "afternoon", "evening", "night", "week",
+                               "weekend", "hour", "minute", "second", "moment"}
+            _pw_first = _pw_explicit.split()[0].lower() if _pw_explicit else ""
+            if _pw_explicit and _pw_first not in _PRE_TIME_WORDS and _pw_explicit.lower() not in _pw_city.lower():
+                _pw_loc = _pw_explicit
+            else:
+                _pw_loc = _pw_city
+            _pw_cached = cache_get(f'weather:{_pw_loc}', 'weather')
+            _pw_result = _pw_cached or fetch_weather_direct(_pw_loc) or fetch_weather_backup(_pw_loc)
+            if not _pw_cached and _pw_result:
+                cache_set(f'weather:{_pw_loc}', _pw_result, 'weather')
+            if _pw_result:
+                yield _sse_event({"t": _pw_result})
+                yield _sse_event({"t": "[S]"})
+                yield _sse_event({**_pre_done, "full": _pw_result, "action": None, "used_search": False})
+                return
+
         # Time pre-check
-        _PRE_TIME = ['what time is it', 'what is the time', "what's the time"]
+        _PRE_TIME = [
+            'what time is it', 'what is the time', "what's the time",
+            'what time is it right now', 'current time', 'time right now',
+            'do you know the time', 'tell me the time',
+        ]
         if any(q in _pre_lower for q in _PRE_TIME):
             _ptime_str = data.get("local_time", "")
             if _ptime_str:
