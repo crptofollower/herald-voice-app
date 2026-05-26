@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.38 -- no support-team deflection; Herald IS the support
+# v8.39 -- no support-team deflection; Herald IS the support
 #
 # v8.12 -- Medical memory system (always include user city in MAPS tag)
 #
@@ -38,7 +38,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.38")
+app = FastAPI(title="Herald API", version="8.39")
 
 app.add_middleware(
     CORSMiddleware,
@@ -2297,17 +2297,22 @@ def fetch_brave_search(query, count=3, freshness=None):
 
 def extract_weather_location(message, profile_location):
     msg = message.lower()
-    for kw in [" in ", " for ", " at "]:
+    # Only extract location after "in" or "at"
+    # Never "for" -- causes "forecast for the afternoon" → France bug
+    for kw in [" in ", " at "]:
         if kw in msg:
             idx = msg.index(kw) + len(kw)
             loc = message[idx:].strip().rstrip("?.,!")
-            if loc and len(loc) > 2:
+            TIME_WORDS = {"the", "a", "an", "this", "that", "today", "tomorrow",
+                          "morning", "afternoon", "evening", "night", "week",
+                          "weekend", "hour", "minute", "second", "moment"}
+            first_word = loc.split()[0].lower() if loc else ""
+            if loc and len(loc) > 2 and first_word not in TIME_WORDS:
                 return loc
-    return profile_location or "Dallas TX"
-
+    return profile_location or None
 def fetch_weather_direct(location):
-    try:
-        clean_loc = location.strip().replace(' ', '+')
+        try:
+            clean_loc = location.strip().replace(' ', '+')
         url = f"https://wttr.in/{clean_loc}?format=j1"
         req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.8"})
         with urllib.request.urlopen(req, timeout=5) as r:
@@ -4283,7 +4288,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.38",
+        "status": "ok", "server": "herald-api", "version": "8.39",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
