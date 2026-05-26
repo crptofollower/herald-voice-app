@@ -302,7 +302,7 @@ export default function ChatScreen() {
     const interval = setInterval(() => {
       index = (index + 1) % THINKING_PHRASES.length;
       setThinkingPhrase(THINKING_PHRASES[index]);
-    }, 1800);
+    }, 4000);
     return () => clearInterval(interval);
   }, [isWaiting]);
 
@@ -1256,12 +1256,11 @@ export default function ChatScreen() {
                 },
               ]}
               onPress={() => {
-                if (handsFreeMode) {
-                  setHandsFreeMode(false);
+                if (isStreaming || isWaiting) return;
+                Keyboard.dismiss();
+                if (isRecording) {
                   stopRecording();
                 } else {
-                  Keyboard.dismiss();
-                  setHandsFreeMode(true);
                   startRecording();
                 }
               }}
