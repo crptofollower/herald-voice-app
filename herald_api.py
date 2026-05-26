@@ -4027,6 +4027,18 @@ def morning_briefing_job():
         else:
             salutation = "Good evening"
 
+        # Add personal opener from recent memory
+        _facts = profile.get("learned_facts", [])
+        _mems  = profile.get("memories", [])
+        _recent = (_facts + _mems)[-3:] if (_facts or _mems) else []
+        _opener = ""
+        if _recent:
+            _last = _recent[-1]
+            _text = _last if isinstance(_last, str) else str(_last)
+            _text = _text[:60] if len(_text) > 60 else _text
+            if len(_text) > 10:
+                _opener = f" Thinking about you -- {_text}."
+
         # v8.13: Briefing respects user preferences
         prefs = profile.get("briefing_prefs", {})
 
@@ -4055,10 +4067,10 @@ def morning_briefing_job():
 
         # Brief tone -- just greeting + weather, skip the rest
         if prefs.get("tone") == "brief":
-            briefing = f"{salutation} {name}. {weather_section}".strip()
+            briefing = f"{salutation} {name}.{_opener} {weather_section}".strip()
         else:
             briefing = (
-                f"{salutation} {name}. {weather_section}"
+                f"{salutation} {name}.{_opener} {weather_section}"
                 f"{moments_section}{tracker_section}{medication_line}{freddie_section}"
             ).strip()
 
