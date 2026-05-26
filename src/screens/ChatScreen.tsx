@@ -720,22 +720,45 @@ export default function ChatScreen() {
           );
           break;
         case "alarm": {
-          // Parse HH:MM|label format
           const alarmParts = action.value.split("|");
           const alarmTime  = alarmParts[0]?.trim() || "";
           const alarmLabel = alarmParts[1]?.trim() || "Herald Alarm";
-          // Open clock app -- Android deep link
-          const alarmUrl = `intent://alarm#Intent;scheme=android.intent.action.SET_ALARM;S.android.intent.extra.alarm.MESSAGE=${encodeURIComponent(alarmLabel)};S.android.intent.extra.alarm.HOUR=${alarmTime.split(":")[0]};S.android.intent.extra.alarm.MINUTES=${alarmTime.split(":")[1]};end`;
+          const alarmHour  = alarmTime.split(":")[0] || "0";
+          const alarmMins  = alarmTime.split(":")[1] || "0";
+
+          // Correct Android SET_ALARM intent format
+          const alarmUrl = `intent:#Intent;action=android.intent.action.SET_ALARM;S.android.intent.extra.alarm.MESSAGE=${encodeURIComponent(alarmLabel)};i.android.intent.extra.alarm.HOUR=${alarmHour};i.android.intent.extra.alarm.MINUTES=${alarmMins};B.android.intent.extra.alarm.SKIP_UI=false;end`;
+
+          // Samsung Clock direct fallback
+          const samsungUrl = `intent:#Intent;action=android.intent.action.SET_ALARM;package=com.samsung.android.clockpackage;S.android.intent.extra.alarm.MESSAGE=${encodeURIComponent(alarmLabel)};i.android.intent.extra.alarm.HOUR=${alarmHour};i.android.intent.extra.alarm.MINUTES=${alarmMins};B.android.intent.extra.alarm.SKIP_UI=false;end`;
+
+          // Generic clock app last resort
+          const clockUrl = `intent:#Intent;action=android.intent.action.SHOW_ALARMS;end`;
+
+          let opened = false;
           try {
             await Linking.openURL(alarmUrl);
+            opened = true;
           } catch {
-            // Fallback -- open clock app
-            await Linking.openURL("intent://com.samsung.android.clockpackage#Intent;scheme=package;end");
+            try {
+              await Linking.openURL(samsungUrl);
+              opened = true;
+            } catch {
+              try {
+                await Linking.openURL(clockUrl);
+                opened = true;
+              } catch (e) {
+                console.error("[Herald] All alarm intents failed:", e);
+              }
+            }
           }
+
           addMessage({
             id: generateId("msg"),
             role: "assistant",
-            content: `Opening your clock app to set that alarm for ${alarmTime}.`,
+            content: opened
+              ? `Alarm set for ${alarmTime} — ${alarmLabel}.`
+              : `I couldn't open the clock app directly. Open your clock app and set it for ${alarmTime}.`,
             timestamp: Date.now(),
           });
           break;
