@@ -41,7 +41,6 @@
       "bundler": "metro"
     },
     "plugins": [
-      "expo-router",
       "expo-font",
       "expo-calendar",
       [
@@ -52,7 +51,6 @@
         }
       ],
       "expo-sqlite",
-      "expo-audio",
       [
         "expo-speech-recognition",
         {
