@@ -38,6 +38,7 @@ import {
 } from "react-native";
 import * as Calendar from "expo-calendar";
 import * as Network from "expo-network";
+import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useStore } from "../store/useStore";
 import { API_BASE } from "../constants/api";
@@ -409,6 +410,7 @@ export default function ChatScreen() {
     if (!text) return;
 
     lastSentRef.current = now;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
     const _autoOpenTriggers = [
       "just open it", "stop asking", "open it directly", "just open",
@@ -1270,6 +1272,17 @@ export default function ChatScreen() {
               </Text>
             </TouchableOpacity>
             </Animated.View>
+            {!isRecording && !isStreaming && !isWaiting && (
+              <Text style={{
+                color: 'rgba(255,255,255,0.35)',
+                fontSize: 10,
+                marginTop: 4,
+                textAlign: 'center',
+                letterSpacing: 0.5,
+              }}>
+                tap to speak
+              </Text>
+            )}
             <TouchableOpacity
               style={[
                 styles.sendBtn,
