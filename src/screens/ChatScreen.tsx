@@ -179,6 +179,8 @@ export default function ChatScreen() {
   const greetingIdRef = useRef<string>("");
   const autoOpenAppsRef = useRef(false);
   const pulseAnim = useRef(new Animated.Value(1)).current;
+  const tokenBatchRef = useRef<string>('');
+  const batchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Scroll snap prevention ────────────────────────────────────────────────
   // Only auto-scroll to bottom when user is already near the bottom.
@@ -621,7 +623,7 @@ export default function ChatScreen() {
             firstToken = false;
             stop();
             setIsWaiting(false);
-            flatListRef.current?.scrollToEnd({ animated: false });
+            flatListRef.current?.scrollToEnd({ animated: true });
             const maxStreamTimer = setTimeout(() => {
               if (streamAbortRef.current) {
                 streamAbortRef.current.abort();
@@ -639,7 +641,15 @@ export default function ChatScreen() {
               (streamAbortRef.current as any)._maxTimer = maxStreamTimer;
             }
           }
-          setStreamingContent((prev) => prev + token);
+          tokenBatchRef.current += token;
+          if (!batchTimerRef.current) {
+            batchTimerRef.current = setTimeout(() => {
+              const batch = tokenBatchRef.current;
+              tokenBatchRef.current = '';
+              batchTimerRef.current = null;
+              if (batch) setStreamingContent((prev) => prev + batch);
+            }, 80);
+          }
         },
         onSentence: (sentence) => { enqueueSentence(sentence); },
         onAction: (action) => {
@@ -652,13 +662,29 @@ export default function ChatScreen() {
           setActionStatus("confirming");
         },
         onDone: (fullText) => {
+          if (batchTimerRef.current) {
+            clearTimeout(batchTimerRef.current);
+            batchTimerRef.current = null;
+          }
+          if (tokenBatchRef.current) {
+            setStreamingContent((prev) => prev + tokenBatchRef.current);
+            tokenBatchRef.current = '';
+          }
           if (fullText.trim()) {
             addMessage({ id: generateId("msg"), role: "assistant", content: fullText, timestamp: Date.now() });
             saveDeviceMemory(`Conversation: ${text.slice(0, 80)} → ${fullText.slice(0, 120)}`, 'conversation');
           }
           resetStreamState();
         },
-        onError: (err) => { setError(err.message); resetStreamState(); },
+        onError: (err) => {
+          if (batchTimerRef.current) {
+            clearTimeout(batchTimerRef.current);
+            batchTimerRef.current = null;
+          }
+          tokenBatchRef.current = '';
+          setError(err.message);
+          resetStreamState();
+        },
       }
     );
 
@@ -1256,7 +1282,7 @@ export default function ChatScreen() {
                 },
               ]}
               onPress={() => {
-                if (isStreaming || isWaiting) return;
+                if (isStreaming || isWaiting || isSpeaking) return;
                 Keyboard.dismiss();
                 if (isRecording) {
                   stopRecording();
