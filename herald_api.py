@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.41 -- no support-team deflection; Herald IS the support
+# v8.42 -- no support-team deflection; Herald IS the support
 #
 # v8.12 -- Medical memory system (always include user city in MAPS tag)
 #
@@ -38,7 +38,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.41")
+app = FastAPI(title="Herald API", version="8.42")
 
 app.add_middleware(
     CORSMiddleware,
@@ -4288,7 +4288,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.41",
+        "status": "ok", "server": "herald-api", "version": "8.42",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -4788,6 +4788,7 @@ async def ask_stream(request: Request):
         _pre_user_id  = data.get("user_id", "").strip()
         _pre_message  = data.get("message", "").strip()
         _pre_lower    = _pre_message.lower()
+        print(f"[HERALD] PRE-CHECK message: '{_pre_lower}'")
         _pre_profile  = get_profile(_pre_user_id)
         _pre_name     = _pre_profile.get("name", "")
         _pre_namepart = f", {_pre_name}" if _pre_name else ""
