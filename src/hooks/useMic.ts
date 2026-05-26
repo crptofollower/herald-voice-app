@@ -7,18 +7,37 @@ import {
 export function useMic(onTranscript: (text: string) => void) {
   const [isRecording, setIsRecording] = useState(false);
   const maxTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const bufferRef = useRef<string>('');
+  const bufferTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const BUFFER_WINDOW = 2400; // ms to wait for follow-up speech
 
   useSpeechRecognitionEvent('result', (event) => {
     if (event.isFinal) {
       const text = event.results[0]?.transcript?.trim();
-      if (text) {
-        onTranscript(text);
+      if (!text) { setIsRecording(false); return; }
+
+      // Accumulate into buffer
+      bufferRef.current = bufferRef.current
+        ? bufferRef.current + ' ' + text
+        : text;
+
+      // Clear any existing timer
+      if (bufferTimerRef.current) {
+        clearTimeout(bufferTimerRef.current);
       }
+
+      // Short confident statements send faster
+      const wordCount = bufferRef.current.split(' ').length;
+      const delay = wordCount > 8 ? 1200 : BUFFER_WINDOW;
+
+      bufferTimerRef.current = setTimeout(() => {
+        const final = bufferRef.current.trim();
+        bufferRef.current = '';
+        bufferTimerRef.current = null;
+        if (final) onTranscript(final);
+      }, delay);
+
       setIsRecording(false);
-      if (maxTimer.current) {
-        clearTimeout(maxTimer.current);
-        maxTimer.current = null;
-      }
     }
   });
 
@@ -63,6 +82,17 @@ export function useMic(onTranscript: (text: string) => void) {
   }
 
   async function stopRecording() {
+    // Flush buffer immediately on manual stop
+    if (bufferTimerRef.current) {
+      clearTimeout(bufferTimerRef.current);
+      bufferTimerRef.current = null;
+    }
+    if (bufferRef.current.trim()) {
+      const final = bufferRef.current.trim();
+      bufferRef.current = '';
+      onTranscript(final);
+      return;
+    }
     if (maxTimer.current) {
       clearTimeout(maxTimer.current);
       maxTimer.current = null;
