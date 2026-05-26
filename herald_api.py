@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.37 -- no support-team deflection; Herald IS the support
+# v8.38 -- no support-team deflection; Herald IS the support
 #
 # v8.12 -- Medical memory system (always include user city in MAPS tag)
 #
@@ -38,7 +38,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.37")
+app = FastAPI(title="Herald API", version="8.38")
 
 app.add_middleware(
     CORSMiddleware,
@@ -4283,7 +4283,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.37",
+        "status": "ok", "server": "herald-api", "version": "8.38",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -5889,7 +5889,8 @@ async def admin_clear_profile_field(request: Request):
         return JSONResponse({"error": "user_id and field required"}, status_code=400)
     CLEARABLE = {
         "confirmed_city", "confirmed_lat", "confirmed_lng",
-        "location", "_briefing_confirm", "pending_watch_offer"
+        "location", "_briefing_confirm", "pending_watch_offer",
+        "onboardingComplete", "ai_name", "name"
     }
     if field not in CLEARABLE:
         return JSONResponse(
