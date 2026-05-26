@@ -1752,13 +1752,12 @@ def _create_followup_tracker(user_id: str, data: dict, cursor):
             print(f"[HERALD] Follow-up tracker error (non-fatal): {e}")
 
 
-def _build_medical_context(user_id: str, cursor=None) -> str:
-    owns_conn = cursor is None
-    conn = None
+def _build_medical_context(user_id: str, conn=None) -> str:
+    owns_conn = conn is None
     try:
         if owns_conn:
             conn = sqlite3.connect(DB_FILE)
-            cursor = conn.cursor()
+        cursor = conn.cursor()
         cursor.execute(
             "SELECT doctor_name, specialty, visit_date, outcome, follow_up_date "
             "FROM medical_records WHERE user_id=? AND active=1 ORDER BY visit_date DESC LIMIT 5",
@@ -2715,7 +2714,7 @@ _CALENDAR_CACHE_TTL = 300  # 5 minutes
 _calendar_cache = {}  # user_id -> (timestamp, result)
 
 
-def _get_calendar_line(user_id: str) -> str:
+def _get_calendar_line(user_id: str, conn=None) -> str:
     """Return formatted upcoming calendar line, cached per user for 5 minutes."""
     if not user_id:
         return ""
@@ -2725,8 +2724,10 @@ def _get_calendar_line(user_id: str) -> str:
         if time.time() - ts < _CALENDAR_CACHE_TTL:
             return result
     calendar_line = ""
+    owns_conn = conn is None
     try:
-        conn = sqlite3.connect(DB_FILE)
+        if owns_conn:
+            conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
         c.execute("""
             SELECT item_name, COALESCE(next_due_date, last_date) AS event_date
@@ -2738,7 +2739,8 @@ def _get_calendar_line(user_id: str) -> str:
             LIMIT 12
         """, (user_id,))
         cal_rows = c.fetchall()
-        conn.close()
+        if owns_conn and conn:
+            conn.close()
         if cal_rows:
             today = date.today()
             cal_items = []
@@ -2865,13 +2867,14 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
     watcher_context = _build_watcher_context(profile)
 
     user_id = profile.get("user_id", "")
-    calendar_line = _get_calendar_line(user_id)
     life_tracker_line = ""
     episodic_line = ""
     medical_context = ""
+    calendar_line = ""
     conn = None
     try:
         conn = sqlite3.connect(DB_FILE)
+        calendar_line = _get_calendar_line(user_id, conn)
         c = conn.cursor()
 
         c.execute("""
@@ -2934,7 +2937,7 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
                     moment_lines.append(f"{summary} ({age})")
                 episodic_line = "Life moments this user has shared: " + "; ".join(moment_lines) + ". Reference these naturally like a friend who remembers -- never robotically."
 
-        medical_context = _build_medical_context(user_id, c)
+        medical_context = _build_medical_context(user_id, conn)
     except Exception:
         pass
     finally:
@@ -3390,9 +3393,17 @@ def build_ask_context(data):
                     profile["name"] = extracted
                     break
 
-    profile = detect_preferences(message, profile)
-    category = tag_query_category(message)
-    profile = increment_query_count(category, profile)
+    # Skip expensive loops for short conversational messages
+    _skip_analysis = len(message.split()) < 6 and not any(
+        kw in msg_lower for kw in [
+            "like", "love", "hate", "prefer", "always", "never",
+            "favorite", "usually", "every", "don't", "do not",
+        ]
+    )
+    if not _skip_analysis:
+        detect_preferences(message, profile)
+    category = tag_query_category(message) if not _skip_analysis else "general"
+    increment_query_count(category, profile)
 
     if "my name is" in msg_lower:
         try: profile["name"] = message.split("my name is", 1)[1].strip().split()[0].rstrip(".,!?")
@@ -3611,6 +3622,23 @@ def get_direct_reply(ctx):
         "show my calendar", "show my schedule", "my agenda",
         "my appointments", "my appointment", "on my schedule",
         "what do i have on", "do i have anything",
+        "next two weeks",
+        "next 2 weeks",
+        "next week",
+        "this week",
+        "next 10 days",
+        "next 10 business days",
+        "next month",
+        "next 30 days",
+        "coming up soon",
+        "what do i have coming",
+        "anything coming up",
+        "what's ahead",
+        "what's on my schedule",
+        "anything scheduled",
+        "upcoming",
+        "what's planned",
+        "what do i have planned",
     ]
     if any(t in msg_lower for t in _CALENDAR_TRIGGERS):
         _user_id = profile.get("user_id", "")
@@ -4081,7 +4109,26 @@ def afternoon_checkin_job():
                 first_name = profile.get("name", "")
                 name_part  = f" {first_name}" if first_name else ""
 
-                msg = f"Hey{name_part} -- how is your afternoon going?"
+                # Personalize based on profile context
+                _profile = get_profile(user_id)
+                _facts = _profile.get("learned_facts", [])
+                _notes = _profile.get("notes", [])
+                _mem = _profile.get("memories", [])
+                _recent = (_facts + _notes + _mem)[-3:] if (_facts or _notes or _mem) else []
+
+                if _recent:
+                    _context = _recent[-1] if isinstance(_recent[-1], str) else str(_recent[-1])
+                    _context = _context[:80] if len(_context) > 80 else _context
+                    _msg = (
+                        f"Hey {first_name} -- afternoon check-in. "
+                        f"How's everything going? Still thinking about {_context}?"
+                        if len(_context) > 10
+                        else f"Hey {first_name} -- how's your afternoon going?"
+                    )
+                else:
+                    _msg = f"Hey {first_name} -- how's your afternoon going? Anything I can help with?"
+
+                msg = _msg
 
                 proactive_queue = profile.get("proactive_queue", [])
                 proactive_queue.append({
@@ -4456,6 +4503,23 @@ async def ask(request: Request):
         "show my calendar", "show my schedule", "my agenda",
         "my appointments", "my appointment", "on my schedule",
         "what do i have on", "do i have anything",
+        "next two weeks",
+        "next 2 weeks",
+        "next week",
+        "this week",
+        "next 10 days",
+        "next 10 business days",
+        "next month",
+        "next 30 days",
+        "coming up soon",
+        "what do i have coming",
+        "anything coming up",
+        "what's ahead",
+        "what's on my schedule",
+        "anything scheduled",
+        "upcoming",
+        "what's planned",
+        "what do i have planned",
     ]
     if any(t in _pre_lower for t in _PRE_CAL):
         _pcal_line = _get_calendar_line(_pre_user_id) if _pre_user_id else ""
@@ -4708,6 +4772,23 @@ async def ask_stream(request: Request):
             "show my calendar", "show my schedule", "my agenda",
             "my appointments", "my appointment", "on my schedule",
             "what do i have on", "do i have anything",
+            "next two weeks",
+            "next 2 weeks",
+            "next week",
+            "this week",
+            "next 10 days",
+            "next 10 business days",
+            "next month",
+            "next 30 days",
+            "coming up soon",
+            "what do i have coming",
+            "anything coming up",
+            "what's ahead",
+            "what's on my schedule",
+            "anything scheduled",
+            "upcoming",
+            "what's planned",
+            "what do i have planned",
         ]
         if any(t in _pre_lower for t in _PRE_CAL):
             _pcal_line = _get_calendar_line(_pre_user_id) if _pre_user_id else ""
