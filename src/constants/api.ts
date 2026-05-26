@@ -26,6 +26,7 @@ export const REQUEST_TIMEOUT_MS = 30_000;
 // Proactive queue -- don't re-poll within this window.
 // Fixes the double greeting bug (app open + resume both fire within seconds).
 export const PROACTIVE_POLL_COOLDOWN_MS = 60_000;
+export const PROACTIVE_POLL_MS = 60_000;
 export const TTS_RATE  = 0.82;
 export const TTS_PITCH = 1.0;
 
