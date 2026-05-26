@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.40 -- no support-team deflection; Herald IS the support
+# v8.41 -- no support-team deflection; Herald IS the support
 #
 # v8.12 -- Medical memory system (always include user city in MAPS tag)
 #
@@ -38,7 +38,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.40")
+app = FastAPI(title="Herald API", version="8.41")
 
 app.add_middleware(
     CORSMiddleware,
@@ -4288,7 +4288,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.40",
+        "status": "ok", "server": "herald-api", "version": "8.41",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -4864,7 +4864,7 @@ async def ask_stream(request: Request):
 
         # Weather pre-check -- bypasses build_ask_context for weather queries
         _PRE_WEATHER_TRIGGERS = [
-            'weather', 'forecast', 'temperature outside', 'how hot',
+            'weather', 'forecast', 'temperature', 'how hot',
             'how cold', 'will it rain', 'chance of rain', 'is it raining',
             'what is it like outside', 'whats it like outside',
             "what's it like outside",
