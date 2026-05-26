@@ -177,6 +177,7 @@ export default function ChatScreen() {
   const liveGreetingAddedRef = useRef(false);
   const greetingIdRef = useRef<string>("");
   const autoOpenAppsRef = useRef(false);
+  const pulseAnim = useRef(new Animated.Value(1)).current;
 
   // ── Scroll snap prevention ────────────────────────────────────────────────
   // Only auto-scroll to bottom when user is already near the bottom.
@@ -622,6 +623,12 @@ export default function ChatScreen() {
             const maxStreamTimer = setTimeout(() => {
               if (streamAbortRef.current) {
                 streamAbortRef.current.abort();
+                addMessage({
+                  id: generateId("msg"),
+                  role: "assistant",
+                  content: "That took longer than expected — try asking again.",
+                  timestamp: Date.now(),
+                });
                 resetStreamState();
                 setError('Response timed out. Try again.');
               }
@@ -677,6 +684,27 @@ export default function ChatScreen() {
       return () => clearTimeout(timer);
     }
   }, [isSpeaking, isStreaming, startRecording]);
+
+  useEffect(() => {
+    if (isRecording) {
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, {
+            toValue: 1.15,
+            duration: 600,
+            useNativeDriver: true,
+          }),
+          Animated.timing(pulseAnim, {
+            toValue: 1,
+            duration: 600,
+            useNativeDriver: true,
+          }),
+        ])
+      ).start();
+    } else {
+      pulseAnim.setValue(1);
+    }
+  }, [isRecording]);
 
   // ── Intent execution ──────────────────────────────────────────────────────
 
@@ -1195,7 +1223,13 @@ export default function ChatScreen() {
               onChangeText={setInputText}
               multiline
               maxLength={2000}
-              returnKeyType="default"
+              returnKeyType="send"
+              onSubmitEditing={() => {
+                if (inputText.trim()) {
+                  sendMessage(inputText.trim());
+                  setInputText('');
+                }
+              }}
               blurOnSubmit={false}
               accessibilityLabel="Message input"
               onFocus={() => {
@@ -1204,6 +1238,7 @@ export default function ChatScreen() {
                 stop();
               }}
             />
+            <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
             <TouchableOpacity
               style={[
                 styles.sendBtn,
@@ -1234,6 +1269,7 @@ export default function ChatScreen() {
                 {isRecording ? '⏹' : '🎤'}
               </Text>
             </TouchableOpacity>
+            </Animated.View>
             <TouchableOpacity
               style={[
                 styles.sendBtn,
