@@ -2734,7 +2734,7 @@ def _get_calendar_line(user_id: str, conn=None) -> str:
             FROM life_tracker
             WHERE user_id = ? AND active = 1 AND source = 'calendar'
               AND date(COALESCE(next_due_date, last_date)) >= date('now')
-              AND date(COALESCE(next_due_date, last_date)) <= date('now', '+14 days')
+              AND date(COALESCE(next_due_date, last_date)) <= date('now', '+30 days')
             ORDER BY event_date ASC
             LIMIT 12
         """, (user_id,))
