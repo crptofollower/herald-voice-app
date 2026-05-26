@@ -173,7 +173,7 @@ export const useStore = create<Store>()(
         }),
     }),
     {
-      name: "herald-store-v3",   // bumped to v3 -- forces fresh onboarding, clears stale state
+      name: "herald-store-v4",
       storage: createJSONStorage(() => AsyncStorage),
 
       onRehydrateStorage: () => (state) => {
