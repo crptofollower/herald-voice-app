@@ -637,11 +637,15 @@ def get_profile(user_id):
 def save_profile(user_id, profile):
     user_profiles[user_id] = profile
     _write_profile_to_db(user_id, profile)
+    # Invalidate system prompt cache on profile change
+    _system_prompt_cache.pop(user_id, None)
 
 
 def save_profile_async(user_id, profile):
     """Update in-memory profile immediately; persist to SQLite in background."""
     user_profiles[user_id] = profile
+    # Invalidate system prompt cache on profile change
+    _system_prompt_cache.pop(user_id, None)
     snapshot = json.loads(json.dumps(profile, ensure_ascii=False))
     threading.Thread(
         target=_write_profile_to_db,
@@ -667,6 +671,8 @@ def save_profile_fields(user_id, updates: dict):
     profile = get_profile(user_id)
     profile.update(updates)
     save_profile(user_id, profile)
+    # Invalidate system prompt cache on profile change
+    _system_prompt_cache.pop(user_id, None)
 
 def is_owner(user_id, auth_code=None):
     if OWNER_CODE and auth_code and auth_code.strip() == OWNER_CODE:
@@ -2712,6 +2718,8 @@ def calculate_moment_weight(category: str, emotion: str,
 
 _CALENDAR_CACHE_TTL = 300  # 5 minutes
 _calendar_cache = {}  # user_id -> (timestamp, result)
+_system_prompt_cache: dict = {}  # user_id -> (timestamp, prompt)
+_SYSTEM_PROMPT_TTL = 180  # 3 minutes
 
 
 def _get_calendar_line(user_id: str, conn=None) -> str:
@@ -3458,7 +3466,18 @@ def build_ask_context(data):
 
     save_profile_async(user_id, profile)
 
-    system   = build_system(profile, local_time, owner, empire, lat, lng, location_label, local_date=local_date, device_context=device_context)
+    # System prompt cache -- rebuilds only when profile changes
+    import time as _time
+    _cache_key = user_id
+    _cached = _system_prompt_cache.get(_cache_key)
+    _now_ts = _time.time()
+    if _cached and (_now_ts - _cached[0]) < _SYSTEM_PROMPT_TTL:
+        system = _cached[1]
+    else:
+        system = build_system(profile, local_time, owner, empire,
+            lat, lng, location_label, local_date=local_date,
+            device_context=device_context)
+        _system_prompt_cache[_cache_key] = (_now_ts, system)
     messages = [{"role": "system", "content": system}]
     messages += history[-20:]
     messages.append({"role": "user", "content": message})
