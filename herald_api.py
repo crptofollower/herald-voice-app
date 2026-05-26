@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.42 -- no support-team deflection; Herald IS the support
+# v8.43 -- no support-team deflection; Herald IS the support
 #
 # v8.12 -- Medical memory system (always include user city in MAPS tag)
 #
@@ -38,7 +38,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.42")
+app = FastAPI(title="Herald API", version="8.43")
 
 app.add_middleware(
     CORSMiddleware,
@@ -526,6 +526,20 @@ def init_db():
                 active       INTEGER DEFAULT 1,
                 created_at   TEXT NOT NULL,
                 UNIQUE(user_id, doctor_name)
+            )
+        """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS life_tracker (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id        TEXT NOT NULL,
+                category       TEXT NOT NULL,
+                item_name      TEXT NOT NULL,
+                last_date      TEXT,
+                next_due_date  TEXT,
+                interval_days  INTEGER DEFAULT 0,
+                source         TEXT DEFAULT 'conversation',
+                active         INTEGER DEFAULT 1,
+                created_at     TEXT NOT NULL
             )
         """)
         c.execute("""
@@ -3648,8 +3662,7 @@ def get_direct_reply(ctx):
         "what do i have on", "do i have anything",
         "next two weeks",
         "next 2 weeks",
-        "next week",
-        "this week",
+             
         "next 10 days",
         "next 10 business days",
         "next month",
@@ -4288,7 +4301,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.42",
+        "status": "ok", "server": "herald-api", "version": "8.43",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -4541,8 +4554,6 @@ async def ask(request: Request):
         "what do i have on", "do i have anything",
         "next two weeks",
         "next 2 weeks",
-        "next week",
-        "this week",
         "next 10 days",
         "next 10 business days",
         "next month",
@@ -4788,7 +4799,6 @@ async def ask_stream(request: Request):
         _pre_user_id  = data.get("user_id", "").strip()
         _pre_message  = data.get("message", "").strip()
         _pre_lower    = _pre_message.lower()
-        print(f"[HERALD] PRE-CHECK message: '{_pre_lower}'")
         _pre_profile  = get_profile(_pre_user_id)
         _pre_name     = _pre_profile.get("name", "")
         _pre_namepart = f", {_pre_name}" if _pre_name else ""
@@ -4815,8 +4825,6 @@ async def ask_stream(request: Request):
             "what do i have on", "do i have anything",
             "next two weeks",
             "next 2 weeks",
-            "next week",
-            "this week",
             "next 10 days",
             "next 10 business days",
             "next month",
