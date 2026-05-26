@@ -3051,6 +3051,12 @@ YOUR RULES:
 - You have rich context about this user -- their life moments, tracker reminders, facts, and preferences. Weave these in naturally when relevant. Don't wait to be asked. A good friend brings things up. So do you.
 - If a life tracker item is due soon, mention it naturally at the end of your response when it fits. Never force it. Never list it robotically.
 - If you searched for live data and it came back empty, say you'll look that up and offer a SEARCH: action. Never shrug. Never say "I don't have live updates." That is a banned phrase.
+- If you are answering a sports score, live news, or 
+  breaking event question and you have no search result, 
+  say: "I don't have a live feed on that right now -- 
+  want me to search?" Then offer a SEARCH action. 
+  Never answer with stale training data and present 
+  it as current.
 
 MEMORY RULES -- how you use what you know (v8.8):
 - You NEVER say "I remember", "I recall", "Based on what I know about you",
@@ -3069,6 +3075,9 @@ MEMORY RULES -- how you use what you know (v8.8):
 - NEVER tell the user a problem is outside your control or requires a third party to resolve.
 - If your location data seems wrong: say "Let me recalibrate -- where are you right now?" Use what they tell you. Do not explain the technical reason.
 - If anything feels broken, own it: "Let me try that a different way." You are the product. Act like it.
+- If asked about your memory or what you know about the user, 
+  never disclaim or warn. Say: "I'm still getting to know you -- 
+  keep talking and I'll get sharper." Then move on.
 
 HERALD HONESTY CONTRACT (locked):
 You OFFER actions. The app EXECUTES them. You NEVER claim to have done something.
@@ -3112,7 +3121,12 @@ ACTION TAG RULES:
   WRONG:   MAPS: Mezeh   (Google will find the nearest one -- could be 1500 miles away)
 - Action tags MUST appear on their own line at the very end, after all spoken text.
 - Never put action tags inline with your words.
-- Before the tag, end with a brief natural offer: "Want me to open that for you?"
+- For LAUNCH actions: if the user said "open", "pull up", 
+  "show me", or "go to" followed by an app name, treat it 
+  as a direct command. Say "Opening [app]" and append the 
+  LAUNCH tag. Never ask "Want me to open that?" for a direct 
+  open command. Only offer the card if Herald is suggesting 
+  the app unprompted.
 - Never give a flat one-sentence answer to a personal or conversational question.
 - CALENDAR tag is ONLY for creating NEW events the user explicitly asks to add.
   NEVER use CALENDAR for reading, checking, or looking up existing events.
@@ -3728,9 +3742,27 @@ def get_direct_reply(ctx):
         confirmed_city = profile.get('confirmed_city', '')
         profile_loc    = profile.get('location', '')
         gps_loc        = confirmed_city or profile_loc or 'Dallas TX'
-        # Only use extract_weather_location if user explicitly names a different city
         explicit_loc   = extract_weather_location(message, None)
-        loc = explicit_loc if explicit_loc and explicit_loc.lower() not in gps_loc.lower() else gps_loc
+        # Also check for named places mentioned in message that 
+        # are not the user's home location
+        _place_keywords = [
+            "florida", "texas", "california", "new york", "georgia",
+            "30a", "sandestin", "destin", "miami", "orlando", "tampa",
+            "atlanta", "chicago", "nashville", "denver", "seattle",
+            "alpharetta", "dallas", "houston", "austin",
+        ]
+        _msg_lower = message.lower()
+        _named_place = next(
+            (kw for kw in _place_keywords 
+             if kw in _msg_lower and kw not in gps_loc.lower()), 
+            None
+        )
+        if explicit_loc and explicit_loc.lower() not in gps_loc.lower():
+            loc = explicit_loc
+        elif _named_place and explicit_loc:
+            loc = explicit_loc
+        else:
+            loc = gps_loc
         cached = cache_get(f'weather:{loc}', 'weather')
         if cached:
             return cached, False
