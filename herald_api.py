@@ -2313,31 +2313,31 @@ def extract_weather_location(message, profile_location):
 def fetch_weather_direct(location):
         try:
             clean_loc = location.strip().replace(' ', '+')
-        url = f"https://wttr.in/{clean_loc}?format=j1"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.8"})
-        with urllib.request.urlopen(req, timeout=5) as r:
-            data = json.loads(r.read().decode())
-        cur  = data["current_condition"][0]
-        area = data["nearest_area"][0]
-        city     = area["areaName"][0]["value"]
-        region   = area["region"][0]["value"]
-        temp_f   = cur["temp_F"]
-        feels_f  = cur["FeelsLikeF"]
-        desc     = cur["weatherDesc"][0]["value"]
-        humidity = cur["humidity"]
-        wind_mph = cur["windspeedMiles"]
-        today    = data["weather"][0]
-        high_f   = today["maxtempF"]
-        low_f    = today["mintempF"]
-        hourly   = today.get("hourly", [])
-        rain_chance = max((int(h.get("chanceofrain", 0)) for h in hourly), default=0)
-        rain_str = (f"There is a {rain_chance} percent chance of rain today."
-                    if rain_chance > 15 else "No significant rain expected today.")
-        return (f"Right now in {city}, {region} it is {temp_f} degrees and {desc.lower()}. "
-                f"Feels like {feels_f} degrees. Humidity {humidity} percent, wind {wind_mph} miles per hour. "
-                f"Today's high is {high_f}, low is {low_f}. {rain_str}")
-    except Exception as e:
-        print(f"[HERALD] wttr.in failed: {e}")
+            url = f"https://wttr.in/{clean_loc}?format=j1"
+            req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.8"})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                data = json.loads(r.read().decode())
+            cur  = data["current_condition"][0]
+            area = data["nearest_area"][0]
+            city     = area["areaName"][0]["value"]
+            region   = area["region"][0]["value"]
+            temp_f   = cur["temp_F"]
+            feels_f  = cur["FeelsLikeF"]
+            desc     = cur["weatherDesc"][0]["value"]
+            humidity = cur["humidity"]
+            wind_mph = cur["windspeedMiles"]
+            today    = data["weather"][0]
+            high_f   = today["maxtempF"]
+            low_f    = today["mintempF"]
+            hourly   = today.get("hourly", [])
+            rain_chance = max((int(h.get("chanceofrain", 0)) for h in hourly), default=0)
+            rain_str = (f"There is a {rain_chance} percent chance of rain today."
+                        if rain_chance > 15 else "No significant rain expected today.")
+            return (f"Right now in {city}, {region} it is {temp_f} degrees and {desc.lower()}. "
+                    f"Feels like {feels_f} degrees. Humidity {humidity} percent, wind {wind_mph} miles per hour. "
+                    f"Today's high is {high_f}, low is {low_f}. {rain_str}")
+        except Exception as e:
+            print(f"[HERALD] wttr.in failed: {e}")
         return None
 
 def fetch_weather_backup(location):
