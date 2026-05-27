@@ -4835,16 +4835,13 @@ async def ask_stream(request: Request):
                 **_trial_fields(_pre_trial),
             }
 
-            # Calendar WRITE detection -- honest response, no silent failure
-            _PRE_CAL_WRITE = [
-                "put that on my calendar", "add to my calendar", "put on my calendar",
-                "add that to my calendar", "schedule that for", "put it on my calendar",
-                "add it to my calendar", "put this on my calendar", "can you put that",
-                "add this to my calendar", "put that in my calendar",
-                "can you put that on my calendar", "put it on the calendar",
-                "add that to the calendar", "put this on the calendar",
-            ]
-            if any(t in _pre_lower for t in _PRE_CAL_WRITE):
+            # Calendar WRITE detection — catches "put X on my calendar", "add X to my calendar"
+            _is_cal_write = (
+                "on my calendar" in _pre_lower or
+                "on the calendar" in _pre_lower or
+                "in my calendar" in _pre_lower
+            ) and any(w in _pre_lower for w in ["put", "add", "schedule", "create", "make"])
+            if _is_cal_write:
                 _pcal_write_reply = (
                     f"I can read your calendar but I can't add events yet{_pre_namepart} — "
                     f"that's coming soon. Want me to remind you to add it manually?"
