@@ -389,9 +389,14 @@ export async function fetchGreeting(payload: GreetingPayload): Promise<GreetingR
 
 export async function fetchProactiveQueue(userId: string): Promise<ProactiveResponse> {
   try {
-    const result = await apiFetch<ProactiveResponse | ProactiveItem[]>(`/proactive/${userId}`);
+    // Backend returns {messages: [...]} — normalize to {items: [...]} here.
+    // The mismatch was silently swallowing all proactive messages and
+    // preventing lastPolled from ever being set (setProactiveItems threw
+    // on undefined, caught silently, debounce never fired → runaway polling).
+    const result = await apiFetch<any>(`/proactive/${userId}`);
     if (Array.isArray(result)) return { items: result, count: result.length };
-    return result;
+    const items: ProactiveItem[] = result.items ?? result.messages ?? [];
+    return { items, count: items.length };
   } catch {
     return { items: [], count: 0 };
   }
