@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.45 -- no support-team deflection; Herald IS the support
+# v8.46 -- no support-team deflection; Herald IS the support
 #
 # v8.12 -- Medical memory system (always include user city in MAPS tag)
 #
@@ -38,7 +38,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.45")
+app = FastAPI(title="Herald API", version="8.46")
 
 app.add_middleware(
     CORSMiddleware,
@@ -1427,14 +1427,15 @@ _RECENCY_WORDS = [
 _SEARCH_INTENT_WORDS = [
     'news', 'headline', 'headlines', 'breaking', 'happened', 'happening',
     'score', 'game', 'election', 'stock', 'crypto', 'bitcoin', 'ethereum',
-    'weather', 'forecast', 'who won', 'result', 'results', 'recap',
+    'weather', 'forecast', 'who won', 'who won', 'result', 'results', 'recap',
+    'win', 'lose', 'beat', 'defeat',
     'update on', 'latest on', 'any news', 'what happened',
     'announced', 'released', 'launched', 'signed', 'traded', 'died',
     'trending', 'viral', 'passed away',
 ]
 
 _EVENT_WORDS = [
-    'fight', 'match', 'game', 'won', 'lost', 'score', 'result',
+    'fight', 'match', 'game', 'won', 'lost', 'win', 'lose', 'beat', 'score', 'result',
     'results', 'election', 'announced', 'released', 'launched',
     'trending', 'viral', 'died', 'passed away', 'signed', 'traded',
 ]
@@ -4297,7 +4298,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.45",
+        "status": "ok", "server": "herald-api", "version": "8.46",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -4796,337 +4797,343 @@ async def ask_stream(request: Request):
     data = await request.json()
 
     async def generate():
-        yield _sse_event({"typing": True})
-
-        # v8.28 PRE-CHECK: fast path queries bypass build_ask_context entirely.
-        # build_ask_context takes 15-20s (SQLite x4). Calendar, alarm, and time
-        # queries should never wait for it. Check them first.
-        _pre_user_id  = data.get("user_id", "").strip()
-        _pre_message  = data.get("message", "").strip()
-        _pre_lower    = _pre_message.lower()
-        _pre_profile  = get_profile(_pre_user_id)
-        _pre_name     = _pre_profile.get("name", "")
-        _pre_namepart = f", {_pre_name}" if _pre_name else ""
-        _pre_ai_name  = _pre_profile.get("ai_name", "Herald")
-        _pre_trial    = get_trial_status(_pre_profile)
-        _pre_done     = {
-            "done": True,
-            "ai_name":      _pre_ai_name,
-            "name":         _pre_name,
-            "model_used":   MODEL_FAST,
-            **_trial_fields(_pre_trial),
-        }
-
-        # Calendar WRITE detection -- honest response, no silent failure
-        _PRE_CAL_WRITE = [
-            "put that on my calendar", "add to my calendar", "put on my calendar",
-            "add that to my calendar", "schedule that for", "put it on my calendar",
-            "add it to my calendar", "put this on my calendar", "can you put that",
-            "add this to my calendar", "put that in my calendar",
-        ]
-        if any(t in _pre_lower for t in _PRE_CAL_WRITE):
-            _pcal_write_reply = (
-                f"I can read your calendar but I can't add events yet{_pre_namepart} — "
-                f"that's coming soon. Want me to remind you to add it manually?"
-            )
+        try:
             yield _sse_event({"typing": True})
-            yield _sse_event({**_pre_done, "full": _pcal_write_reply, "action": None, "used_search": False})
-            return
 
-        # Calendar pre-check
-        _PRE_CAL = [
-            "what do i have", "what's on my calendar", "whats on my calendar",
-            "what is on my calendar", "my calendar", "my schedule",
-            "what do i have today", "what do i have tomorrow",
-            "what do i have this week", "anything on my calendar",
-            "anything on my schedule", "am i free", "what's coming up",
-            "whats coming up", "coming up today", "coming up this week",
-            "show my calendar", "show my schedule", "my agenda",
-            "my appointments", "my appointment", "on my schedule",
-            "what do i have on", "do i have anything",
-            "next two weeks",
-            "next 2 weeks",
-            "next 10 days",
-            "next 10 business days",
-            "next month",
-            "next 30 days",
-            "coming up soon",
-            "what do i have coming",
-            "anything coming up",
-            "what's ahead",
-            "what's on my schedule",
-            "anything scheduled",
-            "upcoming",
-            "what's planned",
-            "what do i have planned",
-        ]
-        if any(t in _pre_lower for t in _PRE_CAL):
-            _pcal_line = _get_calendar_line(_pre_user_id) if _pre_user_id else ""
-            if _pcal_line:
-                _pcal_raw   = _pcal_line.replace(
-                    ". Answer schedule questions from this list -- do not guess.", ""
-                ).replace("Upcoming calendar from device: ", "").strip()
-                _pcal_items = [e.strip() for e in _pcal_raw.split(";") if e.strip()]
-                if len(_pcal_items) == 0:
-                    _pcal_reply = f"Nothing on your calendar in the next two weeks{_pre_namepart}."
-                elif len(_pcal_items) == 1:
-                    _pcal_reply = f"You have one thing coming up{_pre_namepart}: {_pcal_items[0]}."
-                elif len(_pcal_items) == 2:
-                    _pcal_reply = (
-                        f"You have two things coming up{_pre_namepart}: "
-                        f"{_pcal_items[0]}, and {_pcal_items[1]}."
-                    )
-                else:
-                    _pcal_first = ", ".join(_pcal_items[:-1])
-                    _pcal_reply = (
-                        f"Here is what you have coming up{_pre_namepart}: "
-                        f"{_pcal_first}, and {_pcal_items[-1]}."
-                    )
-            else:
-                _pcal_reply = (
-                    f"Your calendar looks clear for the next two weeks{_pre_namepart}. "
-                    f"If you're expecting something to show up, give it a moment to sync."
+            # v8.28 PRE-CHECK: fast path queries bypass build_ask_context entirely.
+            # build_ask_context takes 15-20s (SQLite x4). Calendar, alarm, and time
+            # queries should never wait for it. Check them first.
+            _pre_user_id  = data.get("user_id", "").strip()
+            _pre_message  = data.get("message", "").strip()
+            _pre_lower    = _pre_message.lower()
+            _pre_profile  = get_profile(_pre_user_id)
+            _pre_name     = _pre_profile.get("name", "")
+            _pre_namepart = f", {_pre_name}" if _pre_name else ""
+            _pre_ai_name  = _pre_profile.get("ai_name", "Herald")
+            _pre_trial    = get_trial_status(_pre_profile)
+            _pre_done     = {
+                "done": True,
+                "ai_name":      _pre_ai_name,
+                "name":         _pre_name,
+                "model_used":   MODEL_FAST,
+                **_trial_fields(_pre_trial),
+            }
+
+            # Calendar WRITE detection -- honest response, no silent failure
+            _PRE_CAL_WRITE = [
+                "put that on my calendar", "add to my calendar", "put on my calendar",
+                "add that to my calendar", "schedule that for", "put it on my calendar",
+                "add it to my calendar", "put this on my calendar", "can you put that",
+                "add this to my calendar", "put that in my calendar",
+            ]
+            if any(t in _pre_lower for t in _PRE_CAL_WRITE):
+                _pcal_write_reply = (
+                    f"I can read your calendar but I can't add events yet{_pre_namepart} — "
+                    f"that's coming soon. Want me to remind you to add it manually?"
                 )
-            yield _sse_event({"t": _pcal_reply})
-            yield _sse_event({"t": "[S]"})
-            yield _sse_event({**_pre_done, "full": _pcal_reply, "action": None, "used_search": False})
-            return
-
-        # Weather pre-check -- bypasses build_ask_context for weather queries
-        _PRE_WEATHER_TRIGGERS = [
-            'weather', 'forecast', 'temperature', 'how hot',
-            'how cold', 'will it rain', 'chance of rain', 'is it raining',
-            'what is it like outside', 'whats it like outside',
-            "what's it like outside",
-        ]
-        if any(t in _pre_lower for t in _PRE_WEATHER_TRIGGERS):
-            _pw_profile  = _pre_profile
-            _pw_city     = _pw_profile.get('confirmed_city') or _pw_profile.get('location') or 'Dallas TX'
-            _pw_explicit = extract_weather_location(_pre_message, None)
-            _PRE_TIME_WORDS = {"the", "a", "an", "this", "that", "today", "tomorrow",
-                               "morning", "afternoon", "evening", "night", "week",
-                               "weekend", "hour", "minute", "second", "moment"}
-            _pw_first = _pw_explicit.split()[0].lower() if _pw_explicit else ""
-            if _pw_explicit and _pw_first not in _PRE_TIME_WORDS and _pw_explicit.lower() not in _pw_city.lower():
-                _pw_loc = _pw_explicit
-            else:
-                _pw_loc = _pw_city
-            _pw_cached = cache_get(f'weather:{_pw_loc}', 'weather')
-            _pw_result = _pw_cached or fetch_weather_direct(_pw_loc) or fetch_weather_backup(_pw_loc)
-            if not _pw_cached and _pw_result:
-                cache_set(f'weather:{_pw_loc}', _pw_result, 'weather')
-            if _pw_result:
-                yield _sse_event({"t": _pw_result})
-                yield _sse_event({"t": "[S]"})
-                yield _sse_event({**_pre_done, "full": _pw_result, "action": None, "used_search": False})
+                yield _sse_event({"typing": True})
+                yield _sse_event({**_pre_done, "full": _pcal_write_reply, "action": None, "used_search": False})
                 return
 
-        # Time pre-check
-        _PRE_TIME = [
-            'what time is it', 'what is the time', "what's the time",
-            'what time is it right now', 'current time', 'time right now',
-            'do you know the time', 'tell me the time',
-        ]
-        if any(q in _pre_lower for q in _PRE_TIME):
-            _ptime_str = data.get("local_time", "")
-            if _ptime_str:
-                _ptime_reply = f"It is {_ptime_str}."
-            else:
-                _pnow = datetime.now()
-                _ph   = _pnow.hour; _pm = _pnow.minute
-                _pa   = "AM" if _ph < 12 else "PM"
-                _ph12 = _ph if 1 <= _ph <= 12 else (12 if _ph == 0 else _ph - 12)
-                _ptime_reply = f"It is {_ph12}:{_pm:02d} {_pa}."
-            yield _sse_event({"t": _ptime_reply})
-            yield _sse_event({"t": "[S]"})
-            yield _sse_event({**_pre_done, "full": _ptime_reply, "action": None, "used_search": False})
-            return
-
-        # Alarm pre-check -- relative time, server-side math
-        _PRE_ALARM_REL = re.compile(
-            r'(?:set|create|put)?\s*(?:an?\s+)?(?:alarm|timer)\s*'
-            r'(?:for|in)?\s*(\d+)\s*(minute|min|hour|hr)',
-            re.IGNORECASE
-        )
-        _PRE_WAKE_REL = re.compile(
-            r'(?:wake\s+me\s+(?:up\s+)?in|remind\s+me\s+in)'
-            r'\s+(\d+)\s*(minute|min|hour|hr)',
-            re.IGNORECASE
-        )
-        _alarm_match = _PRE_ALARM_REL.search(_pre_lower) or \
-                       _PRE_WAKE_REL.search(_pre_lower)
-        if _alarm_match:
-            _a_amount  = int(_alarm_match.group(1))
-            _a_unit    = _alarm_match.group(2).lower()
-            _a_minutes = _a_amount if _a_unit.startswith('m') else _a_amount * 60
-            _a_time_str = data.get("local_time", "")
-            _a_now = None
-            if _a_time_str:
-                try:
-                    _atm = re.search(
-                        r'(\d{1,2}):(\d{2})\s*(AM|PM)',
-                        _a_time_str, re.IGNORECASE
-                    )
-                    if _atm:
-                        _ah = int(_atm.group(1)); _am = int(_atm.group(2))
-                        if _atm.group(3).upper() == 'PM' and _ah != 12: _ah += 12
-                        elif _atm.group(3).upper() == 'AM' and _ah == 12: _ah = 0
-                        _a_now = datetime.now().replace(
-                            hour=_ah, minute=_am, second=0, microsecond=0
+            # Calendar pre-check
+            _PRE_CAL = [
+                "what do i have", "what's on my calendar", "whats on my calendar",
+                "what is on my calendar", "my calendar", "my schedule",
+                "what do i have today", "what do i have tomorrow",
+                "what do i have this week", "anything on my calendar",
+                "anything on my schedule", "am i free", "what's coming up",
+                "whats coming up", "coming up today", "coming up this week",
+                "show my calendar", "show my schedule", "my agenda",
+                "my appointments", "my appointment", "on my schedule",
+                "what do i have on", "do i have anything",
+                "next two weeks",
+                "next 2 weeks",
+                "next 10 days",
+                "next 10 business days",
+                "next month",
+                "next 30 days",
+                "coming up soon",
+                "what do i have coming",
+                "anything coming up",
+                "what's ahead",
+                "what's on my schedule",
+                "anything scheduled",
+                "upcoming",
+                "what's planned",
+                "what do i have planned",
+            ]
+            if any(t in _pre_lower for t in _PRE_CAL):
+                _pcal_line = _get_calendar_line(_pre_user_id) if _pre_user_id else ""
+                if _pcal_line:
+                    _pcal_raw   = _pcal_line.replace(
+                        ". Answer schedule questions from this list -- do not guess.", ""
+                    ).replace("Upcoming calendar from device: ", "").strip()
+                    _pcal_items = [e.strip() for e in _pcal_raw.split(";") if e.strip()]
+                    if len(_pcal_items) == 0:
+                        _pcal_reply = f"Nothing on your calendar in the next two weeks{_pre_namepart}."
+                    elif len(_pcal_items) == 1:
+                        _pcal_reply = f"You have one thing coming up{_pre_namepart}: {_pcal_items[0]}."
+                    elif len(_pcal_items) == 2:
+                        _pcal_reply = (
+                            f"You have two things coming up{_pre_namepart}: "
+                            f"{_pcal_items[0]}, and {_pcal_items[1]}."
                         )
-                except Exception:
-                    pass
-            if _a_now is None:
-                _a_now = datetime.now()
-            _a_alarm_dt   = _a_now + timedelta(minutes=_a_minutes)
-            _a_alarm_hhmm = _a_alarm_dt.strftime("%H:%M")
-            _a_spoken     = (
-                f"{_a_amount} {'minute' if _a_amount == 1 else 'minutes'}"
-                if _a_unit.startswith('m') else
-                f"{_a_amount} {'hour' if _a_amount == 1 else 'hours'}"
-            )
-            _a_reply = (
-                f"I can set that for {_a_spoken} from now"
-                f"{_pre_namepart} -- want me to do that?"
-            )
-            _a_action_val = f"{_a_alarm_hhmm}|{_a_spoken} timer"
-            _a_full = f"{_a_reply}\n\nALARM: {_a_action_val}"
-            yield _sse_event({"t": _a_reply})
-            yield _sse_event({"t": "[S]"})
-            yield _sse_event({
-                **_pre_done,
-                "full":        _a_full,
-                "action":      {"type": "alarm", "value": _a_action_val},
-                "used_search": False,
-            })
-            return
-
-        if _pre_user_id:
-            increment_trust_level(_pre_user_id, _pre_message)
-
-        ctx, err = await run_in_threadpool(build_ask_context, data)
-        if err:
-            yield _sse_event({"error": err})
-            return
-
-        profile    = ctx["profile"]
-        messages   = ctx["messages"]
-        message    = ctx["message"]
-        user_id    = ctx["user_id"]
-        msg_lower  = ctx["msg_lower"]
-
-        routed_model = route_model(message)
-        use_search   = needs_web_search(message) and routed_model != SONNET_MODEL
-
-        brave_query = _localize_query(message, profile, ctx["location_label"])
-        freshness   = _get_freshness(msg_lower) if use_search else None
-
-        cap_offer = check_capability_offer(message, profile)
-        if cap_offer:
-            messages[0]["content"] += f"\n\nINSTRUCTION: At the END of your response, naturally add: '{cap_offer}'"
-
-        trial = get_trial_status(profile)
-        base_done = {
-            "done": True,
-            "ai_name":      profile.get("ai_name", "Herald"),
-            "name":         profile.get("name", ""),
-            "model_used":   routed_model,
-            **_trial_fields(trial)
-        }
-
-        if profile.get("pending_watch_offer"):
-            save_profile_fields(user_id, {"pending_watch_offer": None})
-
-        if is_about_me_query(message):
-            reply = build_about_me(profile)
-            yield _sse_event({"t": reply})
-            yield _sse_event({"t": "[S]"})
-            yield _sse_event({**base_done, "full": reply, "action": None, "used_search": False})
-            return
-
-        direct_reply, _ = get_direct_reply(ctx)
-        if direct_reply:
-            reply, action = parse_action(direct_reply)
-            yield _sse_event({"t": reply})
-            yield _sse_event({"t": "[S]"})
-            yield _sse_event({**base_done, "full": reply, "action": action, "used_search": False})
-            return
-
-        search_ctx = fetch_brave_search(brave_query, freshness=freshness) if (use_search and BRAVE_KEY) else None
-
-        full_text    = ""
-        sentence_buf = ""
-
-        def stream_with_sentences(token_source):
-            nonlocal full_text, sentence_buf
-            for token in token_source:
-                full_text    += token
-                sentence_buf += token
-                yield _sse_event({"t": token})
-                if re.search(r'[.!?]\s', sentence_buf[-4:]):
-                    yield _sse_event({"t": "[S]"})
-                    sentence_buf = ""
-            if sentence_buf.strip():
+                    else:
+                        _pcal_first = ", ".join(_pcal_items[:-1])
+                        _pcal_reply = (
+                            f"Here is what you have coming up{_pre_namepart}: "
+                            f"{_pcal_first}, and {_pcal_items[-1]}."
+                        )
+                else:
+                    _pcal_reply = (
+                        f"Your calendar looks clear for the next two weeks{_pre_namepart}. "
+                        f"If you're expecting something to show up, give it a moment to sync."
+                    )
+                yield _sse_event({"t": _pcal_reply})
                 yield _sse_event({"t": "[S]"})
+                yield _sse_event({**_pre_done, "full": _pcal_reply, "action": None, "used_search": False})
+                return
 
-        try:
-            if use_search and BRAVE_KEY:
-                if search_ctx:
-                    augmented = messages.copy()
-                    augmented[-1] = {
-                        "role": "user",
-                        "content": f"{brave_query}\n\n[Live web search results:\n{search_ctx}]"
-                    }
-                    for event in stream_with_sentences(
-                        stream_from_openrouter(augmented, use_search=False, model=routed_model)
-                    ):
+            # Weather pre-check -- bypasses build_ask_context for weather queries
+            _PRE_WEATHER_TRIGGERS = [
+                'weather', 'forecast', 'temperature', 'how hot',
+                'how cold', 'will it rain', 'chance of rain', 'is it raining',
+                'what is it like outside', 'whats it like outside',
+                "what's it like outside",
+            ]
+            if any(t in _pre_lower for t in _PRE_WEATHER_TRIGGERS):
+                _pw_profile  = _pre_profile
+                _pw_city     = _pw_profile.get('confirmed_city') or _pw_profile.get('location') or 'Dallas TX'
+                _pw_explicit = extract_weather_location(_pre_message, None)
+                _PRE_TIME_WORDS = {"the", "a", "an", "this", "that", "today", "tomorrow",
+                                   "morning", "afternoon", "evening", "night", "week",
+                                   "weekend", "hour", "minute", "second", "moment"}
+                _pw_first = _pw_explicit.split()[0].lower() if _pw_explicit else ""
+                if _pw_explicit and _pw_first not in _PRE_TIME_WORDS and _pw_explicit.lower() not in _pw_city.lower():
+                    _pw_loc = _pw_explicit
+                else:
+                    _pw_loc = _pw_city
+                _pw_cached = cache_get(f'weather:{_pw_loc}', 'weather')
+                _pw_result = _pw_cached or fetch_weather_direct(_pw_loc) or fetch_weather_backup(_pw_loc)
+                if not _pw_cached and _pw_result:
+                    cache_set(f'weather:{_pw_loc}', _pw_result, 'weather')
+                if _pw_result:
+                    yield _sse_event({"t": _pw_result})
+                    yield _sse_event({"t": "[S]"})
+                    yield _sse_event({**_pre_done, "full": _pw_result, "action": None, "used_search": False})
+                    return
+
+            # Time pre-check
+            _PRE_TIME = [
+                'what time is it', 'what is the time', "what's the time",
+                'what time is it right now', 'current time', 'time right now',
+                'do you know the time', 'tell me the time',
+            ]
+            if any(q in _pre_lower for q in _PRE_TIME):
+                _ptime_str = data.get("local_time", "")
+                if _ptime_str:
+                    _ptime_reply = f"It is {_ptime_str}."
+                else:
+                    _pnow = datetime.now()
+                    _ph   = _pnow.hour; _pm = _pnow.minute
+                    _pa   = "AM" if _ph < 12 else "PM"
+                    _ph12 = _ph if 1 <= _ph <= 12 else (12 if _ph == 0 else _ph - 12)
+                    _ptime_reply = f"It is {_ph12}:{_pm:02d} {_pa}."
+                yield _sse_event({"t": _ptime_reply})
+                yield _sse_event({"t": "[S]"})
+                yield _sse_event({**_pre_done, "full": _ptime_reply, "action": None, "used_search": False})
+                return
+
+            # Alarm pre-check -- relative time, server-side math
+            _PRE_ALARM_REL = re.compile(
+                r'(?:set|create|put)?\s*(?:an?\s+)?(?:alarm|timer)\s*'
+                r'(?:for|in)?\s*(\d+)\s*(minute|min|hour|hr)',
+                re.IGNORECASE
+            )
+            _PRE_WAKE_REL = re.compile(
+                r'(?:wake\s+me\s+(?:up\s+)?in|remind\s+me\s+in)'
+                r'\s+(\d+)\s*(minute|min|hour|hr)',
+                re.IGNORECASE
+            )
+            _alarm_match = _PRE_ALARM_REL.search(_pre_lower) or \
+                           _PRE_WAKE_REL.search(_pre_lower)
+            if _alarm_match:
+                _a_amount  = int(_alarm_match.group(1))
+                _a_unit    = _alarm_match.group(2).lower()
+                _a_minutes = _a_amount if _a_unit.startswith('m') else _a_amount * 60
+                _a_time_str = data.get("local_time", "")
+                _a_now = None
+                if _a_time_str:
+                    try:
+                        _atm = re.search(
+                            r'(\d{1,2}):(\d{2})\s*(AM|PM)',
+                            _a_time_str, re.IGNORECASE
+                        )
+                        if _atm:
+                            _ah = int(_atm.group(1)); _am = int(_atm.group(2))
+                            if _atm.group(3).upper() == 'PM' and _ah != 12: _ah += 12
+                            elif _atm.group(3).upper() == 'AM' and _ah == 12: _ah = 0
+                            _a_now = datetime.now().replace(
+                                hour=_ah, minute=_am, second=0, microsecond=0
+                            )
+                    except Exception:
+                        pass
+                if _a_now is None:
+                    _a_now = datetime.now()
+                _a_alarm_dt   = _a_now + timedelta(minutes=_a_minutes)
+                _a_alarm_hhmm = _a_alarm_dt.strftime("%H:%M")
+                _a_spoken     = (
+                    f"{_a_amount} {'minute' if _a_amount == 1 else 'minutes'}"
+                    if _a_unit.startswith('m') else
+                    f"{_a_amount} {'hour' if _a_amount == 1 else 'hours'}"
+                )
+                _a_reply = (
+                    f"I can set that for {_a_spoken} from now"
+                    f"{_pre_namepart} -- want me to do that?"
+                )
+                _a_action_val = f"{_a_alarm_hhmm}|{_a_spoken} timer"
+                _a_full = f"{_a_reply}\n\nALARM: {_a_action_val}"
+                yield _sse_event({"t": _a_reply})
+                yield _sse_event({"t": "[S]"})
+                yield _sse_event({
+                    **_pre_done,
+                    "full":        _a_full,
+                    "action":      {"type": "alarm", "value": _a_action_val},
+                    "used_search": False,
+                })
+                return
+
+            if _pre_user_id:
+                increment_trust_level(_pre_user_id, _pre_message)
+
+            ctx, err = await run_in_threadpool(build_ask_context, data)
+            if err:
+                yield _sse_event({"error": err})
+                return
+
+            profile    = ctx["profile"]
+            messages   = ctx["messages"]
+            message    = ctx["message"]
+            user_id    = ctx["user_id"]
+            msg_lower  = ctx["msg_lower"]
+
+            routed_model = route_model(message)
+            use_search   = needs_web_search(message) and routed_model != SONNET_MODEL
+
+            brave_query = _localize_query(message, profile, ctx["location_label"])
+            freshness   = _get_freshness(msg_lower) if use_search else None
+
+            cap_offer = check_capability_offer(message, profile)
+            if cap_offer:
+                messages[0]["content"] += f"\n\nINSTRUCTION: At the END of your response, naturally add: '{cap_offer}'"
+
+            trial = get_trial_status(profile)
+            base_done = {
+                "done": True,
+                "ai_name":      profile.get("ai_name", "Herald"),
+                "name":         profile.get("name", ""),
+                "model_used":   routed_model,
+                **_trial_fields(trial)
+            }
+
+            if profile.get("pending_watch_offer"):
+                save_profile_fields(user_id, {"pending_watch_offer": None})
+
+            if is_about_me_query(message):
+                reply = build_about_me(profile)
+                yield _sse_event({"t": reply})
+                yield _sse_event({"t": "[S]"})
+                yield _sse_event({**base_done, "full": reply, "action": None, "used_search": False})
+                return
+
+            direct_reply, _ = get_direct_reply(ctx)
+            if direct_reply:
+                reply, action = parse_action(direct_reply)
+                yield _sse_event({"t": reply})
+                yield _sse_event({"t": "[S]"})
+                yield _sse_event({**base_done, "full": reply, "action": action, "used_search": False})
+                return
+
+            search_ctx = fetch_brave_search(brave_query, freshness=freshness) if (use_search and BRAVE_KEY) else None
+
+            full_text    = ""
+            sentence_buf = ""
+
+            def stream_with_sentences(token_source):
+                nonlocal full_text, sentence_buf
+                for token in token_source:
+                    full_text    += token
+                    sentence_buf += token
+                    yield _sse_event({"t": token})
+                    if re.search(r'[.!?]\s', sentence_buf[-4:]):
+                        yield _sse_event({"t": "[S]"})
+                        sentence_buf = ""
+                if sentence_buf.strip():
+                    yield _sse_event({"t": "[S]"})
+
+            try:
+                if use_search and BRAVE_KEY:
+                    if search_ctx:
+                        augmented = messages.copy()
+                        augmented[-1] = {
+                            "role": "user",
+                            "content": f"{brave_query}\n\n[Live web search results:\n{search_ctx}]"
+                        }
+                        for event in stream_with_sentences(
+                            stream_from_openrouter(augmented, use_search=False, model=routed_model)
+                        ):
+                            yield event
+                    else:
+                        search_q = message.strip().rstrip("?.,!")
+                        fallback = (
+                            "I couldn't pull a live result for that one. "
+                            "Want me to open a search for you?"
+                        )
+                        yield _sse_event({"t": fallback})
+                        yield _sse_event({"t": "[S]"})
+                        search_action = {"type": "search", "value": search_q}
+                        yield _sse_event({**base_done, "full": fallback, "action": search_action, "used_search": True})
+                        return
+                elif use_search:
+                    for event in stream_with_sentences(stream_from_openrouter(messages, use_search=True)):
                         yield event
                 else:
-                    search_q = message.strip().rstrip("?.,!")
-                    fallback = (
-                        "I couldn't pull a live result for that one. "
-                        "Want me to open a search for you?"
-                    )
-                    yield _sse_event({"t": fallback})
-                    yield _sse_event({"t": "[S]"})
-                    search_action = {"type": "search", "value": search_q}
-                    yield _sse_event({**base_done, "full": fallback, "action": search_action, "used_search": True})
-                    return
-            elif use_search:
-                for event in stream_with_sentences(stream_from_openrouter(messages, use_search=True)):
-                    yield event
-            else:
-                for event in stream_with_sentences(
-                    stream_from_openrouter(messages, use_search=False, model=routed_model)
-                ):
-                    yield event
+                    for event in stream_with_sentences(
+                        stream_from_openrouter(messages, use_search=False, model=routed_model)
+                    ):
+                        yield event
 
-            reply, action = parse_action(full_text)
-
-            msg_count = profile.get("_msg_count", 0) + 1
-            save_profile_fields(user_id, {"_msg_count": msg_count})
-
-            if msg_count % 3 == 0:
-                threading.Thread(
-                    target=extract_learned_facts,
-                    args=(user_id, message, reply),
-                    daemon=True
-                ).start()
-                threading.Thread(
-                    target=_run_watcher_pipeline,
-                    args=(message, profile, user_id),
-                    daemon=True
-                ).start()
-
-            yield _sse_event({**base_done, "full": reply, "action": action, "used_search": use_search})
-
-        except Exception as e:
-            print(f"[HERALD] /ask/stream error: {e}")
-            if full_text.strip():
                 reply, action = parse_action(full_text)
-                yield _sse_event({**base_done, "full": reply, "action": action, "used_search": use_search, "partial": True})
-            else:
-                yield _sse_event({"error": "Stream interrupted. Try again."})
+
+                msg_count = profile.get("_msg_count", 0) + 1
+                save_profile_fields(user_id, {"_msg_count": msg_count})
+
+                if msg_count % 3 == 0:
+                    threading.Thread(
+                        target=extract_learned_facts,
+                        args=(user_id, message, reply),
+                        daemon=True
+                    ).start()
+                    threading.Thread(
+                        target=_run_watcher_pipeline,
+                        args=(message, profile, user_id),
+                        daemon=True
+                    ).start()
+
+                yield _sse_event({**base_done, "full": reply, "action": action, "used_search": use_search})
+
+            except Exception as e:
+                print(f"[HERALD] /ask/stream error: {e}")
+                if full_text.strip():
+                    reply, action = parse_action(full_text)
+                    yield _sse_event({**base_done, "full": reply, "action": action, "used_search": use_search, "partial": True})
+                else:
+                    yield _sse_event({"error": "Stream interrupted. Try again."})
+
+        except Exception:
+            # Client disconnected mid-stream — exit silently.
+            # Suppresses socket.send() flood in Railway logs.
+            return
 
     return StreamingResponse(
         generate(),
