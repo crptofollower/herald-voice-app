@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.46 -- no support-team deflection; Herald IS the support
+# v8.47 -- no support-team deflection; Herald IS the support
 #
 # v8.12 -- Medical memory system (always include user city in MAPS tag)
 #
@@ -36,9 +36,20 @@ from fastapi import FastAPI, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
+# ── LOGGING ───────────────────────────────────────────────────────────────────
+# Suppress Uvicorn's socket.send() transport errors — these fire when a client
+# disconnects mid-stream. Non-fatal, but flood Railway logs and hide real errors.
+import logging
+
+class _SuppressSocketSend(logging.Filter):
+    def filter(self, record):
+        return "socket.send() raised exception" not in record.getMessage()
+
+logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
+
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.46")
+app = FastAPI(title="Herald API", version="8.47")
 
 app.add_middleware(
     CORSMiddleware,
@@ -542,6 +553,11 @@ def init_db():
                 created_at     TEXT NOT NULL
             )
         """)
+        # v8.47: migrate older DBs that pre-date item_name column
+        try:
+            c.execute("ALTER TABLE life_tracker ADD COLUMN item_name TEXT DEFAULT ''")
+        except Exception:
+            pass  # column already exists — safe to ignore
         c.execute("""
             CREATE TABLE IF NOT EXISTS medication_log (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -4298,7 +4314,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.46",
+        "status": "ok", "server": "herald-api", "version": "8.47",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -4825,6 +4841,8 @@ async def ask_stream(request: Request):
                 "add that to my calendar", "schedule that for", "put it on my calendar",
                 "add it to my calendar", "put this on my calendar", "can you put that",
                 "add this to my calendar", "put that in my calendar",
+                "can you put that on my calendar", "put it on the calendar",
+                "add that to the calendar", "put this on the calendar",
             ]
             if any(t in _pre_lower for t in _PRE_CAL_WRITE):
                 _pcal_write_reply = (
