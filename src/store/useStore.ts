@@ -17,6 +17,8 @@ import type { PersonaKey } from "../constants/personas";
 import type { Message, ProactiveItem, FreddieStatus } from "../api/herald";
 import { DEFAULT_PERSONA } from "../constants/personas";
 
+const STORE_SCHEMA_VERSION = 4;
+
 // ─── Slices ───────────────────────────────────────────────────────────────────
 
 interface UserState {
@@ -74,6 +76,7 @@ interface FreddieState {
 
 interface HydrationState {
   _hasHydrated: boolean;
+  _schemaVersion: number;
   setHasHydrated: (v: boolean) => void;
 }
 
@@ -157,6 +160,7 @@ export const useStore = create<Store>()(
 
       // ── Hydration flag ─────────────────────────────────────────────────────
       _hasHydrated: false,
+      _schemaVersion: STORE_SCHEMA_VERSION,
       setHasHydrated: (v) => set({ _hasHydrated: v }),
 
       // ── Hard reset ─────────────────────────────────────────────────────────
@@ -177,6 +181,10 @@ export const useStore = create<Store>()(
       storage: createJSONStorage(() => AsyncStorage),
 
       onRehydrateStorage: () => (state) => {
+        if (state?._schemaVersion !== STORE_SCHEMA_VERSION) {
+          console.warn(`[useStore] Schema mismatch (got ${state?._schemaVersion}, expected ${STORE_SCHEMA_VERSION}) -- resetting`);
+          state?.hardReset();
+        }
         state?.setHasHydrated(true);
       },
 
@@ -194,6 +202,7 @@ export const useStore = create<Store>()(
         messages:           state.messages.slice(-100),
         location:           state.location,
         confirmedCity:      state.confirmedCity,
+        _schemaVersion: state._schemaVersion,
       }),
     }
   )
