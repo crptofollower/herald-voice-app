@@ -117,7 +117,6 @@ function BouncingDots({ color }: { color: string }) {
 
 const THINKING_PHRASES = [
   "Let me find that...",
-  "Good question, one sec...",
   "On it...",
   "Let me look that up...",
   "Checking on that...",
@@ -572,7 +571,6 @@ export default function ChatScreen() {
     resetSpeech();
     const _bridgePhrases = [
       "One second, let me get that...",
-      "Good question, hang on...",
       "Let me find that for you...",
       "On it, give me a sec...",
       "Right on it...",
@@ -1259,7 +1257,7 @@ export default function ChatScreen() {
           >
             <TextInput
               style={[styles.textInput, { color: "#FFFFFF" }]}
-              placeholder="Ask anything..."
+              placeholder={isRecording ? "Listening..." : "Ask anything..."}
               placeholderTextColor="rgba(255,255,255,0.45)"
               value={inputText}
               onChangeText={setInputText}
