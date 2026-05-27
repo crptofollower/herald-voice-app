@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.47 -- no support-team deflection; Herald IS the support
+# v8.50 -- no support-team deflection; Herald IS the support
 #
 # v8.12 -- Medical memory system (always include user city in MAPS tag)
 #
@@ -49,7 +49,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.47")
+app = FastAPI(title="Herald API", version="8.50")
 
 app.add_middleware(
     CORSMiddleware,
@@ -3396,6 +3396,8 @@ def text_to_speech(text, speed=0.85):
 # ── SHARED REQUEST SETUP ──────────────────────────────────────────────────────
 
 def build_ask_context(data):
+    _t0 = time.time()
+    print(f"[TIMING] build_ask_context start for {data.get('user_id','?')[:12]}")
     user_id        = data.get("user_id", "").strip()
     message        = data.get("message", "").strip()
     if not user_id or not message:
@@ -3559,6 +3561,7 @@ def build_ask_context(data):
             "Just one question, naturally placed, never forced. Make them feel welcome."
         )
 
+    print(f"[TIMING] build_ask_context done: {time.time()-_t0:.2f}s")
     return {
         "user_id": user_id, "message": message, "msg_lower": msg_lower,
         "history": history, "local_time": local_time,
@@ -4311,10 +4314,14 @@ async def transcribe_audio(file: UploadFile = File(...)):
     except Exception as e:
         return {"text": "", "error": str(e)}
 
+@app.head("/health")
+async def health_head():
+    return Response(status_code=200)
+
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.47",
+        "status": "ok", "server": "herald-api", "version": "8.50",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
