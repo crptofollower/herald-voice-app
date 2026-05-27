@@ -4338,10 +4338,19 @@ def health():
     }
 
 
+# In-memory rate limit for proactive polling — backend safety net.
+# Frontend debounces at 60s but this guards against any future regression.
+_proactive_poll_times: dict = {}
+_MIN_PROACTIVE_POLL_S = 30  # seconds
+
 @app.get("/proactive/{user_id}")
 def get_proactive(user_id: str):
     if not user_id:
         return {"messages": []}
+    now = time.time()
+    if now - _proactive_poll_times.get(user_id, 0) < _MIN_PROACTIVE_POLL_S:
+        return {"messages": []}
+    _proactive_poll_times[user_id] = now
     profile = get_profile(user_id)
     queue   = profile.get("proactive_queue", [])
     if not queue:
