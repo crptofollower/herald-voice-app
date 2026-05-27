@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.50 -- no support-team deflection; Herald IS the support
+# v8.51 -- no support-team deflection; Herald IS the support
 #
 # v8.12 -- Medical memory system (always include user city in MAPS tag)
 #
@@ -49,7 +49,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.50")
+app = FastAPI(title="Herald API", version="8.51")
 
 app.add_middleware(
     CORSMiddleware,
@@ -553,11 +553,19 @@ def init_db():
                 created_at     TEXT NOT NULL
             )
         """)
-        # v8.47: migrate older DBs that pre-date item_name column
-        try:
-            c.execute("ALTER TABLE life_tracker ADD COLUMN item_name TEXT DEFAULT ''")
-        except Exception:
-            pass  # column already exists — safe to ignore
+        # v8.47+: migrate older DBs missing columns added after initial schema
+        for _col, _def in [
+            ("item_name",     "TEXT DEFAULT ''"),
+            ("last_date",     "TEXT"),
+            ("next_due_date", "TEXT"),
+            ("interval_days", "INTEGER DEFAULT 0"),
+            ("source",        "TEXT DEFAULT 'conversation'"),
+            ("active",        "INTEGER DEFAULT 1"),
+        ]:
+            try:
+                c.execute(f"ALTER TABLE life_tracker ADD COLUMN {_col} {_def}")
+            except Exception:
+                pass  # column already exists — safe to ignore
         c.execute("""
             CREATE TABLE IF NOT EXISTS medication_log (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -4321,7 +4329,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.50",
+        "status": "ok", "server": "herald-api", "version": "8.51",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
