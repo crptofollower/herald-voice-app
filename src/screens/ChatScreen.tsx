@@ -20,6 +20,7 @@
 //   calendar/maps/sms, Honesty Contract, proactive panel, Freddie card.
 
 import { Animated } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import React, { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import {
   View,
@@ -130,6 +131,7 @@ const THINKING_PHRASES = [
 ];
 
 export default function ChatScreen() {
+  const insets = useSafeAreaInsets();
   const {
     userId,
     name,
@@ -569,17 +571,34 @@ export default function ChatScreen() {
     setError(null);
     setPendingAction(null);
     resetSpeech();
-    const _bridgePhrases = [
-      "One second, let me get that...",
-      "Let me find that for you...",
-      "On it, give me a sec...",
-      "Right on it...",
-      "Give me just a moment...",
-    ];
-    speak(
-      _bridgePhrases[Math.floor(Math.random() * _bridgePhrases.length)],
-      { rate: 0.95 }
-    );
+    const isMedicalPast =
+      /went to|had (a|my|the)|saw (the|my)|doctor said|diagnosed|got my|results came/i.test(text) &&
+      /doctor|visit|appointment|hospital|clinic|specialist|surgery|procedure|test|lab/i.test(text);
+    const isMedical =
+      /doctor|medication|prescription|symptom|hospital|pharmacy|appointment|diagnosis|surgery|therapy|feel (bad|sick|awful)/i.test(text);
+    const isLookup =
+      /what (is|are|was|were)|how (much|many|far|long|old)|when (is|was|does)|where (is|was)|who (is|was)|square root|calculate|convert|\d+\s*[\+\-\*\/]/i.test(text);
+
+    let _bridgePhrase: string;
+    if (isMedicalPast) {
+      const _medPast = ["How did that go?", "Everything alright?", "Let me pull that up..."];
+      _bridgePhrase = _medPast[Math.floor(Math.random() * _medPast.length)];
+    } else if (isMedical) {
+      _bridgePhrase = "Let me check on that...";
+    } else if (isLookup) {
+      _bridgePhrase = Math.random() < 0.5 ? "Let me get that..." : "Let me check on that...";
+    } else {
+      const _default = [
+        "Let me check on that...",
+        "Let me grab that...",
+        "Let me find that...",
+        "Give me just a moment...",
+        "Let me look that up...",
+        "Let me think on that...",
+      ];
+      _bridgePhrase = _default[Math.floor(Math.random() * _default.length)];
+    }
+    speak(_bridgePhrase, { rate: 0.95 });
 
     setIsWaiting(true);
     setIsStreaming(true);
@@ -1252,6 +1271,7 @@ export default function ChatScreen() {
               {
                 backgroundColor: "rgba(0,0,0,0.75)",
                 borderTopColor: persona.colors.border,
+                paddingBottom: insets.bottom + 10,
               },
             ]}
           >
@@ -1443,7 +1463,6 @@ const styles = StyleSheet.create({
     alignItems: "flex-end",
     paddingHorizontal: 12,
     paddingTop: 10,
-    paddingBottom: Platform.OS === "ios" ? 10 : 52,  // 52 clears Android gesture nav bar
     borderTopWidth: 1,
     gap: 8,
   },
