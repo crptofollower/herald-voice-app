@@ -180,13 +180,16 @@ export const useStore = create<Store>()(
     {
       name: "herald-store-v4",
       storage: createJSONStorage(() => AsyncStorage),
-
-      onRehydrateStorage: () => (state) => {
-        if (state?._schemaVersion !== STORE_SCHEMA_VERSION) {
-          console.warn(`[useStore] Schema mismatch (got ${state?._schemaVersion}, expected ${STORE_SCHEMA_VERSION}) -- resetting`);
-          state?.hardReset();
+onRehydrateStorage: () => (state) => {
+        if (!state) {
+          useStore.setState({ _hasHydrated: true });
+          return;
         }
-        state?.setHasHydrated(true);
+        if (state._schemaVersion !== STORE_SCHEMA_VERSION) {
+          console.warn(`[useStore] Schema mismatch (got ${state._schemaVersion}, expected ${STORE_SCHEMA_VERSION}) -- resetting`);
+          state.hardReset();
+        }
+        state.setHasHydrated(true);
       },
 
       // Persist what survives restarts. aiName added so chosen name persists.
