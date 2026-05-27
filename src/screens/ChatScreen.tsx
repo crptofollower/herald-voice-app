@@ -757,11 +757,25 @@ export default function ChatScreen() {
             `https://www.google.com/flights?q=${encodeURIComponent(action.value)}`
           );
           break;
-        case "search":
-          await Linking.openURL(
-            `https://www.google.com/search?q=${encodeURIComponent(action.value)}`
-          );
+        case "search": {
+          const q = action.value ?? "";
+          // If the query is YouTube-related, open YouTube app or site directly
+          if (/youtube/i.test(q)) {
+            const searchTerm = q.replace(/youtube/gi, "").trim();
+            const ytApp = `vnd.youtube://results?search_query=${encodeURIComponent(searchTerm || "trending")}`;
+            const ytWeb = `https://www.youtube.com/results?search_query=${encodeURIComponent(searchTerm || "trending")}`;
+            try {
+              await Linking.openURL(ytApp);
+            } catch {
+              await Linking.openURL(ytWeb);
+            }
+          } else {
+            await Linking.openURL(
+              `https://www.google.com/search?q=${encodeURIComponent(q)}`
+            );
+          }
           break;
+        }
         case "launch":
           await handleLaunchAction(action.value);
           break;
