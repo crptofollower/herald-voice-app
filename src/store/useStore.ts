@@ -174,6 +174,7 @@ export const useStore = create<Store>()(
           location: "", confirmedCity: "",
           items: [], unreadCount: 0, lastPolled: null,
           status: null, statusAge: null,
+          _schemaVersion: STORE_SCHEMA_VERSION,
         }),
     }),
     {

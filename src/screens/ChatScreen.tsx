@@ -212,6 +212,7 @@ export default function ChatScreen() {
   const handleIdleResumeRef = useRef<() => void>(() => {});
   useEffect(() => {
     handleIdleResumeRef.current = () => {
+      liveGreetingAddedRef.current = false;
       const newSessionStart = Date.now();
       setSessionStart(newSessionStart);
       // Scroll back to bottom for fresh session
@@ -250,6 +251,7 @@ export default function ChatScreen() {
     setIsWaiting(false);
     setIsStreaming(false);
     setStreamingContent("");
+    tokenBatchRef.current = '';
     if ((streamAbortRef.current as any)?._maxTimer) {
       clearTimeout((streamAbortRef.current as any)._maxTimer);
     }
@@ -715,7 +717,7 @@ export default function ChatScreen() {
 
   const handleTranscript = useCallback((transcript: string) => {
     if (!transcript.trim()) return;
-    sendMessage(transcript.trim());
+    sendMessage(transcript.trim().slice(0, 2000));
   }, [sendMessage]);
   const { isRecording, startRecording, stopRecording } = useMic(handleTranscript);
 
