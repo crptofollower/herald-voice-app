@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.43 -- no support-team deflection; Herald IS the support
+# v8.45 -- no support-team deflection; Herald IS the support
 #
 # v8.12 -- Medical memory system (always include user city in MAPS tag)
 #
@@ -38,7 +38,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.43")
+app = FastAPI(title="Herald API", version="8.45")
 
 app.add_middleware(
     CORSMiddleware,
@@ -301,7 +301,7 @@ LIVE_KEYWORDS = [
     'trending on', 'going viral', 'what are people saying about',
     'what is everyone saying about', 'what is the buzz about',
     'show me a video', 'video about', 'videos of', 'find a video',
-    'on twitter', 'on x about', 'on youtube', 'on instagram', 'on tiktok',
+    'on twitter', 'on x about', 'on instagram', 'on tiktok',
     # Freddie / empire (owner live data)
     'freddie', 'empire status', 'trading status', 'open positions', 'last scan',
     'how are our trades', 'gate progress',
@@ -1535,22 +1535,18 @@ MEDICATION_SIGNALS = [
     'stopped taking', 'switched to', 'dose was changed', 'started taking',
 ]
 
+# Reduced to 3 questions -- 7 was too many for casual conversation.
+# Users drift away mid-intake and nothing saves. 3 questions complete naturally.
 INTAKE_QUESTIONS = {
     'visit': [
-        ('doctor_name',   "What's the doctor's name?"),
-        ('specialty',     "What kind of doctor -- cardiologist, dermatologist, general?"),
-        ('practice',      "Do you know the practice name or location?"),
-        ('reason',        "What was the visit for?"),
-        ('outcome',       "How did it go -- anything they found or decided?"),
-        ('follow_up',     "Did they want to see you again? If so, when?"),
-        ('tests_ordered', "Any tests ordered or results you're waiting on?"),
+        ('doctor_name', "What's the doctor's name?"),
+        ('reason',      "What was the visit for?"),
+        ('outcome',     "How did it go -- anything they found or decided?"),
     ],
     'medication': [
-        ('med_name',   "What's the medication called?"),
-        ('dose',       "Do you know the dose?"),
-        ('prescriber', "Who prescribed it?"),
-        ('reason',     "What's it for?"),
-        ('refill_due', "Do you know when you'll need a refill?"),
+        ('med_name', "What's the medication called?"),
+        ('dose',     "Do you know the dose?"),
+        ('reason',   "What's it for?"),
     ]
 }
 
@@ -4301,7 +4297,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.43",
+        "status": "ok", "server": "herald-api", "version": "8.45",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -4820,6 +4816,22 @@ async def ask_stream(request: Request):
             "model_used":   MODEL_FAST,
             **_trial_fields(_pre_trial),
         }
+
+        # Calendar WRITE detection -- honest response, no silent failure
+        _PRE_CAL_WRITE = [
+            "put that on my calendar", "add to my calendar", "put on my calendar",
+            "add that to my calendar", "schedule that for", "put it on my calendar",
+            "add it to my calendar", "put this on my calendar", "can you put that",
+            "add this to my calendar", "put that in my calendar",
+        ]
+        if any(t in _pre_lower for t in _PRE_CAL_WRITE):
+            _pcal_write_reply = (
+                f"I can read your calendar but I can't add events yet{_pre_namepart} — "
+                f"that's coming soon. Want me to remind you to add it manually?"
+            )
+            yield _sse_event({"typing": True})
+            yield _sse_event({**_pre_done, "full": _pcal_write_reply, "action": None, "used_search": False})
+            return
 
         # Calendar pre-check
         _PRE_CAL = [
