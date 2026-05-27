@@ -4835,11 +4835,9 @@ async def ask_stream(request: Request):
                 **_trial_fields(_pre_trial),
             }
 
-            # Calendar WRITE detection — catches "put X on my calendar", "add X to my calendar"
             _is_cal_write = (
-                "on my calendar" in _pre_lower or
-                "on the calendar" in _pre_lower or
-                "in my calendar" in _pre_lower
+                "my calendar" in _pre_lower or
+                "the calendar" in _pre_lower
             ) and any(w in _pre_lower for w in ["put", "add", "schedule", "create", "make"])
             if _is_cal_write:
                 _pcal_write_reply = (
