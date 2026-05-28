@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.51 -- no support-team deflection; Herald IS the support
+# v8.52 -- no support-team deflection; Herald IS the support
 #
 # v8.12 -- Medical memory system (always include user city in MAPS tag)
 #
@@ -49,7 +49,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.51")
+app = FastAPI(title="Herald API", version="8.52")
 
 app.add_middleware(
     CORSMiddleware,
@@ -555,6 +555,7 @@ def init_db():
         """)
         # v8.47+: migrate older DBs missing columns added after initial schema
         for _col, _def in [
+            ("category",      "TEXT DEFAULT 'general'"),
             ("item_name",     "TEXT DEFAULT ''"),
             ("last_date",     "TEXT"),
             ("next_due_date", "TEXT"),
@@ -4329,7 +4330,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.51",
+        "status": "ok", "server": "herald-api", "version": "8.52",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
