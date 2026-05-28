@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.55 -- Admin dashboard endpoints: /admin/dashboard, /admin/user, /admin/proactive, /admin/waitlist
+# v8.56 -- _last_message_at tracking + /admin/mark_profile + /admin/purge_ghost_queues
 #
 # v8.12 -- Medical memory system (always include user city in MAPS tag)
 #
@@ -49,7 +49,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.55")
+app = FastAPI(title="Herald API", version="8.56")
 
 app.add_middleware(
     CORSMiddleware,
@@ -4541,7 +4541,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.55",
+        "status": "ok", "server": "herald-api", "version": "8.56",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -4999,7 +4999,10 @@ async def ask(request: Request):
         save_profile_fields(user_id, {"pending_watch_offer": None})
 
     msg_count = profile.get("_msg_count", 0) + 1
-    save_profile_fields(user_id, {"_msg_count": msg_count})
+    save_profile_fields(user_id, {
+        "_msg_count": msg_count,
+        "_last_message_at": datetime.now().isoformat()
+    })
 
     if msg_count % 3 == 0:
         threading.Thread(
@@ -5351,7 +5354,10 @@ async def ask_stream(request: Request):
                 reply, action = parse_action(full_text)
 
                 msg_count = profile.get("_msg_count", 0) + 1
-                save_profile_fields(user_id, {"_msg_count": msg_count})
+                save_profile_fields(user_id, {
+                    "_msg_count": msg_count,
+                    "_last_message_at": datetime.now().isoformat()
+                })
 
                 if msg_count % 3 == 0:
                     threading.Thread(
@@ -6424,6 +6430,80 @@ async def admin_waitlist(secret: str = ""):
         return {"ok": True, "count": len(rows), "entries": rows}
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
+@app.post("/admin/mark_profile")
+async def admin_mark_profile(request: Request):
+    """
+    v8.56: Set safe profile flags for any user.
+    Replaces the limited clear_profile_field for positive flag setting.
+    Supports: is_beta, is_test, free_days_earned, trial_days.
+    Auth: requires WEBHOOK_SECRET.
+    """
+    data = await request.json()
+    secret = data.get("secret", "")
+    if not WEBHOOK_SECRET or secret != WEBHOOK_SECRET:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    user_id = data.get("user_id", "").strip()
+    if not user_id:
+        return JSONResponse({"error": "user_id required"}, status_code=400)
+
+    SETTABLE = {"is_beta", "is_test", "free_days_earned", "trial_days"}
+    updates = {k: v for k, v in data.items() if k in SETTABLE}
+    if not updates:
+        return JSONResponse(
+            {"error": f"no settable fields found -- allowed: {SETTABLE}"},
+            status_code=400
+        )
+
+    profile = get_profile(user_id)
+    profile.update(updates)
+    save_profile(user_id, profile)
+    print(f"[HERALD] /admin/mark_profile: {user_id} updated: {updates}")
+    return {"ok": True, "user_id": user_id, "updated": updates}
+
+
+@app.post("/admin/purge_ghost_queues")
+async def admin_purge_ghost_queues(request: Request):
+    """
+    v8.56: Clear proactive queues on ghost/inactive profiles.
+    Ghost = _msg_count < 10 AND no message in last 7 days.
+    Never touches owner or beta profiles. Non-destructive to real users.
+    Auth: requires WEBHOOK_SECRET.
+    """
+    data = await request.json()
+    secret = data.get("secret", "")
+    if not WEBHOOK_SECRET or secret != WEBHOOK_SECRET:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+
+    cutoff = (datetime.now() - timedelta(days=7)).isoformat()
+    purged = 0
+    skipped = 0
+    total_cleared = 0
+
+    for uid, profile in user_profiles.items():
+        # Never touch real users
+        if profile.get("is_owner") or profile.get("is_beta"):
+            skipped += 1
+            continue
+        msg_count = profile.get("_msg_count", 0)
+        last_msg  = profile.get("_last_message_at", "")
+        is_ghost  = msg_count < 10 or (last_msg and last_msg < cutoff) or not last_msg
+
+        if is_ghost and profile.get("proactive_queue"):
+            cleared = len(profile["proactive_queue"])
+            profile["proactive_queue"] = []
+            save_profile_async(uid, profile)
+            total_cleared += cleared
+            purged += 1
+            print(f"[HERALD] purge_ghost_queues: cleared {cleared} entries for {uid} (msgs={msg_count})")
+
+    print(f"[HERALD] purge_ghost_queues: purged {purged} profiles, cleared {total_cleared} queue entries, skipped {skipped} real users")
+    return {
+        "ok": True,
+        "purged_profiles": purged,
+        "total_entries_cleared": total_cleared,
+        "skipped_real_users": skipped,
+    }
 
 @app.get("/admin/find_user")
 async def admin_find_user(secret: str, name: str = ""):
