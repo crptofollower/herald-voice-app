@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.56 -- _last_message_at tracking + /admin/mark_profile + /admin/purge_ghost_queues
+# v8.57 -- TTS list summarization rule in system prompt
 #
 # v8.12 -- Medical memory system (always include user city in MAPS tag)
 #
@@ -49,7 +49,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.56")
+app = FastAPI(title="Herald API", version="8.57")
 
 app.add_middleware(
     CORSMiddleware,
@@ -3251,6 +3251,11 @@ YOUR VOICE:
   "Based on what I know, I'd handle it this way -- what do you think?"
   Plant the seed. Respect their call. Never lecture. Never repeat it.
 - Never make the user feel stupid. Make them feel known.
+- VOICE OUTPUT RULE: This response will be spoken aloud. When your answer contains
+  a list (addresses, options, search results, steps), never read it verbatim.
+  Summarize naturally: "I found three burger places near you -- want me to go through them?"
+  or "There are a few options -- the closest one is [first result], want to hear the rest?"
+  Full lists are for reading, not listening. Always compress for spoken delivery.
 
 TRUST LEVEL (read from profile -- trust_level: {trust_level}):
 Level 0 -- New: Neutral tone. Answer questions cleanly. Warm but not familiar.
@@ -4541,7 +4546,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.56",
+        "status": "ok", "server": "herald-api", "version": "8.57",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
