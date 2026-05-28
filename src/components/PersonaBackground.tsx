@@ -22,11 +22,11 @@ const IMAGES_DAY: Record<PersonaKey, ReturnType<typeof require>> = {
 // ─── Night images (Build 15) ──────────────────────────────────────────────────
 
 const IMAGES_NIGHT: Record<PersonaKey, ReturnType<typeof require>> = {
-  beach:    require("../../assets/beach-night.jpg"),
-  city:     require("../../assets/city-night.jpg"),
-  country:  require("../../assets/country-night.jpg"),
-  desert:   require("../../assets/desert-night.jpg"),
-  mountain: require("../../assets/mountain-night.jpg"),
+  beach:    require("../../assets/beach-night.png"),
+  city:     require("../../assets/city-night.png"),
+  country:  require("../../assets/country-night.png"),
+  desert:   require("../../assets/desert-night.png"),
+  mountain: require("../../assets/mountain-night.png"),
 };
 
 // Night: 8pm (20:00) through 5:59am. Day: everything else.
