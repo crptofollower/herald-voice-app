@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.52 -- no support-team deflection; Herald IS the support
+# v8.53 -- SQLite hardening: _db_conn() helper + retry on profile writes + /user/export endpoint
 #
 # v8.12 -- Medical memory system (always include user city in MAPS tag)
 #
@@ -19,7 +19,7 @@
 #     Only fires if medication keywords found in memories
 #   - Version bumped to 8.8 throughout
 
-import os, json, re, random, string, time, http.client, ssl, sqlite3, threading, uuid, math
+import os, json, re, random, string, time, http.client, ssl, sqlite3, threading, uuid, math, contextlib
 import urllib.request, urllib.error, urllib.parse
 from datetime import datetime, timedelta, date
 from starlette.concurrency import run_in_threadpool
@@ -49,7 +49,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.52")
+app = FastAPI(title="Herald API", version="8.53")
 
 app.add_middleware(
     CORSMiddleware,
@@ -84,6 +84,43 @@ EMPIRE_URL     = "https://raw.githubusercontent.com/crptofollower/herald-voice-a
 PROFILES_FILE  = os.environ.get("PROFILES_FILE", "/data/profiles.json")
 INVITES_FILE   = os.environ.get("INVITES_FILE",  "/data/invites.json")
 DB_FILE        = "/data/herald.db"
+
+# ── DB CONNECTION HELPER ──────────────────────────────────────────────────────
+# v8.53: Context manager for all SQLite connections.
+# Guarantees commit on success, rollback on exception, close always.
+# WAL mode + 5s timeout eliminates "database is locked" errors.
+# Note: wal_checkpoint intentionally NOT called on every close -- belongs
+#       in a scheduled maintenance job, not per-connection overhead.
+
+@contextlib.contextmanager
+def get_db_connection():
+    """Context manager for SQLite. WAL + timeout + auto commit/rollback/close."""
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_FILE, timeout=5)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA cache_size=-64000")   # ~64MB page cache
+        conn.execute("PRAGMA foreign_keys=ON")
+        yield conn
+        conn.commit()
+    except Exception:
+        if conn:
+            conn.rollback()
+        raise
+    finally:
+        if conn:
+            conn.close()
+
+# Alias kept for any internal reads that don't need the context manager pattern.
+# All writes must use get_db_connection().
+def _db_conn():
+    conn = sqlite3.connect(DB_FILE, timeout=5)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA cache_size=-64000")
+    conn.execute("PRAGMA foreign_keys=ON")
+    return conn
 
 # ── MODEL ROUTING ─────────────────────────────────────────────────────────────
 
@@ -442,7 +479,7 @@ invites        = {}
 def init_db():
     try:
         os.makedirs("/data", exist_ok=True)
-        conn = sqlite3.connect(DB_FILE)
+        conn = _db_conn()
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         c = conn.cursor()
@@ -592,7 +629,7 @@ def init_db():
 def load_profiles():
     global user_profiles, owner_user_ids
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = _db_conn()
         c = conn.cursor()
         c.execute("SELECT user_id, data FROM profiles")
         rows = c.fetchall()
@@ -616,7 +653,7 @@ def load_profiles():
 def load_invites():
     global invites
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = _db_conn()
         c = conn.cursor()
         c.execute("SELECT code, data FROM invites")
         rows = c.fetchall()
@@ -634,15 +671,12 @@ def load_invites():
 
 def _save_invite(code, invite):
     try:
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute(
-            "INSERT OR REPLACE INTO invites (code, data, created_at) VALUES (?, ?, ?)",
-            (code, json.dumps(invite, ensure_ascii=False),
-             invite.get("created_at", datetime.now().isoformat()))
-        )
-        conn.commit()
-        conn.close()
+        with get_db_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO invites (code, data, created_at) VALUES (?, ?, ?)",
+                (code, json.dumps(invite, ensure_ascii=False),
+                 invite.get("created_at", datetime.now().isoformat()))
+            )
     except Exception as e:
         print(f"[HERALD] Could not save invite {code}: {e}")
 
@@ -694,17 +728,27 @@ def save_profile_async(user_id, profile):
 
 
 def _write_profile_to_db(user_id, profile):
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute(
-            "INSERT OR REPLACE INTO profiles (user_id, data, updated_at) VALUES (?, ?, ?)",
-            (user_id, json.dumps(profile, ensure_ascii=False), datetime.now().isoformat())
-        )
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print(f"[HERALD] Could not save profile for {user_id}: {e}")
+    # v8.53: Retry only on lock contention. Exponential backoff. Context manager guarantees cleanup.
+    for attempt in range(4):
+        try:
+            with get_db_connection() as conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO profiles (user_id, data, updated_at) VALUES (?, ?, ?)",
+                    (user_id, json.dumps(profile, ensure_ascii=False), datetime.now().isoformat())
+                )
+            if attempt > 0:
+                print(f"[HERALD] Profile saved for {user_id} after {attempt} retry(ies)")
+            return True
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower() and attempt < 3:
+                time.sleep(0.1 * (2 ** attempt))  # 100ms, 200ms, 400ms
+                continue
+            print(f"[HERALD] Could not save profile for {user_id}: {e}")
+            break
+        except Exception as e:
+            print(f"[HERALD] Unexpected error saving profile {user_id}: {e}")
+            break
+    return False
 
 def save_profile_fields(user_id, updates: dict):
     profile = get_profile(user_id)
@@ -1716,49 +1760,47 @@ def advance_medical_intake(profile: dict, user_message: str, user_id: str) -> di
 
 def _write_medical_record(user_id: str, record_type: str, data: dict):
     try:
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        if record_type == 'visit':
-            doctor = data.get('doctor_name', '').strip()
-            if doctor:
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            if record_type == 'visit':
+                doctor = data.get('doctor_name', '').strip()
+                if doctor:
+                    c.execute(
+                        "INSERT INTO medical_contacts "
+                        "(user_id, doctor_name, specialty, practice, address, phone, last_seen, next_visit, created_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                        "ON CONFLICT(user_id, doctor_name) DO UPDATE SET "
+                        "specialty=excluded.specialty, practice=excluded.practice, "
+                        "last_seen=excluded.last_seen, next_visit=excluded.next_visit",
+                        (user_id, doctor, data.get('specialty',''), data.get('practice',''),
+                         data.get('location',''), data.get('phone',''),
+                         data.get('visit_date', datetime.now().strftime('%Y-%m-%d')),
+                         data.get('follow_up',''), datetime.now().isoformat())
+                    )
                 c.execute(
-                    "INSERT INTO medical_contacts "
-                    "(user_id, doctor_name, specialty, practice, address, phone, last_seen, next_visit, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                    "ON CONFLICT(user_id, doctor_name) DO UPDATE SET "
-                    "specialty=excluded.specialty, practice=excluded.practice, "
-                    "last_seen=excluded.last_seen, next_visit=excluded.next_visit",
-                    (user_id, doctor, data.get('specialty',''), data.get('practice',''),
-                     data.get('location',''), data.get('phone',''),
+                    "INSERT INTO medical_records "
+                    "(user_id, doctor_name, specialty, practice, location, visit_date, reason, "
+                    "outcome, follow_up_date, follow_up_notes, tests_ordered, results, source, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'conversation', ?)",
+                    (user_id, data.get('doctor_name',''), data.get('specialty',''),
+                     data.get('practice',''), data.get('location',''),
                      data.get('visit_date', datetime.now().strftime('%Y-%m-%d')),
-                     data.get('follow_up',''), datetime.now().isoformat())
+                     data.get('reason',''), data.get('outcome',''),
+                     data.get('follow_up',''), data.get('follow_up_notes',''),
+                     data.get('tests_ordered',''), data.get('results',''),
+                     datetime.now().isoformat())
                 )
-            c.execute(
-                "INSERT INTO medical_records "
-                "(user_id, doctor_name, specialty, practice, location, visit_date, reason, "
-                "outcome, follow_up_date, follow_up_notes, tests_ordered, results, source, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'conversation', ?)",
-                (user_id, data.get('doctor_name',''), data.get('specialty',''),
-                 data.get('practice',''), data.get('location',''),
-                 data.get('visit_date', datetime.now().strftime('%Y-%m-%d')),
-                 data.get('reason',''), data.get('outcome',''),
-                 data.get('follow_up',''), data.get('follow_up_notes',''),
-                 data.get('tests_ordered',''), data.get('results',''),
-                 datetime.now().isoformat())
-            )
-            if data.get('follow_up',''):
-                _create_followup_tracker(user_id, data, c)
-        elif record_type == 'medication':
-            c.execute(
-                "INSERT INTO medication_log "
-                "(user_id, med_name, dose, prescriber, reason, refill_due, active, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
-                (user_id, data.get('med_name',''), data.get('dose',''),
-                 data.get('prescriber',''), data.get('reason',''),
-                 data.get('refill_due',''), datetime.now().isoformat())
-            )
-        conn.commit()
-        conn.close()
+                if data.get('follow_up',''):
+                    _create_followup_tracker(user_id, data, c)
+            elif record_type == 'medication':
+                c.execute(
+                    "INSERT INTO medication_log "
+                    "(user_id, med_name, dose, prescriber, reason, refill_due, active, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
+                    (user_id, data.get('med_name',''), data.get('dose',''),
+                     data.get('prescriber',''), data.get('reason',''),
+                     data.get('refill_due',''), datetime.now().isoformat())
+                )
         print(f"[HERALD] Medical record written: {record_type} for {user_id}")
     except Exception as e:
         print(f"[HERALD] Medical record write error: {e}")
@@ -1798,7 +1840,7 @@ def _build_medical_context(user_id: str, conn=None) -> str:
     owns_conn = conn is None
     try:
         if owns_conn:
-            conn = sqlite3.connect(DB_FILE)
+            conn = _db_conn()
         cursor = conn.cursor()
         cursor.execute(
             "SELECT doctor_name, specialty, visit_date, outcome, follow_up_date "
@@ -1942,7 +1984,7 @@ def build_about_me(profile):
 
     moments_str = ""
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = _db_conn()
         c = conn.cursor()
         c.execute("""
             SELECT summary, days_ago FROM life_moments
@@ -1966,7 +2008,7 @@ def build_about_me(profile):
 
     tracker_str = ""
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = _db_conn()
         c = conn.cursor()
         c.execute("""
             SELECT item_name, next_due_date FROM life_tracker
@@ -2776,7 +2818,7 @@ def _get_calendar_line(user_id: str, conn=None) -> str:
     owns_conn = conn is None
     try:
         if owns_conn:
-            conn = sqlite3.connect(DB_FILE)
+            conn = _db_conn()
         c = conn.cursor()
         c.execute("""
             SELECT item_name, COALESCE(next_due_date, last_date) AS event_date
@@ -2922,7 +2964,7 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
     calendar_line = ""
     conn = None
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = _db_conn()
         calendar_line = _get_calendar_line(user_id, conn)
         c = conn.cursor()
 
@@ -4041,7 +4083,7 @@ def morning_briefing_job():
 
         moments_line = ""
         try:
-            conn = sqlite3.connect(DB_FILE)
+            conn = _db_conn()
             c    = conn.cursor()
             c.execute("""
                 SELECT summary FROM life_moments
@@ -4057,7 +4099,7 @@ def morning_briefing_job():
 
         tracker_line = ""
         try:
-            conn = sqlite3.connect(DB_FILE)
+            conn = _db_conn()
             c    = conn.cursor()
             c.execute("""
                 SELECT item_name, next_due_date FROM life_tracker
@@ -4107,7 +4149,7 @@ def morning_briefing_job():
         medication_line = ""
         if prefs.get("include_medication", True):
             try:
-                conn = sqlite3.connect(DB_FILE)
+                conn = _db_conn()
                 c = conn.cursor()
                 c.execute(
                     "SELECT med_name FROM medication_log "
@@ -4167,7 +4209,7 @@ def afternoon_checkin_job():
         cutoff_active = (datetime.now() - timedelta(days=7)).isoformat()
         cutoff_recent = (datetime.now() - timedelta(hours=2)).isoformat()
 
-        conn = sqlite3.connect(DB_FILE)
+        conn = _db_conn()
         c = conn.cursor()
         c.execute(
             "SELECT user_id, data FROM profiles WHERE updated_at > ? AND updated_at < ?",
@@ -4238,7 +4280,7 @@ def evening_medication_job():
     try:
         cutoff = (datetime.now() - timedelta(days=7)).isoformat()
 
-        conn = sqlite3.connect(DB_FILE)
+        conn = _db_conn()
         c = conn.cursor()
         c.execute("SELECT user_id, data FROM profiles WHERE updated_at > ?", (cutoff,))
         rows = c.fetchall()
@@ -4330,7 +4372,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.52",
+        "status": "ok", "server": "herald-api", "version": "8.53",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -4359,7 +4401,7 @@ def health():
             "news_bak":    "NewsData" if NEWSDATA_KEY else "not configured",
             "movies":      "OMDb" if OMDB_KEY else "not configured",
             "geocoding":   "Google" if GEOCODING_KEY else "not configured",
-            "tts":         "OpenAI nova" if OPENAI_KEY else "not configured",
+            "tts":         "expo-speech (on-device)",
             "email":       "SendGrid" if SENDGRID_KEY else "SENDGRID_API_KEY not set",
             "sync":        "VM webhook" if WEBHOOK_SECRET else "WEBHOOK_SECRET not set",
         },
@@ -5419,7 +5461,7 @@ async def waitlist(request: Request):
         return JSONResponse({"error": "Invalid email address"}, status_code=400)
     source = (body.get("source") or "landing")[:32]
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = _db_conn()
         c = conn.cursor()
         c.execute("INSERT INTO waitlist (email, source) VALUES (?, ?)", (email, source))
         conn.commit()
@@ -5469,7 +5511,7 @@ async def waitlist_list(request: Request):
     if secret != os.environ.get("WEBHOOK_SECRET", ""):
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = _db_conn()
         c = conn.cursor()
         c.execute("SELECT email, source, created_at FROM waitlist ORDER BY created_at DESC")
         rows = c.fetchall()
@@ -5498,7 +5540,7 @@ async def cron_watchers(request: Request):
     gas_cache    = {}
 
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = _db_conn()
         c = conn.cursor()
         c.execute("SELECT user_id, data FROM profiles")
         rows = c.fetchall()
@@ -5624,7 +5666,7 @@ async def freddie_trades(request: Request):
         return {"ok": True, "synced": 0, "message": "no trades to sync"}
 
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = _db_conn()
         c = conn.cursor()
         c.execute("""
             CREATE TABLE IF NOT EXISTS freddie_trades (
@@ -5721,62 +5763,60 @@ async def calendar_sync(request: Request):
 
     stored = 0
     try:
-        conn = sqlite3.connect(DB_FILE)
-        c    = conn.cursor()
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS life_tracker (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id      TEXT NOT NULL,
-                category     TEXT NOT NULL,
-                item_name    TEXT NOT NULL,
-                last_date    TEXT,
-                next_due_date TEXT,
-                interval_days INTEGER DEFAULT 0,
-                source       TEXT DEFAULT 'calendar',
-                active       INTEGER DEFAULT 1,
-                created_at   TEXT NOT NULL
-            )
-        """)
-        for appt in appointments:
-            title    = appt.get("title", "").strip()
-            date_str = appt.get("date", "")
-            category = appt.get("category", "appointment")
-            interval = appt.get("interval", 0)
-            if not title or not date_str:
-                continue
-            try:
-                appt_date = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-                appt_date_str = appt_date.strftime("%Y-%m-%d")
-            except Exception:
-                continue
-            next_due = appt_date_str
-            if interval > 0:
-                next_date = appt_date + timedelta(days=interval)
-                next_due  = next_date.strftime("%Y-%m-%d")
+        with get_db_connection() as conn:
+            c = conn.cursor()
             c.execute("""
-                SELECT id FROM life_tracker
-                WHERE user_id = ? AND item_name = ? AND last_date = ?
-            """, (user_id, title, appt_date_str))
-            if c.fetchone():
+                CREATE TABLE IF NOT EXISTS life_tracker (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id      TEXT NOT NULL,
+                    category     TEXT NOT NULL,
+                    item_name    TEXT NOT NULL,
+                    last_date    TEXT,
+                    next_due_date TEXT,
+                    interval_days INTEGER DEFAULT 0,
+                    source       TEXT DEFAULT 'calendar',
+                    active       INTEGER DEFAULT 1,
+                    created_at   TEXT NOT NULL
+                )
+            """)
+            for appt in appointments:
+                title    = appt.get("title", "").strip()
+                date_str = appt.get("date", "")
+                category = appt.get("category", "appointment")
+                interval = appt.get("interval", 0)
+                if not title or not date_str:
+                    continue
+                try:
+                    appt_date = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                    appt_date_str = appt_date.strftime("%Y-%m-%d")
+                except Exception:
+                    continue
+                next_due = appt_date_str
+                if interval > 0:
+                    next_date = appt_date + timedelta(days=interval)
+                    next_due  = next_date.strftime("%Y-%m-%d")
                 c.execute("""
-                    UPDATE life_tracker SET next_due_date = ?
+                    SELECT id FROM life_tracker
                     WHERE user_id = ? AND item_name = ? AND last_date = ?
-                      AND source = 'calendar'
-                      AND (next_due_date IS NULL OR next_due_date = '')
-                """, (next_due, user_id, title, appt_date_str))
-                continue
-            c.execute("""
-                INSERT INTO life_tracker
-                (user_id, category, item_name, last_date, next_due_date,
-                 interval_days, source, active, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, 'calendar', 1, ?)
-            """, (
-                user_id, category, title, appt_date_str,
-                next_due, interval, datetime.now().isoformat()
-            ))
-            stored += 1
-        conn.commit()
-        conn.close()
+                """, (user_id, title, appt_date_str))
+                if c.fetchone():
+                    c.execute("""
+                        UPDATE life_tracker SET next_due_date = ?
+                        WHERE user_id = ? AND item_name = ? AND last_date = ?
+                          AND source = 'calendar'
+                          AND (next_due_date IS NULL OR next_due_date = '')
+                    """, (next_due, user_id, title, appt_date_str))
+                    continue
+                c.execute("""
+                    INSERT INTO life_tracker
+                    (user_id, category, item_name, last_date, next_due_date,
+                     interval_days, source, active, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, 'calendar', 1, ?)
+                """, (
+                    user_id, category, title, appt_date_str,
+                    next_due, interval, datetime.now().isoformat()
+                ))
+                stored += 1
         print(f"[HERALD] Calendar sync: {stored} new appointments stored for {user_id}")
         return {"ok": True, "stored": stored, "received": len(appointments)}
     except Exception as e:
@@ -5791,7 +5831,7 @@ async def medical_summary(user_id: str, send_email: bool = False):
     profile = get_profile(user_id)
     name    = profile.get("name", "there")
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = _db_conn()
         c    = conn.cursor()
         c.execute("""
             SELECT doctor_name, specialty, practice, location,
@@ -5935,7 +5975,7 @@ async def health_sync(request: Request):
     summary = f"Health on {today}: " + ", ".join(parts)
 
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = _db_conn()
         c    = conn.cursor()
         c.execute("""
             CREATE TABLE IF NOT EXISTS life_moments (
@@ -5976,6 +6016,65 @@ async def health_sync(request: Request):
     except Exception as e:
         print(f"[HERALD] Health sync error: {e}")
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+@app.get("/user/export/{user_id}")
+async def user_export(user_id: str, secret: str = ""):
+    """
+    v8.53: Session L migration endpoint.
+    Returns all personal data for a user as JSON so the device can
+    import it into local SQLite. After import, device calls DELETE /user/data
+    to wipe personal data from the backend. Backend then only stores billing state.
+    Auth: requires WEBHOOK_SECRET.
+    """
+    if not WEBHOOK_SECRET or secret != WEBHOOK_SECRET:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    if not user_id:
+        return JSONResponse({"error": "user_id required"}, status_code=400)
+
+    profile = user_profiles.get(user_id, {})
+    if not profile:
+        return JSONResponse({"error": "user not found"}, status_code=404)
+
+    try:
+        conn = _db_conn()
+        c = conn.cursor()
+
+        def rows_as_dicts(cursor):
+            cols = [d[0] for d in cursor.description]
+            return [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+        c.execute("SELECT * FROM medical_records WHERE user_id=? AND active=1", (user_id,))
+        medical_records = rows_as_dicts(c)
+
+        c.execute("SELECT * FROM medical_contacts WHERE user_id=? AND active=1", (user_id,))
+        medical_contacts = rows_as_dicts(c)
+
+        c.execute("SELECT * FROM medication_log WHERE user_id=? AND active=1", (user_id,))
+        medications = rows_as_dicts(c)
+
+        c.execute("SELECT * FROM life_tracker WHERE user_id=? AND active=1", (user_id,))
+        life_tracker = rows_as_dicts(c)
+
+        c.execute("SELECT * FROM life_moments WHERE user_id=? AND active=1", (user_id,))
+        life_moments = rows_as_dicts(c)
+
+        conn.close()
+    except Exception as e:
+        return JSONResponse({"error": f"export failed: {e}"}, status_code=500)
+
+    print(f"[HERALD] /user/export: exported all personal data for {user_id}")
+    return {
+        "ok": True,
+        "user_id": user_id,
+        "exported_at": datetime.now().isoformat(),
+        "profile": profile,
+        "medical_records": medical_records,
+        "medical_contacts": medical_contacts,
+        "medications": medications,
+        "life_tracker": life_tracker,
+        "life_moments": life_moments,
+    }
 
 
 # ── STARTUP ───────────────────────────────────────────────────────────────────
@@ -6049,7 +6148,8 @@ def startup():
     print(f"[HERALD]   morning_briefing  -> 7:00am ET daily")
     print(f"[HERALD]   afternoon_checkin -> 2:00pm ET daily (v8.8)")
     print(f"[HERALD]   evening_medication -> 7:00pm ET daily (v8.8)")
-    print(f"[HERALD API v8.12] /transcribe endpoint LIVE")
+    print(f"[HERALD API v8.53] SQLite hardening LIVE -- WAL + timeout=5 + profile retry on all 23 connection sites")
+    print(f"[HERALD API v8.53] /user/export endpoint added -- Session L device migration ready")
     print(f"[HERALD API] FIX v8.11: MAPS tag always includes city -- no more 1500-mile directions")
     print(f"[HERALD API] OpenRouter:    {'YES' if OPENROUTER_KEY else 'MISSING -- required'}")
     print(f"[HERALD API] Model routing: Haiku ({HAIKU_MODEL}) / Sonnet ({SONNET_MODEL})")
