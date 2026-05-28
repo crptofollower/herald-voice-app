@@ -444,12 +444,13 @@ export default function ChatScreen() {
           const calPerms = await Calendar.getCalendarPermissionsAsync();
           if (calPerms.status === 'granted') {
             const isTomorrow = /tomorrow/i.test(text);
-            const isThisWeek = /this week/i.test(text);
-            const start = new Date(); start.setHours(0,0,0,0);
-            const end = new Date(start);
-            if (isThisWeek) { end.setDate(end.getDate() + 7); }
-            else if (isTomorrow) { start.setDate(start.getDate() + 1); end.setDate(end.getDate() + 1); }
-            end.setHours(23,59,59,999);
+const isThisWeek = /this week/i.test(text);
+const start = new Date();
+start.setHours(0, 0, 0, 0);
+if (isTomorrow) start.setDate(start.getDate() + 1);
+const end = new Date(start);
+if (isThisWeek) { end.setDate(end.getDate() + 7); }
+end.setHours(23, 59, 59, 999);
             const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
             const events = await Calendar.getEventsAsync(calendars.map(c => c.id), start, end);
             const sorted = events.filter(e => e.title).sort((a,b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime());
@@ -492,17 +493,13 @@ export default function ChatScreen() {
       try {
         const { status } = await Calendar.requestCalendarPermissionsAsync();
         if (status === 'granted') {
-          const start = new Date();
-          start.setHours(0, 0, 0, 0);
           const isTomorrow = /tomorrow/i.test(text);
           const isThisWeek = /this week/i.test(text);
+          const start = new Date();
+          start.setHours(0, 0, 0, 0);
+          if (isTomorrow) start.setDate(start.getDate() + 1);
           const end = new Date(start);
-          if (isThisWeek) {
-            end.setDate(end.getDate() + 7);
-          } else if (isTomorrow) {
-            start.setDate(start.getDate() + 1);
-            end.setDate(end.getDate() + 1);
-          }
+          if (isThisWeek) { end.setDate(end.getDate() + 7); }
           end.setHours(23, 59, 59, 999);
           const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
           const calIds = calendars.map((c) => c.id);

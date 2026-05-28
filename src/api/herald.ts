@@ -298,10 +298,10 @@ export function askHeraldStream(
 
         if (!streamFinished) {
           clearTimeout(firstTokenTimeout);
+          streamFinished = true;
           flushSentence();
           if (accumulated) {
             callbacks.onDone(accumulated);
-            streamFinished = true;
           }
         }
 
