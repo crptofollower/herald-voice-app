@@ -245,6 +245,7 @@ export function askHeraldStream(
 
           if (parsed.done) {
             clearTimeout(firstTokenTimeout);
+            streamFinished = true;
             flushSentence();
             callbacks.onAction(parsed.action as AskResponse["action"]);
             const full =
@@ -252,14 +253,13 @@ export function askHeraldStream(
                 ? (parsed.full as string)
                 : accumulated;
             callbacks.onDone(full);
-            streamFinished = true;
             return;
           }
 
           if (parsed.error) {
             clearTimeout(firstTokenTimeout);
-            callbacks.onError(new Error(String(parsed.error)));
             streamFinished = true;
+            callbacks.onError(new Error(String(parsed.error)));
             return;
           }
 

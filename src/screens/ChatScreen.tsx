@@ -490,8 +490,8 @@ export default function ChatScreen() {
     ];
     if (calendarPatterns.some((p) => p.test(text))) {
       try {
-        const calPerms = await Calendar.getCalendarPermissionsAsync();
-        if (calPerms.status === 'granted') {
+        const { status } = await Calendar.requestCalendarPermissionsAsync();
+        if (status === 'granted') {
           const start = new Date();
           start.setHours(0, 0, 0, 0);
           const isTomorrow = /tomorrow/i.test(text);
@@ -602,6 +602,7 @@ export default function ChatScreen() {
     }
     speak(_bridgePhrase, { rate: 0.95 });
 
+    setShowProactive(false);
     setIsWaiting(true);
     setIsStreaming(true);
     setStreamingContent("");
