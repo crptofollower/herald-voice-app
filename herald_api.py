@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.54 -- Personality system: per-user communication style + humor calibration
+# v8.55 -- Admin dashboard endpoints: /admin/dashboard, /admin/user, /admin/proactive, /admin/waitlist
 #
 # v8.12 -- Medical memory system (always include user city in MAPS tag)
 #
@@ -49,7 +49,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.54")
+app = FastAPI(title="Herald API", version="8.55")
 
 app.add_middleware(
     CORSMiddleware,
@@ -4541,7 +4541,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.54",
+        "status": "ok", "server": "herald-api", "version": "8.55",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -6288,6 +6288,142 @@ async def admin_clear_profile_field(request: Request):
     save_profile(user_id, profile)
     print(f"[HERALD] /admin/clear_profile_field: {user_id}.{field} cleared (was: {old_val})")
     return {"ok": True, "user_id": user_id, "field": field, "cleared_value": str(old_val)}
+
+@app.get("/admin/dashboard")
+async def admin_dashboard(secret: str = ""):
+    """v8.55: Master dashboard endpoint -- returns all users summary + system stats."""
+    if not WEBHOOK_SECRET or secret != WEBHOOK_SECRET:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    try:
+        users = []
+        for uid, profile in user_profiles.items():
+            pp = profile.get("personality_profile", {})
+            users.append({
+                "user_id":        uid,
+                "name":           profile.get("name", ""),
+                "ai_name":        profile.get("ai_name", "Herald"),
+                "confirmed_city": profile.get("confirmed_city", ""),
+                "msg_count":      profile.get("_msg_count", 0),
+                "memory_count":   len(profile.get("memories", [])) + len(profile.get("learned_facts", [])),
+                "is_beta":        profile.get("is_beta", False),
+                "is_owner":       profile.get("is_owner", False),
+                "personality_samples": pp.get("samples", 0),
+                "humor_weight":   pp.get("humor_weight", 0.0),
+                "comm_style":     pp.get("comm_style", "neutral"),
+            })
+
+        # Waitlist count
+        waitlist_count = 0
+        try:
+            conn = _db_conn()
+            c = conn.cursor()
+            c.execute("SELECT COUNT(*) FROM waitlist")
+            waitlist_count = c.fetchone()[0]
+            conn.close()
+        except Exception:
+            pass
+
+        # Proactive call rate -- count proactive queue entries across all users
+        total_proactive = sum(
+            len(p.get("proactive_queue", [])) for p in user_profiles.values()
+        )
+
+        return {
+            "ok": True,
+            "version": "8.55",
+            "user_count": len(users),
+            "users": sorted(users, key=lambda x: x["msg_count"], reverse=True),
+            "waitlist_count": waitlist_count,
+            "total_proactive_queued": total_proactive,
+            "cache_entries": len(_cache),
+            "server_time": datetime.now().isoformat(),
+        }
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/admin/user/{user_id}")
+async def admin_user_detail(user_id: str, secret: str = ""):
+    """v8.55: Full profile detail for one user including personality + DB records."""
+    if not WEBHOOK_SECRET or secret != WEBHOOK_SECRET:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    profile = get_profile(user_id)
+    if not profile.get("name") and not profile.get("ai_name"):
+        return JSONResponse({"error": "user not found"}, status_code=404)
+    try:
+        conn = _db_conn()
+        c = conn.cursor()
+        c.execute("SELECT summary, category, emotion, days_ago FROM life_moments WHERE user_id=? AND active=1 ORDER BY weight DESC LIMIT 10", (user_id,))
+        moments = [{"summary": r[0], "category": r[1], "emotion": r[2], "days_ago": r[3]} for r in c.fetchall()]
+        c.execute("SELECT category, item_name, next_due_date FROM life_tracker WHERE user_id=? AND active=1 ORDER BY next_due_date ASC LIMIT 10", (user_id,))
+        tracker = [{"category": r[0], "item": r[1], "due": r[2]} for r in c.fetchall()]
+        c.execute("SELECT doctor_name, specialty, visit_date, outcome FROM medical_records WHERE user_id=? AND active=1 ORDER BY visit_date DESC LIMIT 5", (user_id,))
+        medical = [{"doctor": r[0], "specialty": r[1], "date": r[2], "outcome": r[3]} for r in c.fetchall()]
+        conn.close()
+    except Exception:
+        moments = []; tracker = []; medical = []
+
+    return {
+        "ok": True,
+        "user_id": user_id,
+        "name": profile.get("name", ""),
+        "ai_name": profile.get("ai_name", "Herald"),
+        "confirmed_city": profile.get("confirmed_city", ""),
+        "msg_count": profile.get("_msg_count", 0),
+        "trust_level": profile.get("trust_level", 0),
+        "memories": profile.get("memories", [])[-20:],
+        "learned_facts": profile.get("learned_facts", [])[-20:],
+        "personality_profile": profile.get("personality_profile", {}),
+        "watches": profile.get("watches", []),
+        "proactive_queue": profile.get("proactive_queue", []),
+        "life_moments": moments,
+        "life_tracker": tracker,
+        "medical_records": medical,
+        "created_at": profile.get("created_at", ""),
+    }
+
+
+@app.post("/admin/proactive")
+async def admin_send_proactive(request: Request):
+    """v8.55: Push a manual message into a user's proactive queue."""
+    data = await request.json()
+    secret = data.get("secret", "")
+    if not WEBHOOK_SECRET or secret != WEBHOOK_SECRET:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    user_id = data.get("user_id", "").strip()
+    message = data.get("message", "").strip()
+    if not user_id or not message:
+        return JSONResponse({"error": "user_id and message required"}, status_code=400)
+    profile = get_profile(user_id)
+    queue = profile.get("proactive_queue", [])
+    queue.append({
+        "id":         str(uuid.uuid4())[:8],
+        "type":       "admin_manual",
+        "text":       message,
+        "created_at": datetime.utcnow().isoformat(),
+    })
+    if len(queue) > 10:
+        queue = queue[-10:]
+    profile["proactive_queue"] = queue
+    save_profile(user_id, profile)
+    print(f"[HERALD] /admin/proactive: manual message queued for {user_id}: {message[:60]}")
+    return {"ok": True, "user_id": user_id, "queued": message}
+
+
+@app.get("/admin/waitlist")
+async def admin_waitlist(secret: str = ""):
+    """v8.55: Return full waitlist table."""
+    if not WEBHOOK_SECRET or secret != WEBHOOK_SECRET:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    try:
+        conn = _db_conn()
+        c = conn.cursor()
+        c.execute("SELECT id, email, source, created_at FROM waitlist ORDER BY created_at DESC")
+        rows = [{"id": r[0], "email": r[1], "source": r[2], "created_at": r[3]} for r in c.fetchall()]
+        conn.close()
+        return {"ok": True, "count": len(rows), "entries": rows}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 @app.get("/admin/find_user")
 async def admin_find_user(secret: str, name: str = ""):
