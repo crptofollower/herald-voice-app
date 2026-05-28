@@ -1,6 +1,8 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.57 -- TTS list summarization rule in system prompt
+# v8.58 -- Sports terms added to FAST_OVERRIDES (stops Brave fallback on sports queries)
+#          Referral code generated on /onboard registration
+#          /invite/redeem endpoint -- applies free_days to both users
 #
 # v8.12 -- Medical memory system (always include user city in MAPS tag)
 #
@@ -49,7 +51,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.57")
+app = FastAPI(title="Herald API", version="8.58")
 
 app.add_middleware(
     CORSMiddleware,
@@ -427,6 +429,13 @@ FAST_OVERRIDES = [
     'my medications', 'what medications am i on', 'my prescriptions',
     'email my medical', 'send my medical history', 'my health summary',
     'when did i see', 'last time i saw', 'my follow up',
+    # Sports -- always route through ESPN fast path, never Brave fallback
+    'cowboys', 'rangers', 'mavericks', 'mavs', 'stars', 'rockets', 'astros', 'texans',
+    'nfl score', 'nba score', 'mlb score', 'nhl score',
+    'how are the', 'how did the', 'how is the',
+    'did the cowboys', 'did the mavs', 'did the rangers', 'did the astros',
+    'sports score', 'sports scores', 'latest score', 'latest scores',
+    'game score', 'final score', 'last night score', 'score last night',
 ]
 
 PLACES_SIGNALS = [
@@ -4546,7 +4555,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.57",
+        "status": "ok", "server": "herald-api", "version": "8.58",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -4769,9 +4778,12 @@ async def onboard(request: Request):
         profile["is_owner"] = True
     if not profile.get("created_at"):
         profile["created_at"] = datetime.now().isoformat()
+    # v8.58: generate referral code on first registration if not already set
+    if not profile.get("referral_code"):
+        profile["referral_code"] = make_invite_code()
 
     save_profile(user_id, profile)
-    print(f"[HERALD] /onboard: {name} | ai_name={ai_name} | persona={persona} | owner={is_owner_req} | id={user_id}")
+    print(f"[HERALD] /onboard: {name} | ai_name={ai_name} | persona={persona} | owner={is_owner_req} | id={user_id} | ref={profile['referral_code']}")
 
     return {
         "ok":      True,
@@ -4779,6 +4791,7 @@ async def onboard(request: Request):
         "is_owner": is_owner_req,
         "ai_name": profile.get("ai_name", "Herald"),
         "name":    profile.get("name", ""),
+        "referral_code": profile.get("referral_code", ""),
     }
 
 
@@ -5638,6 +5651,66 @@ async def invite_list(request: Request):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     invite_list_data = sorted(invites.values(), key=lambda x: x.get("created_at",""), reverse=True)
     return {"ok": True, "invites": invite_list_data, "total": len(invite_list_data)}
+
+
+@app.post("/invite/redeem")
+async def invite_redeem(request: Request):
+    """v8.58: Redeem a referral code. Awards 30 free days to both referrer and referee.
+    Called from app after successful onboard when referred_by code is present.
+    Body: { referral_code, new_user_id }
+    """
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid request"}, status_code=400)
+
+    referral_code = (data.get("referral_code") or "").strip().lower()
+    new_user_id   = (data.get("new_user_id") or "").strip()
+
+    if not referral_code or not new_user_id:
+        return JSONResponse({"error": "referral_code and new_user_id required"}, status_code=400)
+
+    # Find the referrer by scanning profiles for matching referral_code
+    referrer_id = None
+    for uid, prof in user_profiles.items():
+        if prof.get("referral_code", "").lower() == referral_code:
+            referrer_id = uid
+            break
+
+    if not referrer_id:
+        return JSONResponse({"error": "referral code not found"}, status_code=404)
+
+    if referrer_id == new_user_id:
+        return JSONResponse({"error": "cannot redeem your own referral code"}, status_code=400)
+
+    # Check not already redeemed by this user
+    new_profile = get_profile(new_user_id)
+    if new_profile.get("referred_by"):
+        return JSONResponse({"error": "referral already redeemed"}, status_code=400)
+
+    REFERRAL_BONUS_DAYS = 30
+
+    # Award referee
+    new_profile["referred_by"]      = referral_code
+    new_profile["free_days_earned"] = new_profile.get("free_days_earned", 0) + REFERRAL_BONUS_DAYS
+    save_profile(new_user_id, new_profile)
+    save_profile_async(new_user_id, new_profile)
+
+    # Award referrer
+    referrer_profile = get_profile(referrer_id)
+    referrer_profile["free_days_earned"] = referrer_profile.get("free_days_earned", 0) + REFERRAL_BONUS_DAYS
+    save_profile(referrer_id, referrer_profile)
+    save_profile_async(referrer_id, referrer_profile)
+
+    referrer_name = referrer_profile.get("name", "your friend")
+    print(f"[HERALD] /invite/redeem: {new_user_id} redeemed code {referral_code} from {referrer_id} -- both get {REFERRAL_BONUS_DAYS} days")
+
+    return {
+        "ok": True,
+        "bonus_days": REFERRAL_BONUS_DAYS,
+        "referrer_name": referrer_name,
+        "message": f"You and {referrer_name} both get {REFERRAL_BONUS_DAYS} free days.",
+    }
 
 
 @app.post("/waitlist")
@@ -6548,8 +6621,8 @@ def startup():
     print(f"[HERALD]   morning_briefing  -> 7:00am ET daily")
     print(f"[HERALD]   afternoon_checkin -> 2:00pm ET daily (v8.8)")
     print(f"[HERALD]   evening_medication -> 7:00pm ET daily (v8.8)")
-    print(f"[HERALD API v8.53] SQLite hardening LIVE -- WAL + timeout=5 + profile retry on all 23 connection sites")
-    print(f"[HERALD API v8.53] /user/export endpoint added -- Session L device migration ready")
+    print(f"[HERALD API v8.58] Sports → FAST_OVERRIDES (ESPN fast path, no Brave fallback)")
+    print(f"[HERALD API v8.58] Referral code generated on /onboard -- /invite/redeem live")
     print(f"[HERALD API] FIX v8.11: MAPS tag always includes city -- no more 1500-mile directions")
     print(f"[HERALD API] OpenRouter:    {'YES' if OPENROUTER_KEY else 'MISSING -- required'}")
     print(f"[HERALD API] Model routing: Haiku ({HAIKU_MODEL}) / Sonnet ({SONNET_MODEL})")
