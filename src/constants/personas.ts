@@ -1,20 +1,22 @@
 // personas.ts -- Herald Persona System
-// Updated May 15 2026
+// Updated May 28 2026
+// Build 15: wallpaperNight field added -- time-based swap in PersonaBackground
 // Handoff tokens (accent, surfaceTint, palette, description) are canonical for
 // picker and notifications. colors.* remains the ChatScreen API.
 
 export type PersonaKey = "beach" | "mountain" | "city" | "country" | "desert";
 
 export interface Persona {
-  key:         PersonaKey;
-  name:        string;
-  description: string;
-  accent:      string;
-  surfaceTint: string;
-  palette:     [string, string, string];
-  tagline:     string;   // mirrors description until picker migrates
-  greeting:    string;   // what Herald says on first open (TTS)
-  gradient:    [string, string, string, string];
+  key:           PersonaKey;
+  name:          string;
+  description:   string;
+  accent:        string;
+  surfaceTint:   string;
+  palette:       [string, string, string];
+  tagline:       string;   // mirrors description until picker migrates
+  greeting:      string;   // what Herald says on first open (TTS)
+  gradient:      [string, string, string, string];
+  wallpaperNight: string;  // Build 15: night image filename (no path, no extension)
   colors: {
     background:      string;
     surface:         string;
@@ -36,14 +38,15 @@ function accentColors(accent: string) {
 
 export const PERSONAS: Record<PersonaKey, Persona> = {
   beach: {
-    key:         "beach",
-    name:        "Beach",
-    description: "Blues and sand. Light and open.",
-    accent:      "#4dd4d6",
-    surfaceTint: "rgba(31, 58, 84, 0.55)",
-    palette:     ["#4dd4d6", "#e8d9b0", "#8fb8d4"],
-    tagline:     "Blues and sand. Light and open.",
-    greeting:    "Good to see you.",
+    key:            "beach",
+    name:           "Beach",
+    description:    "Blues and sand. Light and open.",
+    accent:         "#4dd4d6",
+    surfaceTint:    "rgba(31, 58, 84, 0.55)",
+    palette:        ["#4dd4d6", "#e8d9b0", "#8fb8d4"],
+    tagline:        "Blues and sand. Light and open.",
+    greeting:       "Good to see you.",
+    wallpaperNight: "beach-night",
     gradient: [
       "rgba(2,24,40,0)",
       "rgba(2,24,40,0)",
@@ -59,14 +62,15 @@ export const PERSONAS: Record<PersonaKey, Persona> = {
     },
   },
   mountain: {
-    key:         "mountain",
-    name:        "Mountain",
-    description: "Steel and slate. Crisp and focused.",
-    accent:      "#7fa896",
-    surfaceTint: "rgba(26, 50, 44, 0.55)",
-    palette:     ["#7fa896", "#b8c5cc", "#3a4a52"],
-    tagline:     "Steel and slate. Crisp and focused.",
-    greeting:    "Good to see you.",
+    key:            "mountain",
+    name:           "Mountain",
+    description:    "Steel and slate. Crisp and focused.",
+    accent:         "#7fa896",
+    surfaceTint:    "rgba(26, 50, 44, 0.55)",
+    palette:        ["#7fa896", "#b8c5cc", "#3a4a52"],
+    tagline:        "Steel and slate. Crisp and focused.",
+    greeting:       "Good to see you.",
+    wallpaperNight: "mountain-night",
     gradient: [
       "rgba(5,15,32,0)",
       "rgba(5,15,32,0)",
@@ -82,14 +86,15 @@ export const PERSONAS: Record<PersonaKey, Persona> = {
     },
   },
   city: {
-    key:         "city",
-    name:        "City",
-    description: "Charcoal and white. Sharp and clean.",
-    accent:      "#2dd4bf",
-    surfaceTint: "rgba(36, 42, 52, 0.6)",
-    palette:     ["#2dd4bf", "#e8edf2", "#1a1f26"],
-    tagline:     "Charcoal and white. Sharp and clean.",
-    greeting:    "Good to see you.",
+    key:            "city",
+    name:           "City",
+    description:    "Charcoal and white. Sharp and clean.",
+    accent:         "#2dd4bf",
+    surfaceTint:    "rgba(36, 42, 52, 0.6)",
+    palette:        ["#2dd4bf", "#e8edf2", "#1a1f26"],
+    tagline:        "Charcoal and white. Sharp and clean.",
+    greeting:       "Good to see you.",
+    wallpaperNight: "city-night",
     gradient: [
       "rgba(10,4,2,0)",
       "rgba(10,4,2,0)",
@@ -105,14 +110,15 @@ export const PERSONAS: Record<PersonaKey, Persona> = {
     },
   },
   country: {
-    key:         "country",
-    name:        "Country",
-    description: "Greens and earth. Warm and easy.",
-    accent:      "#d4a83d",
-    surfaceTint: "rgba(58, 44, 24, 0.6)",
-    palette:     ["#d4a83d", "#7a9a5c", "#c97a4a"],
-    tagline:     "Greens and earth. Warm and easy.",
-    greeting:    "Good to see you.",
+    key:            "country",
+    name:           "Country",
+    description:    "Greens and earth. Warm and easy.",
+    accent:         "#d4a83d",
+    surfaceTint:    "rgba(58, 44, 24, 0.6)",
+    palette:        ["#d4a83d", "#7a9a5c", "#c97a4a"],
+    tagline:        "Greens and earth. Warm and easy.",
+    greeting:       "Good to see you.",
+    wallpaperNight: "country-night",
     gradient: [
       "rgba(30,14,2,0)",
       "rgba(30,14,2,0)",
@@ -128,14 +134,15 @@ export const PERSONAS: Record<PersonaKey, Persona> = {
     },
   },
   desert: {
-    key:         "desert",
-    name:        "Desert",
-    description: "Terracotta and clay. Warm and grounded.",
-    accent:      "#d97a4a",
-    surfaceTint: "rgba(58, 32, 24, 0.6)",
-    palette:     ["#d97a4a", "#e8b878", "#5a3a2a"],
-    tagline:     "Terracotta and clay. Warm and grounded.",
-    greeting:    "Good to see you.",
+    key:            "desert",
+    name:           "Desert",
+    description:    "Terracotta and clay. Warm and grounded.",
+    accent:         "#d97a4a",
+    surfaceTint:    "rgba(58, 32, 24, 0.6)",
+    palette:        ["#d97a4a", "#e8b878", "#5a3a2a"],
+    tagline:        "Terracotta and clay. Warm and grounded.",
+    greeting:       "Good to see you.",
+    wallpaperNight: "desert-night",
     gradient: [
       "rgba(21,7,4,0)",
       "rgba(21,7,4,0)",

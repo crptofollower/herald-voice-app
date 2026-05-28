@@ -1,22 +1,39 @@
 // PersonaBackground.tsx -- Full-screen scene image background per persona
-// Updated May 15 2026
+// Updated May 28 2026
+// Build 15: Night wallpaper swap -- hour >= 20 || hour < 6 uses night image.
 // Uses real JPG scene images from assets/ folder.
 // ImageBackground fills the screen, dark overlay keeps text readable.
 
-import React from "react";
+import React, { useMemo } from "react";
 import { StyleSheet, ImageBackground, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { PERSONAS, type PersonaKey } from "../constants/personas";
 
-// ─── Scene images ─────────────────────────────────────────────────────────────
+// ─── Day images ───────────────────────────────────────────────────────────────
 
-const IMAGES: Record<PersonaKey, ReturnType<typeof require>> = {
+const IMAGES_DAY: Record<PersonaKey, ReturnType<typeof require>> = {
   beach:    require("../../assets/beach.jpg"),
   city:     require("../../assets/city.jpg"),
   country:  require("../../assets/country.jpg"),
   desert:   require("../../assets/desert.jpg"),
   mountain: require("../../assets/mountain.jpg"),
 };
+
+// ─── Night images (Build 15) ──────────────────────────────────────────────────
+
+const IMAGES_NIGHT: Record<PersonaKey, ReturnType<typeof require>> = {
+  beach:    require("../../assets/beach-night.jpg"),
+  city:     require("../../assets/city-night.jpg"),
+  country:  require("../../assets/country-night.jpg"),
+  desert:   require("../../assets/desert-night.jpg"),
+  mountain: require("../../assets/mountain-night.jpg"),
+};
+
+// Night: 8pm (20:00) through 5:59am. Day: everything else.
+function isNightTime(): boolean {
+  const hour = new Date().getHours();
+  return hour >= 20 || hour < 6;
+}
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
@@ -27,9 +44,16 @@ interface Props {
 }
 
 export function PersonaBackground({ persona, children, style }: Props) {
+  // Evaluated once per render -- changes naturally at next open after 8pm/6am.
+  // No interval needed: users open the app; it picks the right image then.
+  const source = useMemo(
+    () => (isNightTime() ? IMAGES_NIGHT[persona] : IMAGES_DAY[persona]),
+    [persona]
+  );
+
   return (
     <ImageBackground
-      source={IMAGES[persona]}
+      source={source}
       style={[styles.container, style]}
       resizeMode="cover"
     >

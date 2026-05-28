@@ -1298,7 +1298,7 @@ end.setHours(23, 59, 59, 999);
                 stop();
               }}
             />
-            <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
+            <Animated.View style={{ transform: [{ scale: pulseAnim }], alignItems: 'center' }}>
             <TouchableOpacity
               style={[
                 styles.sendBtn,
@@ -1319,7 +1319,9 @@ end.setHours(23, 59, 59, 999);
                 if (isRecording) {
                   stopRecording();
                 } else {
-                  startRecording();
+                  // 50ms delay: lets Android layout settle after keyboard dismiss
+                  // before speech recognition initialises -- fixes first-tap miss.
+                  setTimeout(() => startRecording(), 50);
                 }
               }}
               accessibilityLabel={handsFreeMode ? "Stop hands-free mode" : "Start hands-free mode"}
@@ -1328,18 +1330,18 @@ end.setHours(23, 59, 59, 999);
                 {isRecording ? '⏹' : '🎤'}
               </Text>
             </TouchableOpacity>
-            </Animated.View>
             {!isRecording && !isStreaming && !isWaiting && (
               <Text style={{
                 color: 'rgba(255,255,255,0.35)',
                 fontSize: 10,
-                marginTop: 4,
+                marginTop: 2,
                 textAlign: 'center',
                 letterSpacing: 0.5,
               }}>
                 tap to speak
               </Text>
             )}
+            </Animated.View>
             <TouchableOpacity
               style={[
                 styles.sendBtn,
