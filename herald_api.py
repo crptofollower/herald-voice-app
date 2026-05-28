@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.53 -- SQLite hardening: _db_conn() helper + retry on profile writes + /user/export endpoint
+# v8.54 -- Personality system: per-user communication style + humor calibration
 #
 # v8.12 -- Medical memory system (always include user city in MAPS tag)
 #
@@ -49,7 +49,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.53")
+app = FastAPI(title="Herald API", version="8.54")
 
 app.add_middleware(
     CORSMiddleware,
@@ -198,6 +198,25 @@ RESEARCH_OFFER_PHRASES = [
     "{name}, {topic} keeps coming up for you. I can put together a proper briefing — current thinking, what the research says, what to watch — and send it over.",
     "I've noticed you're digging into {topic}, {name}. Want me to do a proper pull on that and email you something worth reading?",
 ]
+
+# ── PERSONALITY EXTRACTION ────────────────────────────────────────────────────
+# v8.54: Per-user communication style and humor calibration.
+# Runs every 3rd message alongside extract_learned_facts.
+# Stored in profile["personality_profile"] -- accumulates over time.
+# humor_weight: 0.0 (neutral) -> 1.0 (fully earned). Never decrements.
+
+PERSONALITY_EXTRACTION_PROMPT = """Analyze this single user message for communication style signals.
+
+User message: "{message}"
+
+Return ONLY valid JSON, no preamble, no markdown:
+{{"comm_style": "direct|verbose|casual|formal", "humor_signal": "dark|dry|warm|none", "earned_phrases": [], "word_count": 5}}
+
+Rules:
+- comm_style: direct = short declarative, verbose = long explanatory, casual = loose grammar/slang, formal = structured
+- humor_signal: dark = morbid/gallows, dry = deadpan understatement, warm = lighthearted, none = neutral
+- earned_phrases: exact short phrases or confirmations the user typed (max 3, only if genuinely distinctive -- e.g. "Clear", "Copy that", "Roger", "Bet", "Facts"). Empty list if nothing distinctive.
+- word_count: integer word count of the message"""
 
 BUILT_CAPABILITIES = ["email"]
 
@@ -1938,6 +1957,154 @@ Rules:
         print(f"[HERALD] extract_learned_facts (non-fatal): {e}")
 
 
+def update_personality_profile(user_id: str, message: str):
+    """
+    v8.54: Extract communication style signals from one user message.
+    Accumulates into profile["personality_profile"] over time.
+    humor_weight increments on dark/dry signal. Never decrements -- earned not lost.
+    Safe to call in background thread -- non-fatal on any error.
+    """
+    try:
+        if not _check_extraction_budget(user_id):
+            return
+        prompt = PERSONALITY_EXTRACTION_PROMPT.format(message=message[:300])
+        payload = json.dumps({
+            "model": HAIKU_MODEL,
+            "max_tokens": 120,
+            "messages": [{"role": "user", "content": prompt}]
+        }).encode("utf-8")
+        req = urllib.request.Request(OR_URL, data=payload, headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {OPENROUTER_KEY}",
+            "HTTP-Referer": "https://apexempire.ai",
+            "X-Title": "Herald Personal AI"
+        }, method="POST")
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode())
+        raw = data["choices"][0]["message"]["content"].strip()
+        raw = raw.replace("```json", "").replace("```", "").strip()
+        extracted = json.loads(raw)
+
+        profile = get_profile(user_id)
+        pp = profile.get("personality_profile", {
+            "comm_style": "neutral",
+            "humor_weight": 0.0,
+            "humor_type": "none",
+            "register": "assistant",
+            "earned_phrases": [],
+            "avg_word_count": 10,
+            "samples": 0,
+            "last_updated": ""
+        })
+
+        # Update sample count and rolling average word count
+        samples = pp.get("samples", 0) + 1
+        prev_avg = pp.get("avg_word_count", 10)
+        new_wc = extracted.get("word_count", 10)
+        pp["avg_word_count"] = round((prev_avg * (samples - 1) + new_wc) / samples, 1)
+        pp["samples"] = samples
+
+        # Communication style -- majority vote via simple last-N wins
+        new_style = extracted.get("comm_style", "neutral")
+        if new_style in ("direct", "verbose", "casual", "formal"):
+            pp["comm_style"] = new_style
+
+        # Humor weight -- increments on signal, never decrements
+        humor_signal = extracted.get("humor_signal", "none")
+        if humor_signal in ("dark", "dry"):
+            pp["humor_weight"] = min(1.0, round(pp.get("humor_weight", 0.0) + 0.05, 2))
+            pp["humor_type"] = humor_signal
+        elif humor_signal == "warm":
+            pp["humor_type"] = "warm"
+
+        # Register -- inferred from style + avg word count
+        if pp["comm_style"] == "direct" and pp["avg_word_count"] < 8:
+            pp["register"] = "peer"
+        elif pp["comm_style"] == "formal":
+            pp["register"] = "friendly-formal"
+        else:
+            pp["register"] = "conversational"
+
+        # Earned phrases -- deduplicated, max 10 stored
+        new_phrases = extracted.get("earned_phrases", [])
+        existing = pp.get("earned_phrases", [])
+        for phrase in new_phrases:
+            phrase = phrase.strip()
+            if phrase and phrase.lower() not in [p.lower() for p in existing]:
+                existing.append(phrase)
+        pp["earned_phrases"] = existing[-10:]
+
+        pp["last_updated"] = datetime.now().isoformat()
+        profile["personality_profile"] = pp
+        save_profile_async(user_id, profile)
+        print(f"[PERSONALITY] {user_id}: style={pp['comm_style']} humor={pp['humor_weight']} register={pp['register']} samples={samples}")
+
+    except Exception as e:
+        print(f"[PERSONALITY] update_personality_profile (non-fatal): {e}")
+
+
+def build_personality_block(profile: dict) -> str:
+    """
+    v8.54: Build the personality injection for build_system().
+    Returns empty string if fewer than 10 samples -- too early to calibrate.
+    Never crashes -- safe to call even if personality_profile key is missing.
+    """
+    try:
+        pp = profile.get("personality_profile", {})
+        samples = pp.get("samples", 0)
+        if samples < 10:
+            return ""
+
+        style = pp.get("comm_style", "neutral")
+        humor_weight = pp.get("humor_weight", 0.0)
+        humor_type = pp.get("humor_type", "none")
+        register = pp.get("register", "conversational")
+        phrases = pp.get("earned_phrases", [])
+        avg_wc = pp.get("avg_word_count", 10)
+
+        lines = ["COMMUNICATION STYLE (calibrated from this user over time):"]
+
+        # Style line
+        if style == "direct" and avg_wc < 8:
+            lines.append("- Direct. Short answers. Gets to the point fast.")
+        elif style == "verbose":
+            lines.append("- Appreciates context and detail. Don't truncate.")
+        elif style == "casual":
+            lines.append("- Casual register. Loose grammar fine. Match their energy.")
+        elif style == "formal":
+            lines.append("- Prefers structured, precise responses.")
+        else:
+            lines.append("- Still calibrating style -- neutral for now.")
+
+        # Register line
+        if register == "peer":
+            lines.append("- Register: peer. Skip assistant softening. Talk like a colleague.")
+        elif register == "friendly-formal":
+            lines.append("- Register: trusted advisor. Warm but precise.")
+        else:
+            lines.append("- Register: conversational friend.")
+
+        # Humor line
+        if humor_weight >= 0.6 and humor_type == "dark":
+            lines.append("- Humor: dark and dry -- fully earned. Brief, not forced.")
+        elif humor_weight >= 0.4 and humor_type in ("dark", "dry"):
+            lines.append("- Humor: dry -- emerging. Occasional understatement fine.")
+        elif humor_weight >= 0.2 and humor_type == "warm":
+            lines.append("- Humor: warm and light. Keep it clean.")
+        else:
+            lines.append("- Humor: neutral -- not yet calibrated. Don't initiate.")
+
+        # Earned phrases
+        if phrases:
+            phrase_str = ", ".join(f'"{p}"' for p in phrases[:5])
+            lines.append(f"- Phrases this user actually uses: {phrase_str}. Echo occasionally -- never force it.")
+
+        return "\n".join(lines)
+
+    except Exception:
+        return ""
+
+
 # ── PROFILE SUMMARY ───────────────────────────────────────────────────────────
 
 def build_preferences_summary(profile):
@@ -3036,6 +3203,7 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
             conn.close()
 
     context_parts = [p for p in [medical_context, calendar_line, notes_line, auto_open_line, prefs_line, facts_line, life_tracker_line, episodic_line] if p]
+    personality_block = build_personality_block(profile)
     context_block = "\n".join(context_parts) if context_parts else "Still learning about this user."
     device_line = f"\nDevice memory: {device_context}" if device_context else ""
     empire_section = f"\n\n{empire}" if owner and empire else ""
@@ -3075,6 +3243,7 @@ YOUR VOICE:
 - Humor: dry, occasional, never forced. Play along when the user is clearly joking.
   Never initiate humor on serious topics. Never punch at real tragedy for a laugh.
   Humor deepens as trust deepens. Earn the laugh -- never chase it.
+{personality_block}
 - When someone shares something worrying -- health, a relationship, money -- ask one
   follow-up question first. Stay calm. Show you are paying attention.
   Never jump to advice before you understand the situation.
@@ -4372,7 +4541,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.53",
+        "status": "ok", "server": "herald-api", "version": "8.54",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -4839,6 +5008,11 @@ async def ask(request: Request):
             daemon=True
         ).start()
         threading.Thread(
+            target=update_personality_profile,
+            args=(user_id, message),
+            daemon=True
+        ).start()
+        threading.Thread(
             target=_run_watcher_pipeline,
             args=(message, profile, user_id),
             daemon=True
@@ -5183,6 +5357,11 @@ async def ask_stream(request: Request):
                     threading.Thread(
                         target=extract_learned_facts,
                         args=(user_id, message, reply),
+                        daemon=True
+                    ).start()
+                    threading.Thread(
+                        target=update_personality_profile,
+                        args=(user_id, message),
                         daemon=True
                     ).start()
                     threading.Thread(
