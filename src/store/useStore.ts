@@ -6,6 +6,9 @@
 //     Persisted so it survives restarts. Used in ChatScreen header and greeting.
 //     Mickey named his "Harry." This is the personalization hook.
 //
+// Changes May 29 2026:
+//   - Schema migration preserves userId/name/aiName/persona on version bump.
+//     Prevents Mickey's userId being orphaned when Session L bumps schema to v5.
 // Changes May 16 2026:
 //   - Added _hasHydrated flag to fix onboarding loop.
 
@@ -186,8 +189,10 @@ onRehydrateStorage: () => (state) => {
           return;
         }
         if (state._schemaVersion !== STORE_SCHEMA_VERSION) {
-          console.warn(`[useStore] Schema mismatch (got ${state._schemaVersion}, expected ${STORE_SCHEMA_VERSION}) -- resetting`);
+          console.warn(`[useStore] Schema migration: ${state._schemaVersion} → ${STORE_SCHEMA_VERSION}`);
+          const { userId, name, aiName, persona } = state;
           state.hardReset();
+          useStore.setState({ userId, name, aiName, persona });
         }
         state.setHasHydrated(true);
       },
