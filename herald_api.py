@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.62 -- facts key in SSE done payload (Critical 7 backend)
+# v8.63 -- /user/sync_facts device SQLite backup sync (Session L)
 #          Brave date injection for time-sensitive queries (any topic, any sport, any show)
 #          _localize_query upgraded: appends today's date when recency signal detected
 #
@@ -51,7 +51,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.62")
+app = FastAPI(title="Herald API", version="8.63")
 
 app.add_middleware(
     CORSMiddleware,
@@ -4671,7 +4671,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.62",
+        "status": "ok", "server": "herald-api", "version": "8.63",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -6404,6 +6404,53 @@ async def user_export(user_id: str, secret: str = ""):
         "life_tracker": life_tracker,
         "life_moments": life_moments,
     }
+
+
+@app.post("/user/sync_facts")
+async def user_sync_facts(request: Request):
+    """
+    v8.63: Session L — device SQLite backup sync.
+    Receives structured facts extracted on device and writes them to Railway
+    as a backup. Device is source of truth; Railway copy is for recovery only.
+    Body: { user_id, facts: [{ category, value }] }
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON"}, status_code=400)
+
+    user_id = body.get("user_id", "").strip()
+    facts = body.get("facts", [])
+
+    if not user_id:
+        return JSONResponse({"error": "user_id required"}, status_code=400)
+    if not isinstance(facts, list):
+        return JSONResponse({"error": "facts must be a list"}, status_code=400)
+
+    written = 0
+    try:
+        with get_db_connection() as conn:
+            c = conn.cursor()
+            for fact in facts:
+                category = fact.get("category", "general")
+                value = fact.get("value", "").strip()
+                if not value:
+                    continue
+                # Write to life_moments as backup — same table migration.ts reads from
+                c.execute(
+                    """INSERT INTO life_moments (user_id, role, content, active, created_at)
+                       VALUES (?, 'assistant', ?, 1, ?)
+                       ON CONFLICT DO NOTHING""",
+                    (user_id, f"[{category}] {value}", datetime.now().isoformat())
+                )
+                written += 1
+            conn.commit()
+    except Exception as e:
+        print(f"[HERALD] /user/sync_facts error: {e}")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+    print(f"[HERALD] /user/sync_facts: wrote {written} facts for {user_id}")
+    return {"ok": True, "written": written}
 
 
 # ── STARTUP ───────────────────────────────────────────────────────────────────
