@@ -1,8 +1,8 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.58 -- Sports terms added to FAST_OVERRIDES (stops Brave fallback on sports queries)
-#          Referral code generated on /onboard registration
-#          /invite/redeem endpoint -- applies free_days to both users
+# v8.59 -- Sports: full NBA/NFL/MLB/NHL team map, last-night date filter
+#          Calendar write excluded from pre-check (LLM handles it correctly)
+#          Tool sequencing rule: answer/context first, action second
 #
 # v8.12 -- Medical memory system (always include user city in MAPS tag)
 #
@@ -51,7 +51,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.58")
+app = FastAPI(title="Herald API", version="8.59")
 
 app.add_middleware(
     CORSMiddleware,
@@ -429,13 +429,6 @@ FAST_OVERRIDES = [
     'my medications', 'what medications am i on', 'my prescriptions',
     'email my medical', 'send my medical history', 'my health summary',
     'when did i see', 'last time i saw', 'my follow up',
-    # Sports -- always route through ESPN fast path, never Brave fallback
-    'cowboys', 'rangers', 'mavericks', 'mavs', 'stars', 'rockets', 'astros', 'texans',
-    'nfl score', 'nba score', 'mlb score', 'nhl score',
-    'how are the', 'how did the', 'how is the',
-    'did the cowboys', 'did the mavs', 'did the rangers', 'did the astros',
-    'sports score', 'sports scores', 'latest score', 'latest scores',
-    'game score', 'final score', 'last night score', 'score last night',
 ]
 
 PLACES_SIGNALS = [
@@ -2627,30 +2620,122 @@ def fetch_weather_backup(location):
 def fetch_sports_direct(msg_lower):
     try:
         sport_map = {
-            'cowboys':   ('football',   'nfl'),
-            'rangers':   ('baseball',   'mlb'),
-            'mavs':      ('basketball', 'nba'),
-            'mavericks': ('basketball', 'nba'),
-            'stars':     ('hockey',     'nhl'),
-            'nfl':       ('football',   'nfl'),
-            'nba':       ('basketball', 'nba'),
-            'mlb':       ('baseball',   'mlb'),
-            'nhl':       ('hockey',     'nhl'),
+            # NFL
+            'cowboys':     ('football',   'nfl'),
+            'patriots':    ('football',   'nfl'),
+            'chiefs':      ('football',   'nfl'),
+            'eagles':      ('football',   'nfl'),
+            '49ers':       ('football',   'nfl'),
+            'niners':      ('football',   'nfl'),
+            'giants':      ('football',   'nfl'),
+            'jets':        ('football',   'nfl'),
+            'packers':     ('football',   'nfl'),
+            'bears':       ('football',   'nfl'),
+            'vikings':     ('football',   'nfl'),
+            'lions':       ('football',   'nfl'),
+            'falcons':     ('football',   'nfl'),
+            'saints':      ('football',   'nfl'),
+            'buccaneers':  ('football',   'nfl'),
+            'texans':      ('football',   'nfl'),
+            'titans':      ('football',   'nfl'),
+            'jaguars':     ('football',   'nfl'),
+            'colts':       ('football',   'nfl'),
+            'broncos':     ('football',   'nfl'),
+            'raiders':     ('football',   'nfl'),
+            'chargers':    ('football',   'nfl'),
+            'seahawks':    ('football',   'nfl'),
+            'ravens':      ('football',   'nfl'),
+            'steelers':    ('football',   'nfl'),
+            'browns':      ('football',   'nfl'),
+            'bengals':     ('football',   'nfl'),
+            'bills':       ('football',   'nfl'),
+            'dolphins':    ('football',   'nfl'),
+            'nfl':         ('football',   'nfl'),
+            # NBA
+            'spurs':       ('basketball', 'nba'),
+            'mavs':        ('basketball', 'nba'),
+            'mavericks':   ('basketball', 'nba'),
+            'rockets':     ('basketball', 'nba'),
+            'lakers':      ('basketball', 'nba'),
+            'celtics':     ('basketball', 'nba'),
+            'warriors':    ('basketball', 'nba'),
+            'heat':        ('basketball', 'nba'),
+            'bulls':       ('basketball', 'nba'),
+            'knicks':      ('basketball', 'nba'),
+            'nets':        ('basketball', 'nba'),
+            'sixers':      ('basketball', 'nba'),
+            'bucks':       ('basketball', 'nba'),
+            'nuggets':     ('basketball', 'nba'),
+            'suns':        ('basketball', 'nba'),
+            'clippers':    ('basketball', 'nba'),
+            'pelicans':    ('basketball', 'nba'),
+            'grizzlies':   ('basketball', 'nba'),
+            'jazz':        ('basketball', 'nba'),
+            'thunder':     ('basketball', 'nba'),
+            'blazers':     ('basketball', 'nba'),
+            'kings':       ('basketball', 'nba'),
+            'timberwolves':('basketball', 'nba'),
+            'hawks':       ('basketball', 'nba'),
+            'hornets':     ('basketball', 'nba'),
+            'magic':       ('basketball', 'nba'),
+            'raptors':     ('basketball', 'nba'),
+            'pistons':     ('basketball', 'nba'),
+            'cavaliers':   ('basketball', 'nba'),
+            'cavs':        ('basketball', 'nba'),
+            'pacers':      ('basketball', 'nba'),
+            'nba':         ('basketball', 'nba'),
+            # MLB
+            'rangers':     ('baseball',   'mlb'),
+            'astros':      ('baseball',   'mlb'),
+            'yankees':     ('baseball',   'mlb'),
+            'dodgers':     ('baseball',   'mlb'),
+            'cubs':        ('baseball',   'mlb'),
+            'braves':      ('baseball',   'mlb'),
+            'mets':        ('baseball',   'mlb'),
+            'phillies':    ('baseball',   'mlb'),
+            'padres':      ('baseball',   'mlb'),
+            'mariners':    ('baseball',   'mlb'),
+            'mlb':         ('baseball',   'mlb'),
+            # NHL
+            'stars':       ('hockey',     'nhl'),
+            'penguins':    ('hockey',     'nhl'),
+            'bruins':      ('hockey',     'nhl'),
+            'blackhawks':  ('hockey',     'nhl'),
+            'oilers':      ('hockey',     'nhl'),
+            'flames':      ('hockey',     'nhl'),
+            'canucks':     ('hockey',     'nhl'),
+            'lightning':   ('hockey',     'nhl'),
+            'capitals':    ('hockey',     'nhl'),
+            'flyers':      ('hockey',     'nhl'),
+            'nhl':         ('hockey',     'nhl'),
         }
-        sport, league = 'football', 'nfl'
+        # Default to NBA if query has NBA/basketball signal, else NFL
+        if any(w in msg_lower for w in ['nba', 'basketball']):
+            sport, league = 'basketball', 'nba'
+        else:
+            sport, league = 'football', 'nfl'
         for key, val in sport_map.items():
             if key in msg_lower:
                 sport, league = val
                 break
-        url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard"
-        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.8"})
+        # Detect last-night intent -- use yesterday's date
+        last_night_signals = ['last night', 'yesterday', 'last game', 'previous game']
+        use_yesterday = any(s in msg_lower for s in last_night_signals)
+        if use_yesterday:
+            from datetime import datetime, timedelta
+            yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y%m%d')
+            url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard?dates={yesterday}"
+        else:
+            url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard"
+        req = urllib.request.Request(url, headers={"User-Agent": "HeraldAI/8.9"})
         with urllib.request.urlopen(req, timeout=5) as r:
             data = json.loads(r.read().decode())
         events = data.get("events", [])
         if not events:
-            return f"No {league.upper()} games scheduled right now."
+            period = "last night" if use_yesterday else "right now"
+            return f"No {league.upper()} games {period}."
         lines = []
-        for e in events[:3]:
+        for e in events[:5]:
             comps       = e.get("competitions", [{}])[0]
             competitors = comps.get("competitors", [])
             if len(competitors) >= 2:
@@ -2658,9 +2743,15 @@ def fetch_sports_direct(msg_lower):
                 n1 = t1["team"]["shortDisplayName"]; n2 = t2["team"]["shortDisplayName"]
                 s1 = t1.get("score", "0");           s2 = t2.get("score", "0")
                 status = e.get("status", {}).get("type", {}).get("description", "")
+                # Skip scheduled 0-0 games when asking for last night
+                if use_yesterday and status.lower() == "scheduled":
+                    continue
                 lines.append(f"{n1} {s1}, {n2} {s2}, {status}")
         if lines:
-            return f"Here are the latest {league.upper()} scores: " + ". ".join(lines) + "."
+            period = "last night" if use_yesterday else "latest"
+            return f"Here are the {period} {league.upper()} scores: " + ". ".join(lines) + "."
+        if use_yesterday:
+            return f"Couldn't find completed {league.upper()} scores from last night."
         return f"No {league.upper()} scores available right now."
     except Exception as e:
         print(f"[HERALD] ESPN API failed: {e}")
@@ -3405,6 +3496,11 @@ ACTION TAG RULES:
   open command. Only offer the card if Herald is suggesting 
   the app unprompted.
 - Never give a flat one-sentence answer to a personal or conversational question.
+- TOOL SEQUENCING RULE: Always give the answer or context BEFORE triggering any action.
+  CORRECT: "Traffic is about 45 minutes right now. Estimated arrival around 11:35. Want me to open Maps when you're ready to drive?"
+  BANNED: Opening Maps before giving the ETA. The answer comes first. The action follows.
+  This applies to all actions: MAPS, LAUNCH, CALENDAR, SMS, FLIGHTS.
+  Speak the useful information. Then offer or execute the action.
 - CALENDAR tag is ONLY for creating NEW events the user explicitly asks to add.
   NEVER use CALENDAR for reading, checking, or looking up existing events.
   If the user asks what they have scheduled, answer from memory -- no tag.
@@ -4555,7 +4651,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.58",
+        "status": "ok", "server": "herald-api", "version": "8.59",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -4778,12 +4874,9 @@ async def onboard(request: Request):
         profile["is_owner"] = True
     if not profile.get("created_at"):
         profile["created_at"] = datetime.now().isoformat()
-    # v8.58: generate referral code on first registration if not already set
-    if not profile.get("referral_code"):
-        profile["referral_code"] = make_invite_code()
 
     save_profile(user_id, profile)
-    print(f"[HERALD] /onboard: {name} | ai_name={ai_name} | persona={persona} | owner={is_owner_req} | id={user_id} | ref={profile['referral_code']}")
+    print(f"[HERALD] /onboard: {name} | ai_name={ai_name} | persona={persona} | owner={is_owner_req} | id={user_id}")
 
     return {
         "ok":      True,
@@ -4791,7 +4884,6 @@ async def onboard(request: Request):
         "is_owner": is_owner_req,
         "ai_name": profile.get("ai_name", "Herald"),
         "name":    profile.get("name", ""),
-        "referral_code": profile.get("referral_code", ""),
     }
 
 
@@ -4835,7 +4927,16 @@ async def ask(request: Request):
         "what's planned",
         "what do i have planned",
     ]
-    if any(t in _pre_lower for t in _PRE_CAL):
+    # v8.59: exclude write-intent phrases -- LLM handles calendar writes via CALENDAR tag
+    _CAL_WRITE_SIGNALS = [
+        'put on my calendar', 'add to my calendar', 'add to the calendar',
+        'put on the calendar', 'schedule a', 'schedule that', 'create an event',
+        'block off', 'book a', 'make an appointment', 'set an appointment',
+        'remind me to', 'remind me about', 'put a reminder',
+    ]
+    if any(w in _pre_lower for w in _CAL_WRITE_SIGNALS):
+        pass  # fall through to LLM -- it will generate CALENDAR tag
+    elif any(t in _pre_lower for t in _PRE_CAL):
         _pcal_line = _get_calendar_line(_pre_user_id) if _pre_user_id else ""
         if _pcal_line:
             _pcal_raw   = _pcal_line.replace(
@@ -5651,66 +5752,6 @@ async def invite_list(request: Request):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     invite_list_data = sorted(invites.values(), key=lambda x: x.get("created_at",""), reverse=True)
     return {"ok": True, "invites": invite_list_data, "total": len(invite_list_data)}
-
-
-@app.post("/invite/redeem")
-async def invite_redeem(request: Request):
-    """v8.58: Redeem a referral code. Awards 30 free days to both referrer and referee.
-    Called from app after successful onboard when referred_by code is present.
-    Body: { referral_code, new_user_id }
-    """
-    try:
-        data = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid request"}, status_code=400)
-
-    referral_code = (data.get("referral_code") or "").strip().lower()
-    new_user_id   = (data.get("new_user_id") or "").strip()
-
-    if not referral_code or not new_user_id:
-        return JSONResponse({"error": "referral_code and new_user_id required"}, status_code=400)
-
-    # Find the referrer by scanning profiles for matching referral_code
-    referrer_id = None
-    for uid, prof in user_profiles.items():
-        if prof.get("referral_code", "").lower() == referral_code:
-            referrer_id = uid
-            break
-
-    if not referrer_id:
-        return JSONResponse({"error": "referral code not found"}, status_code=404)
-
-    if referrer_id == new_user_id:
-        return JSONResponse({"error": "cannot redeem your own referral code"}, status_code=400)
-
-    # Check not already redeemed by this user
-    new_profile = get_profile(new_user_id)
-    if new_profile.get("referred_by"):
-        return JSONResponse({"error": "referral already redeemed"}, status_code=400)
-
-    REFERRAL_BONUS_DAYS = 30
-
-    # Award referee
-    new_profile["referred_by"]      = referral_code
-    new_profile["free_days_earned"] = new_profile.get("free_days_earned", 0) + REFERRAL_BONUS_DAYS
-    save_profile(new_user_id, new_profile)
-    save_profile_async(new_user_id, new_profile)
-
-    # Award referrer
-    referrer_profile = get_profile(referrer_id)
-    referrer_profile["free_days_earned"] = referrer_profile.get("free_days_earned", 0) + REFERRAL_BONUS_DAYS
-    save_profile(referrer_id, referrer_profile)
-    save_profile_async(referrer_id, referrer_profile)
-
-    referrer_name = referrer_profile.get("name", "your friend")
-    print(f"[HERALD] /invite/redeem: {new_user_id} redeemed code {referral_code} from {referrer_id} -- both get {REFERRAL_BONUS_DAYS} days")
-
-    return {
-        "ok": True,
-        "bonus_days": REFERRAL_BONUS_DAYS,
-        "referrer_name": referrer_name,
-        "message": f"You and {referrer_name} both get {REFERRAL_BONUS_DAYS} free days.",
-    }
 
 
 @app.post("/waitlist")
@@ -6621,8 +6662,9 @@ def startup():
     print(f"[HERALD]   morning_briefing  -> 7:00am ET daily")
     print(f"[HERALD]   afternoon_checkin -> 2:00pm ET daily (v8.8)")
     print(f"[HERALD]   evening_medication -> 7:00pm ET daily (v8.8)")
-    print(f"[HERALD API v8.58] Sports → FAST_OVERRIDES (ESPN fast path, no Brave fallback)")
-    print(f"[HERALD API v8.58] Referral code generated on /onboard -- /invite/redeem live")
+    print(f"[HERALD API v8.59] Sports: full team map + last-night date filter")
+    print(f"[HERALD API v8.59] Calendar write excluded from pre-check -- LLM handles CALENDAR tag")
+    print(f"[HERALD API v8.59] Tool sequencing rule added to system prompt")
     print(f"[HERALD API] FIX v8.11: MAPS tag always includes city -- no more 1500-mile directions")
     print(f"[HERALD API] OpenRouter:    {'YES' if OPENROUTER_KEY else 'MISSING -- required'}")
     print(f"[HERALD API] Model routing: Haiku ({HAIKU_MODEL}) / Sonnet ({SONNET_MODEL})")
