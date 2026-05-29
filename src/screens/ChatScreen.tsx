@@ -66,6 +66,7 @@ import { answerFromDevice } from '../utils/localAnswers';
 import { classifyQuery } from "../routing/tierRouter";
 import { handleTier1, buildTier2DeviceContext, writeProfileFromOnboarding } from "../routing/tier1Responses";
 import { refreshCalendarCache } from "../db/calendarCacheDB";
+import { writeFacts } from "../db/factDB";
 import { initDB } from "../db/useDeviceDB";
 import { runMigration } from "../routing/migration";
 
@@ -702,6 +703,9 @@ export default function ChatScreen() {
           setActionStatus("confirming");
         },
         onFacts: (facts) => {
+          // Write to structured factDB (Session L — new layer)
+          writeFacts(facts);
+          // Also route to legacy useDeviceMemory (kept until Session W unifies)
           for (const fact of facts) {
             if (fact.category === 'medication') {
               saveLocalMedical('medication', fact.value);
