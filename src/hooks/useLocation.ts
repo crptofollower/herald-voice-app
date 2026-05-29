@@ -101,12 +101,23 @@ export function useLocation(): LocationResult {
   useEffect(() => {
     let cancelled = false;
     let watchSubscription: Location.LocationSubscription | null = null;
-    const userId = useStore.getState().userId;
 
     async function fetchLocation() {
+      // Wait for Zustand hydration before reading userId.
+      // On cold start, getState().userId is the ephemeral pre-hydration UUID.
+      // Reading it too early caches the city against a UUID that won't persist.
+      if (!useStore.persist.hasHydrated()) {
+        await new Promise<void>((resolve) => {
+          const unsub = useStore.subscribe(
+            (state) => state._hasHydrated,
+            (hydrated) => { if (hydrated) { unsub(); resolve(); } }
+          );
+        });
+      }
       // 1. Load cached result immediately if fresh, then refresh GPS in background
       await hydrateCacheRef();
       const cached = cacheRef.current ?? (await getCachedLocation());
+      const userId = useStore.getState().userId; // now guaranteed to be persisted UUID
       if (cached) {
         cacheRef.current = cached;
         if (!cancelled) setLocation(cached);
