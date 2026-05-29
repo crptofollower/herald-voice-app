@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.60 -- Places response reformatted for spoken delivery (no numbered lists)
+# v8.61 -- facts key in SSE done payload (Critical 7 backend)
 #          Brave date injection for time-sensitive queries (any topic, any sport, any show)
 #          _localize_query upgraded: appends today's date when recency signal detected
 #
@@ -51,7 +51,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.60")
+app = FastAPI(title="Herald API", version="8.61")
 
 app.add_middleware(
     CORSMiddleware,
@@ -4670,7 +4670,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.60",
+        "status": "ok", "server": "herald-api", "version": "8.61",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -5205,6 +5205,7 @@ async def ask_stream(request: Request):
                 "ai_name":      _pre_ai_name,
                 "name":         _pre_name,
                 "model_used":   MODEL_FAST,
+                "facts":        [],
                 **_trial_fields(_pre_trial),
             }
 
@@ -5419,6 +5420,7 @@ async def ask_stream(request: Request):
                 "ai_name":      profile.get("ai_name", "Herald"),
                 "name":         profile.get("name", ""),
                 "model_used":   routed_model,
+                "facts":        [],
                 **_trial_fields(trial)
             }
 
@@ -5497,12 +5499,15 @@ async def ask_stream(request: Request):
                     "_last_message_at": datetime.now().isoformat()
                 })
 
+                extracted_facts = []
                 if msg_count % 3 == 0:
-                    threading.Thread(
-                        target=extract_learned_facts,
-                        args=(user_id, message, reply),
-                        daemon=True
-                    ).start()
+                    _facts_before = len(get_profile(user_id).get("learned_facts", []))
+                    extract_learned_facts(user_id, message, reply)
+                    _new_facts = get_profile(user_id).get("learned_facts", [])[_facts_before:]
+                    extracted_facts = [
+                        {"category": f.get("category", ""), "value": f.get("value", "")}
+                        for f in _new_facts
+                    ]
                     threading.Thread(
                         target=update_personality_profile,
                         args=(user_id, message),
@@ -5514,7 +5519,7 @@ async def ask_stream(request: Request):
                         daemon=True
                     ).start()
 
-                yield _sse_event({**base_done, "full": reply, "action": action, "used_search": use_search})
+                yield _sse_event({**base_done, "full": reply, "action": action, "used_search": use_search, "facts": extracted_facts})
 
             except Exception as e:
                 print(f"[HERALD] /ask/stream error: {e}")
