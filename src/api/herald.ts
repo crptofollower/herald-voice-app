@@ -128,6 +128,11 @@ export interface GreetingResponse {
   name: string;
 }
 
+export interface ExtractedFact {
+  category: string;
+  value: string;
+}
+
 // ─── Stream callbacks ──────────────────────────────────────────────────────────
 //
 // onToken    -- fired per token. Append to the visible bubble. [S] is stripped.
@@ -140,6 +145,7 @@ export interface StreamCallbacks {
   onToken: (token: string) => void;
   onSentence: (sentence: string) => void;
   onAction: (action: AskResponse["action"]) => void;
+  onFacts: (facts: ExtractedFact[]) => void;
   onDone: (fullText: string) => void;
   onError: (err: Error) => void;
 }
@@ -248,6 +254,7 @@ export function askHeraldStream(
             streamFinished = true;
             flushSentence();
             callbacks.onAction(parsed.action as AskResponse["action"]);
+            callbacks.onFacts((parsed.facts as ExtractedFact[]) ?? []);
             const full =
               typeof parsed.full === "string" && parsed.full
                 ? (parsed.full as string)
@@ -301,6 +308,7 @@ export function askHeraldStream(
           streamFinished = true;
           flushSentence();
           if (accumulated) {
+            callbacks.onFacts([]);
             callbacks.onDone(accumulated);
           }
         }
@@ -345,6 +353,7 @@ export function askHeraldStream(
       callbacks.onToken(reply);
       callbacks.onSentence(reply);
       callbacks.onAction(data.action);
+      callbacks.onFacts([]);
       callbacks.onDone(reply);
     } catch (fbErr) {
       if (outerController.signal.aborted) return;
