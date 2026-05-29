@@ -61,7 +61,7 @@ import { useCalendar } from "../hooks/useCalendar";
 import { useLocation } from "../hooks/useLocation";
 import { useMic } from "../hooks/useMic";
 import { useHealthConnect } from "../hooks/useHealthConnect";
-import { useDeviceMemory, saveLocalProfile } from "../hooks/useDeviceMemory";
+import { useDeviceMemory, saveLocalProfile, saveLocalMedical, saveLocalPreference } from "../hooks/useDeviceMemory";
 import { answerFromDevice } from '../utils/localAnswers';
 
 interface IntentAction {
@@ -127,6 +127,64 @@ const THINKING_PHRASES = [
   "Hang tight...",
   "Let me think through that...",
 ];
+
+const CALENDAR_QUERY_PATTERNS = [
+  /what('s| is) on my calendar/i,
+  /what do i have (today|tomorrow|this week)/i,
+  /any (appointments|meetings|events) (today|tomorrow)/i,
+  /my schedule (today|tomorrow|this week)/i,
+  /what('s| is) (scheduled|planned) (today|tomorrow)/i,
+];
+
+async function readCalendarDirect(text: string): Promise<string | null> {
+  try {
+    const { status } = await Calendar.getCalendarPermissionsAsync(); // check only
+    if (status !== 'granted') return null;
+    const isTomorrow = /tomorrow/i.test(text);
+    const isThisWeek = /this week/i.test(text);
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    if (isTomorrow) start.setDate(start.getDate() + 1);
+    const end = new Date(start);
+    if (isThisWeek) end.setDate(end.getDate() + 7);
+    end.setHours(23, 59, 59, 999);
+    const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
+    const events = await Calendar.getEventsAsync(calendars.map(c => c.id), start, end);
+    const sorted = events
+      .filter(e => e.title)
+      .sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime());
+    const dayLabel = isTomorrow ? 'tomorrow' : isThisWeek ? 'this week' : 'today';
+    if (sorted.length === 0) return `Your calendar is clear ${dayLabel}.`;
+    const lines = sorted.map(e => {
+      const t = new Date(e.startDate).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      return isThisWeek
+        ? `${e.title} on ${new Date(e.startDate).toLocaleDateString([], { weekday: 'long' })} at ${t}`
+        : `${e.title} at ${t}`;
+    });
+    return lines.length === 1
+      ? `You have ${lines[0]} ${dayLabel}.`
+      : `${dayLabel.charAt(0).toUpperCase() + dayLabel.slice(1)} you have: ${lines.join(', ')}.`;
+  } catch {
+    return null;
+  }
+}
+
+function extractFact(userMsg: string, aiReply: string, category: string): string | null {
+  if (category === 'medication' || category === 'medical') {
+    const med = aiReply.match(/Dr\.?\s+\w+|prescribed\s+[\w\s]+|takes\s+[\w\s]+|appointment\s+(?:on\s+)?[\w\s,]+/i);
+    if (med) return med[0].trim().slice(0, 100);
+  }
+  if (category === 'family') {
+    const fam = userMsg.match(
+      /my\s+(wife|husband|son|daughter|mom|dad|father(?:-in-law)?|mother(?:-in-law)?|brother|sister)(?:'s name is| is named| is)?\s+(\w+)/i
+    );
+    if (fam) return `${fam[1]}: ${fam[2]}`;
+  }
+  // All other categories: take first clean sentence of the reply
+  const first = aiReply.split(/[.!?]/)[0]?.trim();
+  if (first && first.length >= 15 && first.length <= 100) return first;
+  return null;
+}
 
 export default function ChatScreen() {
   const insets = useSafeAreaInsets();
@@ -436,43 +494,16 @@ export default function ChatScreen() {
     const networkState = await Network.getNetworkStateAsync();
     const isOffline = !networkState.isConnected || !networkState.isInternetReachable;
     if (isOffline) {
-      // Try calendar first (async, needs expo-calendar)
-      const calPatterns = [
-        /what('s| is) on my calendar/i,
-        /what do i have (today|tomorrow|this week)/i,
-        /any (appointments|meetings|events) (today|tomorrow)/i,
-        /my schedule (today|tomorrow|this week)/i,
-        /what('s| is) (scheduled|planned) (today|tomorrow)/i,
-      ];
-      if (calPatterns.some((p) => p.test(text))) {
-        try {
-          const calPerms = await Calendar.getCalendarPermissionsAsync();
-          if (calPerms.status === 'granted') {
-            const isTomorrow = /tomorrow/i.test(text);
-const isThisWeek = /this week/i.test(text);
-const start = new Date();
-start.setHours(0, 0, 0, 0);
-if (isTomorrow) start.setDate(start.getDate() + 1);
-const end = new Date(start);
-if (isThisWeek) { end.setDate(end.getDate() + 7); }
-end.setHours(23, 59, 59, 999);
-            const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
-            const events = await Calendar.getEventsAsync(calendars.map(c => c.id), start, end);
-            const sorted = events.filter(e => e.title).sort((a,b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime());
-            const dayLabel = isTomorrow ? 'tomorrow' : isThisWeek ? 'this week' : 'today';
-            const calAnswer = sorted.length === 0
-              ? `Your calendar is clear ${dayLabel}.`
-              : sorted.length === 1
-                ? `You have ${sorted[0].title} at ${new Date(sorted[0].startDate).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})} ${dayLabel}.`
-                : `${dayLabel.charAt(0).toUpperCase()+dayLabel.slice(1)} you have: ${sorted.map(e=>`${e.title} at ${new Date(e.startDate).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}`).join(', ')}.`;
-            addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-            addMessage({ id: generateId('msg'), role: 'assistant', content: calAnswer, timestamp: Date.now() });
-            speak(calAnswer);
-            setInputText('');
-            sendingRef.current = false;
-            return;
-          }
-        } catch { /* fall through */ }
+      if (CALENDAR_QUERY_PATTERNS.some((p) => p.test(text))) {
+        const calAnswer = await readCalendarDirect(text);
+        if (calAnswer) {
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          addMessage({ id: generateId('msg'), role: 'assistant', content: calAnswer, timestamp: Date.now() });
+          speak(calAnswer);
+          setInputText('');
+          sendingRef.current = false;
+          return;
+        }
       }
       // Try device memory next
       const localAnswer = answerFromDevice(text);
@@ -487,57 +518,15 @@ end.setHours(23, 59, 59, 999);
     }
 
     // ── Calendar on-device -- read expo-calendar directly, zero network ────
-    const calendarPatterns = [
-      /what('s| is) on my calendar/i,
-      /what do i have (today|tomorrow|this week)/i,
-      /any (appointments|meetings|events) (today|tomorrow)/i,
-      /my schedule (today|tomorrow|this week)/i,
-      /what('s| is) (scheduled|planned) (today|tomorrow)/i,
-    ];
-    if (calendarPatterns.some((p) => p.test(text))) {
-      try {
-        const { status } = await Calendar.requestCalendarPermissionsAsync();
-        if (status === 'granted') {
-          const isTomorrow = /tomorrow/i.test(text);
-          const isThisWeek = /this week/i.test(text);
-          const start = new Date();
-          start.setHours(0, 0, 0, 0);
-          if (isTomorrow) start.setDate(start.getDate() + 1);
-          const end = new Date(start);
-          if (isThisWeek) { end.setDate(end.getDate() + 7); }
-          end.setHours(23, 59, 59, 999);
-          const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
-          const calIds = calendars.map((c) => c.id);
-          const events = await Calendar.getEventsAsync(calIds, start, end);
-          const sorted = events
-            .filter((e) => e.title)
-            .sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime());
-          const dayLabel = isTomorrow ? 'tomorrow' : isThisWeek ? 'this week' : 'today';
-          let calAnswer: string;
-          if (sorted.length === 0) {
-            calAnswer = `Your calendar is clear ${dayLabel}.`;
-          } else {
-            const lines = sorted.map((e) => {
-              const t = new Date(e.startDate).toLocaleTimeString([], {
-                hour: 'numeric', minute: '2-digit',
-              });
-              return isThisWeek
-                ? `${e.title} on ${new Date(e.startDate).toLocaleDateString([], { weekday: 'long' })} at ${t}`
-                : `${e.title} at ${t}`;
-            });
-            calAnswer = lines.length === 1
-              ? `You have ${lines[0]} ${dayLabel}.`
-              : `${dayLabel.charAt(0).toUpperCase() + dayLabel.slice(1)} you have: ${lines.join(', ')}.`;
-          }
-          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-          addMessage({ id: generateId('msg'), role: 'assistant', content: calAnswer, timestamp: Date.now() });
-          speak(calAnswer);
-          setInputText('');
-          sendingRef.current = false;
-          return;
-        }
-      } catch {
-        // fall through to network
+    if (CALENDAR_QUERY_PATTERNS.some((p) => p.test(text))) {
+      const calAnswer = await readCalendarDirect(text);
+      if (calAnswer) {
+        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+        addMessage({ id: generateId('msg'), role: 'assistant', content: calAnswer, timestamp: Date.now() });
+        speak(calAnswer);
+        setInputText('');
+        sendingRef.current = false;
+        return;
       }
     }
 
@@ -682,6 +671,19 @@ end.setHours(23, 59, 59, 999);
           setPendingAction(action as IntentAction);
           setActionStatus("confirming");
         },
+        onFacts: (facts) => {
+          for (const fact of facts) {
+            if (fact.category === 'medication') {
+              saveLocalMedical('medication', fact.value);
+            } else if (fact.category === 'medical') {
+              saveLocalMedical('visit', fact.value);
+            } else if (['food', 'sports', 'music'].includes(fact.category)) {
+              saveLocalPreference(fact.category, fact.value);
+            } else {
+              saveDeviceMemory(fact.value, fact.category);
+            }
+          }
+        },
         onDone: (fullText) => {
           if (batchTimerRef.current) {
             clearTimeout(batchTimerRef.current);
@@ -693,7 +695,6 @@ end.setHours(23, 59, 59, 999);
           }
           if (fullText.trim()) {
             addMessage({ id: generateId("msg"), role: "assistant", content: fullText, timestamp: Date.now() });
-            const _memText = `${text.slice(0, 80)} → ${fullText.slice(0, 120)}`;
             const _memCat = /medication|prescription|pill|dose|pharmacy/i.test(text) ? 'medication'
               : /doctor|hospital|clinic|surgery|diagnosis|symptom|appointment/i.test(text) ? 'medical'
               : /wife|husband|daughter|son|mom|dad|brother|sister|family|father|mother/i.test(text) ? 'family'
@@ -703,7 +704,8 @@ end.setHours(23, 59, 59, 999);
               : /score|game|team|nfl|nba|mlb|nhl|espn/i.test(text) ? 'sports'
               : /eat|restaurant|food|dinner|lunch|breakfast|coffee/i.test(text) ? 'food'
               : 'general';
-            saveDeviceMemory(_memText, _memCat);
+            const _memFact = extractFact(text, fullText, _memCat);
+            if (_memFact) saveDeviceMemory(_memFact, _memCat);
           }
           resetStreamState();
         },
