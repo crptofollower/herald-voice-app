@@ -118,7 +118,6 @@ function BouncingDots({ color }: { color: string }) {
 
 const THINKING_PHRASES = [
   "Let me find that...",
-  "On it...",
   "Let me look that up...",
   "Checking on that...",
   "Give me a second...",
@@ -126,7 +125,6 @@ const THINKING_PHRASES = [
   "One moment...",
   "Looking into it...",
   "Hang tight...",
-  "Right on it...",
   "Let me think through that...",
 ];
 
@@ -695,7 +693,17 @@ end.setHours(23, 59, 59, 999);
           }
           if (fullText.trim()) {
             addMessage({ id: generateId("msg"), role: "assistant", content: fullText, timestamp: Date.now() });
-            saveDeviceMemory(`Conversation: ${text.slice(0, 80)} → ${fullText.slice(0, 120)}`, 'conversation');
+            const _memText = `${text.slice(0, 80)} → ${fullText.slice(0, 120)}`;
+            const _memCat = /medication|prescription|pill|dose|pharmacy/i.test(text) ? 'medication'
+              : /doctor|hospital|clinic|surgery|diagnosis|symptom|appointment/i.test(text) ? 'medical'
+              : /wife|husband|daughter|son|mom|dad|brother|sister|family|father|mother/i.test(text) ? 'family'
+              : /bank|invest|mortgage|savings|debt|401k|retire|money/i.test(text) ? 'finance'
+              : /work|job|boss|client|project|meeting|career/i.test(text) ? 'work'
+              : /flight|hotel|trip|travel|vacation|airport/i.test(text) ? 'travel'
+              : /score|game|team|nfl|nba|mlb|nhl|espn/i.test(text) ? 'sports'
+              : /eat|restaurant|food|dinner|lunch|breakfast|coffee/i.test(text) ? 'food'
+              : 'general';
+            saveDeviceMemory(_memText, _memCat);
           }
           resetStreamState();
         },
