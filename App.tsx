@@ -34,6 +34,7 @@ import OnboardingScreen from "./src/screens/OnboardingScreen";
 import ChatScreen from "./src/screens/ChatScreen";
 import { ONESIGNAL_APP_ID } from "./src/constants/api";
 import { runMigrations } from './src/migrations/runMigrations';
+import { initDB } from './src/db/useDeviceDB';
 
 export type RootStackParamList = {
   Onboarding: undefined;
@@ -81,6 +82,7 @@ export default function App() {
   useEffect(() => {
     const init = async () => {
       await runMigrations();
+      await initDB();
       try {
         await Font.loadAsync({
           "SourceSerif4-Light":    SourceSerif4_300Light,
