@@ -1,8 +1,8 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.59 -- Sports: full NBA/NFL/MLB/NHL team map, last-night date filter
-#          Calendar write excluded from pre-check (LLM handles it correctly)
-#          Tool sequencing rule: answer/context first, action second
+# v8.60 -- Places response reformatted for spoken delivery (no numbered lists)
+#          Brave date injection for time-sensitive queries (any topic, any sport, any show)
+#          _localize_query upgraded: appends today's date when recency signal detected
 #
 # v8.12 -- Medical memory system (always include user city in MAPS tag)
 #
@@ -51,7 +51,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.59")
+app = FastAPI(title="Herald API", version="8.60")
 
 app.add_middleware(
     CORSMiddleware,
@@ -1493,19 +1493,35 @@ _NEAR_ME_TERMS = [
 ]
 
 def _localize_query(message: str, profile: dict, location_label: str = None) -> str:
+    """v8.60: Shapes every Brave query -- location replacement + date injection.
+    Date is appended when recency signal detected so Brave returns current results
+    for any topic: sports, TV, celebrity, news, MMA, college games, anything.
+    """
     location = location_label or profile.get("location", "")
-    if not location:
-        return message
     msg_lower = message.lower()
-    if not any(t in msg_lower for t in _NEAR_ME_TERMS):
-        return message
     result = message
-    for term in _NEAR_ME_TERMS:
-        replacement = f"near {location}"
-        idx = result.lower().find(term)
-        while idx >= 0:
-            result = result[:idx] + replacement + result[idx + len(term):]
-            idx = result.lower().find(term, idx + len(replacement))
+
+    # Location replacement -- 'near me' -> 'near Plano TX'
+    if location and any(t in msg_lower for t in _NEAR_ME_TERMS):
+        for term in _NEAR_ME_TERMS:
+            replacement = f"near {location}"
+            idx = result.lower().find(term)
+            while idx >= 0:
+                result = result[:idx] + replacement + result[idx + len(term):]
+                idx = result.lower().find(term, idx + len(replacement))
+
+    # v8.60: Date injection -- append today's date for any time-sensitive query
+    # Covers: sports, TV recaps, celebrity news, MMA, college games, any topic
+    _DATE_SIGNALS = [
+        'last night', 'yesterday', 'tonight', 'today', 'this morning',
+        'this week', 'latest', 'recent', 'just happened', 'right now',
+        'this season', 'recap', 'results', 'score', 'who won',
+        'what happened', 'any news', 'update on', 'trending',
+    ]
+    if any(s in msg_lower for s in _DATE_SIGNALS):
+        today = datetime.now().strftime('%B %d %Y')
+        result = f"{result} {today}"
+
     return result
 
 _RECENCY_WORDS = [
@@ -3940,24 +3956,27 @@ def get_places_reply(message: str, lat: float, lng: float,
     if not places:
         return None
 
-    lines = [f"Here are the top spots nearby:\n"]
-    for i, p in enumerate(places, 1):
-        status = ""
-        if p["open_now"] is True:
-            status = " — open now"
-        elif p["open_now"] is False:
-            status = " — closed now"
-        rating = f"{p['rating']} stars" if p["rating"] else ""
-        lines.append(
-            f"{i}. {p['name']}"
-            f"{' · ' + rating if rating else ''}"
-            f"{status}\n   {p['vicinity']}"
-        )
-    lines.append(
-        f"\nWant directions, more details, or should I open "
-        f"one of these in Maps?"
-    )
-    return "\n".join(lines)
+    # v8.60: spoken format -- no numbered lists, no addresses read aloud
+    # Lead with the best result, speak naturally, offer Maps for directions
+    top = places[0]
+    name = top["name"]
+    rating = f"rated {top['rating']} stars" if top.get("rating") else ""
+    if top.get("open_now") is True:
+        hours = "open right now"
+    elif top.get("open_now") is False:
+        hours = "closed right now"
+    else:
+        hours = ""
+    parts = [p for p in [rating, hours] if p]
+    detail = ", ".join(parts)
+    if detail:
+        reply = f"{name} is a solid choice -- {detail}. Want me to pull up directions?"
+    else:
+        reply = f"{name} is nearby and worth checking out. Want me to open Maps?"
+    if len(places) > 1:
+        others = " and ".join(p["name"] for p in places[1:])
+        reply += f" I also found {others} if you want options."
+    return reply
 
 def get_direct_reply(ctx):
     message   = ctx["message"]
@@ -4651,7 +4670,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.59",
+        "status": "ok", "server": "herald-api", "version": "8.60",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -6662,9 +6681,8 @@ def startup():
     print(f"[HERALD]   morning_briefing  -> 7:00am ET daily")
     print(f"[HERALD]   afternoon_checkin -> 2:00pm ET daily (v8.8)")
     print(f"[HERALD]   evening_medication -> 7:00pm ET daily (v8.8)")
-    print(f"[HERALD API v8.59] Sports: full team map + last-night date filter")
-    print(f"[HERALD API v8.59] Calendar write excluded from pre-check -- LLM handles CALENDAR tag")
-    print(f"[HERALD API v8.59] Tool sequencing rule added to system prompt")
+    print(f"[HERALD API v8.60] Places response: spoken format -- no numbered lists")
+    print(f"[HERALD API v8.60] Brave date injection: _localize_query appends date on recency signals")
     print(f"[HERALD API] FIX v8.11: MAPS tag always includes city -- no more 1500-mile directions")
     print(f"[HERALD API] OpenRouter:    {'YES' if OPENROUTER_KEY else 'MISSING -- required'}")
     print(f"[HERALD API] Model routing: Haiku ({HAIKU_MODEL}) / Sonnet ({SONNET_MODEL})")
