@@ -63,6 +63,11 @@ import { useMic } from "../hooks/useMic";
 import { useHealthConnect } from "../hooks/useHealthConnect";
 import { useDeviceMemory, saveLocalProfile, saveLocalMedical, saveLocalPreference } from "../hooks/useDeviceMemory";
 import { answerFromDevice } from '../utils/localAnswers';
+import { classifyQuery } from "../routing/tierRouter";
+import { handleTier1, buildTier2DeviceContext, writeProfileFromOnboarding } from "../routing/tier1Responses";
+import { refreshCalendarCache } from "../db/calendarCacheDB";
+import { initDB } from "../db/useDeviceDB";
+import { runMigration } from "../routing/migration";
 
 interface IntentAction {
   type: string;
@@ -334,6 +339,7 @@ export default function ChatScreen() {
           if (idleMs > IDLE_THRESHOLD_MS) {
             handleIdleResumeRef.current();
           }
+          refreshCalendarCache().catch(() => {}); // refresh cache on foreground
         }
         // Always update on any state change (background, inactive, active)
         lastInteractionRef.current = Date.now();
@@ -360,6 +366,15 @@ export default function ChatScreen() {
       if (val === 'true') autoOpenAppsRef.current = true;
     });
   }, []);
+
+  // ── Session L: init device SQLite and run one-time migration ─────────────
+  useEffect(() => {
+    if (!userId) return;
+    initDB().then(() => {
+      runMigration(userId);
+      refreshCalendarCache();
+    }).catch(() => {});
+  }, [userId]);
 
   useEffect(() => {
     if (!isWaiting) return;
@@ -530,8 +545,21 @@ export default function ChatScreen() {
       }
     }
 
-    // ── Device-first interceptor -- answer personal queries from SQLite ──────
-    // Zero network. Zero OpenRouter cost. Under 200ms. Works offline.
+    // ── Tier router — device-first before any network call ───────────────────
+    // Tier 1: answer from device SQLite, no LLM, no network, under 200ms.
+    // Tier 2: memory probe — attach structured local context to backend request.
+    // Tier 3: default — existing network path unchanged.
+    const tierDecision = classifyQuery(text);
+
+    if (tierDecision.tier === 1 && tierDecision.tier1Response) {
+      handleTier1(tierDecision.tier1Response, text, addMessage, speak, generateId);
+      sendingRef.current = false;
+      setInputText("");
+      return;
+    }
+
+    // Legacy device interceptor — keep as fallback for patterns not yet
+    // covered by tierRouter signal groups
     const localAnswer = answerFromDevice(text);
     if (localAnswer) {
       addMessage({
@@ -621,7 +649,9 @@ export default function ChatScreen() {
         history: historySnapshot,
         local_time,
         local_date,
-        device_context: getContextBlock() || undefined,
+        device_context: tierDecision.tier === 2 && tierDecision.localContext
+          ? buildTier2DeviceContext(tierDecision.localContext)
+          : getContextBlock() || undefined,
         persona: personaKey,
         lat: lat ?? undefined,
         lng: lng ?? undefined,
@@ -723,7 +753,7 @@ export default function ChatScreen() {
 
     streamAbortRef.current = abortController;
     setInputText("");
-  }, [userId, messages, personaKey, lat, lng, locationLabel, getContextBlock, addMessage, setError, resetSpeech, enqueueSentence, resetStreamState]);
+  }, [userId, messages, personaKey, lat, lng, locationLabel, getContextBlock, addMessage, setError, resetSpeech, enqueueSentence, resetStreamState, stop]);
 
   const handleSend = useCallback(() => {
     sendMessage(inputText.trim());
@@ -986,6 +1016,7 @@ export default function ChatScreen() {
       content: `Done — "${title}" is on your calendar for ${dateDisplay} at ${timeDisplay}.`,
       timestamp: Date.now(),
     });
+    refreshCalendarCache().catch(() => {}); // update cache after write
   };
 
   const handleMapsAction = async (query: string) => {
