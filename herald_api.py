@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.61 -- facts key in SSE done payload (Critical 7 backend)
+# v8.62 -- facts key in SSE done payload (Critical 7 backend)
 #          Brave date injection for time-sensitive queries (any topic, any sport, any show)
 #          _localize_query upgraded: appends today's date when recency signal detected
 #
@@ -51,7 +51,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.61")
+app = FastAPI(title="Herald API", version="8.62")
 
 app.add_middleware(
     CORSMiddleware,
@@ -4671,7 +4671,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.61",
+        "status": "ok", "server": "herald-api", "version": "8.62",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
