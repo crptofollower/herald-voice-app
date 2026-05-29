@@ -212,6 +212,10 @@ export default function ChatScreen() {
   const handleIdleResumeRef = useRef<() => void>(() => {});
   useEffect(() => {
     handleIdleResumeRef.current = () => {
+      // Only fire idle greeting if user has actually been active (has messages)
+      // Prevents double greeting on first install / onboarding completion
+      const currentMessages = useStore.getState().messages;
+      if (currentMessages.length === 0) return;
       liveGreetingAddedRef.current = false;
       const newSessionStart = Date.now();
       setSessionStart(newSessionStart);
@@ -415,6 +419,9 @@ export default function ChatScreen() {
     if (!text) return;
 
     lastSentRef.current = now;
+    sendingRef.current = true;
+    const historySnapshot = messages.map(({ role, content }) => ({ role, content }));
+
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
     const _autoOpenTriggers = [
@@ -558,7 +565,6 @@ end.setHours(23, 59, 59, 999);
       return;
     }
     lastInteractionRef.current = now;
-    sendingRef.current = true;
 
     addMessage({
       id: generateId("msg"),
@@ -625,7 +631,7 @@ end.setHours(23, 59, 59, 999);
       {
         user_id: userId,
         message: text,
-        history: messages.map(({ role, content }) => ({ role, content })),
+        history: historySnapshot,
         local_time,
         local_date,
         device_context: getContextBlock() || undefined,
@@ -715,7 +721,13 @@ end.setHours(23, 59, 59, 999);
 
   const handleTranscript = useCallback((transcript: string) => {
     if (!transcript.trim()) return;
-    sendMessage(transcript.trim().slice(0, 2000));
+    const trimmed = transcript.trim().slice(0, 2000);
+    // Brief display in input bar so user sees what was heard, then send
+    setInputText(trimmed);
+    setTimeout(() => {
+      setInputText('');
+      sendMessage(trimmed);
+    }, 600);
   }, [sendMessage]);
   const { isRecording, startRecording, stopRecording } = useMic(handleTranscript);
 
@@ -1010,7 +1022,7 @@ end.setHours(23, 59, 59, 999);
       workout: { deep: "com.sec.android.app.shealth://" },
       steps: { deep: "com.sec.android.app.shealth://" },
       spotify: { deep: "spotify://", fallback: "https://open.spotify.com" },
-      facebook: { deep: "fb://", fallback: "https://facebook.com" },
+      facebook: { deep: "intent:#Intent;action=android.intent.action.VIEW;package=com.facebook.katana;end", fallback: "https://facebook.com" },
       googlemaps: { deep: "comgooglemaps://", fallback: "https://maps.google.com" },
       maps: { deep: "comgooglemaps://", fallback: "https://maps.google.com" },
       gmail: { deep: "googlegmail://", fallback: "https://mail.google.com" },
