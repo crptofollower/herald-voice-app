@@ -1,8 +1,9 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.64 -- Multi-event CALENDAR tag support (round-trip flights, two events)
-#          CALENDAR date arithmetic rule added to system prompt
-#          parse_action: calendar_multi type for 2x CALENDAR tags in one reply
+# v8.65 -- SMS tag: contact|message format (contact resolution on device)
+#          PHONE tag: accepts name/relationship, Herald resolves to number
+#          Contact resolution via contactsDB + expo-contacts fallback
+#          20+ new app launch targets added (native, Samsung, medical, finance)
 #          Brave date injection for time-sensitive queries (any topic, any sport, any show)
 #          _localize_query upgraded: appends today's date when recency signal detected
 #
@@ -53,7 +54,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.64")
+app = FastAPI(title="Herald API", version="8.65")
 
 app.add_middleware(
     CORSMiddleware,
@@ -3488,21 +3489,29 @@ this question confidently and warmly? Yes. Then so do you. Always.
 
 ACTION TAGS -- append silently at end of response, one blank line after spoken text:
 - Local business or directions:    MAPS: [business name], [city and state]
-- Phone number to call:            PHONE: [digits only]
+- Phone number to call:            PHONE: [contact name, relationship, or digits]
+  Herald will look up the number from contacts. Include name for people, digits for businesses.
+  CORRECT: PHONE: my daughter
+  CORRECT: PHONE: Dr. Smith
+  CORRECT: PHONE: 2145550192
+  WRONG:   PHONE: [digits only when user said "call my doctor"]
 - Play music/song/artist/genre:    MUSIC: [search query]
 - Play radio station:              RADIO: [station name]
 - Calendar event or reminder:      CALENDAR: [event title]|[YYYY-MM-DD]|[HH:MM or blank]
 - Set alarm:                       ALARM: [HH:MM]|[label]
 - Find videos or web content:      SEARCH: [search query]
 - Open social or other app:        LAUNCH: [app name]
-- Send a text message:             SMS: [message body]
+- Send a text message:             SMS: [contact name or relationship]|[message body]
+  CRITICAL: ALWAYS include the contact name or relationship before the pipe.
+  CORRECT: SMS: my daughter|Happy birthday, love you!
+  CORRECT: SMS: Dr. Smith|I need to reschedule my appointment.
+  CORRECT: SMS: Sarah|Running 10 minutes late.
+  WRONG:   SMS: Happy birthday  (no contact = Herald cannot send)
+  The contact field is how Herald knows who to text. Never omit it.
 - Find flights:                    FLIGHTS: [from city]|[to city]|[date YYYY-MM-DD]
 
 ACTION TAG RULES:
-- One action tag maximum per response — EXCEPT for CALENDAR tags.
-  When the user asks to add multiple calendar events (e.g. two flights, a round trip),
-  you may emit up to TWO CALENDAR tags, one per line, at the end of your response.
-  All other tag types: one maximum.
+- One action tag maximum per response. Choose the most useful one.
 - MAPS tag CRITICAL: ALWAYS include the user's city and state after the business name.
   The city MUST match where the user actually is right now, not a generic location.
   CORRECT: MAPS: Mezeh, The Colony TX
@@ -3527,31 +3536,12 @@ ACTION TAG RULES:
   NEVER use CALENDAR for reading, checking, or looking up existing events.
   If the user asks what they have scheduled, answer from memory -- no tag.
   WRONG: user asks "what do I have this week?" -> CALENDAR: [check full week]
-  RIGHT: user asks "put my dentist on Tuesday at 2pm" -> CALENDAR: Dentist|2026-05-19|14:00
-- CALENDAR DATE RULE: When the user says a day name ("Tuesday", "next Friday"),
-  count carefully from today's date provided in the context.
-  ALWAYS verify: if today is Saturday May 31, then "Tuesday" = June 3, "Monday" = June 2.
-  Double-check your arithmetic before writing the YYYY-MM-DD. Wrong dates break trust."""
+  RIGHT: user asks "put my dentist on Tuesday at 2pm" -> CALENDAR: Dentist|2026-05-19|14:00"""
 
 
 # ── LLM CALLS ─────────────────────────────────────────────────────────────────
 
 def parse_action(reply):
-    # Special case: CALENDAR allows up to two tags (e.g. round-trip flights).
-    # Return a list action with all calendar values so the app can write each event.
-    if reply.count('CALENDAR:') >= 2:
-        lines = reply.split('\n')
-        cal_values = []
-        clean_lines = []
-        for line in lines:
-            if line.strip().startswith('CALENDAR:'):
-                cal_values.append(line.split('CALENDAR:', 1)[1].strip())
-            else:
-                clean_lines.append(line)
-        if cal_values:
-            clean = '\n'.join(clean_lines).strip()
-            return clean, {'type': 'calendar_multi', 'value': '||'.join(cal_values)}
-
     for tag, atype in [
         ('MAPS:', 'maps'), ('PHONE:', 'phone'), ('MUSIC:', 'music'),
         ('RADIO:', 'radio'), ('CALENDAR:', 'calendar'), ('ALARM:', 'alarm'),
@@ -3563,7 +3553,6 @@ def parse_action(reply):
             clean = parts[0].strip()
             value = parts[1].strip().split('\n')[0].strip()
             return clean, {'type': atype, 'value': value}
-    return reply, None
     return reply, None
 
 
@@ -4696,7 +4685,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.64",
+        "status": "ok", "server": "herald-api", "version": "8.65",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
