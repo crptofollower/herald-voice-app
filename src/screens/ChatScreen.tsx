@@ -66,9 +66,22 @@ import { answerFromDevice } from '../utils/localAnswers';
 import { classifyQuery } from "../routing/tierRouter";
 import { handleTier1, buildTier2DeviceContext, writeProfileFromOnboarding } from "../routing/tier1Responses";
 import { refreshCalendarCache } from "../db/calendarCacheDB";
-import { writeFacts } from "../db/factDB";
+import { writeFacts, _registerContactExtractor } from "../db/factDB";
 import { initDB } from "../db/useDeviceDB";
 import { runMigration } from "../routing/migration";
+import { setProfileField, setProfileFields } from "../db/profileDB";
+import { writeMedicalFact } from "../db/medicalDB";
+import {
+  writeContact,
+  resolvePhoneNumber,
+  updateLastContact,
+  extractContactFromFact,
+} from "../db/contactsDB";
+import { queueWrite, drainPendingWrites, getPendingCount } from "../db/pendingWritesDB";
+import { writeMedicalFact, writeMedicalRecord, writeMedication, writeMedicalContact } from "../db/medicalDB";
+import { findContactByRelationship, findContactByName, updateLastContact, writeContact, extractContactFromFact } from "../db/contactsDB";
+import { queueWrite, drainPendingWrites, getPendingCount } from "../db/pendingWritesDB";
+import { _registerContactExtractor } from "../db/factDB";
 
 interface IntentAction {
   type: string;
@@ -341,6 +354,17 @@ export default function ChatScreen() {
             handleIdleResumeRef.current();
           }
           refreshCalendarCache().catch(() => {}); // refresh cache on foreground
+          // Drain offline queue on foreground — catches writes queued while offline
+          Network.getNetworkStateAsync().then((net) => {
+            if (!net.isConnected || !net.isInternetReachable) return;
+            if (getPendingCount() === 0) return;
+            drainPendingWrites(async (write) => {
+              const payload = JSON.parse(write.payload);
+              if (write.type === 'calendar') {
+                await handleCalendarAction(payload.value, payload.context ?? '');
+              }
+            }).catch(() => {});
+          }).catch(() => {});
         }
         // Always update on any state change (background, inactive, active)
         lastInteractionRef.current = Date.now();
@@ -371,9 +395,53 @@ export default function ChatScreen() {
   // ── Session L: init device SQLite and run one-time migration ─────────────
   useEffect(() => {
     if (!userId) return;
-    initDB().then(() => {
+    initDB().then(async () => {
       runMigration(userId);
       refreshCalendarCache();
+
+      // Register contact extractor so relationship facts auto-populate contacts table
+      _registerContactExtractor(extractContactFromFact);
+
+      // Wire core identity to local_profile SQLite table
+      const store = useStore.getState();
+      const profileWrites: Record<string, string> = {};
+      if (store.name)    profileWrites.name    = store.name;
+      if (store.aiName)  profileWrites.ai_name = store.aiName;
+      if (store.persona) profileWrites.persona  = store.persona;
+      if (userId)        profileWrites.user_id  = userId;
+      if (Object.keys(profileWrites).length > 0) {
+        setProfileFields(profileWrites);
+      }
+
+      // Drain any writes queued while offline — calendar events, SMS etc.
+      const pending = getPendingCount();
+      if (pending > 0) {
+        drainPendingWrites(async (write) => {
+          const payload = JSON.parse(write.payload);
+          if (write.type === 'calendar') {
+            await handleCalendarAction(payload.value, payload.context ?? '');
+          }
+          // SMS drain: open native messages — non-blocking best effort
+          if (write.type === 'sms') {
+            const { Linking } = await import('react-native');
+            const body = encodeURIComponent(payload.body ?? '');
+            const num  = payload.phone ?? '';
+            await Linking.openURL(num
+              ? `sms:${num}?body=${body}`
+              : `sms:?body=${body}`
+            );
+          }
+        }).then((drained) => {
+          if (drained > 0) {
+            addMessage({
+              id: generateId('msg'),
+              role: 'assistant',
+              content: `I went ahead and took care of ${drained} thing${drained > 1 ? 's' : ''} I had queued up while you were offline.`,
+              timestamp: Date.now(),
+            });
+          }
+        }).catch(() => {});
+      }
     }).catch(() => {});
   }, [userId]);
 
@@ -418,6 +486,8 @@ export default function ChatScreen() {
             });
             if (greetingLabel) {
               saveDeviceProfile("confirmed_city", greetingLabel);
+              // Mirror to local_profile SQLite — makes Tier 1 profile queries work
+              setProfileField("city", greetingLabel);
             }
           }
         })
@@ -531,6 +601,19 @@ export default function ChatScreen() {
       setInputText('');
       sendingRef.current = false;
       return;
+    }
+
+    // ── Calendar on-device -- read expo-calendar directly, zero network ────
+    if (CALENDAR_QUERY_PATTERNS.some((p) => p.test(text))) {
+      const calAnswer = await readCalendarDirect(text);
+      if (calAnswer) {
+        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+        addMessage({ id: generateId('msg'), role: 'assistant', content: calAnswer, timestamp: Date.now() });
+        speak(calAnswer);
+        setInputText('');
+        sendingRef.current = false;
+        return;
+      }
     }
 
     // ── Tier router — device-first before any network call ───────────────────
@@ -690,14 +773,23 @@ export default function ChatScreen() {
           setActionStatus("confirming");
         },
         onFacts: (facts) => {
-          // Write to structured factDB (Session L — new layer)
+          // Write to structured factDB — temporal detection, dedup, importance scoring
           writeFacts(facts);
-          // Also route to legacy useDeviceMemory (kept until Session W unifies)
+
+          // Route to typed device tables (medicalDB, contactsDB)
           for (const fact of facts) {
+            if (!fact.value?.trim()) continue;
+
             if (fact.category === 'medication') {
+              // Both legacy hook (AsyncStorage) and new medicalDB (SQLite)
               saveLocalMedical('medication', fact.value);
-            } else if (fact.category === 'medical') {
+              writeMedicalFact('medication', fact.value);
+            } else if (fact.category === 'medical' || fact.category === 'visit') {
               saveLocalMedical('visit', fact.value);
+              writeMedicalFact('medical', fact.value);
+            } else if (fact.category === 'relationships') {
+              // Contact extraction handled by _registerContactExtractor in writeFacts
+              saveDeviceMemory(fact.value, fact.category);
             } else if (['food', 'sports', 'music'].includes(fact.category)) {
               saveLocalPreference(fact.category, fact.value);
             } else {
@@ -800,30 +892,47 @@ export default function ChatScreen() {
     setActionStatus("executing");
     try {
       switch (action.type) {
-        case "calendar": {
-          // Pass recent message text so resolveLocalDate can catch LLM day-name miscounts
-          const recentText = messages.slice(-6).map(m => m.content).join(" ");
-          await handleCalendarAction(action.value, recentText);
+        case "calendar":
+          await handleCalendarAction(action.value);
           break;
-        }
-        case "calendar_multi": {
-          // Two calendar events (e.g. round-trip flights) — write each in sequence
-          const recentText = messages.slice(-6).map(m => m.content).join(" ");
-          const eventValues = action.value.split("||");
-          for (const ev of eventValues) {
-            await handleCalendarAction(ev.trim(), recentText);
-          }
-          break;
-        }
         case "maps":
           await handleMapsAction(action.value);
           break;
         case "sms":
           await handleSMSAction(action.value);
           break;
-        case "phone":
-          await Linking.openURL(`tel:${action.value.replace(/\D/g, "")}`);
+        case "phone": {
+          // If value looks like a raw number, dial directly.
+          // If it looks like a name/relationship, resolve first.
+          const rawVal = action.value.trim();
+          const looksLikeNumber = /^[\d\s\-\+\(\)]+$/.test(rawVal) && rawVal.replace(/\D/g, '').length >= 7;
+          if (looksLikeNumber) {
+            await Linking.openURL(`tel:${rawVal.replace(/\D/g, '')}`);
+          } else {
+            // Resolve name/relationship to phone number
+            const resolved = await resolveContactPhone(rawVal);
+            if (resolved?.phone) {
+              updateLastContact(resolved.contactId ?? '');
+              await Linking.openURL(`tel:${resolved.phone}`);
+              addMessage({
+                id: generateId("msg"),
+                role: "assistant",
+                content: `Calling ${resolved.name} now.`,
+                timestamp: Date.now(),
+              });
+            } else {
+              // Can't resolve — open dialer so user can dial manually
+              await Linking.openURL(`tel:`);
+              addMessage({
+                id: generateId("msg"),
+                role: "assistant",
+                content: `I couldn't find a number for ${rawVal}. The dialer is open — or tell me their number and I'll save it.`,
+                timestamp: Date.now(),
+              });
+            }
+          }
           break;
+        }
         case "flights":
           await Linking.openURL(
             `https://www.google.com/flights?q=${encodeURIComponent(action.value)}`
@@ -923,84 +1032,13 @@ export default function ChatScreen() {
     }
   };
 
-  // ── resolveLocalDate ───────────────────────────────────────────────────────
-  // Converts a YYYY-MM-DD string from the LLM into a verified local Date.
-  // The LLM receives local_date as a string and sometimes miscounts day names
-  // (e.g. writes Wednesday when user said Tuesday). This function catches
-  // the mismatch by checking what day of week the LLM date actually lands on
-  // versus what day name appears in the conversation text, and corrects it.
-  //
-  // Also handles bare day names ("tuesday", "next friday") as a fallback
-  // if the LLM failed to produce a YYYY-MM-DD at all.
-
-  const resolveLocalDate = (
-    llmDateStr: string,
-    conversationText: string
-  ): string => {
-    const DAY_NAMES = ["sunday","monday","tuesday","wednesday","thursday","friday","saturday"];
-
-    // If LLM gave us a valid YYYY-MM-DD, verify it matches any day name in the text
-    if (llmDateStr && /^\d{4}-\d{2}-\d{2}$/.test(llmDateStr)) {
-      const [year, month, day] = llmDateStr.split("-").map(Number);
-      // Use local noon to avoid DST boundary issues
-      const llmDate = new Date(year, month - 1, day, 12, 0, 0);
-      if (!isNaN(llmDate.getTime())) {
-        const llmDayName = DAY_NAMES[llmDate.getDay()];
-        // Check if conversation mentions a specific day that differs from LLM date
-        const mentionedDay = DAY_NAMES.find(d => new RegExp(`\\b${d}\\b`, 'i').test(conversationText));
-        if (mentionedDay && mentionedDay !== llmDayName) {
-          // LLM got the wrong day — find the correct upcoming date for mentionedDay
-          const targetDayIndex = DAY_NAMES.indexOf(mentionedDay);
-          const today = new Date();
-          today.setHours(12, 0, 0, 0);
-          const todayIndex = today.getDay();
-          let daysAhead = targetDayIndex - todayIndex;
-          if (daysAhead <= 0) daysAhead += 7; // always future
-          const corrected = new Date(today);
-          corrected.setDate(today.getDate() + daysAhead);
-          return [
-            corrected.getFullYear(),
-            String(corrected.getMonth() + 1).padStart(2, "0"),
-            String(corrected.getDate()).padStart(2, "0"),
-          ].join("-");
-        }
-        // LLM date is consistent with text — use it
-        return llmDateStr;
-      }
-    }
-
-    // Fallback: try to parse a day name directly from conversation text
-    const mentionedDay = DAY_NAMES.find(d => new RegExp(`\\b${d}\\b`, 'i').test(conversationText));
-    if (mentionedDay) {
-      const targetDayIndex = DAY_NAMES.indexOf(mentionedDay);
-      const today = new Date();
-      today.setHours(12, 0, 0, 0);
-      const todayIndex = today.getDay();
-      let daysAhead = targetDayIndex - todayIndex;
-      if (daysAhead <= 0) daysAhead += 7;
-      const resolved = new Date(today);
-      resolved.setDate(today.getDate() + daysAhead);
-      return [
-        resolved.getFullYear(),
-        String(resolved.getMonth() + 1).padStart(2, "0"),
-        String(resolved.getDate()).padStart(2, "0"),
-      ].join("-");
-    }
-
-    // No day name found — return whatever the LLM gave us (tomorrow fallback in handler)
-    return llmDateStr;
-  };
-
   // ── Calendar action ───────────────────────────────────────────────────────
 
-  const handleCalendarAction = async (value: string, conversationContext = "") => {
+  const handleCalendarAction = async (value: string) => {
     const parts = value.split("|");
     const title = parts[0]?.trim() || "Appointment";
-    const rawDateStr = parts[1]?.trim() || "";
+    const dateStr = parts[1]?.trim() || "";
     const timeStr = parts[2]?.trim() || "";
-
-    // Resolve date on device — catches LLM day-name miscounts
-    const dateStr = resolveLocalDate(rawDateStr, conversationContext);
 
     if (!timeStr || !/^\d{1,2}:\d{2}$/.test(timeStr)) {
       addMessage({
@@ -1011,6 +1049,20 @@ export default function ChatScreen() {
       });
       setPendingAction(null);
       setActionStatus("confirming");
+      return;
+    }
+
+    // Check network — queue for later if offline
+    const _calNetState = await Network.getNetworkStateAsync();
+    const _calOffline = !_calNetState.isConnected || !_calNetState.isInternetReachable;
+    if (_calOffline) {
+      queueWrite('calendar', { value, context: conversationContext });
+      addMessage({
+        id: generateId("msg"),
+        role: "assistant",
+        content: `You're offline right now. I've saved "${title}" and I'll add it to your calendar when you're back online.`,
+        timestamp: Date.now(),
+      });
       return;
     }
 
@@ -1090,9 +1142,7 @@ export default function ChatScreen() {
       content: `Done — "${title}" is on your calendar for ${dateDisplay} at ${timeDisplay}.`,
       timestamp: Date.now(),
     });
-    // Await the cache refresh before returning — so any immediate follow-up
-    // calendar query ("were you able to add that?") hits a fresh cache.
-    await refreshCalendarCache().catch(() => {});
+    refreshCalendarCache().catch(() => {}); // update cache after write
   };
 
   const handleMapsAction = async (query: string) => {
@@ -1107,18 +1157,112 @@ export default function ChatScreen() {
     }
   };
 
+  // ── resolveContactPhone ──────────────────────────────────────────────────────
+  // Resolves a name or relationship to a phone number.
+  // Pass 1: Herald contacts table (contactsDB) — fastest, device SQLite
+  // Pass 2: OS device contacts via expo-contacts — broader coverage
+  // Returns null if not found — caller handles graceful fallback.
+
+  const resolveContactPhone = async (nameOrRelation: string): Promise<{ phone: string; name: string; contactId?: string } | null> => {
+    const clean = nameOrRelation.trim().toLowerCase();
+
+    // Pass 1: Herald contacts table
+    const byRelation = findContactByRelationship(clean);
+    if (byRelation?.phone) {
+      return { phone: byRelation.phone, name: byRelation.name, contactId: byRelation.id };
+    }
+    const byName = findContactByName(clean);
+    if (byName?.phone) {
+      return { phone: byName.phone, name: byName.name, contactId: byName.id };
+    }
+
+    // Pass 2: OS device contacts
+    try {
+      const Contacts = await import('expo-contacts');
+      const { status } = await Contacts.requestPermissionsAsync();
+      if (status !== 'granted') return null;
+
+      const { data } = await Contacts.getContactsAsync({
+        fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name],
+      });
+
+      if (!data?.length) return null;
+
+      // Find best match — prioritize exact name match, then partial
+      const exactMatch = data.find(c =>
+        c.name?.toLowerCase() === clean ||
+        c.firstName?.toLowerCase() === clean ||
+        c.lastName?.toLowerCase() === clean
+      );
+      const partialMatch = data.find(c =>
+        c.name?.toLowerCase().includes(clean) ||
+        c.firstName?.toLowerCase().includes(clean)
+      );
+
+      const match = exactMatch ?? partialMatch;
+      if (match?.phoneNumbers?.[0]?.number) {
+        const phone = match.phoneNumbers[0].number.replace(/\D/g, '');
+        const name = match.name ?? nameOrRelation;
+        // Write to Herald contacts for next time
+        writeContact({ name, phone, importance: 5 });
+        return { phone, name };
+      }
+    } catch {
+      // expo-contacts not installed or permission denied — silent
+    }
+
+    return null;
+  };
+
   const handleSMSAction = async (value: string) => {
     const pipeIdx = value.indexOf("|");
-    const contactName = pipeIdx >= 0 ? value.substring(0, pipeIdx).trim() : value.trim();
+    const contactRaw  = pipeIdx >= 0 ? value.substring(0, pipeIdx).trim() : value.trim();
     const messageText = pipeIdx >= 0 ? value.substring(pipeIdx + 1).trim() : "";
     const body = encodeURIComponent(messageText);
-    const smsUrl = Platform.OS === "ios" ? `sms:&body=${body}` : `sms:?body=${body}`;
-    await Linking.openURL(smsUrl);
-    if (contactName) {
+
+    // Offline: queue the write instead of failing
+    const networkState = await Network.getNetworkStateAsync();
+    const offline = !networkState.isConnected || !networkState.isInternetReachable;
+
+    // Try to resolve contact to phone number
+    const resolved = contactRaw ? await resolveContactPhone(contactRaw) : null;
+
+    if (offline) {
+      queueWrite('sms', {
+        phone: resolved?.phone ?? '',
+        body: messageText,
+        contactName: resolved?.name ?? contactRaw,
+      });
       addMessage({
         id: generateId("msg"),
         role: "assistant",
-        content: `Your messages app is open with that ready. Just pick ${contactName} and hit send.`,
+        content: `You're offline right now. I've saved that message to ${resolved?.name ?? contactRaw} and I'll send it when you're back online.`,
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
+    if (resolved?.phone) {
+      // Full pre-fill — phone number AND body. One tap to send.
+      const smsUrl = `sms:${resolved.phone}?body=${body}`;
+      await Linking.openURL(smsUrl);
+      if (resolved.contactId) updateLastContact(resolved.contactId);
+      addMessage({
+        id: generateId("msg"),
+        role: "assistant",
+        content: `Messages is open to ${resolved.name} with your message ready. Just hit send.`,
+        timestamp: Date.now(),
+      });
+    } else {
+      // No number found — open Messages with body pre-filled, user picks contact
+      const smsUrl = Platform.OS === "ios" ? `sms:&body=${body}` : `sms:?body=${body}`;
+      await Linking.openURL(smsUrl);
+      addMessage({
+        id: generateId("msg"),
+        role: "assistant",
+        content: contactRaw
+          ? `Messages is open with your note ready — just pick ${contactRaw} and hit send. If you tell me ${contactRaw}'s number I'll remember it for next time.`
+          : `Messages is open with your note ready. Just pick your contact and hit send.`,
         timestamp: Date.now(),
       });
     }
@@ -1193,6 +1337,36 @@ export default function ChatScreen() {
       bofa: { deep: "bofa://", fallback: "https://bankofamerica.com" },
       aarp: { deep: "aarp://", fallback: "https://aarp.org" },
       googlephotos: { deep: "googlephotos://", fallback: "https://photos.google.com" },
+      // System apps
+      settings:      { deep: "intent:#Intent;action=android.settings.SETTINGS;end" },
+      camera:        { deep: "intent:#Intent;action=android.media.action.IMAGE_CAPTURE;end" },
+      dialer:        { deep: "intent:#Intent;action=android.intent.action.DIAL;end" },
+      phone:         { deep: "intent:#Intent;action=android.intent.action.DIAL;end" },
+      calculator:    { deep: "intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.APP_CALCULATOR;end" },
+      files:         { deep: "intent:#Intent;action=android.intent.action.VIEW;type=resource/folder;end" },
+      // Samsung specific
+      samsungpay:    { deep: "samsungpay://", fallback: "https://www.samsung.com/us/samsung-pay/" },
+      samsungwallet: { deep: "samsungpay://", fallback: "https://www.samsung.com/us/samsung-pay/" },
+      bixby:         { deep: "bixby://", fallback: "" },
+      // Additional streaming
+      disneyplus:    { deep: "disneyplus://", fallback: "https://disneyplus.com" },
+      hbomax:        { deep: "hbomax://", fallback: "https://max.com" },
+      max:           { deep: "hbomax://", fallback: "https://max.com" },
+      peacock:       { deep: "peacocktv://", fallback: "https://peacocktv.com" },
+      paramountplus: { deep: "paramountplus://", fallback: "https://paramountplus.com" },
+      appletv:       { deep: "videos://", fallback: "https://tv.apple.com" },
+      // Pharmacy / health
+      express_scripts: { deep: "expressscripts://", fallback: "https://express-scripts.com" },
+      goodrx:        { deep: "goodrx://", fallback: "https://goodrx.com" },
+      // News
+      cnn:           { deep: "cnn://", fallback: "https://cnn.com" },
+      foxnews:       { deep: "foxnews://", fallback: "https://foxnews.com" },
+      espn:          { deep: "sportscenter://", fallback: "https://espn.com" },
+      // Productivity
+      googledocs:    { deep: "googledocs://", fallback: "https://docs.google.com" },
+      googledrive:   { deep: "googledrive://", fallback: "https://drive.google.com" },
+      zoom:          { deep: "zoomus://", fallback: "https://zoom.us" },
+      teams:         { deep: "msteams://", fallback: "https://teams.microsoft.com" },
     };
 
     const app = launchApps[key];

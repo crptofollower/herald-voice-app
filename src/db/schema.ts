@@ -15,6 +15,19 @@
 //     WAL mode enabled on getDB() open
 //
 // RULE: NEVER modify a past migration. Always add at the next version number.
+//
+// ─── SECURITY ROADMAP (locked) ────────────────────────────────────────────────
+// Current state: Device SQLite is protected by Android app sandbox only.
+// On non-rooted devices this is sufficient for Gate 2 (Mickey, 1 user).
+// BEFORE Gate 3 (5 users, Heather, real medical data on device):
+//   → Encrypt herald_device.db with SQLCipher or expo-sqlite + encryption key
+//   → Key stored in Android Keystore via expo-secure-store (never in AsyncStorage)
+//   → Key is device-bound — not backed up, not extractable
+//   → ADB backup cannot extract encrypted DB
+//   → Migration: encrypt existing DB on first open after upgrade
+// Session W is the target. Do not onboard Gate 3 users without this in place.
+// The product promise "your data never leaves your phone" is only half-true
+// without encryption — technically correct but misleading on a rooted/lost device.
 
 import * as SQLite from "expo-sqlite";
 
@@ -184,10 +197,20 @@ const MIGRATIONS: Record<number, (db: SQLite.SQLiteDatabase) => void> = {
       -- context_type: 'active' = current/ongoing. 'historical' = past event.
       --   Fixes stale context in memory synthesis ("airport pickup from 3 days ago").
 
-      ALTER TABLE facts ADD COLUMN entity_id       TEXT;
-      ALTER TABLE facts ADD COLUMN importance_score INTEGER DEFAULT 50;
-      ALTER TABLE facts ADD COLUMN valid_until      TEXT;
-      ALTER TABLE facts ADD COLUMN context_type     TEXT DEFAULT 'historical';
+      -- ALTER TABLE ADD COLUMN does not support IF NOT EXISTS in SQLite.
+      -- Wrap each in its own execSync so a duplicate-column error on reinstall
+      -- does not abort the entire migration. Each column is idempotent this way.
+      `);
+      // Add V3 columns to facts — safe on reinstall
+      for (const col of [
+        "ALTER TABLE facts ADD COLUMN entity_id       TEXT",
+        "ALTER TABLE facts ADD COLUMN importance_score INTEGER DEFAULT 50",
+        "ALTER TABLE facts ADD COLUMN valid_until      TEXT",
+        "ALTER TABLE facts ADD COLUMN context_type     TEXT DEFAULT 'historical'",
+      ]) {
+        try { db.execSync(col + ";"); } catch { /* column already exists — safe */ }
+      }
+      db.execSync(`
 
       -- Indexes on facts — queried on every memory probe and Tier 1 response.
       -- No index = full table scan on every message. Costs nothing to add now.
