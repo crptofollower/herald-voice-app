@@ -4,21 +4,11 @@
 //
 // Call initDB() once on app mount (in App.tsx).
 // All other db/ modules import getDB() from schema.ts directly.
-//
-// Usage in App.tsx:
-//   import { initDB } from './src/db/useDeviceDB';
-//   useEffect(() => { initDB(); }, []);
 
 import { runMigrations } from "./schema";
-import { expireTemporalFacts } from "./factDB";
 
 let _initialized = false;
 let _initPromise: Promise<void> | null = null;
-
-// ─── initDB ───────────────────────────────────────────────────────────────────
-//
-// Idempotent — safe to call multiple times, only runs once.
-// Awaitable — callers that need DB ready before proceeding can await this.
 
 export async function initDB(): Promise<void> {
   if (_initialized) return;
@@ -27,11 +17,32 @@ export async function initDB(): Promise<void> {
   _initPromise = (async () => {
     try {
       await runMigrations();
-      // Expire facts whose valid_until has passed — runs in <1ms, safe on every open
-      expireTemporalFacts();
+
+      // Expire temporal facts — wrapped in try-catch so a failure here
+      // never blocks app init. Import is lazy to avoid circular dependency.
+      try {
+        const { expireTemporalFacts } = await import("./factDB");
+        if (typeof expireTemporalFacts === "function") {
+          expireTemporalFacts();
+        }
+      } catch {
+        // Non-critical — app continues without expiry on this open
+      }
+
+      // Register contact extractor — lazy import for same reason
+      try {
+        const { _registerContactExtractor } = await import("./factDB");
+        const { extractContactFromFact } = await import("./contactsDB");
+        if (typeof _registerContactExtractor === "function" &&
+            typeof extractContactFromFact === "function") {
+          _registerContactExtractor(extractContactFromFact);
+        }
+      } catch {
+        // Non-critical
+      }
+
       _initialized = true;
     } catch (e) {
-      // Reset so next call retries
       _initPromise = null;
       console.error("[Herald] DB init failed:", e);
       throw e;
@@ -40,11 +51,6 @@ export async function initDB(): Promise<void> {
 
   return _initPromise;
 }
-
-// ─── isDBReady ────────────────────────────────────────────────────────────────
-//
-// Synchronous check — use this in components that want to skip DB reads
-// until init is confirmed, without awaiting.
 
 export function isDBReady(): boolean {
   return _initialized;
