@@ -56,34 +56,42 @@ export async function refreshCalendarCache(): Promise<void> {
     const db = getDB();
     const nowISO = new Date().toISOString();
 
-    // Full refresh — clear existing cache
-    db.runSync("DELETE FROM calendar_cache;");
+    db.execSync("BEGIN IMMEDIATE;");
+    try {
+      // Full refresh — clear existing cache
+      db.runSync("DELETE FROM calendar_cache;");
 
-    for (const event of events) {
-      if (!event.title) continue;
+      for (const event of events) {
+        if (!event.title) continue;
 
-      // Parse startDate/endDate safely — expo-calendar returns strings on Android
-      // that may not be standard ISO. new Date() handles most formats.
-      const startMs = event.startDate ? new Date(event.startDate).getTime() : now;
-      const endMs = event.endDate ? new Date(event.endDate).getTime() : now;
+        // Parse startDate/endDate safely — expo-calendar returns strings on Android
+        // that may not be standard ISO. new Date() handles most formats.
+        const startMs = event.startDate ? new Date(event.startDate).getTime() : now;
+        const endMs = event.endDate ? new Date(event.endDate).getTime() : now;
 
-      // Skip events with unparseable dates
-      if (isNaN(startMs) || isNaN(endMs)) continue;
+        // Skip events with unparseable dates
+        if (isNaN(startMs) || isNaN(endMs)) continue;
 
-      db.runSync(
-        `INSERT OR REPLACE INTO calendar_cache
-           (id, title, start_ms, end_ms, all_day, notes, cached_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?);`,
-        [
-          event.id,
-          event.title,
-          startMs,
-          endMs,
-          event.allDay ? 1 : 0,
-          event.notes ?? null,
-          nowISO,
-        ]
-      );
+        db.runSync(
+          `INSERT OR REPLACE INTO calendar_cache
+             (id, title, start_ms, end_ms, all_day, notes, cached_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?);`,
+          [
+            event.id,
+            event.title,
+            startMs,
+            endMs,
+            event.allDay ? 1 : 0,
+            event.notes ?? null,
+            nowISO,
+          ]
+        );
+      }
+
+      db.execSync("COMMIT;");
+    } catch {
+      db.execSync("ROLLBACK;");
+      return; // leave existing cache intact
     }
   } catch {
     // Silent — leave existing cache intact on error
