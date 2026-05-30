@@ -74,9 +74,10 @@ import {
   resolvePhoneNumber,
   updateLastContact,
   extractContactFromFact,
+  findContactByRelationship,
+  findContactByName,
 } from "../db/contactsDB";
 import { writeMedicalFact, writeMedicalRecord, writeMedication, writeMedicalContact } from "../db/medicalDB";
-import { findContactByRelationship, findContactByName, updateLastContact, writeContact, extractContactFromFact } from "../db/contactsDB";
 import { drainPendingWrites, getPendingCount, queueWrite } from "../db/pendingWritesDB";
 import { _registerContactExtractor, writeFacts } from "../db/factDB";
 
@@ -1139,7 +1140,7 @@ export default function ChatScreen() {
       content: `Done — "${title}" is on your calendar for ${dateDisplay} at ${timeDisplay}.`,
       timestamp: Date.now(),
     });
-    refreshCalendarCache().catch(() => {}); // update cache after write
+    await refreshCalendarCache().catch(() => {}); // await so post-write queries hit fresh cache
   };
 
   const handleMapsAction = async (query: string) => {
