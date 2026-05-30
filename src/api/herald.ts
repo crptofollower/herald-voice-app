@@ -71,11 +71,16 @@ export interface ProfilePayload {
 
 export interface ProactiveItem {
   id: string;
-  type: "freddie" | "weather" | "sports" | "health" | "reminder" | "news";
-  title: string;
-  body: string;
+  // All known backend type values — "morning_briefing" etc. come from backend
+  type: "freddie" | "weather" | "sports" | "health" | "reminder" | "news"
+      | "morning_briefing" | "afternoon_checkin" | "medication_check" | "watcher_alert"
+      | string; // fallback for future types
+  title?: string;   // ProactiveCard UI shape
+  body?: string;    // ProactiveCard UI shape
+  text?: string;    // Backend shape — herald_api.py pushes { text } not { title, body }
   metadata?: Record<string, unknown>;
-  timestamp: number;
+  timestamp?: number;
+  created_at?: string;
   read: boolean;
   message?: string;
 }

@@ -31,6 +31,11 @@ export interface Fact {
   source_date: string;
   last_used?: string;
   use_count: number;
+  // Schema V3 fields — added by MIGRATIONS[3]
+  entity_id?: string;
+  importance_score?: number;   // 0-100
+  valid_until?: string;        // ISO date — NULL = permanent
+  context_type?: string;       // 'active' | 'historical'
 }
 
 // ─── writeFact ────────────────────────────────────────────────────────────────
@@ -39,14 +44,35 @@ export interface Fact {
 // (case-insensitive, trimmed) already exists, updates use_count only.
 // Returns the fact id.
 
+export interface WriteFactOptions {
+  confidence?: Fact["confidence"];
+  contextType?: "active" | "historical";
+  validUntil?: string;   // ISO date — fact expires (e.g. "picking someone up today")
+  entityId?: string;
+  importanceScore?: number;
+}
+
 export function writeFact(
   fact: string,
   category: string,
-  confidence: Fact["confidence"] = "stated"
+  optionsOrConfidence: WriteFactOptions | Fact["confidence"] = "stated"
 ): string {
   const db = getDB();
   const normalized = fact.trim().toLowerCase();
   const today = new Date().toISOString().split("T")[0];
+
+  // Accept legacy (string) or new options object
+  const opts: WriteFactOptions =
+    typeof optionsOrConfidence === "string"
+      ? { confidence: optionsOrConfidence }
+      : optionsOrConfidence;
+
+  const confidence = opts.confidence ?? "stated";
+  const contextType = opts.contextType ?? "historical";
+  const validUntil = opts.validUntil ?? null;
+  const entityId = opts.entityId ?? null;
+  // importance_score: use provided, or derive from category if not given
+  const importanceScore = opts.importanceScore ?? CATEGORY_IMPORTANCE[category] ?? 50;
 
   // Check for existing fact with same normalized text
   const existing = db.getFirstSync<{ id: string; use_count: number }>(
@@ -63,13 +89,46 @@ export function writeFact(
   }
 
   const id = `f_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-  db.runSync(
-    `INSERT INTO facts (id, fact, category, confidence, source_date, use_count)
-     VALUES (?, ?, ?, ?, ?, 0);`,
-    [id, fact.trim(), category, confidence, today]
-  );
+
+  // Try to insert with v3 columns — fall back gracefully if migration hasn't run yet
+  try {
+    db.runSync(
+      `INSERT INTO facts
+         (id, fact, category, confidence, source_date, use_count,
+          context_type, valid_until, entity_id, importance_score)
+       VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?);`,
+      [id, fact.trim(), category, confidence, today,
+       contextType, validUntil, entityId, importanceScore]
+    );
+  } catch {
+    // V3 columns not yet available — insert base columns only
+    db.runSync(
+      `INSERT INTO facts (id, fact, category, confidence, source_date, use_count)
+       VALUES (?, ?, ?, ?, ?, 0);`,
+      [id, fact.trim(), category, confidence, today]
+    );
+  }
   return id;
 }
+
+// Category → default importance score mapping.
+// Mirrors memory_importance table seeded in MIGRATIONS[3].
+const CATEGORY_IMPORTANCE: Record<string, number> = {
+  medical:       100,
+  medication:     95,
+  family:         85,
+  relationships:  75,
+  financial:      70,
+  work:           60,
+  schedule:       65,
+  location:       50,
+  travel:         45,
+  life_events:    55,
+  sports:         30,
+  preferences:    20,
+  food:           20,
+  general:        10,
+};
 
 // ─── writeFacts ───────────────────────────────────────────────────────────────
 //
@@ -100,43 +159,82 @@ export function getFactsByCategory(category: string): Fact[] {
 
 // ─── getTopFacts ──────────────────────────────────────────────────────────────
 //
-// Returns the top N facts across all categories, ordered by use_count DESC.
-// Used to build the local context block sent to backend on Tier 2 queries.
+// Returns the top N facts, decay-weighted by recency.
+// Formula: score = use_count * importance_score / MAX(1, days_since_source_date)
+// This means a fact mentioned 3 times this week beats one mentioned 10 times
+// six months ago — recency of relevance matters as much as frequency.
+//
+// Filters:
+//   - Expired facts (valid_until < today) are excluded
+//   - Historical context_type is included but ranked below active
 
 export function getTopFacts(limit = 20): Fact[] {
   const db = getDB();
-  return db.getAllSync<Fact>(
-    "SELECT * FROM facts ORDER BY use_count DESC, source_date DESC LIMIT ?;",
-    [limit]
-  );
+  try {
+    // V3 query: decay weighting + expiry filter + context_type ranking
+    return db.getAllSync<Fact>(
+      `SELECT *,
+         (COALESCE(use_count, 1) * COALESCE(importance_score, 50))
+           / MAX(1.0, julianday('now') - julianday(source_date)) AS decay_score
+       FROM facts
+       WHERE (valid_until IS NULL OR valid_until >= date('now'))
+       ORDER BY
+         CASE WHEN context_type = 'active' THEN 1 ELSE 2 END ASC,
+         decay_score DESC
+       LIMIT ?;`,
+      [limit]
+    );
+  } catch {
+    // V3 columns not yet available — fall back to simple ordering
+    return db.getAllSync<Fact>(
+      "SELECT * FROM facts ORDER BY use_count DESC, source_date DESC LIMIT ?;",
+      [limit]
+    );
+  }
 }
 
 // ─── getFactsSummary ──────────────────────────────────────────────────────────
 //
-// Returns a plain-text summary of known facts, grouped by category.
-// Used by tier1Responses.ts to answer "what do you know about me" queries
-// until Phi-3 is available in Session W.
+// Returns a plain-text summary of known facts for Tier 2 context.
+// Ordered by importance + recency decay. Expired facts excluded.
+// Caps at 4 facts per category so high-volume categories (general) don't
+// overwhelm the context window. Total capped at 30 facts.
 
 export function getFactsSummary(): string {
-  const db = getDB();
-  const facts = db.getAllSync<Fact>(
-    "SELECT * FROM facts ORDER BY category, use_count DESC;"
-  );
-
+  const facts = getTopFacts(60); // get more, then cap per category below
   if (facts.length === 0) return "";
+
+  // Category display order — most important first
+  const CATEGORY_ORDER = [
+    "medical", "medication", "family", "relationships",
+    "financial", "work", "schedule", "location",
+    "life_events", "travel", "preferences", "sports", "food", "general",
+  ];
 
   const grouped: Record<string, string[]> = {};
   for (const f of facts) {
     if (!grouped[f.category]) grouped[f.category] = [];
-    grouped[f.category].push(f.fact);
+    if (grouped[f.category].length < 4) { // cap 4 per category
+      grouped[f.category].push(f.fact);
+    }
   }
 
   const lines: string[] = [];
-  for (const [cat, items] of Object.entries(grouped)) {
-    const label = cat.charAt(0).toUpperCase() + cat.slice(1);
-    lines.push(`${label}: ${items.slice(0, 5).join("; ")}`);
+  // Emit in importance order
+  for (const cat of CATEGORY_ORDER) {
+    if (grouped[cat]?.length) {
+      const label = cat.charAt(0).toUpperCase() + cat.slice(1).replace("_", " ");
+      lines.push(`${label}: ${grouped[cat].join("; ")}`);
+    }
   }
-  return lines.join("\n");
+  // Any categories not in the order list (future expansion)
+  for (const [cat, items] of Object.entries(grouped)) {
+    if (!CATEGORY_ORDER.includes(cat)) {
+      lines.push(`${cat}: ${items.join("; ")}`);
+    }
+  }
+
+  return lines.slice(0, 14).join("\n"); // max 14 category lines
 }
 
 // ─── markFactUsed ─────────────────────────────────────────────────────────────
@@ -155,6 +253,48 @@ export function markFactUsed(id: string): void {
     "UPDATE facts SET use_count = ?, last_used = ? WHERE id = ?;",
     [row.use_count + 1, new Date().toISOString(), id]
   );
+}
+
+
+// ─── expireTemporalFacts ──────────────────────────────────────────────────────
+//
+// Call on app open to clean up facts that have passed their valid_until date.
+// Marks them historical rather than deleting — preserves the record.
+// Example: "picking someone up at 4:30 today" should become historical tomorrow.
+
+export function expireTemporalFacts(): void {
+  const db = getDB();
+  try {
+    db.runSync(
+      `UPDATE facts
+       SET context_type = 'historical'
+       WHERE valid_until IS NOT NULL
+         AND valid_until < date('now')
+         AND context_type = 'active';`
+    );
+  } catch {
+    // V3 columns not yet available — no-op
+  }
+}
+
+// ─── writeFactWithExpiry ──────────────────────────────────────────────────────
+//
+// Convenience wrapper for time-sensitive facts.
+// daysValid: how many days until this fact becomes historical.
+// Use for: "picking someone up today", "steak dinner tonight", event-specific context.
+
+export function writeFactWithExpiry(
+  fact: string,
+  category: string,
+  daysValid: number
+): string {
+  const expiry = new Date();
+  expiry.setDate(expiry.getDate() + daysValid);
+  return writeFact(fact, category, {
+    contextType: "active",
+    validUntil: expiry.toISOString().split("T")[0],
+    confidence: "stated",
+  });
 }
 
 // ─── deleteFact ───────────────────────────────────────────────────────────────

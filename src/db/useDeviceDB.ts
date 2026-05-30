@@ -10,6 +10,7 @@
 //   useEffect(() => { initDB(); }, []);
 
 import { runMigrations } from "./schema";
+import { expireTemporalFacts } from "./factDB";
 
 let _initialized = false;
 let _initPromise: Promise<void> | null = null;
@@ -26,6 +27,8 @@ export async function initDB(): Promise<void> {
   _initPromise = (async () => {
     try {
       await runMigrations();
+      // Expire facts whose valid_until has passed — runs in <1ms, safe on every open
+      expireTemporalFacts();
       _initialized = true;
     } catch (e) {
       // Reset so next call retries

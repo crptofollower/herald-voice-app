@@ -1,6 +1,9 @@
 // ProactiveCard.tsx -- Dismissable proactive notification card
-// Handles Freddie trade setups, weather alerts, sports, and general items.
-// Accessible: large touch targets, high contrast, readable text.
+// Build 21 fix: backend items use { text, type } not { title, body, type }.
+//   TYPE_LABELS/COLORS now cover all backend type values including
+//   morning_briefing, afternoon_checkin, medication_check, watcher_alert.
+//   Unknown types fall back to a generic label instead of crashing.
+//   item.title falls back to item.text so backend messages always render.
 
 import React, { useRef } from "react";
 import {
@@ -13,23 +16,35 @@ import {
 import type { ProactiveItem } from "../api/herald";
 import type { Persona } from "../constants/personas";
 
-const TYPE_LABELS: Record<ProactiveItem["type"], string> = {
-  freddie: "TRADE SETUP",
-  weather: "WEATHER",
-  sports: "SPORTS",
-  health: "HEALTH",
-  reminder: "REMINDER",
-  news: "NEWS",
+// All known backend type values — extend here as new types are added.
+const TYPE_LABELS: Record<string, string> = {
+  freddie:           "TRADE SETUP",
+  weather:           "WEATHER",
+  sports:            "SPORTS",
+  health:            "HEALTH",
+  reminder:          "REMINDER",
+  news:              "NEWS",
+  morning_briefing:  "MORNING",
+  afternoon_checkin: "CHECK-IN",
+  medication_check:  "MEDICATION",
+  watcher_alert:     "ALERT",
 };
 
-const TYPE_COLORS: Record<ProactiveItem["type"], string> = {
-  freddie: "#2A7BB5",
-  weather: "#5A7A3A",
-  sports: "#C4622D",
-  health: "#8B4A9E",
-  reminder: "#6B5F54",
-  news: "#1A1A1A",
+const TYPE_COLORS: Record<string, string> = {
+  freddie:           "#2A7BB5",
+  weather:           "#5A7A3A",
+  sports:            "#C4622D",
+  health:            "#8B4A9E",
+  reminder:          "#6B5F54",
+  news:              "#1A1A1A",
+  morning_briefing:  "#2A7BB5",
+  afternoon_checkin: "#5A7A3A",
+  medication_check:  "#8B4A9E",
+  watcher_alert:     "#C4622D",
 };
+
+const FALLBACK_LABEL = "HERALD";
+const FALLBACK_COLOR = "#4A5568";
 
 interface Props {
   item: ProactiveItem;
@@ -61,7 +76,13 @@ export function ProactiveCard({ item, persona, onRead, onDismiss }: Props) {
     onRead(item.id);
   };
 
-  const typeColor = TYPE_COLORS[item.type];
+  const typeLabel = TYPE_LABELS[item.type] ?? FALLBACK_LABEL;
+  const typeColor = TYPE_COLORS[item.type] ?? FALLBACK_COLOR;
+
+  // Backend sends { text } — ProactiveItem interface has { title, body }.
+  // Support both shapes so old and new backend items render correctly.
+  const displayTitle = item.title || (item as any).text || "";
+  const displayBody  = item.body  || "";
 
   return (
     <Animated.View
@@ -80,12 +101,12 @@ export function ProactiveCard({ item, persona, onRead, onDismiss }: Props) {
         onPress={handlePress}
         activeOpacity={0.8}
         accessibilityRole="button"
-        accessibilityLabel={`${TYPE_LABELS[item.type]}: ${item.title}`}
+        accessibilityLabel={`${typeLabel}: ${displayTitle}`}
       >
         <View style={styles.header}>
           <View style={[styles.typePill, { backgroundColor: typeColor + "18" }]}>
             <Text style={[styles.typeLabel, { color: typeColor }]}>
-              {TYPE_LABELS[item.type]}
+              {typeLabel}
             </Text>
           </View>
 
@@ -96,18 +117,20 @@ export function ProactiveCard({ item, persona, onRead, onDismiss }: Props) {
             accessibilityLabel="Dismiss"
           >
             <Text style={[styles.dismissX, { color: persona.colors.textMuted }]}>
-              x
+              ×
             </Text>
           </TouchableOpacity>
         </View>
 
         <Text style={[styles.title, { color: persona.colors.text }]}>
-          {item.title}
+          {displayTitle}
         </Text>
 
-        <Text style={[styles.body, { color: persona.colors.textMuted }]}>
-          {item.body}
-        </Text>
+        {displayBody ? (
+          <Text style={[styles.body, { color: persona.colors.textMuted }]}>
+            {displayBody}
+          </Text>
+        ) : null}
       </TouchableOpacity>
     </Animated.View>
   );
@@ -146,8 +169,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   dismissX: {
-    fontSize: 16,
-    lineHeight: 20,
+    fontSize: 18,
+    lineHeight: 22,
   },
   title: {
     fontSize: 16,
