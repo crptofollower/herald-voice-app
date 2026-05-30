@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.65 -- SMS tag: contact|message format (contact resolution on device)
+# v8.67 -- /user/export binds access_code to profile (per-user auth)
 #          PHONE tag: accepts name/relationship, Herald resolves to number
 #          Contact resolution via contactsDB + expo-contacts fallback
 #          20+ new app launch targets added (native, Samsung, medical, finance)
@@ -54,7 +54,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.65")
+app = FastAPI(title="Herald API", version="8.67")
 
 app.add_middleware(
     CORSMiddleware,
@@ -4685,7 +4685,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.65",
+        "status": "ok", "server": "herald-api", "version": "8.67",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -6362,15 +6362,34 @@ async def health_sync(request: Request):
 
 
 @app.get("/user/export/{user_id}")
-async def user_export(user_id: str, secret: str = ""):
+async def user_export(user_id: str, request: Request, secret: str = ""):
     """
     v8.53: Session L migration endpoint.
     Returns all personal data for a user as JSON so the device can
     import it into local SQLite. After import, device calls DELETE /user/data
     to wipe personal data from the backend. Backend then only stores billing state.
-    Auth: requires WEBHOOK_SECRET.
+    Auth: WEBHOOK_SECRET query param (admin) OR access_code / owner_code
+    (query or JSON body) matching HERALD_ACCESS_CODE / HERALD_OWNER_CODE.
     """
-    if not WEBHOOK_SECRET or secret != WEBHOOK_SECRET:
+    admin_ok = bool(WEBHOOK_SECRET and secret == WEBHOOK_SECRET)
+
+    access_code = request.query_params.get("access_code", "").strip().lower()
+    owner_code = request.query_params.get("owner_code", "").strip().lower()
+    if not access_code and not owner_code:
+        try:
+            body = await request.json()
+            if isinstance(body, dict):
+                access_code = body.get("access_code", "").strip().lower()
+                owner_code = body.get("owner_code", "").strip().lower()
+        except Exception:
+            pass
+
+    valid_codes = [ACCESS_CODE.lower()] if ACCESS_CODE else []
+    owner_codes = [OWNER_CODE.lower()] if OWNER_CODE else []
+    submitted = [c for c in (access_code, owner_code) if c]
+    code_ok = any(c in valid_codes + owner_codes for c in submitted)
+
+    if not admin_ok and not code_ok:
         return JSONResponse({"error": "unauthorized"}, status_code=403)
     if not user_id:
         return JSONResponse({"error": "user_id required"}, status_code=400)
@@ -6378,6 +6397,11 @@ async def user_export(user_id: str, secret: str = ""):
     profile = user_profiles.get(user_id, {})
     if not profile:
         return JSONResponse({"error": "user not found"}, status_code=404)
+
+    if not admin_ok:
+        profile_code = str(profile.get("access_code", "")).strip().lower()
+        if not profile_code or not any(c == profile_code for c in submitted):
+            return JSONResponse({"error": "unauthorized"}, status_code=403)
 
     try:
         conn = _db_conn()
