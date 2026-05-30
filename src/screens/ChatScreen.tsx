@@ -533,19 +533,6 @@ export default function ChatScreen() {
       return;
     }
 
-    // ── Calendar on-device -- read expo-calendar directly, zero network ────
-    if (CALENDAR_QUERY_PATTERNS.some((p) => p.test(text))) {
-      const calAnswer = await readCalendarDirect(text);
-      if (calAnswer) {
-        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-        addMessage({ id: generateId('msg'), role: 'assistant', content: calAnswer, timestamp: Date.now() });
-        speak(calAnswer);
-        setInputText('');
-        sendingRef.current = false;
-        return;
-      }
-    }
-
     // ── Tier router — device-first before any network call ───────────────────
     // Tier 1: answer from device SQLite, no LLM, no network, under 200ms.
     // Tier 2: memory probe — attach structured local context to backend request.
@@ -813,9 +800,21 @@ export default function ChatScreen() {
     setActionStatus("executing");
     try {
       switch (action.type) {
-        case "calendar":
-          await handleCalendarAction(action.value);
+        case "calendar": {
+          // Pass recent message text so resolveLocalDate can catch LLM day-name miscounts
+          const recentText = messages.slice(-6).map(m => m.content).join(" ");
+          await handleCalendarAction(action.value, recentText);
           break;
+        }
+        case "calendar_multi": {
+          // Two calendar events (e.g. round-trip flights) — write each in sequence
+          const recentText = messages.slice(-6).map(m => m.content).join(" ");
+          const eventValues = action.value.split("||");
+          for (const ev of eventValues) {
+            await handleCalendarAction(ev.trim(), recentText);
+          }
+          break;
+        }
         case "maps":
           await handleMapsAction(action.value);
           break;
@@ -924,13 +923,84 @@ export default function ChatScreen() {
     }
   };
 
+  // ── resolveLocalDate ───────────────────────────────────────────────────────
+  // Converts a YYYY-MM-DD string from the LLM into a verified local Date.
+  // The LLM receives local_date as a string and sometimes miscounts day names
+  // (e.g. writes Wednesday when user said Tuesday). This function catches
+  // the mismatch by checking what day of week the LLM date actually lands on
+  // versus what day name appears in the conversation text, and corrects it.
+  //
+  // Also handles bare day names ("tuesday", "next friday") as a fallback
+  // if the LLM failed to produce a YYYY-MM-DD at all.
+
+  const resolveLocalDate = (
+    llmDateStr: string,
+    conversationText: string
+  ): string => {
+    const DAY_NAMES = ["sunday","monday","tuesday","wednesday","thursday","friday","saturday"];
+
+    // If LLM gave us a valid YYYY-MM-DD, verify it matches any day name in the text
+    if (llmDateStr && /^\d{4}-\d{2}-\d{2}$/.test(llmDateStr)) {
+      const [year, month, day] = llmDateStr.split("-").map(Number);
+      // Use local noon to avoid DST boundary issues
+      const llmDate = new Date(year, month - 1, day, 12, 0, 0);
+      if (!isNaN(llmDate.getTime())) {
+        const llmDayName = DAY_NAMES[llmDate.getDay()];
+        // Check if conversation mentions a specific day that differs from LLM date
+        const mentionedDay = DAY_NAMES.find(d => new RegExp(`\\b${d}\\b`, 'i').test(conversationText));
+        if (mentionedDay && mentionedDay !== llmDayName) {
+          // LLM got the wrong day — find the correct upcoming date for mentionedDay
+          const targetDayIndex = DAY_NAMES.indexOf(mentionedDay);
+          const today = new Date();
+          today.setHours(12, 0, 0, 0);
+          const todayIndex = today.getDay();
+          let daysAhead = targetDayIndex - todayIndex;
+          if (daysAhead <= 0) daysAhead += 7; // always future
+          const corrected = new Date(today);
+          corrected.setDate(today.getDate() + daysAhead);
+          return [
+            corrected.getFullYear(),
+            String(corrected.getMonth() + 1).padStart(2, "0"),
+            String(corrected.getDate()).padStart(2, "0"),
+          ].join("-");
+        }
+        // LLM date is consistent with text — use it
+        return llmDateStr;
+      }
+    }
+
+    // Fallback: try to parse a day name directly from conversation text
+    const mentionedDay = DAY_NAMES.find(d => new RegExp(`\\b${d}\\b`, 'i').test(conversationText));
+    if (mentionedDay) {
+      const targetDayIndex = DAY_NAMES.indexOf(mentionedDay);
+      const today = new Date();
+      today.setHours(12, 0, 0, 0);
+      const todayIndex = today.getDay();
+      let daysAhead = targetDayIndex - todayIndex;
+      if (daysAhead <= 0) daysAhead += 7;
+      const resolved = new Date(today);
+      resolved.setDate(today.getDate() + daysAhead);
+      return [
+        resolved.getFullYear(),
+        String(resolved.getMonth() + 1).padStart(2, "0"),
+        String(resolved.getDate()).padStart(2, "0"),
+      ].join("-");
+    }
+
+    // No day name found — return whatever the LLM gave us (tomorrow fallback in handler)
+    return llmDateStr;
+  };
+
   // ── Calendar action ───────────────────────────────────────────────────────
 
-  const handleCalendarAction = async (value: string) => {
+  const handleCalendarAction = async (value: string, conversationContext = "") => {
     const parts = value.split("|");
     const title = parts[0]?.trim() || "Appointment";
-    const dateStr = parts[1]?.trim() || "";
+    const rawDateStr = parts[1]?.trim() || "";
     const timeStr = parts[2]?.trim() || "";
+
+    // Resolve date on device — catches LLM day-name miscounts
+    const dateStr = resolveLocalDate(rawDateStr, conversationContext);
 
     if (!timeStr || !/^\d{1,2}:\d{2}$/.test(timeStr)) {
       addMessage({
@@ -1020,7 +1090,9 @@ export default function ChatScreen() {
       content: `Done — "${title}" is on your calendar for ${dateDisplay} at ${timeDisplay}.`,
       timestamp: Date.now(),
     });
-    refreshCalendarCache().catch(() => {}); // update cache after write
+    // Await the cache refresh before returning — so any immediate follow-up
+    // calendar query ("were you able to add that?") hits a fresh cache.
+    await refreshCalendarCache().catch(() => {});
   };
 
   const handleMapsAction = async (query: string) => {
