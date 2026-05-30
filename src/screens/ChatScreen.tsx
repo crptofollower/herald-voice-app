@@ -66,22 +66,19 @@ import { answerFromDevice } from '../utils/localAnswers';
 import { classifyQuery } from "../routing/tierRouter";
 import { handleTier1, buildTier2DeviceContext, writeProfileFromOnboarding } from "../routing/tier1Responses";
 import { refreshCalendarCache } from "../db/calendarCacheDB";
-import { writeFacts, _registerContactExtractor } from "../db/factDB";
 import { initDB } from "../db/useDeviceDB";
 import { runMigration } from "../routing/migration";
 import { setProfileField, setProfileFields } from "../db/profileDB";
-import { writeMedicalFact } from "../db/medicalDB";
 import {
   writeContact,
   resolvePhoneNumber,
   updateLastContact,
   extractContactFromFact,
 } from "../db/contactsDB";
-import { queueWrite, drainPendingWrites, getPendingCount } from "../db/pendingWritesDB";
 import { writeMedicalFact, writeMedicalRecord, writeMedication, writeMedicalContact } from "../db/medicalDB";
 import { findContactByRelationship, findContactByName, updateLastContact, writeContact, extractContactFromFact } from "../db/contactsDB";
-import { queueWrite, drainPendingWrites, getPendingCount } from "../db/pendingWritesDB";
-import { _registerContactExtractor } from "../db/factDB";
+import { drainPendingWrites, getPendingCount, queueWrite } from "../db/pendingWritesDB";
+import { _registerContactExtractor, writeFacts } from "../db/factDB";
 
 interface IntentAction {
   type: string;
