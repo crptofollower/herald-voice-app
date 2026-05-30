@@ -1,21 +1,11 @@
 // src/db/calendarCacheDB.ts
 // Herald device SQLite — calendar_cache table read/write.
 // Session L — Device-First Intelligence Layer
-//
-// Caches device calendar events in a 14-day window.
-// Refreshed on app open and after any calendar write.
-//
-// This eliminates the async timing race that caused intermittent calendar
-// read failures — the tier router reads from this cache synchronously
-// instead of racing against the live Calendar API async call.
-//
-// Refresh triggers (wired in ChatScreen.tsx Step 14):
-//   1. AppState change to 'active'
-//   2. After any successful calendar write
-//   3. On cold open before first message fires
-//
-// Cache is best-effort — if the device calendar API fails, the existing
-// cache is left intact. Stale cache is better than no cache.
+// Build 20 fix: store/compare as Unix ms timestamps (not ISO strings).
+//   Eliminates timezone mismatch on Android where expo-calendar returns
+//   non-standard ISO strings that break string comparison in SQLite.
+// Build 20 fix: requestCalendarPermissionsAsync (prompt) on first cache
+//   refresh so users who were never prompted get the dialog.
 
 import * as Calendar from "expo-calendar";
 import { getDB } from "./schema";
@@ -23,29 +13,38 @@ import { getDB } from "./schema";
 export interface CachedEvent {
   id: string;
   title: string;
-  start_time: string;   // ISO string
-  end_time: string;     // ISO string
-  all_day: number;      // 0 or 1
+  start_ms: number;   // Unix milliseconds — NOT ISO string
+  end_ms: number;     // Unix milliseconds
+  all_day: number;    // 0 or 1
   notes?: string;
-  cached_at: string;    // ISO string
+  cached_at: string;  // ISO string — fine for age check, not for filtering
 }
 
 // ─── refreshCalendarCache ─────────────────────────────────────────────────────
 //
 // Pulls events from the device calendar for the next 14 days and writes
 // them to the cache table. Clears stale entries before writing.
-// Silently no-ops if calendar permission is not granted.
+//
+// On first call: requests permission (shows dialog if not yet granted).
+// On subsequent calls: checks permission only (no dialog spam).
 
 export async function refreshCalendarCache(): Promise<void> {
   try {
-    const { status } = await Calendar.getCalendarPermissionsAsync();
+    // Request permission on first call — this is what shows the dialog.
+    // getCalendarPermissionsAsync only checks; it never prompts.
+    let { status } = await Calendar.getCalendarPermissionsAsync();
+    if (status !== "granted") {
+      const result = await Calendar.requestCalendarPermissionsAsync();
+      status = result.status;
+    }
     if (status !== "granted") return;
 
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(start);
-    end.setDate(end.getDate() + 14);
-    end.setHours(23, 59, 59, 999);
+    const now = Date.now();
+    const startMs = new Date().setHours(0, 0, 0, 0);
+    const endMs = startMs + 14 * 24 * 60 * 60 * 1000 - 1; // 14 days, end of day
+
+    const start = new Date(startMs);
+    const end = new Date(endMs);
 
     const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
     const events = await Calendar.getEventsAsync(
@@ -55,25 +54,34 @@ export async function refreshCalendarCache(): Promise<void> {
     );
 
     const db = getDB();
-    const now = new Date().toISOString();
+    const nowISO = new Date().toISOString();
 
-    // Clear existing cache — full refresh, not incremental
+    // Full refresh — clear existing cache
     db.runSync("DELETE FROM calendar_cache;");
 
     for (const event of events) {
       if (!event.title) continue;
+
+      // Parse startDate/endDate safely — expo-calendar returns strings on Android
+      // that may not be standard ISO. new Date() handles most formats.
+      const startMs = event.startDate ? new Date(event.startDate).getTime() : now;
+      const endMs = event.endDate ? new Date(event.endDate).getTime() : now;
+
+      // Skip events with unparseable dates
+      if (isNaN(startMs) || isNaN(endMs)) continue;
+
       db.runSync(
         `INSERT OR REPLACE INTO calendar_cache
-           (id, title, start_time, end_time, all_day, notes, cached_at)
+           (id, title, start_ms, end_ms, all_day, notes, cached_at)
          VALUES (?, ?, ?, ?, ?, ?, ?);`,
         [
           event.id,
           event.title,
-          event.startDate?.toString() ?? now,
-          event.endDate?.toString() ?? now,
+          startMs,
+          endMs,
           event.allDay ? 1 : 0,
           event.notes ?? null,
-          now,
+          nowISO,
         ]
       );
     }
@@ -85,34 +93,36 @@ export async function refreshCalendarCache(): Promise<void> {
 // ─── getCachedEvents ──────────────────────────────────────────────────────────
 //
 // Returns cached events for 'today', 'tomorrow', or 'this week'.
-// All comparisons use local time via Date parsing.
+// Compares Unix milliseconds — no timezone string parsing.
 
 export function getCachedEvents(
   window: "today" | "tomorrow" | "this week"
 ): CachedEvent[] {
   const db = getDB();
 
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
 
-  if (window === "tomorrow") {
-    start.setDate(start.getDate() + 1);
+  let windowStartMs: number;
+  let windowEndMs: number;
+
+  if (window === "today") {
+    windowStartMs = todayStart.getTime();
+    windowEndMs = windowStartMs + 24 * 60 * 60 * 1000 - 1;
+  } else if (window === "tomorrow") {
+    windowStartMs = todayStart.getTime() + 24 * 60 * 60 * 1000;
+    windowEndMs = windowStartMs + 24 * 60 * 60 * 1000 - 1;
+  } else {
+    // this week — 7 days from start of today
+    windowStartMs = todayStart.getTime();
+    windowEndMs = windowStartMs + 7 * 24 * 60 * 60 * 1000 - 1;
   }
-
-  const end = new Date(start);
-  if (window === "this week") {
-    end.setDate(end.getDate() + 7);
-  }
-  end.setHours(23, 59, 59, 999);
-
-  const startISO = start.toISOString();
-  const endISO = end.toISOString();
 
   return db.getAllSync<CachedEvent>(
     `SELECT * FROM calendar_cache
-     WHERE start_time >= ? AND start_time <= ?
-     ORDER BY start_time ASC;`,
-    [startISO, endISO]
+     WHERE start_ms >= ? AND start_ms <= ?
+     ORDER BY start_ms ASC;`,
+    [windowStartMs, windowEndMs]
   );
 }
 
@@ -125,18 +135,20 @@ export function formatCachedEventsForSpeech(
   events: CachedEvent[],
   window: "today" | "tomorrow" | "this week"
 ): string {
-  const dayLabel = window === "tomorrow"
-    ? "tomorrow"
-    : window === "this week"
-    ? "this week"
-    : "today";
+  const dayLabel =
+    window === "tomorrow"
+      ? "tomorrow"
+      : window === "this week"
+      ? "this week"
+      : "today";
 
   if (events.length === 0) {
     return `Your calendar is clear ${dayLabel}.`;
   }
 
   const lines = events.map((e) => {
-    const start = new Date(e.start_time);
+    // start_ms is now a number — no string parsing needed
+    const start = new Date(e.start_ms);
     if (e.all_day) {
       return window === "this week"
         ? `${e.title} on ${start.toLocaleDateString([], { weekday: "long" })}`
