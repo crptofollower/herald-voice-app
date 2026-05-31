@@ -175,6 +175,7 @@ export default function OnboardingScreen() {
     const trimmedName   = name.trim() || "Friend";
     const trimmedAiName = aiName.trim() || "Herald";  // default to Herald if blank
     saveLocalProfile("ai_name", trimmedAiName);
+    saveLocalProfile("persona", persona);
     setSubmitting(true);
     Speech.stop();
     try {
@@ -186,6 +187,10 @@ export default function OnboardingScreen() {
           ai_name:     trimmedAiName,            // NEW: send chosen AI name
           persona:     persona,
           access_code: accessCode.trim().toLowerCase(),
+          referral_code: accessCode.trim().toLowerCase() !== "herald2026" &&
+                         accessCode.trim().toLowerCase() !== "miked2026"
+                         ? accessCode.trim().toLowerCase()
+                         : undefined,
         }),
       });
       if (!response.ok) throw new Error(`${response.status}`);
