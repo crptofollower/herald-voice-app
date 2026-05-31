@@ -1144,7 +1144,26 @@ export default function ChatScreen() {
   };
 
   const handleMapsAction = async (query: string) => {
-    const encoded = encodeURIComponent(query);
+    let destination = query;
+
+    // Check if destination is a person/relationship rather than an address
+    const looksLikePlace = /\d|street|st\b|ave\b|avenue|drive|dr\b|road|rd\b|blvd|lane|ln\b|way\b|court|ct\b|highway|hwy|mall|airport|hospital|park\b/i.test(destination);
+
+    if (!looksLikePlace) {
+      try {
+        const { findContactByRelationship, findContactByName } = await import("../db/contactsDB");
+        const contact = await findContactByRelationship(destination)
+                     ?? await findContactByName(destination);
+        if (contact?.address) {
+          destination = contact.address;
+        }
+        // If no address found, fall through with original destination string
+      } catch {
+        // Silent — fall through with original destination
+      }
+    }
+
+    const encoded = encodeURIComponent(destination);
     const googleApp = `comgooglemaps://?q=${encoded}`;
     const googleWeb = `https://maps.google.com/maps?q=${encoded}`;
     try {
