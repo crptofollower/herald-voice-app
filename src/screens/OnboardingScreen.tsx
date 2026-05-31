@@ -22,6 +22,7 @@ import {
   ActivityIndicator,
   Animated,
   Image,
+  ImageBackground,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Location from "expo-location";
@@ -36,7 +37,7 @@ import { saveLocalProfile } from "../hooks/useDeviceMemory";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Step = "intro" | "mic" | "location" | "notify" | "code" | "name" | "ainame" | "persona" | "confirm";
+type Step = "code" | "name" | "ainame" | "promise" | "notify" | "location" | "mic" | "persona" | "confirm";
 
 const PERSONA_KEYS = Object.keys(PERSONAS) as PersonaKey[];
 
@@ -45,14 +46,14 @@ const BG_BOTTOM = "#0D2440";
 const ACCENT    = "#1A9B8A";
 
 const HERALD_SPEECH: Record<string, string> = {
-  intro:    "Hi. I am Herald. Your personal AI. Always on, always ready. Let me get you set up. It will only take a minute.",
-  mic:      "Can I hear you? I will listen when you tap the mic. I never record in the background. Never.",
-  location: "Can I see where you are? I will know your weather and what is nearby. I only check when you ask.",
-  notify:   "Can I tap you on the shoulder? I will let you know when something you care about happens. A score, a price, something you are watching. You can turn this off anytime.",
-  code:     "Enter your access code to get started.",
-  name:     "What should I call you?",
-  ainame:   "And what would you like to call me? Herald is my default. But make me yours.",
-  persona:  "Pick the world that feels most like you.",
+  code:     "Let's get you set up. I will walk you through it one step at a time. Nothing here is permanent.",
+  name:     "Who do I have the pleasure of meeting? Just your first name is perfect.",
+  ainame:   "Good to meet you. What would you like to call me? Pick a name that feels easy to say out loud.",
+  promise:  "Before I ask you for anything, I want to make you three promises. I will not sell what I know about you. I do not track where you go. I only look when it helps you.",
+  notify:   "Can I tap you on the shoulder? So I can let you know when something happens. A score you follow, a price you are watching. You decide what is worth a tap.",
+  location: "Can I see where you are? So I can tell you if it is raining, point you to a good place nearby, or help if you are ever lost. I only check when you ask. Never in the background.",
+  mic:      "Can I hear you? So you can just talk to me instead of typing. I only listen the moment you tap the mic. I never record or keep your voice.",
+  persona:  "Where do you feel most at home? I will take my colors from the place you pick.",
 };
 
 // ─── Speak helper ─────────────────────────────────────────────────────────────
@@ -91,7 +92,7 @@ function FadeIn({ children }: { children: React.ReactNode }) {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function OnboardingScreen() {
-  const [step, setStep]               = useState<Step>("intro");
+  const [step, setStep]               = useState<Step>("code");
   const [accessCode, setAccessCode]   = useState("");
   const [codeError, setCodeError]     = useState("");
   const [name, setName]               = useState("");
@@ -122,21 +123,33 @@ export default function OnboardingScreen() {
 
   useEffect(() => () => { Speech.stop(); }, []);
 
-  const DarkBg = ({ children }: { children: React.ReactNode }) => (
-    <LinearGradient colors={[BG_TOP, BG_BOTTOM]} style={styles.container}>
-      <FadeIn>{children}</FadeIn>
-    </LinearGradient>
+  const BEACH_IMAGE = require("../../assets/beach.jpg");
+
+  const BeachBg = ({ children }: { children: React.ReactNode }) => (
+    <ImageBackground
+      source={BEACH_IMAGE}
+      style={{ flex: 1 }}
+      resizeMode="cover"
+    >
+      <LinearGradient
+        colors={["rgba(13,18,23,0.88)", "rgba(13,18,23,0.78)", "rgba(13,18,23,0.85)"]}
+        locations={[0, 0.5, 1]}
+        style={{ flex: 1 }}
+      >
+        <FadeIn>{children}</FadeIn>
+      </LinearGradient>
+    </ImageBackground>
   );
 
   // ── Permission helpers ────────────────────────────────────────────────────
   const requestMic = async () => {
     try { await Audio.requestPermissionsAsync(); } catch {}
-    setStep("location");
+    setStep("persona");
   };
 
   const requestLocation = async () => {
     try { await Location.requestForegroundPermissionsAsync(); } catch {}
-    setStep("notify");
+    setStep("mic");
   };
 
   // ── Code validation ───────────────────────────────────────────────────────
@@ -195,237 +208,248 @@ export default function OnboardingScreen() {
     }
   };
 
-  // ─── STEP 1: Intro ────────────────────────────────────────────────────────
-  if (step === "intro") {
-    return (
-      <DarkBg>
-        <View style={styles.centered}>
-          <View style={[styles.logoBox, { backgroundColor: ACCENT }]}>
-            <Text style={styles.logoLetter}>H</Text>
-          </View>
-          <Text style={styles.wordmark}>HERALD</Text>
-          <Text style={styles.tagline}>Your personal AI.</Text>
-          <Text style={styles.tagline}>Always on. Always ready.</Text>
-          <Text style={styles.bodyText}>
-            I'm going to ask you a few quick things.{"\n"}
-            It'll take less than a minute.
-          </Text>
-          <TouchableOpacity
-            style={[styles.bigBtn, { backgroundColor: ACCENT }]}
-            onPress={() => setStep("mic")}
-            accessibilityRole="button"
-          >
-            <Text style={styles.bigBtnText}>Let's go →</Text>
-          </TouchableOpacity>
-        </View>
-      </DarkBg>
-    );
-  }
-
-  // ─── STEP 2: Mic ─────────────────────────────────────────────────────────
-  if (step === "mic") {
-    return (
-      <DarkBg>
-        <View style={styles.centered}>
-          <Text style={styles.emoji}>🎤</Text>
-          <Text style={styles.stepHeadline}>Can I hear you?</Text>
-          <Text style={styles.stepBody}>
-            Talk to me instead of typing.{"\n"}
-            I only listen when you tap the mic.{"\n"}
-            Never in the background.
-          </Text>
-          <TouchableOpacity
-            style={[styles.bigBtn, { backgroundColor: ACCENT }]}
-            onPress={requestMic}
-          >
-            <Text style={styles.bigBtnText}>Yes, let's go</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.skipBtn} onPress={() => setStep("location")}>
-            <Text style={styles.skipText}>skip</Text>
-          </TouchableOpacity>
-        </View>
-      </DarkBg>
-    );
-  }
-
-  // ─── STEP 3: Location ────────────────────────────────────────────────────
-  if (step === "location") {
-    return (
-      <DarkBg>
-        <View style={styles.centered}>
-          <Text style={styles.emoji}>📍</Text>
-          <Text style={styles.stepHeadline}>Can I see where you are?</Text>
-          <Text style={styles.stepBody}>
-            I'll know your weather and what's nearby.{"\n"}
-            I only check when you ask.{"\n"}
-            Never tracking in the background.
-          </Text>
-          <TouchableOpacity
-            style={[styles.bigBtn, { backgroundColor: ACCENT }]}
-            onPress={requestLocation}
-          >
-            <Text style={styles.bigBtnText}>Sure</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.skipBtn} onPress={() => setStep("notify")}>
-            <Text style={styles.skipText}>skip</Text>
-          </TouchableOpacity>
-        </View>
-      </DarkBg>
-    );
-  }
-
-  // ─── STEP 4: Notifications ───────────────────────────────────────────────
-  if (step === "notify") {
-    return (
-      <DarkBg>
-        <View style={styles.centered}>
-          <Text style={styles.emoji}>🔔</Text>
-          <Text style={styles.stepHeadline}>Can I tap you on the shoulder?</Text>
-          <Text style={styles.stepBody}>
-            I'll let you know when something{"\n"}
-            you care about happens.{"\n"}
-            A score. A price. Something you're watching.{"\n"}
-            You can turn this off anytime.
-          </Text>
-          <TouchableOpacity
-            style={[styles.bigBtn, { backgroundColor: ACCENT }]}
-            onPress={() => setStep("code")}
-          >
-            <Text style={styles.bigBtnText}>Sure</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.skipBtn} onPress={() => setStep("code")}>
-            <Text style={styles.skipText}>skip</Text>
-          </TouchableOpacity>
-        </View>
-      </DarkBg>
-    );
-  }
-
-  // ─── STEP 5: Access code ─────────────────────────────────────────────────
   if (step === "code") {
     return (
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-        keyboardVerticalOffset={0}
-      >
-        <LinearGradient colors={[BG_TOP, BG_BOTTOM]} style={styles.container}>
+      <BeachBg>
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
           <View style={styles.centered}>
-            <View style={[styles.logoBox, { backgroundColor: ACCENT }]}>
-              <Text style={styles.logoLetter}>H</Text>
-            </View>
-            <Text style={styles.wordmark}>HERALD</Text>
-            <Text style={styles.tagline}>Your personal AI — always on, always ready.</Text>
+            <Text style={styles.stepCaption}>Step 1 of 7  ·  about 5 minutes</Text>
+            <Text style={[styles.stepHeadline, { fontFamily: "SourceSerif4-Regular" }]}>
+              Let's get you set up.
+            </Text>
+            <Text style={styles.stepBody}>
+              I'll walk you through it one step at a time. Nothing here is permanent — you can change any of it later, or stop me whenever you like.
+            </Text>
             <TextInput
               style={[styles.codeInput, codeError ? styles.inputError : null]}
-              placeholder="Enter your access code..."
-              placeholderTextColor="#4A6A7A"
+              placeholder="Enter your invite code"
+              placeholderTextColor="rgba(255,255,255,0.35)"
               value={accessCode}
-              onChangeText={(t) => { setAccessCode(t); setCodeError(""); }}
+              onChangeText={setAccessCode}
               autoCapitalize="none"
               autoCorrect={false}
-              returnKeyType="done"
+              returnKeyType="go"
               onSubmitEditing={validateCode}
             />
             {codeError ? <Text style={styles.errorText}>{codeError}</Text> : null}
             <TouchableOpacity
-              style={[styles.bigBtn, { backgroundColor: ACCENT, opacity: accessCode.trim() ? 1 : 0.5 }]}
+              style={[styles.primaryBtn, { backgroundColor: "#4dd4d6" }]}
               onPress={validateCode}
-              disabled={!accessCode.trim()}
+              accessibilityRole="button"
             >
-              <Text style={styles.bigBtnText}>GET STARTED</Text>
+              <Text style={styles.primaryBtnText}>Begin</Text>
             </TouchableOpacity>
           </View>
-        </LinearGradient>
-      </KeyboardAvoidingView>
+        </KeyboardAvoidingView>
+      </BeachBg>
     );
   }
 
-  // ─── STEP 6: User name ───────────────────────────────────────────────────
   if (step === "name") {
     return (
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-        keyboardVerticalOffset={0}
-      >
-        <LinearGradient colors={[BG_TOP, BG_BOTTOM]} style={styles.container}>
+      <BeachBg>
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
           <View style={styles.centered}>
-            <Text style={styles.stepHeadline}>What should I call you?</Text>
+            <Text style={styles.stepCaption}>Step 2 of 7</Text>
+            <Text style={[styles.stepHeadline, { fontFamily: "SourceSerif4-Regular" }]}>
+              Who do I have the pleasure of meeting?
+            </Text>
             <Text style={styles.stepBody}>
-              I'll remember this.{"\n"}
-              Use whatever you actually go by.
+              Just your first name is perfect — it's how I'll greet you from now on.
             </Text>
             <TextInput
               style={styles.nameInput}
-              placeholder="Your name"
-              placeholderTextColor="#4A6A7A"
+              placeholder="Type your name"
+              placeholderTextColor="rgba(255,255,255,0.35)"
               value={name}
               onChangeText={setName}
-              autoFocus
               autoCapitalize="words"
               autoCorrect={false}
               returnKeyType="done"
               onSubmitEditing={advanceFromName}
             />
             <TouchableOpacity
-              style={[styles.bigBtn, { backgroundColor: ACCENT, opacity: name.trim() ? 1 : 0.5 }]}
+              style={[styles.primaryBtn, { backgroundColor: "#4dd4d6", opacity: name.trim() ? 1 : 0.5 }]}
               onPress={advanceFromName}
               disabled={!name.trim()}
+              accessibilityRole="button"
             >
-              <Text style={styles.bigBtnText}>That's me →</Text>
+              <Text style={styles.primaryBtnText}>That's me</Text>
             </TouchableOpacity>
           </View>
-        </LinearGradient>
-      </KeyboardAvoidingView>
+        </KeyboardAvoidingView>
+      </BeachBg>
     );
   }
 
-  // ─── STEP 7: AI name (NEW) ────────────────────────────────────────────────
-  // This is the hook. The user names their AI. It becomes theirs.
-  // Mickey named his "Harry." That's what makes this a companion, not a tool.
   if (step === "ainame") {
-    const displayName = name.trim() || "Friend";
+    const firstName = name.trim() || "there";
     return (
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-        keyboardVerticalOffset={0}
-      >
-        <LinearGradient colors={[BG_TOP, BG_BOTTOM]} style={styles.container}>
+      <BeachBg>
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
           <View style={styles.centered}>
-            <Text style={styles.stepHeadline}>
-              Nice to meet you, {displayName}.
+            <Text style={styles.stepGreeting}>Good to meet you, {firstName}.</Text>
+            <Text style={[styles.stepHeadline, { fontFamily: "SourceSerif4-Regular" }]}>
+              What would you like to call me?
             </Text>
             <Text style={styles.stepBody}>
-              What would you like to call me?{"\n"}
-              Herald is my default — but make me yours.
+              Pick a name that feels easy to say out loud. This is who you'll be talking to.
             </Text>
+            <View style={styles.chipRow}>
+              {["Sam", "Kit", "Cal", "Friday"].map((suggestion) => (
+                <TouchableOpacity
+                  key={suggestion}
+                  style={[
+                    styles.chip,
+                    aiName === suggestion && { backgroundColor: "#4dd4d6", borderColor: "#4dd4d6" },
+                  ]}
+                  onPress={() => setAiName(suggestion)}
+                >
+                  <Text style={[
+                    styles.chipText,
+                    aiName === suggestion && { color: "#0d1217" },
+                  ]}>{suggestion}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
             <TextInput
               style={styles.nameInput}
-              placeholder="Herald"
-              placeholderTextColor="#4A6A7A"
+              placeholder="Or type something else…"
+              placeholderTextColor="rgba(255,255,255,0.35)"
               value={aiName}
               onChangeText={setAiName}
-              autoFocus
               autoCapitalize="words"
               autoCorrect={false}
               returnKeyType="done"
-              onSubmitEditing={() => setStep("persona")}
+              onSubmitEditing={() => setStep("promise")}
             />
             <TouchableOpacity
-              style={[styles.bigBtn, { backgroundColor: ACCENT }]}
-              onPress={() => setStep("persona")}
+              style={[styles.primaryBtn, { backgroundColor: "#4dd4d6" }]}
+              onPress={() => setStep("promise")}
+              accessibilityRole="button"
             >
-              <Text style={styles.bigBtnText}>
-                {aiName.trim()
-                  ? `Got it, I'm ${aiName.trim()} →`
-                  : "Herald works for me →"}
+              <Text style={styles.primaryBtnText}>
+                {aiName.trim() ? `Call you ${aiName.trim()}` : "Herald works for me"}
               </Text>
             </TouchableOpacity>
           </View>
-        </LinearGradient>
-      </KeyboardAvoidingView>
+        </KeyboardAvoidingView>
+      </BeachBg>
+    );
+  }
+
+  if (step === "promise") {
+    return (
+      <BeachBg>
+        <ScrollView contentContainerStyle={styles.centered} bounces={false}>
+          <Text style={styles.stepCaption}>My promise to you</Text>
+          <Text style={[styles.stepHeadline, { fontFamily: "SourceSerif4-Regular" }]}>
+            Before anything else, here's the deal.
+          </Text>
+          <Text style={[styles.stepBody, { fontFamily: "SourceSerif4-Regular", marginBottom: 20 }]}>
+            I'll never sell what I know about you. Not to anyone, not ever.{"\n\n"}
+            I don't track where you go. There's no map of your day on some server.{"\n\n"}
+            I only look when you ask — to find you a good meal, or get help if you're ever lost or in trouble.
+          </Text>
+          <Text style={[styles.stepBody, { fontSize: 15, marginBottom: 32 }]}>
+            You're in charge of every bit of it. Turn anything off, anytime — and I'll still be here.
+          </Text>
+          <TouchableOpacity
+            style={[styles.primaryBtn, { backgroundColor: "#4dd4d6" }]}
+            onPress={() => setStep("notify")}
+            accessibilityRole="button"
+          >
+            <Text style={styles.primaryBtnText}>Okay — I'm listening</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </BeachBg>
+    );
+  }
+
+  if (step === "notify") {
+    return (
+      <BeachBg>
+        <View style={styles.centered}>
+          <Text style={styles.stepCaption}>A quick ask  ·  Step 4 of 7</Text>
+          <View style={styles.iconHalo}>
+            <Text style={styles.iconGlyph}>🔔</Text>
+          </View>
+          <Text style={[styles.stepHeadline, { fontFamily: "SourceSerif4-Regular" }]}>
+            Can I tap you on the shoulder?
+          </Text>
+          <Text style={styles.stepBody}>
+            So I can let you know when something happens — a score you follow, a price you're watching, a friend's birthday coming up. You decide what's worth a tap, and you can turn it off anytime.
+          </Text>
+          <TouchableOpacity
+            style={[styles.primaryBtn, { backgroundColor: "#4dd4d6" }]}
+            onPress={() => setStep("location")}
+            accessibilityRole="button"
+          >
+            <Text style={styles.primaryBtnText}>Yes, you can</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.ghostBtn} onPress={() => setStep("location")}>
+            <Text style={styles.ghostBtnText}>Not yet</Text>
+          </TouchableOpacity>
+        </View>
+      </BeachBg>
+    );
+  }
+
+  if (step === "location") {
+    return (
+      <BeachBg>
+        <View style={styles.centered}>
+          <Text style={styles.stepCaption}>A quick ask  ·  Step 5 of 7</Text>
+          <View style={styles.iconHalo}>
+            <Text style={styles.iconGlyph}>📍</Text>
+          </View>
+          <Text style={[styles.stepHeadline, { fontFamily: "SourceSerif4-Regular" }]}>
+            Where are you?
+          </Text>
+          <Text style={styles.stepBody}>
+            So I can tell you if it's raining outside, point you to a good place to eat nearby, or help if you're ever lost. I only check when you ask — never in the background, and I never share it with anyone.
+          </Text>
+          <TouchableOpacity
+            style={[styles.primaryBtn, { backgroundColor: "#4dd4d6" }]}
+            onPress={requestLocation}
+            accessibilityRole="button"
+          >
+            <Text style={styles.primaryBtnText}>Sure, go ahead</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.ghostBtn} onPress={() => setStep("mic")}>
+            <Text style={styles.ghostBtnText}>Not yet</Text>
+          </TouchableOpacity>
+        </View>
+      </BeachBg>
+    );
+  }
+
+  if (step === "mic") {
+    return (
+      <BeachBg>
+        <View style={styles.centered}>
+          <Text style={styles.stepCaption}>One more  ·  Step 6 of 7</Text>
+          <View style={styles.iconHalo}>
+            <Text style={styles.iconGlyph}>🎤</Text>
+          </View>
+          <Text style={[styles.stepHeadline, { fontFamily: "SourceSerif4-Regular" }]}>
+            Can I hear you?
+          </Text>
+          <Text style={styles.stepBody}>
+            So you can just talk to me instead of typing. I only listen the moment you tap the mic — never in the background. I don't record or keep your voice.
+          </Text>
+          <TouchableOpacity
+            style={[styles.primaryBtn, { backgroundColor: "#4dd4d6" }]}
+            onPress={requestMic}
+            accessibilityRole="button"
+          >
+            <Text style={styles.primaryBtnText}>Turn on talking</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.ghostBtn} onPress={() => setStep("persona")}>
+            <Text style={styles.ghostBtnText}>Not yet</Text>
+          </TouchableOpacity>
+        </View>
+      </BeachBg>
     );
   }
 
@@ -440,7 +464,7 @@ export default function OnboardingScreen() {
       setPersonaKey(key);
     };
     return (
-      <LinearGradient colors={[BG_TOP, BG_BOTTOM]} style={styles.container}>
+      <BeachBg>
         <ScrollView contentContainerStyle={styles.personaScroll} bounces={false}>
           <Text style={[styles.stepHeadline, { fontFamily: "SourceSerif4-Medium" }]}>
             Pick your look.
@@ -531,7 +555,7 @@ export default function OnboardingScreen() {
             )}
           </TouchableOpacity>
         </ScrollView>
-      </LinearGradient>
+      </BeachBg>
     );
   }
 
@@ -660,4 +684,82 @@ const styles = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
   tileCheckMark: { color: "#FFFFFF", fontSize: 14, fontWeight: "700" },
+
+  stepCaption: {
+    fontFamily: "Inter-Medium",
+    fontSize: 11,
+    letterSpacing: 0.18 * 11,
+    textTransform: "uppercase",
+    color: "rgba(255,255,255,0.55)",
+    marginBottom: 20,
+    textAlign: "center",
+  },
+  stepGreeting: {
+    fontFamily: "Inter-Medium",
+    fontSize: 15,
+    color: "rgba(255,255,255,0.72)",
+    marginBottom: 8,
+    textAlign: "center",
+  },
+  primaryBtn: {
+    width: "100%",
+    height: 56,
+    borderRadius: 28,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 12,
+  },
+  primaryBtnText: {
+    fontFamily: "Inter-Bold",
+    fontSize: 17,
+    color: "#0d1217",
+  },
+  ghostBtn: {
+    width: "100%",
+    height: 48,
+    borderRadius: 24,
+    borderWidth: 1.5,
+    borderColor: "rgba(255,255,255,0.22)",
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 8,
+  },
+  ghostBtnText: {
+    fontFamily: "Inter-Medium",
+    fontSize: 15,
+    color: "rgba(255,255,255,0.72)",
+  },
+  iconHalo: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: "rgba(77,212,214,0.12)",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 24,
+  },
+  iconGlyph: {
+    fontSize: 36,
+  },
+  chipRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+    justifyContent: "center",
+    marginBottom: 16,
+    marginTop: 8,
+  },
+  chip: {
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 20,
+    borderWidth: 1.5,
+    borderColor: "rgba(255,255,255,0.22)",
+    backgroundColor: "rgba(255,255,255,0.06)",
+  },
+  chipText: {
+    fontFamily: "Inter-Medium",
+    fontSize: 15,
+    color: "rgba(255,255,255,0.85)",
+  },
 });
