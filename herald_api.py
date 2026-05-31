@@ -1,6 +1,8 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.67 -- /user/export binds access_code to profile (per-user auth)
+# v8.68 -- resolve_relative_dates pre-LLM + CALENDAR past-date fix
+#          life_tracker cycle_type migration (NOT NULL default patch)
+#          /user/export accepts profile owner_code match
 #          PHONE tag: accepts name/relationship, Herald resolves to number
 #          Contact resolution via contactsDB + expo-contacts fallback
 #          20+ new app launch targets added (native, Samsung, medical, finance)
@@ -54,7 +56,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.67")
+app = FastAPI(title="Herald API", version="8.68")
 
 app.add_middleware(
     CORSMiddleware,
@@ -623,6 +625,7 @@ def init_db():
             ("interval_days", "INTEGER DEFAULT 0"),
             ("source",        "TEXT DEFAULT 'conversation'"),
             ("active",        "INTEGER DEFAULT 1"),
+            ("cycle_type",    "TEXT DEFAULT 'custom'"),
         ]:
             try:
                 c.execute(f"ALTER TABLE life_tracker ADD COLUMN {_col} {_def}")
@@ -3541,7 +3544,60 @@ ACTION TAG RULES:
 
 # ── LLM CALLS ─────────────────────────────────────────────────────────────────
 
-def parse_action(reply):
+def _format_month_day(d):
+    """Format date as 'May 30' (no leading zero on day)."""
+    return f"{d.strftime('%B')} {d.day}"
+
+
+def resolve_relative_dates(message: str, local_date: str) -> str:
+    """Replace relative date terms with absolute month-day strings using device local_date."""
+    if not message or not local_date:
+        return message
+    try:
+        base = datetime.strptime(local_date.strip(), "%Y-%m-%d").date()
+    except Exception:
+        return message
+    try:
+        today_fmt = _format_month_day(base)
+        tomorrow_fmt = _format_month_day(base + timedelta(days=1))
+        days_until_sat = (5 - base.weekday()) % 7
+        weekend_fmt = _format_month_day(base + timedelta(days=days_until_sat))
+        next_week_fmt = _format_month_day(base + timedelta(days=7))
+
+        result = message
+        result = re.sub(r'\bthis weekend\b', weekend_fmt, result, flags=re.IGNORECASE)
+        result = re.sub(r'\bnext week\b', next_week_fmt, result, flags=re.IGNORECASE)
+        result = re.sub(r'\btonight\b', today_fmt, result, flags=re.IGNORECASE)
+        result = re.sub(r'\btomorrow\b', tomorrow_fmt, result, flags=re.IGNORECASE)
+        result = re.sub(r'\btoday\b', today_fmt, result, flags=re.IGNORECASE)
+        return result
+    except Exception:
+        return message
+
+
+def _fix_calendar_past_date(value, local_date):
+    """If CALENDAR tag date is before local_date, bump forward one year."""
+    if not local_date:
+        return value
+    parts = value.split("|")
+    if len(parts) < 2:
+        return value
+    date_str = parts[1].strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_str):
+        return value
+    try:
+        cal_d = datetime.strptime(date_str, "%Y-%m-%d").date()
+        ref_d = datetime.strptime(local_date.strip(), "%Y-%m-%d").date()
+        if cal_d < ref_d:
+            fixed = cal_d.replace(year=cal_d.year + 1)
+            parts[1] = fixed.strftime("%Y-%m-%d")
+            return "|".join(parts)
+    except Exception:
+        pass
+    return value
+
+
+def parse_action(reply, local_date=None):
     for tag, atype in [
         ('MAPS:', 'maps'), ('PHONE:', 'phone'), ('MUSIC:', 'music'),
         ('RADIO:', 'radio'), ('CALENDAR:', 'calendar'), ('ALARM:', 'alarm'),
@@ -3552,6 +3608,8 @@ def parse_action(reply):
             parts = reply.split(tag, 1)
             clean = parts[0].strip()
             value = parts[1].strip().split('\n')[0].strip()
+            if atype == 'calendar':
+                value = _fix_calendar_past_date(value, local_date)
             return clean, {'type': atype, 'value': value}
     return reply, None
 
@@ -4685,7 +4743,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.67",
+        "status": "ok", "server": "herald-api", "version": "8.68",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -5085,6 +5143,9 @@ async def ask(request: Request):
     if _pre_user_id:
         increment_trust_level(_pre_user_id, _pre_message)
 
+    _local_date = data.get("local_date", "") or ""
+    data["message"] = resolve_relative_dates(data.get("message", "").strip(), _local_date)
+
     ctx, err = await run_in_threadpool(build_ask_context, data)
     if err:
         return JSONResponse({"error": err}, status_code=400)
@@ -5107,7 +5168,7 @@ async def ask(request: Request):
 
     direct_reply, _ = get_direct_reply(ctx)
     if direct_reply:
-        reply, action = parse_action(direct_reply)
+        reply, action = parse_action(direct_reply, _local_date)
         trial = get_trial_status(profile)
         if profile.get("pending_watch_offer"):
             save_profile_fields(user_id, {"pending_watch_offer": None})
@@ -5146,7 +5207,7 @@ async def ask(request: Request):
     else:
         raw_reply = call_openrouter(messages, use_search=False, model=routed_model)
 
-    reply, action = parse_action(raw_reply)
+    reply, action = parse_action(raw_reply, _local_date)
 
     if profile.get("pending_watch_offer"):
         save_profile_fields(user_id, {"pending_watch_offer": None})
@@ -5408,6 +5469,9 @@ async def ask_stream(request: Request):
             if _pre_user_id:
                 increment_trust_level(_pre_user_id, _pre_message)
 
+            _local_date = data.get("local_date", "") or ""
+            data["message"] = resolve_relative_dates(data.get("message", "").strip(), _local_date)
+
             ctx, err = await run_in_threadpool(build_ask_context, data)
             if err:
                 yield _sse_event({"error": err})
@@ -5451,7 +5515,7 @@ async def ask_stream(request: Request):
 
             direct_reply, _ = get_direct_reply(ctx)
             if direct_reply:
-                reply, action = parse_action(direct_reply)
+                reply, action = parse_action(direct_reply, _local_date)
                 yield _sse_event({"t": reply})
                 yield _sse_event({"t": "[S]"})
                 yield _sse_event({**base_done, "full": reply, "action": action, "used_search": False})
@@ -5506,7 +5570,7 @@ async def ask_stream(request: Request):
                     ):
                         yield event
 
-                reply, action = parse_action(full_text)
+                reply, action = parse_action(full_text, _local_date)
 
                 msg_count = profile.get("_msg_count", 0) + 1
                 save_profile_fields(user_id, {
@@ -5539,7 +5603,7 @@ async def ask_stream(request: Request):
             except Exception as e:
                 print(f"[HERALD] /ask/stream error: {e}")
                 if full_text.strip():
-                    reply, action = parse_action(full_text)
+                    reply, action = parse_action(full_text, _local_date)
                     yield _sse_event({**base_done, "full": reply, "action": action, "used_search": use_search, "partial": True})
                 else:
                     yield _sse_event({"error": "Stream interrupted. Try again."})
@@ -6399,8 +6463,12 @@ async def user_export(user_id: str, request: Request, secret: str = ""):
         return JSONResponse({"error": "user not found"}, status_code=404)
 
     if not admin_ok:
-        profile_code = str(profile.get("access_code", "")).strip().lower()
-        if not profile_code or not any(c == profile_code for c in submitted):
+        profile_access = str(profile.get("access_code", "")).strip().lower()
+        profile_owner = str(profile.get("owner_code", "")).strip().lower()
+        valid_profile_codes = [c for c in [profile_access, profile_owner] if c]
+        if not valid_profile_codes or not any(
+            c in valid_profile_codes for c in submitted
+        ):
             return JSONResponse({"error": "unauthorized"}, status_code=403)
 
     try:
