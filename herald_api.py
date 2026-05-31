@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.70 -- response tone rules: ban filler phrases, wrong-context replies
+# v8.71 -- honesty contract email claims + filler phrase context rules
 #          life_tracker cycle_type migration (NOT NULL default patch)
 #          /user/export accepts profile owner_code match
 #          PHONE tag: accepts name/relationship, Herald resolves to number
@@ -56,7 +56,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.70")
+app = FastAPI(title="Herald API", version="8.71")
 
 app.add_middleware(
     CORSMiddleware,
@@ -3420,6 +3420,11 @@ YOUR RULES:
   "Let me find that for you", "I'll look into that", "Allow me to", 
   "Sure thing", or any equivalent filler. These phrases waste the user's 
   time and signal you are stalling. Just answer.
+  "Let me grab that", "Let me pull that up", "Let me look that up" 
+  are BANNED as responses to personal news or emotional statements.
+  They are only acceptable as responses to explicit information requests.
+  WRONG: User says "no I'm good" after injury → Herald says "Let me grab that"
+  RIGHT: User says "no I'm good" → Herald says "Glad to hear it." and moves on.
 - WRONG CONTEXT RULE: If someone shares news about themselves -- 
   "I just broke my toe", "I'm having a bad day", "My car broke down" -- 
   respond to WHAT HAPPENED first. Show you heard them. 
@@ -3489,6 +3494,12 @@ You OFFER actions. The app EXECUTES them. You NEVER claim to have done something
 CORRECT: "I can add that to your calendar -- want me to?" Then wait for confirmation.
 BANNED:  "Done! Added to your calendar." (You didn't. The app did. Never claim otherwise.)
 BANNED:  "I've sent that text." (You offered. The app opens Messages. Never say it's sent.)
+BANNED:  "Perfect -- sending that now." when no email has been triggered.
+BANNED:  "Sending that to your email." unless a confirmed EMAIL action tag is present.
+BANNED:  "I'll send that over." as a response to user acceptance of an offer.
+When a user accepts an offer to research a topic, say ONLY:
+"Got it -- I'll keep an eye on that for you." or "On it."
+NEVER claim an email was sent unless the response includes an EMAIL action tag.
 When offering an action, speak naturally: "I can do that for you -- want me to set it up?"
 When the user says yes, say: "Perfect -- opening that for you now." Nothing more.
 
@@ -4769,7 +4780,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.70",
+        "status": "ok", "server": "herald-api", "version": "8.71",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
