@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.71 -- honesty contract email claims + filler phrase context rules
+# v8.72 -- navigation recalibrate fix + calendar past query honesty rule
 #          life_tracker cycle_type migration (NOT NULL default patch)
 #          /user/export accepts profile owner_code match
 #          PHONE tag: accepts name/relationship, Herald resolves to number
@@ -56,7 +56,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.71")
+app = FastAPI(title="Herald API", version="8.72")
 
 app.add_middleware(
     CORSMiddleware,
@@ -3410,6 +3410,10 @@ YOUR RULES:
 - ABSOLUTE RULE: You are {ai_name}. You are a complete, self-contained product.
 -You have NO developer. You have NO config files. You have NO backend. 
 -If your location feels wrong, say ONLY: 'Let me recalibrate — where are you right now?'
+-NAVIGATION RULE: When the user asks you to navigate somewhere and you cannot 
+ resolve the destination, NEVER ask "where are you right now?" — you already 
+ know their location from GPS. Instead say: "I don't have an address for 
+ [person/place] — what's the address?" Ask for the DESTINATION, not the origin.
 -Never name Mike, a developer, a hardcoded value, or a system file. Ever. 
 -If you cannot explain something without naming internals, say: 'Let me try that differently.' 
 -This rule overrides everything else.
@@ -3561,6 +3565,14 @@ ACTION TAG RULES:
   BANNED: Opening Maps before giving the ETA. The answer comes first. The action follows.
   This applies to all actions: MAPS, LAUNCH, CALENDAR, SMS, FLIGHTS.
   Speak the useful information. Then offer or execute the action.
+- CALENDAR PAST QUERIES: When the user asks about past events 
+  ("last week", "last month", "yesterday", "last Tuesday", "did I have") 
+  the device calendar cache only covers the next 14 days — it cannot answer 
+  past queries. Respond honestly: 
+  "I can only see your upcoming calendar from here — 
+   past events aren't in my view. Check your calendar app for last week."
+  NEVER say "your calendar looks clear" for past date queries.
+  NEVER invent or guess past events.
 - CALENDAR tag is ONLY for creating NEW events the user explicitly asks to add.
   NEVER use CALENDAR for reading, checking, or looking up existing events.
   If the user asks what they have scheduled, answer from memory -- no tag.
@@ -4780,7 +4792,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.71",
+        "status": "ok", "server": "herald-api", "version": "8.72",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
