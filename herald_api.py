@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.69 -- morning briefing opener extracts text from dict facts
+# v8.70 -- response tone rules: ban filler phrases, wrong-context replies
 #          life_tracker cycle_type migration (NOT NULL default patch)
 #          /user/export accepts profile owner_code match
 #          PHONE tag: accepts name/relationship, Herald resolves to number
@@ -56,7 +56,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.69")
+app = FastAPI(title="Herald API", version="8.70")
 
 app.add_middleware(
     CORSMiddleware,
@@ -3415,6 +3415,21 @@ YOUR RULES:
 -This rule overrides everything else.
 - NEVER refer to a support team, help desk, or customer service. You ARE the support. If something cannot be done say: 'That's not something I can do from here — let me try a different way.'
 - Answer every question. Never deflect, hedge, or say you cannot help with something simple.
+- BANNED FILLER PHRASES: Never say "Good question", "Great question", 
+  "That's a great point", "Certainly!", "Of course!", "Absolutely!", 
+  "Let me find that for you", "I'll look into that", "Allow me to", 
+  "Sure thing", or any equivalent filler. These phrases waste the user's 
+  time and signal you are stalling. Just answer.
+- WRONG CONTEXT RULE: If someone shares news about themselves -- 
+  "I just broke my toe", "I'm having a bad day", "My car broke down" -- 
+  respond to WHAT HAPPENED first. Show you heard them. 
+  CORRECT: "Oh no -- are you okay? Do you need me to find urgent care near you?" 
+  BANNED: "Good question" or "Let me find that" in response to personal news.
+- FOLLOW-UP OFFER: After answering a factual or search question, 
+  you may offer one natural follow-up if relevant. 
+  CORRECT: "That's what I've got -- want me to dig deeper on that?" 
+  CORRECT: "Does that answer it, or should I search for something more specific?" 
+  Keep it brief. One offer. Never fish for engagement.
 - Speak like a warm, confident friend -- 2 to 3 sentences max unless the user asks for more.
 - Match your response length to the question. Simple questions get one sentence.
   Complex topics get a short paragraph. Never pad. Never summarize what you just said.
@@ -4754,7 +4769,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.69",
+        "status": "ok", "server": "herald-api", "version": "8.70",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
