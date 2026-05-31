@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.68 -- resolve_relative_dates pre-LLM + CALENDAR past-date fix
+# v8.69 -- morning briefing opener extracts text from dict facts
 #          life_tracker cycle_type migration (NOT NULL default patch)
 #          /user/export accepts profile owner_code match
 #          PHONE tag: accepts name/relationship, Herald resolves to number
@@ -56,7 +56,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.68")
+app = FastAPI(title="Herald API", version="8.69")
 
 app.add_middleware(
     CORSMiddleware,
@@ -4509,7 +4509,18 @@ def morning_briefing_job():
         _opener = ""
         if _recent:
             _last = _recent[-1]
-            _text = _last if isinstance(_last, str) else str(_last)
+            if isinstance(_last, str):
+                _text = _last
+            elif isinstance(_last, dict):
+                _text = (
+                    _last.get("value") or
+                    _last.get("text") or
+                    _last.get("fact") or
+                    next((v for v in _last.values() if isinstance(v, str) and len(v) > 3), "")
+                )
+            else:
+                _text = ""
+            _text = str(_text).strip()
             _text = _text[:60] if len(_text) > 60 else _text
             if len(_text) > 10:
                 _opener = f" Thinking about you -- {_text}."
@@ -4743,7 +4754,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.68",
+        "status": "ok", "server": "herald-api", "version": "8.69",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
