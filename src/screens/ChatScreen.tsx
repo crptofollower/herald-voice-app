@@ -1,5 +1,7 @@
 // src/screens/ChatScreen.tsx — Herald main interface
 //
+// CHANGES Build 21 — calendar write grace window + fresh local_date/local_time per send
+//
 // CHANGES May 17, 2026 (scroll + ambient mode):
 //
 //   SCROLL SNAP FIX:
@@ -66,6 +68,7 @@ import { answerFromDevice } from '../utils/localAnswers';
 import { classifyQuery } from "../routing/tierRouter";
 import { handleTier1, buildTier2DeviceContext, writeProfileFromOnboarding } from "../routing/tier1Responses";
 import { refreshCalendarCache } from "../db/calendarCacheDB";
+import { markCalendarWrite } from "../db/calendarState";
 import { initDB } from "../db/useDeviceDB";
 import { runMigration } from "../routing/migration";
 import { setProfileField, setProfileFields } from "../db/profileDB";
@@ -525,6 +528,7 @@ export default function ChatScreen() {
   // If GPS resolves within 3s of open, re-fetch greeting with real coords.
   useEffect(() => {
     if (!userId || !available || lat == null || lng == null) return;
+    if (!greetingSentRef.current) return;
     if (Date.now() - greetingMountRef.current > 3000) return;
     if (!needsLocationGreetingRef.current) return;
     needsLocationGreetingRef.current = false;
@@ -618,7 +622,7 @@ export default function ChatScreen() {
     // Tier 1: answer from device SQLite, no LLM, no network, under 200ms.
     // Tier 2: memory probe — attach structured local context to backend request.
     // Tier 3: default — existing network path unchanged.
-    const tierDecision = classifyQuery(text);
+    const tierDecision = await classifyQuery(text);
 
     if (tierDecision.tier === 1 && tierDecision.tier1Response) {
       handleTier1(tierDecision.tier1Response, text, addMessage, speak, generateId);
@@ -697,19 +701,14 @@ export default function ChatScreen() {
 
     let firstToken = true;
 
-    // v8.15.1: Send device local time so backend answers "what time is it"
-    // correctly. Railway runs UTC -- without this the answer is 5 hours off.
-    const nowDate = new Date();
-    const local_time = nowDate.toLocaleTimeString("en-US", {
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
+    // Fresh device clock on every send — backend resolve_relative_dates depends on this
+    const _now = new Date();
+    const local_date = _now.toLocaleDateString('en-CA'); // YYYY-MM-DD always
+    const local_time = _now.toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
     });
-    const local_date = [
-      nowDate.getFullYear(),
-      String(nowDate.getMonth() + 1).padStart(2, "0"),
-      String(nowDate.getDate()).padStart(2, "0"),
-    ].join("-");
 
     const abortController = askHeraldStream(
       {
@@ -1140,6 +1139,7 @@ export default function ChatScreen() {
       content: `Done — "${title}" is on your calendar for ${dateDisplay} at ${timeDisplay}.`,
       timestamp: Date.now(),
     });
+    markCalendarWrite();
     await refreshCalendarCache().catch(() => {}); // await so post-write queries hit fresh cache
   };
 
@@ -1334,10 +1334,20 @@ export default function ChatScreen() {
       americanexpress: { deep: "amex://", fallback: "https://americanexpress.com" },
       bofa: { deep: "bofa://", fallback: "https://bankofamerica.com" },
       aarp: { deep: "aarp://", fallback: "https://aarp.org" },
-      googlephotos: { deep: "googlephotos://", fallback: "https://photos.google.com" },
+      googlephotos:  { deep: "googlephotos://", fallback: "https://photos.google.com" },
+      photos:        { deep: "googlephotos://", fallback: "https://photos.google.com" },
+      photoalbum:    { deep: "googlephotos://", fallback: "https://photos.google.com" },
+      myphotoalbum:  { deep: "googlephotos://", fallback: "https://photos.google.com" },
+      myphotos:      { deep: "googlephotos://", fallback: "https://photos.google.com" },
+      gallery:       { deep: "intent:#Intent;action=android.intent.action.VIEW;type=image/*;package=com.sec.android.gallery3d;end", fallback: "https://photos.google.com" },
       // System apps
       settings:      { deep: "intent:#Intent;action=android.settings.SETTINGS;end" },
-      camera:        { deep: "intent:#Intent;action=android.media.action.IMAGE_CAPTURE;end" },
+      camera:        {
+        deep: [
+          "intent:#Intent;action=android.media.action.IMAGE_CAPTURE;package=com.sec.android.app.camera;end",
+          "intent:#Intent;action=android.media.action.IMAGE_CAPTURE;end",
+        ],
+      },
       dialer:        { deep: "intent:#Intent;action=android.intent.action.DIAL;end" },
       phone:         { deep: "intent:#Intent;action=android.intent.action.DIAL;end" },
       calculator:    { deep: "intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.APP_CALCULATOR;end" },
