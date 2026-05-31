@@ -1364,7 +1364,21 @@ export default function ChatScreen() {
       camera:        {
         deep: [
           "intent:#Intent;action=android.media.action.IMAGE_CAPTURE;package=com.sec.android.app.camera;end",
+          "intent:#Intent;action=android.media.action.IMAGE_CAPTURE;package=com.android.camera2;end",
+          "intent:#Intent;action=android.media.action.IMAGE_CAPTURE;package=com.android.camera;end",
           "intent:#Intent;action=android.media.action.IMAGE_CAPTURE;end",
+        ],
+      },
+      selfie:        {
+        deep: [
+          "intent:#Intent;action=android.media.action.IMAGE_CAPTURE;i.android.intent.extras.CAMERA_FACING=1;package=com.sec.android.app.camera;end",
+          "intent:#Intent;action=android.media.action.IMAGE_CAPTURE;i.android.intent.extras.CAMERA_FACING=1;end",
+        ],
+      },
+      video:         {
+        deep: [
+          "intent:#Intent;action=android.media.action.VIDEO_CAPTURE;package=com.sec.android.app.camera;end",
+          "intent:#Intent;action=android.media.action.VIDEO_CAPTURE;end",
         ],
       },
       dialer:        { deep: "intent:#Intent;action=android.intent.action.DIAL;end" },
