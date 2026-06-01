@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.74 -- life_moments table in init_db for fresh Railway deploys
+# v8.75 -- life_moments ALTER TABLE migration for legacy narrow schemas
 #          life_tracker cycle_type migration (NOT NULL default patch)
 #          /user/export accepts profile owner_code match
 #          PHONE tag: accepts name/relationship, Herald resolves to number
@@ -56,7 +56,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.74")
+app = FastAPI(title="Herald API", version="8.75")
 
 app.add_middleware(
     CORSMiddleware,
@@ -672,6 +672,21 @@ def init_db():
                 created_at TEXT NOT NULL
             )
         """)
+        for _col, _def in [
+            ("role",      "TEXT"),
+            ("content",   "TEXT"),
+            ("summary",   "TEXT"),
+            ("category",  "TEXT DEFAULT 'health'"),
+            ("emotion",   "TEXT DEFAULT 'neutral'"),
+            ("weight",    "INTEGER DEFAULT 3"),
+            ("days_ago",  "INTEGER DEFAULT 0"),
+            ("active",    "INTEGER DEFAULT 1"),
+            ("source",    "TEXT DEFAULT 'conversation'"),
+        ]:
+            try:
+                c.execute(f"ALTER TABLE life_moments ADD COLUMN {_col} {_def}")
+            except Exception:
+                pass  # column already exists -- safe to ignore
         conn.commit()
         conn.close()
         print(f"[HERALD] SQLite ready: {DB_FILE}")
@@ -4818,7 +4833,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.74",
+        "status": "ok", "server": "herald-api", "version": "8.75",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
