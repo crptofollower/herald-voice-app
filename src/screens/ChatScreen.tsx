@@ -89,7 +89,7 @@ interface IntentAction {
   value: string;
 }
 
-const IDLE_THRESHOLD_MS = 15 * 60 * 1000; // 15 minutes
+const IDLE_THRESHOLD_MS = 60 * 60 * 1000; // 60 minutes
 
 // ─── Bouncing dots ─────────────────────────────────────────────────────────────
 
@@ -1144,7 +1144,11 @@ export default function ChatScreen() {
   };
 
   const handleMapsAction = async (query: string) => {
-    let destination = query;
+    // Sanitize: strip natural language preamble from LLM output
+    // e.g. "the address I'm looking for is 6646 Mims Street" → "6646 Mims Street"
+    let destination = query
+      .replace(/^(the address (i('m| am) looking for( is)?|is)|directions? to( the)?|navigate to( the)?|take me to( the)?)\s*/i, '')
+      .trim();
 
     // Check if destination is a person/relationship rather than an address
     const looksLikePlace = /\d|street|st\b|ave\b|avenue|drive|dr\b|road|rd\b|blvd|lane|ln\b|way\b|court|ct\b|highway|hwy|mall|airport|hospital|park\b/i.test(destination);
@@ -1161,6 +1165,15 @@ export default function ChatScreen() {
       } catch {
         // Silent — fall through with original destination
       }
+    }
+
+    // Append confirmed city if destination looks like a street address without a city
+    // e.g. "6646 Mims Street" → "6646 Mims Street, Plano TX"
+    const hasCity = /,\s*[A-Za-z]|\b(tx|ca|fl|ny|wa|il|pa|oh|ga|nc|mi|nj|va|az|co|tn|in|mo|md|wi|mn|sc|al|la|ky|or|ok|ct|ut|ia|nv|ar|ms|ks|ne|nm|id|wv|hi|nh|me|ri|mt|de|sd|nd|ak|vt|wy|dc)\b/i.test(destination);
+    if (!hasCity && /\d/.test(destination)) {
+      const { getProfileField } = await import("../db/profileDB");
+      const city = getProfileField("city");
+      if (city) destination = `${destination}, ${city}`;
     }
 
     const encoded = encodeURIComponent(destination);
@@ -1330,7 +1343,8 @@ export default function ChatScreen() {
       airbnb: { deep: "airbnb://", fallback: "https://airbnb.com" },
       hotels: { deep: "hotels://", fallback: "https://hotels.com" },
       hilton: { deep: "hilton://", fallback: "https://hilton.com" },
-      marriott: { deep: "marriott://", fallback: "https://marriott.com" },
+      marriott: { deep: "marriottbonvoy://", fallback: "https://marriott.com" },
+      marriottbonvoy: { deep: "marriottbonvoy://", fallback: "https://marriott.com" },
       hyatt: { deep: "world://", fallback: "https://hyatt.com" },
       ihg: { deep: "ihg://", fallback: "https://ihg.com" },
       hertz: { deep: "hertz://", fallback: "https://hertz.com" },
@@ -1571,6 +1585,7 @@ export default function ChatScreen() {
               data={displayMessages}
               renderItem={renderMessage}
               keyExtractor={(item) => item.id}
+              keyboardShouldPersistTaps="handled"
               contentContainerStyle={styles.messageList}
               showsVerticalScrollIndicator={false}
               // ── Scroll snap fix: track position, only auto-scroll at bottom ──
