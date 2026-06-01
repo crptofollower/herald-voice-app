@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.72 -- navigation recalibrate fix + calendar past query honesty rule
+# v8.73 -- onboard access_code persist + LIVE_KEYWORDS expansion + export owner bypass
 #          life_tracker cycle_type migration (NOT NULL default patch)
 #          /user/export accepts profile owner_code match
 #          PHONE tag: accepts name/relationship, Herald resolves to number
@@ -56,7 +56,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.72")
+app = FastAPI(title="Herald API", version="8.73")
 
 app.add_middleware(
     CORSMiddleware,
@@ -379,6 +379,16 @@ LIVE_KEYWORDS = [
     # Freddie / empire (owner live data)
     'freddie', 'empire status', 'trading status', 'open positions', 'last scan',
     'how are our trades', 'gate progress',
+    # Sports events — specific enough to warrant live search
+    'nba finals', 'nfl playoffs', 'nfl draft', 'mlb playoffs', 'world series',
+    'stanley cup', 'super bowl', 'march madness', 'final four',
+    'nba draft', 'trade deadline', 'free agency',
+    # Current events phrases missed by existing patterns
+    'anything going on', 'going on in', 'going on with',
+    'what happened with', 'any updates on', 'latest on',
+    'is there anything', 'is there news',
+    'when does the', 'when is the', 'when do the',
+    'starts today', 'starts tonight', 'starts this week',
 ]
 
 FAST_OVERRIDES = [
@@ -4792,7 +4802,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.72",
+        "status": "ok", "server": "herald-api", "version": "8.73",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
@@ -5015,6 +5025,7 @@ async def onboard(request: Request):
         profile["is_owner"] = True
     if not profile.get("created_at"):
         profile["created_at"] = datetime.now().isoformat()
+    profile["access_code"] = access_code
 
     save_profile(user_id, profile)
     print(f"[HERALD] /onboard: {name} | ai_name={ai_name} | persona={persona} | owner={is_owner_req} | id={user_id}")
@@ -6511,7 +6522,7 @@ async def user_export(user_id: str, request: Request, secret: str = ""):
     if not profile:
         return JSONResponse({"error": "user not found"}, status_code=404)
 
-    if not admin_ok:
+    if not admin_ok and not any(c in owner_codes for c in submitted):
         profile_access = str(profile.get("access_code", "")).strip().lower()
         profile_owner = str(profile.get("owner_code", "")).strip().lower()
         valid_profile_codes = [c for c in [profile_access, profile_owner] if c]
