@@ -62,15 +62,15 @@ import { generateId } from "../utils/id";
 import { useCalendar } from "../hooks/useCalendar";
 import { useLocation } from "../hooks/useLocation";
 import { useMic } from "../hooks/useMic";
+import { useRaiseToWake } from "../hooks/useRaiseToWake";
 import { useHealthConnect } from "../hooks/useHealthConnect";
-import { useDeviceMemory, saveLocalProfile, saveLocalMedical, saveLocalPreference } from "../hooks/useDeviceMemory";
+import { useDeviceMemory } from "../hooks/useDeviceMemory";
 import { answerFromDevice } from '../utils/localAnswers';
 import { classifyQuery } from "../routing/tierRouter";
 import { handleTier1, buildTier2DeviceContext, writeProfileFromOnboarding } from "../routing/tier1Responses";
 import { refreshCalendarCache } from "../db/calendarCacheDB";
 import { markCalendarWrite } from "../db/calendarState";
 import { initDB } from "../db/useDeviceDB";
-import { runMigration } from "../routing/migration";
 import { setProfileField, setProfileFields } from "../db/profileDB";
 import {
   writeContact,
@@ -254,7 +254,7 @@ export default function ChatScreen() {
   const needsLocationGreetingRef = useRef(true);
   const liveGreetingAddedRef = useRef(false);
   const greetingIdRef = useRef<string>("");
-  const autoOpenAppsRef = useRef(false);
+  const autoOpenAppsRef = useRef<Set<string>>(new Set());
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const tokenBatchRef = useRef<string>('');
   const batchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -269,7 +269,7 @@ export default function ChatScreen() {
   const handsFreeRef = useRef(false);
   useProactiveQueue();
   useCalendar();
-  // useHealthConnect(); // disabled until AndroidManifest entries added
+  const { summary: healthSummary, syncHealth } = useHealthConnect();
   const { lat, lng, label: locationLabel, available } = useLocation();
   const {
     saveMemory: saveDeviceMemory,
@@ -388,8 +388,15 @@ export default function ChatScreen() {
   }, [unreadCount]);
 
   useEffect(() => {
-    AsyncStorage.getItem('auto_open_apps').then(val => {
-      if (val === 'true') autoOpenAppsRef.current = true;
+    AsyncStorage.getItem('herald_auto_open_apps').then(val => {
+      if (val) {
+        try {
+          const saved = JSON.parse(val);
+          if (Array.isArray(saved)) {
+            autoOpenAppsRef.current = new Set(saved);
+          }
+        } catch {}
+      }
     });
   }, []);
 
@@ -397,8 +404,14 @@ export default function ChatScreen() {
   useEffect(() => {
     if (!userId) return;
     initDB().then(async () => {
-      runMigration(userId);
       refreshCalendarCache();
+      AsyncStorage.getItem('herald_health_sync').then(last => {
+        const now = Date.now();
+        if (!last || now - parseInt(last) > 3_600_000) {
+          syncHealth();
+          AsyncStorage.setItem('herald_health_sync', String(now));
+        }
+      });
 
       // Register contact extractor so relationship facts auto-populate contacts table
       _registerContactExtractor(extractContactFromFact);
@@ -564,19 +577,14 @@ export default function ChatScreen() {
 
     lastSentRef.current = now;
     sendingRef.current = true;
+    try {
     const historySnapshot = messages.map(({ role, content }) => ({ role, content }));
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
-    const _autoOpenTriggers = [
-      "just open it", "stop asking", "open it directly", "just open",
-      "don't ask", "dont ask", "open without asking", "just do it",
-      "open it when i ask", "open when i ask", "just launch it",
-    ];
-    if (_autoOpenTriggers.some(t => text.toLowerCase().includes(t))) {
-      autoOpenAppsRef.current = true;
-      AsyncStorage.setItem('auto_open_apps', 'true');
-    }
+    // Auto-open triggers removed — per-app permission is now set
+    // automatically when the user confirms a launch intent.
+    // "just open it" style phrases are no longer needed.
 
     // ── Offline check -- skip network, answer from device or give warm message ──
     const networkState = await Network.getNetworkStateAsync();
@@ -762,9 +770,12 @@ export default function ChatScreen() {
         onSentence: (sentence) => { enqueueSentence(sentence); },
         onAction: (action) => {
           if (!action) return;
-          if (autoOpenAppsRef.current && action.type === "launch") {
-            executeIntent(action as IntentAction);
-            return;
+          if (action.type === "launch") {
+            const appKey = canonicalKey(action.value as string ?? "");
+            if (autoOpenAppsRef.current.has(appKey)) {
+              executeIntent(action as IntentAction);
+              return;
+            }
           }
           setPendingAction(action as IntentAction);
           setActionStatus("confirming");
@@ -777,20 +788,18 @@ export default function ChatScreen() {
           for (const fact of facts) {
             if (!fact.value?.trim()) continue;
 
-            if (fact.category === 'medication') {
-              // Both legacy hook (AsyncStorage) and new medicalDB (SQLite)
-              saveLocalMedical('medication', fact.value);
-              writeMedicalFact('medication', fact.value);
-            } else if (fact.category === 'medical' || fact.category === 'visit') {
-              saveLocalMedical('visit', fact.value);
-              writeMedicalFact('medical', fact.value);
-            } else if (fact.category === 'relationships') {
-              // Contact extraction handled by _registerContactExtractor in writeFacts
-              saveDeviceMemory(fact.value, fact.category);
-            } else if (['food', 'sports', 'music'].includes(fact.category)) {
-              saveLocalPreference(fact.category, fact.value);
-            } else {
-              saveDeviceMemory(fact.value, fact.category);
+            const MEDICAL_CATEGORIES = new Set([
+              'medication', 'medications', 'medical', 'visit',
+              'doctor', 'diagnosis', 'symptom', 'procedure',
+              'allergy', 'condition', 'lab', 'test', 'health'
+            ]);
+
+            if (MEDICAL_CATEGORIES.has(fact.category)) {
+              writeMedicalFact(
+                fact.category === 'medication' || fact.category === 'medications'
+                  ? 'medication' : 'medical',
+                fact.value
+              );
             }
           }
         },
@@ -805,17 +814,6 @@ export default function ChatScreen() {
           }
           if (fullText.trim()) {
             addMessage({ id: generateId("msg"), role: "assistant", content: fullText, timestamp: Date.now() });
-            const _memCat = /medication|prescription|pill|dose|pharmacy/i.test(text) ? 'medication'
-              : /doctor|hospital|clinic|surgery|diagnosis|symptom|appointment/i.test(text) ? 'medical'
-              : /wife|husband|daughter|son|mom|dad|brother|sister|family|father|mother/i.test(text) ? 'family'
-              : /bank|invest|mortgage|savings|debt|401k|retire|money/i.test(text) ? 'finance'
-              : /work|job|boss|client|project|meeting|career/i.test(text) ? 'work'
-              : /flight|hotel|trip|travel|vacation|airport/i.test(text) ? 'travel'
-              : /score|game|team|nfl|nba|mlb|nhl|espn/i.test(text) ? 'sports'
-              : /eat|restaurant|food|dinner|lunch|breakfast|coffee/i.test(text) ? 'food'
-              : 'general';
-            const _memFact = extractFact(text, fullText, _memCat);
-            if (_memFact) saveDeviceMemory(_memFact, _memCat);
           }
           resetStreamState();
         },
@@ -833,6 +831,10 @@ export default function ChatScreen() {
 
     streamAbortRef.current = abortController;
     setInputText("");
+    } catch (e) {
+      console.error('[Herald] sendMessage error:', e);
+      resetStreamState();
+    }
   }, [userId, messages, personaKey, lat, lng, locationLabel, getContextBlock, addMessage, setError, resetSpeech, enqueueSentence, resetStreamState, stop]);
 
   const handleSend = useCallback(() => {
@@ -850,6 +852,17 @@ export default function ChatScreen() {
     }, 600);
   }, [sendMessage]);
   const { isRecording, startRecording, stopRecording } = useMic(handleTranscript);
+
+  useRaiseToWake({
+    aiName: aiName || 'Herald',
+    onWake: () => {
+      // Phone moved + name heard → activate mic as if user pressed button
+      if (!sendingRef.current && !isStreaming) {
+        startRecording();
+      }
+    },
+    enabled: !isStreaming && !sendingRef.current && !isRecording,
+  });
 
   useEffect(() => {
     handsFreeRef.current = handsFreeMode;
@@ -1298,130 +1311,168 @@ export default function ChatScreen() {
     }
   };
 
+  // Canonical key map — aliases that should share the same permission
+  const CANONICAL_KEYS: Record<string, string> = {
+    aa: 'americanairlines',
+    bofa: 'bankofamerica',
+    amex: 'americanexpress',
+    max: 'hbomax',
+    marriott: 'marriottbonvoy',
+    shealth: 'health',
+    samsunghealth: 'health',
+    samsungwallet: 'samsungpay',
+    ubereats: 'uber',
+    x: 'twitter',
+    express_scripts: 'expressscripts',
+    expressscripts_app: 'expressscripts',
+  };
+
+  const canonicalKey = (k: string): string => {
+    const base = k.toLowerCase().trim()
+      .replace(/\s+/g, '')
+      .replace(/[_+]/g, '');
+    return CANONICAL_KEYS[base] ?? base;
+  };
+
   const handleLaunchAction = async (appName: string) => {
-    const key = appName.toLowerCase().trim().replace(/\s+/g, "");
+    const key = canonicalKey(appName);
     const launchApps: Record<string, { deep: string | string[]; fallback?: string }> = {
-      youtube: { deep: "youtube://", fallback: "https://youtube.com" },
-      tiktok: { deep: "tiktok://", fallback: "https://tiktok.com" },
-      twitter: { deep: "twitter://", fallback: "https://twitter.com" },
-      x: { deep: "twitter://", fallback: "https://twitter.com" },
-      instagram: { deep: "instagram://", fallback: "https://instagram.com" },
-      health: { deep: "com.sec.android.app.shealth://" },
-      shealth: { deep: "com.sec.android.app.shealth://" },
-      samsunghealth: { deep: "com.sec.android.app.shealth://" },
-      walking: { deep: "com.sec.android.app.shealth://" },
-      workout: { deep: "com.sec.android.app.shealth://" },
-      steps: { deep: "com.sec.android.app.shealth://" },
-      spotify: { deep: "spotify://", fallback: "https://open.spotify.com" },
-      facebook: { deep: "intent:#Intent;action=android.intent.action.VIEW;package=com.facebook.katana;end", fallback: "https://facebook.com" },
-      googlemaps: { deep: "comgooglemaps://", fallback: "https://maps.google.com" },
-      maps: { deep: "comgooglemaps://", fallback: "https://maps.google.com" },
-      gmail: { deep: "googlegmail://", fallback: "https://mail.google.com" },
-      healthconnect: { deep: "com.google.android.apps.healthdata://" },
-      linkedin: { deep: "linkedin://", fallback: "https://linkedin.com" },
-      pinterest: { deep: "pinterest://", fallback: "https://pinterest.com" },
-      truthsocial: { deep: "truthsocial://", fallback: "https://truthsocial.com" },
-      uber: { deep: "uber://", fallback: "https://uber.com" },
-      lyft: { deep: "lyft://", fallback: "https://lyft.com" },
-      doordash: { deep: "doordash://", fallback: "https://doordash.com" },
-      ubereats: { deep: "ubereats://", fallback: "https://ubereats.com" },
-      chilis: { deep: "chilis://", fallback: "https://chilis.com" },
-      starbucks: { deep: "starbucks://", fallback: "https://starbucks.com" },
-      chipotle: { deep: "chipotle://", fallback: "https://chipotle.com" },
-      amazon: { deep: "amazon://", fallback: "https://amazon.com" },
-      walmart: { deep: "walmart://", fallback: "https://walmart.com" },
-      target: { deep: "target://", fallback: "https://target.com" },
-      bestbuy: { deep: "bestbuy://", fallback: "https://bestbuy.com" },
-      costco: { deep: "costco://", fallback: "https://costco.com" },
-      samsclub: { deep: "samsclub://", fallback: "https://samsclub.com" },
-      yelp: { deep: "yelp://", fallback: "https://yelp.com" },
-      americanairlines: { deep: "americanairlines://", fallback: "https://aa.com" },
-      aa: { deep: "americanairlines://", fallback: "https://aa.com" },
-      delta: { deep: "fly-delta://", fallback: "https://delta.com" },
-      southwest: { deep: "southwest://", fallback: "https://southwest.com" },
-      united: { deep: "united://", fallback: "https://united.com" },
-      airbnb: { deep: "airbnb://", fallback: "https://airbnb.com" },
-      hotels: { deep: "hotels://", fallback: "https://hotels.com" },
-      hilton: { deep: "hilton://", fallback: "https://hilton.com" },
-      marriott: { deep: "marriottbonvoy://", fallback: "https://marriott.com" },
-      marriottbonvoy: { deep: "marriottbonvoy://", fallback: "https://marriott.com" },
-      hyatt: { deep: "world://", fallback: "https://hyatt.com" },
-      ihg: { deep: "ihg://", fallback: "https://ihg.com" },
-      hertz: { deep: "hertz://", fallback: "https://hertz.com" },
-      enterprise: { deep: "enterprise://", fallback: "https://enterprise.com" },
-      avis: { deep: "avis://", fallback: "https://avis.com" },
-      nationalcar: { deep: "nationalcar://", fallback: "https://nationalcar.com" },
-      budget: { deep: "budget://", fallback: "https://budget.com" },
-      tripadvisor: { deep: "tripadvisor://", fallback: "https://tripadvisor.com" },
-      netflix: { deep: "netflix://", fallback: "https://netflix.com" },
-      hulu: { deep: "hulu://", fallback: "https://hulu.com" },
-      amc: { deep: "amc://", fallback: "https://amctheatres.com" },
-      fandango: { deep: "fandango://", fallback: "https://fandango.com" },
-      cvs: { deep: "cvs://", fallback: "https://cvs.com" },
-      walgreens: { deep: "walgreens://", fallback: "https://walgreens.com" },
-      mychart: { deep: "epicmychart://", fallback: "https://mychart.com" },
-      chase: { deep: "chase://", fallback: "https://chase.com" },
-      bankofamerica: { deep: "bofa://", fallback: "https://bankofamerica.com" },
-      wellsfargo: { deep: "wellsfargo://", fallback: "https://wellsfargo.com" },
-      amex: { deep: "amex://", fallback: "https://americanexpress.com" },
-      americanexpress: { deep: "amex://", fallback: "https://americanexpress.com" },
-      bofa: { deep: "bofa://", fallback: "https://bankofamerica.com" },
-      aarp: { deep: "aarp://", fallback: "https://aarp.org" },
-      googlephotos:  { deep: "googlephotos://", fallback: "https://photos.google.com" },
-      photos:        { deep: "googlephotos://", fallback: "https://photos.google.com" },
-      photoalbum:    { deep: "googlephotos://", fallback: "https://photos.google.com" },
-      myphotoalbum:  { deep: "googlephotos://", fallback: "https://photos.google.com" },
-      myphotos:      { deep: "googlephotos://", fallback: "https://photos.google.com" },
-      gallery:       { deep: "intent:#Intent;action=android.intent.action.VIEW;type=image/*;package=com.sec.android.gallery3d;end", fallback: "https://photos.google.com" },
-      // System apps
-      settings:      { deep: "intent:#Intent;action=android.settings.SETTINGS;end" },
-      camera:        {
-        deep: [
-          "intent:#Intent;action=android.media.action.IMAGE_CAPTURE;package=com.sec.android.app.camera;end",
-          "intent:#Intent;action=android.media.action.IMAGE_CAPTURE;package=com.android.camera2;end",
-          "intent:#Intent;action=android.media.action.IMAGE_CAPTURE;package=com.android.camera;end",
-          "intent:#Intent;action=android.media.action.IMAGE_CAPTURE;end",
-        ],
-      },
-      selfie:        {
-        deep: [
-          "intent:#Intent;action=android.media.action.IMAGE_CAPTURE;i.android.intent.extras.CAMERA_FACING=1;package=com.sec.android.app.camera;end",
-          "intent:#Intent;action=android.media.action.IMAGE_CAPTURE;i.android.intent.extras.CAMERA_FACING=1;end",
-        ],
-      },
-      video:         {
-        deep: [
-          "intent:#Intent;action=android.media.action.VIDEO_CAPTURE;package=com.sec.android.app.camera;end",
-          "intent:#Intent;action=android.media.action.VIDEO_CAPTURE;end",
-        ],
-      },
-      dialer:        { deep: "intent:#Intent;action=android.intent.action.DIAL;end" },
-      phone:         { deep: "intent:#Intent;action=android.intent.action.DIAL;end" },
-      calculator:    { deep: "intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.APP_CALCULATOR;end" },
-      files:         { deep: "intent:#Intent;action=android.intent.action.VIEW;type=resource/folder;end" },
-      // Samsung specific
-      samsungpay:    { deep: "samsungpay://", fallback: "https://www.samsung.com/us/samsung-pay/" },
-      samsungwallet: { deep: "samsungpay://", fallback: "https://www.samsung.com/us/samsung-pay/" },
-      bixby:         { deep: "bixby://", fallback: "" },
-      // Additional streaming
-      disneyplus:    { deep: "disneyplus://", fallback: "https://disneyplus.com" },
-      hbomax:        { deep: "hbomax://", fallback: "https://max.com" },
-      max:           { deep: "hbomax://", fallback: "https://max.com" },
-      peacock:       { deep: "peacocktv://", fallback: "https://peacocktv.com" },
-      paramountplus: { deep: "paramountplus://", fallback: "https://paramountplus.com" },
-      appletv:       { deep: "videos://", fallback: "https://tv.apple.com" },
-      // Pharmacy / health
-      express_scripts: { deep: "expressscripts://", fallback: "https://express-scripts.com" },
-      goodrx:        { deep: "goodrx://", fallback: "https://goodrx.com" },
-      // News
-      cnn:           { deep: "cnn://", fallback: "https://cnn.com" },
-      foxnews:       { deep: "foxnews://", fallback: "https://foxnews.com" },
-      espn:          { deep: "sportscenter://", fallback: "https://espn.com" },
-      // Productivity
-      googledocs:    { deep: "googledocs://", fallback: "https://docs.google.com" },
-      googledrive:   { deep: "googledrive://", fallback: "https://drive.google.com" },
-      zoom:          { deep: "zoomus://", fallback: "https://zoom.us" },
-      teams:         { deep: "msteams://", fallback: "https://teams.microsoft.com" },
+      // ── Social ────────────────────────────────────────────────────────────
+      youtube:          { deep: "youtube://",        fallback: "https://youtube.com" },
+      tiktok:           { deep: "tiktok://",         fallback: "https://tiktok.com" },
+      twitter:          { deep: "twitter://",        fallback: "https://twitter.com" },
+      x:                { deep: "twitter://",        fallback: "https://twitter.com" },
+      instagram:        { deep: "instagram://",      fallback: "https://instagram.com" },
+      facebook:         { deep: "intent:#Intent;action=android.intent.action.VIEW;package=com.facebook.katana;end", fallback: "https://facebook.com" },
+      linkedin:         { deep: "linkedin://",       fallback: "https://linkedin.com" },
+      pinterest:        { deep: "pinterest://",      fallback: "https://pinterest.com" },
+      truthsocial:      { deep: "truthsocial://",    fallback: "https://truthsocial.com" },
+      // ── Ride share ────────────────────────────────────────────────────────
+      uber:             { deep: "intent:#Intent;package=com.ubercab;end",              fallback: "https://uber.com" },
+      lyft:             { deep: "intent:#Intent;package=me.lyft.android;end",          fallback: "https://lyft.com" },
+      // ── Food delivery ─────────────────────────────────────────────────────
+      doordash:         { deep: "intent:#Intent;package=com.doordash.consumer;end",    fallback: "https://doordash.com" },
+      ubereats:         { deep: "intent:#Intent;package=com.ubercab.eats;end",         fallback: "https://ubereats.com" },
+      grubhub:          { deep: "intent:#Intent;package=com.grubhub.android;end",      fallback: "https://grubhub.com" },
+      instacart:        { deep: "intent:#Intent;package=com.instacart.client;end",     fallback: "https://instacart.com" },
+      // ── Dining ───────────────────────────────────────────────────────────
+      chilis:           { deep: "chilis://",         fallback: "https://chilis.com" },
+      starbucks:        { deep: "intent:#Intent;package=com.starbucks.mobilecard;end", fallback: "https://starbucks.com" },
+      chipotle:         { deep: "intent:#Intent;package=com.chipotle.ordering;end",    fallback: "https://chipotle.com" },
+      // ── Shopping ─────────────────────────────────────────────────────────
+      amazon:           { deep: "amazon://",         fallback: "https://amazon.com" },
+      walmart:          { deep: "intent:#Intent;package=com.walmart.android;end",      fallback: "https://walmart.com" },
+      target:           { deep: "intent:#Intent;package=com.target.ui;end",            fallback: "https://target.com" },
+      bestbuy:          { deep: "bestbuy://",        fallback: "https://bestbuy.com" },
+      costco:           { deep: "intent:#Intent;package=com.costco.costcomobile;end",  fallback: "https://costco.com" },
+      samsclub:         { deep: "samsclub://",       fallback: "https://samsclub.com" },
+      yelp:             { deep: "yelp://",           fallback: "https://yelp.com" },
+      // ── Music ────────────────────────────────────────────────────────────
+      spotify:          { deep: "spotify://",        fallback: "https://open.spotify.com" },
+      // ── Maps / navigation ─────────────────────────────────────────────────
+      googlemaps:       { deep: "comgooglemaps://",  fallback: "https://maps.google.com" },
+      maps:             { deep: "comgooglemaps://",  fallback: "https://maps.google.com" },
+      // ── Email / productivity ──────────────────────────────────────────────
+      gmail:            { deep: "googlegmail://",    fallback: "https://mail.google.com" },
+      googledocs:       { deep: "googledocs://",     fallback: "https://docs.google.com" },
+      googledrive:      { deep: "googledrive://",    fallback: "https://drive.google.com" },
+      zoom:             { deep: "zoomus://",         fallback: "https://zoom.us" },
+      teams:            { deep: "msteams://",        fallback: "https://teams.microsoft.com" },
+      // ── Airlines ─────────────────────────────────────────────────────────
+      americanairlines: { deep: "intent:#Intent;package=com.aa.android;end",           fallback: "https://aa.com" },
+      aa:               { deep: "intent:#Intent;package=com.aa.android;end",           fallback: "https://aa.com" },
+      delta:            { deep: "fly-delta://",                                         fallback: "https://delta.com" },
+      southwest:        { deep: "intent:#Intent;package=com.southwest.airlines;end",   fallback: "https://southwest.com" },
+      united:           { deep: "intent:#Intent;package=com.united.mobile.android;end", fallback: "https://united.com" },
+      // ── Hotels ───────────────────────────────────────────────────────────
+      airbnb:           { deep: "airbnb://",         fallback: "https://airbnb.com" },
+      hotels:           { deep: "hotels://",         fallback: "https://hotels.com" },
+      hilton:           { deep: "intent:#Intent;package=com.hilton.android.hhonors;end", fallback: "https://hilton.com" },
+      marriott:         { deep: "marriottbonvoy://", fallback: "https://marriott.com" },
+      marriottbonvoy:   { deep: "marriottbonvoy://", fallback: "https://marriott.com" },
+      hyatt:            { deep: "world://",          fallback: "https://hyatt.com" },
+      ihg:              { deep: "intent:#Intent;package=com.ihg.apps.android;end",     fallback: "https://ihg.com" },
+      // ── Car rental ───────────────────────────────────────────────────────
+      hertz:            { deep: "intent:#Intent;package=com.hertz.mobile.android;end", fallback: "https://hertz.com" },
+      enterprise:       { deep: "intent:#Intent;package=com.ehi.enterprise;end",       fallback: "https://enterprise.com" },
+      avis:             { deep: "intent:#Intent;package=com.avis.androidapp;end",      fallback: "https://avis.com" },
+      nationalcar:      { deep: "nationalcar://",    fallback: "https://nationalcar.com" },
+      budget:           { deep: "budget://",         fallback: "https://budget.com" },
+      // ── Travel ───────────────────────────────────────────────────────────
+      tripadvisor:      { deep: "tripadvisor://",    fallback: "https://tripadvisor.com" },
+      // ── Streaming ────────────────────────────────────────────────────────
+      netflix:          { deep: "netflix://",        fallback: "https://netflix.com" },
+      hulu:             { deep: "intent:#Intent;package=com.hulu.plus;end",            fallback: "https://hulu.com" },
+      disneyplus:       { deep: "intent:#Intent;package=com.disney.disneyplus;end",    fallback: "https://disneyplus.com" },
+      hbomax:           { deep: "intent:#Intent;package=com.hbo.hbonow;end",           fallback: "https://max.com" },
+      max:              { deep: "intent:#Intent;package=com.hbo.hbonow;end",           fallback: "https://max.com" },
+      peacock:          { deep: "intent:#Intent;package=com.peacocktv.peacockandroid;end", fallback: "https://peacocktv.com" },
+      paramountplus:    { deep: "intent:#Intent;package=com.cbs.ott;end",             fallback: "https://paramountplus.com" },
+      appletv:          { deep: "videos://",         fallback: "https://tv.apple.com" },
+      'disney+':        { deep: "intent:#Intent;package=com.disney.disneyplus;end",    fallback: "https://disneyplus.com" },
+      'paramount+':     { deep: "intent:#Intent;package=com.cbs.ott;end",              fallback: "https://paramountplus.com" },
+      'appletv+':       { deep: "videos://",                                            fallback: "https://tv.apple.com" },
+      'apple tv+':      { deep: "videos://",                                            fallback: "https://tv.apple.com" },
+      espn:             { deep: "intent:#Intent;package=com.espn.score_center;end",   fallback: "https://espn.com" },
+      // ── Cinema ───────────────────────────────────────────────────────────
+      amc:              { deep: "amc://",            fallback: "https://amctheatres.com" },
+      fandango:         { deep: "fandango://",       fallback: "https://fandango.com" },
+      // ── Pharmacy / health ─────────────────────────────────────────────────
+      cvs:              { deep: "intent:#Intent;package=com.cvs.launchers.cvs;end",   fallback: "https://cvs.com" },
+      walgreens:        { deep: "intent:#Intent;package=com.walgreens.riteaid.mobile;end", fallback: "https://walgreens.com" },
+      mychart:          { deep: "epicmychart://",    fallback: "https://mychart.com" },
+      goodrx:           { deep: "intent:#Intent;package=com.goodrx;end",              fallback: "https://goodrx.com" },
+      expressscripts:   { deep: "expressscripts://", fallback: "https://express-scripts.com" },
+      // ── Banking / finance ─────────────────────────────────────────────────
+      chase:            { deep: "intent:#Intent;package=com.chase.sig.android;end",   fallback: "https://chase.com" },
+      bankofamerica:    { deep: "intent:#Intent;package=com.infonow.bofa;end",        fallback: "https://bankofamerica.com" },
+      bofa:             { deep: "intent:#Intent;package=com.infonow.bofa;end",        fallback: "https://bankofamerica.com" },
+      wellsfargo:       { deep: "intent:#Intent;package=com.wf.wellsfargomobile;end", fallback: "https://wellsfargo.com" },
+      amex:             { deep: "intent:#Intent;package=com.americanexpress.android.acctsvcs.us;end", fallback: "https://americanexpress.com" },
+      americanexpress:  { deep: "intent:#Intent;package=com.americanexpress.android.acctsvcs.us;end", fallback: "https://americanexpress.com" },
+      robinhood:        { deep: "intent:#Intent;package=com.robinhood.android;end",   fallback: "https://robinhood.com" },
+      fidelity:         { deep: "intent:#Intent;package=com.fidelity.android;end",    fallback: "https://fidelity.com" },
+      schwab:           { deep: "intent:#Intent;package=com.schwab.mobile;end",       fallback: "https://schwab.com" },
+      venmo:            { deep: "intent:#Intent;package=com.venmo;end",               fallback: "https://venmo.com" },
+      paypal:           { deep: "intent:#Intent;package=com.paypal.android.p2pmobile;end", fallback: "https://paypal.com" },
+      zelle:            { deep: "intent:#Intent;package=com.zellepay.zelle;end",      fallback: "https://zellepay.com" },
+      // ── Books / audio ─────────────────────────────────────────────────────
+      audible:          { deep: "intent:#Intent;package=com.audible.application;end", fallback: "https://audible.com" },
+      kindle:           { deep: "intent:#Intent;package=com.amazon.kindle;end",       fallback: "https://read.amazon.com" },
+      // ── News ─────────────────────────────────────────────────────────────
+      cnn:              { deep: "cnn://",            fallback: "https://cnn.com" },
+      foxnews:          { deep: "foxnews://",        fallback: "https://foxnews.com" },
+      // ── Senior / lifestyle ────────────────────────────────────────────────
+      aarp:             { deep: "intent:#Intent;package=org.aarp.aarpnow;end",        fallback: "https://aarp.org" },
+      // ── Photos / gallery (all Android) ────────────────────────────────────
+      googlephotos:     { deep: "googlephotos://",   fallback: "https://photos.google.com" },
+      photos:           { deep: "googlephotos://",   fallback: "https://photos.google.com" },
+      photoalbum:       { deep: "googlephotos://",   fallback: "https://photos.google.com" },
+      myphotoalbum:     { deep: "googlephotos://",   fallback: "https://photos.google.com" },
+      myphotos:         { deep: "googlephotos://",   fallback: "https://photos.google.com" },
+      gallery:          { deep: [
+                            "intent:#Intent;action=android.intent.action.VIEW;type=image/*;package=com.sec.android.gallery3d;end",
+                            "intent:#Intent;action=android.intent.action.VIEW;type=image/*;package=com.google.android.apps.photos;end",
+                            "googlephotos://"
+                          ], fallback: "https://photos.google.com" },
+      // ── Samsung Health (Samsung only — correct) ────────────────────────────
+      health:           { deep: "com.sec.android.app.shealth://" },
+      shealth:          { deep: "com.sec.android.app.shealth://" },
+      samsunghealth:    { deep: "com.sec.android.app.shealth://" },
+      walking:          { deep: "com.sec.android.app.shealth://" },
+      workout:          { deep: "com.sec.android.app.shealth://" },
+      steps:            { deep: "com.sec.android.app.shealth://" },
+      healthconnect:    { deep: "com.google.android.apps.healthdata://" },
+      // ── Samsung specific (Samsung only — correct) ──────────────────────────
+      samsungpay:       { deep: "samsungpay://",     fallback: "https://www.samsung.com/us/samsung-pay/" },
+      samsungwallet:    { deep: "samsungpay://",     fallback: "https://www.samsung.com/us/samsung-pay/" },
+      bixby:            { deep: "bixby://",          fallback: "" },
+      // ── Device / system (all Android) ─────────────────────────────────────
+      settings:         { deep: "intent:#Intent;action=android.settings.SETTINGS;end" },
+      dialer:           { deep: "intent:#Intent;action=android.intent.action.DIAL;end" },
+      phone:            { deep: "intent:#Intent;action=android.intent.action.DIAL;end" },
+      calculator:       { deep: "intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.APP_CALCULATOR;end" },
+      files:            { deep: "intent:#Intent;action=android.intent.action.VIEW;type=resource/folder;end" },
     };
 
     const app = launchApps[key];
@@ -1448,6 +1499,17 @@ export default function ChatScreen() {
 
   const handleConfirmIntent = useCallback(async () => {
     if (!pendingAction || actionStatus === "executing") return;
+    // Store per-app permission on confirm — next time opens directly
+    if (pendingAction.type === "launch") {
+      const appKey = canonicalKey(pendingAction.value as string ?? "");
+      if (appKey) {
+        autoOpenAppsRef.current.add(appKey);
+        AsyncStorage.setItem(
+          'herald_auto_open_apps',
+          JSON.stringify([...autoOpenAppsRef.current])
+        );
+      }
+    }
     await executeIntent(pendingAction);
   }, [pendingAction, actionStatus]); // eslint-disable-line react-hooks/exhaustive-deps
 

@@ -34,6 +34,7 @@ import PersonaConfirmScreen from "./PersonaConfirmScreen";
 import { useStore } from "../store/useStore";
 import { API_BASE } from "../constants/api";
 import { saveLocalProfile } from "../hooks/useDeviceMemory";
+import { writeProfileFromOnboarding } from '../routing/tier1Responses';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -201,6 +202,12 @@ export default function OnboardingScreen() {
       // Store the AI name -- used in header, greeting, everywhere
       if (storeSetAiName) storeSetAiName(data.ai_name || trimmedAiName);
       setOnboardingComplete();
+      writeProfileFromOnboarding({
+        userId: data.user_id,
+        name:   trimmedName,
+        aiName: trimmedAiName,
+        persona: persona,
+      });
     } catch {
       const fallbackId = `user_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
       setUser(fallbackId, trimmedName);
@@ -208,6 +215,12 @@ export default function OnboardingScreen() {
       setOwner(false);
       if (storeSetAiName) storeSetAiName(trimmedAiName);
       setOnboardingComplete();
+      writeProfileFromOnboarding({
+        userId: fallbackId,
+        name:   trimmedName,
+        aiName: trimmedAiName,
+        persona: persona,
+      });
     } finally {
       setSubmitting(false);
     }

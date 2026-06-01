@@ -44,14 +44,28 @@ export interface Fact {
 // (case-insensitive, trimmed) already exists, updates use_count only.
 // Returns the fact id.
 
+export interface WriteFactOptions {
+  confidence?: "stated" | "inferred" | "confirmed";
+  contextType?: "active" | "historical" | "corrected";
+  validUntil?: string;
+  importanceScore?: number;
+  entityId?: string;
+}
+
 export function writeFact(
   fact: string,
   category: string,
-  confidence: Fact["confidence"] = "stated"
+  options?: Fact["confidence"] | WriteFactOptions
 ): string {
   const db = getDB();
   const normalized = fact.trim().toLowerCase();
   const today = new Date().toISOString().split("T")[0];
+  const confidence: Fact["confidence"] =
+    typeof options === "string" ? options :
+    options?.confidence ?? "stated";
+  const contextType = typeof options === "object" ? (options.contextType ?? "historical") : "historical";
+  const validUntil  = typeof options === "object" ? (options.validUntil ?? null) : null;
+  const importanceScore = typeof options === "object" ? (options.importanceScore ?? 50) : 50;
 
   // Deduplication — two passes:
   // Pass 1: exact normalized match (fast, covers most cases)
@@ -100,9 +114,9 @@ export function writeFact(
 
   const id = `f_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   db.runSync(
-    `INSERT INTO facts (id, fact, category, confidence, source_date, use_count)
-     VALUES (?, ?, ?, ?, ?, 0);`,
-    [id, fact.trim(), category, confidence, today]
+    `INSERT INTO facts (id, fact, category, confidence, source_date, use_count, context_type, valid_until, importance_score)
+     VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?);`,
+    [id, fact.trim(), category, confidence, today, contextType, validUntil, importanceScore]
   );
   return id;
 }
@@ -116,6 +130,14 @@ export function writeFact(
 
 const TEMPORAL_PATTERNS = /\b(today|tonight|this evening|this afternoon|this morning|right now|later today|in a bit|shortly|soon|this week|this weekend|tomorrow)\b/i;
 const NEAR_TERM_PATTERNS = /\b(this week|this weekend|next few days)\b/i;
+
+const CATEGORY_IMPORTANCE: Record<string, number> = {
+  medical: 100, medications: 95, medication: 95,
+  relationships: 85, family: 85,
+  financial: 70, location: 65,
+  professional: 60, schedule: 55,
+  preferences: 40, life_events: 35, general: 10,
+};
 
 // ─── writeFacts ───────────────────────────────────────────────────────────────
 //
@@ -134,7 +156,8 @@ export function writeFacts(
       writeFact(f.value, f.category, {
         confidence: "stated",
         contextType: "active",
-        validUntil: new Date().toISOString().split("T")[0], // expires today
+        validUntil: (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().split("T")[0]; })(),
+        importanceScore: CATEGORY_IMPORTANCE[f.category] ?? 50,
       });
     } else if (NEAR_TERM_PATTERNS.test(f.value)) {
       // "this week/weekend" — expires in 7 days
@@ -144,10 +167,15 @@ export function writeFacts(
         confidence: "stated",
         contextType: "active",
         validUntil: exp.toISOString().split("T")[0],
+        importanceScore: CATEGORY_IMPORTANCE[f.category] ?? 50,
       });
     } else {
       // Permanent fact — no expiry, historical by default
-      writeFact(f.value, f.category, "stated");
+      writeFact(f.value, f.category, {
+        confidence: "stated",
+        contextType: "historical",
+        importanceScore: CATEGORY_IMPORTANCE[f.category] ?? 50,
+      });
     }
 
     // Extract contacts from relationship facts
@@ -171,7 +199,7 @@ export function getFactsByCategory(category: string, limit = 20): Fact[] {
            / MAX(1.0, julianday('now') - julianday(source_date)) AS decay_score
        FROM facts
        WHERE category = ?
-         AND (valid_until IS NULL OR valid_until >= date('now'))
+         AND (valid_until IS NULL OR valid_until > date('now'))
        ORDER BY
          CASE WHEN context_type = 'active' THEN 1 ELSE 2 END ASC,
          decay_score DESC
@@ -180,7 +208,7 @@ export function getFactsByCategory(category: string, limit = 20): Fact[] {
     );
   } catch {
     return db.getAllSync<Fact>(
-      "SELECT * FROM facts WHERE category = ? ORDER BY use_count DESC, source_date DESC LIMIT ?;",
+      "SELECT * FROM facts WHERE category = ? AND (valid_until IS NULL OR valid_until > date('now')) ORDER BY use_count DESC, source_date DESC LIMIT ?;",
       [category, limit]
     );
   }
@@ -194,7 +222,9 @@ export function getFactsByCategory(category: string, limit = 20): Fact[] {
 export function getTopFacts(limit = 20): Fact[] {
   const db = getDB();
   return db.getAllSync<Fact>(
-    "SELECT * FROM facts ORDER BY use_count DESC, source_date DESC LIMIT ?;",
+    `SELECT * FROM facts
+     WHERE (valid_until IS NULL OR valid_until > date('now'))
+     ORDER BY use_count DESC, source_date DESC LIMIT ?;`,
     [limit]
   );
 }
@@ -205,24 +235,48 @@ export function getTopFacts(limit = 20): Fact[] {
 // Used by tier1Responses.ts to answer "what do you know about me" queries
 // until Phi-3 is available in Session W.
 
+const CATEGORY_PRIORITY: Record<string, number> = {
+  medical: 1, medications: 2, medication: 2,
+  relationships: 3, family: 3,
+  financial: 4, location: 5,
+  professional: 6, schedule: 7,
+  preferences: 8, life_events: 9, general: 10,
+};
+
 export function getFactsSummary(): string {
   const db = getDB();
   const facts = db.getAllSync<Fact>(
-    "SELECT * FROM facts ORDER BY category, use_count DESC;"
+    `SELECT * FROM facts
+     WHERE (valid_until IS NULL OR valid_until > date('now'))
+       AND (context_type IS NULL OR context_type != 'corrected')
+     ORDER BY
+       COALESCE(importance_score, 50) DESC,
+       use_count DESC
+     LIMIT 60;`
   );
-
   if (facts.length === 0) return "";
 
   const grouped: Record<string, string[]> = {};
   for (const f of facts) {
     if (!grouped[f.category]) grouped[f.category] = [];
-    grouped[f.category].push(f.fact);
+    if (grouped[f.category].length < 4) grouped[f.category].push(f.fact);
   }
 
+  // Sort categories by priority — medical always first
+  const sorted = Object.entries(grouped).sort(([a], [b]) => {
+    const pa = CATEGORY_PRIORITY[a] ?? 99;
+    const pb = CATEGORY_PRIORITY[b] ?? 99;
+    return pa - pb;
+  });
+
   const lines: string[] = [];
-  for (const [cat, items] of Object.entries(grouped)) {
+  let totalFacts = 0;
+  for (const [cat, items] of sorted) {
+    if (totalFacts >= 30) break;
     const label = cat.charAt(0).toUpperCase() + cat.slice(1);
-    lines.push(`${label}: ${items.slice(0, 5).join("; ")}`);
+    const slice = items.slice(0, Math.min(4, 30 - totalFacts));
+    lines.push(`${label}: ${slice.join("; ")}`);
+    totalFacts += slice.length;
   }
   return lines.join("\n");
 }

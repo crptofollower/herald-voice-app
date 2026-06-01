@@ -29,11 +29,13 @@ import {
   Inter_700Bold,
 } from "@expo-google-fonts/inter";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useStore } from "./src/store/useStore";
 import OnboardingScreen from "./src/screens/OnboardingScreen";
 import ChatScreen from "./src/screens/ChatScreen";
 import { ONESIGNAL_APP_ID } from "./src/constants/api";
 import { runMigrations } from './src/migrations/runMigrations';
+import { runMigration } from './src/routing/migration';
 import { initDB } from './src/db/useDeviceDB';
 
 export type RootStackParamList = {
@@ -52,14 +54,59 @@ const queryClient = new QueryClient({
 
 function Navigation() {
   const onboardingComplete = useStore((s) => s.onboardingComplete);
+  const userId               = useStore((s) => s.userId);
   const _hasHydrated       = useStore((s) => s._hasHydrated);
+  const hardReset          = useStore((s) => s.hardReset);
+  const [sqliteChecked, setSqliteChecked] = useState(false);
 
-  // ── Wait for AsyncStorage to load before rendering any screen ─────────────
-  // Without this guard, OnboardingScreen mounts briefly (onboardingComplete
-  // is false before hydration), fires its TTS speech, then immediately
-  // unmounts when hydration sets onboardingComplete = true. ChatScreen then
-  // mounts and fires the greeting. Both voices play at the same time.
-  if (!_hasHydrated) {
+  useEffect(() => {
+    if (!_hasHydrated) return;
+    try {
+      const { getProfileField, setProfileField } = require('./src/db/profileDB');
+      const sqliteOnboarding = getProfileField('onboarding_complete');
+
+      if (onboardingComplete && sqliteOnboarding !== 'true') {
+        // Zustand says onboarded but SQLite has no record.
+        // Check if userId exists in SQLite — if yes, this is an existing user
+        // predating Build 24. Backfill SQLite and trust Zustand.
+        // If no userId anywhere, it is a truly blank install — safe to reset.
+        const storeState = require('./src/store/useStore').useStore.getState();
+        const sqliteUserId = getProfileField('user_id');
+
+        if (!storeState.userId && !sqliteUserId) {
+          // Truly blank — reset to onboarding
+          console.warn('[Herald] Blank install detected — resetting');
+          hardReset();
+        } else {
+          // Existing user predating Build 24 — backfill SQLite, preserve state
+          setProfileField('onboarding_complete', 'true');
+          setProfileField('user_id', storeState.userId);
+          if (storeState.name) setProfileField('name', storeState.name);
+          if (storeState.aiName) setProfileField('ai_name', storeState.aiName);
+          console.log('[Herald] Backfilled SQLite for pre-Build-24 user');
+        }
+      }
+    } catch {
+      // SQLite not ready — pass through, next open will catch it
+    }
+    setSqliteChecked(true);
+  }, [_hasHydrated]);
+
+  useEffect(() => {
+    if (!_hasHydrated || !sqliteChecked || !onboardingComplete || !userId) return;
+    AsyncStorage.getItem('herald_migration_attempts').then(async (attemptsStr) => {
+      const attempts = parseInt(attemptsStr ?? '0');
+      if (attempts >= 3) return; // give up after 3 failures — user onboards fresh
+      try {
+        await runMigration(userId);
+        await AsyncStorage.removeItem('herald_migration_attempts');
+      } catch {
+        await AsyncStorage.setItem('herald_migration_attempts', String(attempts + 1));
+      }
+    });
+  }, [_hasHydrated, sqliteChecked, onboardingComplete, userId]);
+
+  if (!_hasHydrated || !sqliteChecked) {
     return <View style={{ flex: 1, backgroundColor: "#0A1628" }} />;
   }
 
