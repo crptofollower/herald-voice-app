@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.73 -- onboard access_code persist + LIVE_KEYWORDS expansion + export owner bypass
+# v8.74 -- life_moments table in init_db for fresh Railway deploys
 #          life_tracker cycle_type migration (NOT NULL default patch)
 #          /user/export accepts profile owner_code match
 #          PHONE tag: accepts name/relationship, Herald resolves to number
@@ -56,7 +56,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.73")
+app = FastAPI(title="Herald API", version="8.74")
 
 app.add_middleware(
     CORSMiddleware,
@@ -654,6 +654,22 @@ def init_db():
                 refill_due    TEXT,
                 active        INTEGER DEFAULT 1,
                 created_at    TEXT NOT NULL
+            )
+        """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS life_moments (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    TEXT NOT NULL,
+                role       TEXT,
+                content    TEXT,
+                summary    TEXT,
+                category   TEXT DEFAULT 'health',
+                emotion    TEXT DEFAULT 'neutral',
+                weight     INTEGER DEFAULT 3,
+                days_ago   INTEGER DEFAULT 0,
+                active     INTEGER DEFAULT 1,
+                source     TEXT DEFAULT 'conversation',
+                created_at TEXT NOT NULL
             )
         """)
         conn.commit()
@@ -4802,7 +4818,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.73",
+        "status": "ok", "server": "herald-api", "version": "8.74",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled (throttled -- every 3rd message)",
