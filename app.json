@@ -58,6 +58,78 @@
           "speechRecognitionPermission": "Herald uses speech recognition to understand you.",
           "androidSpeechServicePackages": ["com.google.android.googlequicksearchbox"]
         }
+      ],
+      [
+        "react-native-health-connect",
+        {
+          "permissions": [
+            "android.permission.health.READ_STEPS",
+            "android.permission.health.READ_ACTIVE_CALORIES_BURNED",
+            "android.permission.health.READ_HEART_RATE",
+            "android.permission.health.READ_SLEEP"
+          ]
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "extraPropertiesEntries": {},
+            "manifestQueries": {
+              "packages": [
+                "com.ubercab",
+                "me.lyft.android",
+                "com.doordash.consumer",
+                "com.ubercab.eats",
+                "com.grubhub.android",
+                "com.instacart.client",
+                "com.starbucks.mobilecard",
+                "com.chipotle.ordering",
+                "com.chilifresh.chilis",
+                "com.walmart.android",
+                "com.target.ui",
+                "com.costco.costcomobile",
+                "com.aa.android",
+                "com.southwest.airlines",
+                "com.united.mobile.android",
+                "com.hilton.android.hhonors",
+                "com.ihg.apps.android",
+                "com.hertz.mobile.android",
+                "com.ehi.enterprise",
+                "com.avis.androidapp",
+                "com.budget.android",
+                "com.nationalcar",
+                "com.hyatt.android",
+                "com.hulu.plus",
+                "com.disney.disneyplus",
+                "com.hbo.hbonow",
+                "com.peacocktv.peacockandroid",
+                "com.cbs.ott",
+                "com.espn.score_center",
+                "com.cvs.launchers.cvs",
+                "com.walgreens.riteaid.mobile",
+                "com.goodrx",
+                "com.chase.sig.android",
+                "com.infonow.bofa",
+                "com.wf.wellsfargomobile",
+                "com.americanexpress.android.acctsvcs.us",
+                "com.robinhood.android",
+                "com.fidelity.android",
+                "com.schwab.mobile",
+                "com.venmo",
+                "com.paypal.android.p2pmobile",
+                "com.zellepay.zelle",
+                "com.audible.application",
+                "com.amazon.kindle",
+                "com.facebook.katana",
+                "org.aarp.aarpnow",
+                "com.google.android.apps.photos",
+                "com.sec.android.gallery3d",
+                "com.samsung.android.clockpackage"
+              ]
+            }
+          }
+        }
       ]
     ],
     "scheme": "herald",

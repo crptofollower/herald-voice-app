@@ -61,35 +61,70 @@ function Navigation() {
 
   useEffect(() => {
     if (!_hasHydrated) return;
-    try {
-      const { getProfileField, setProfileField } = require('./src/db/profileDB');
-      const sqliteOnboarding = getProfileField('onboarding_complete');
+    (async () => {
+      try {
+        const { getProfileField, setProfileField } = require('./src/db/profileDB');
+        const sqliteOnboarding = getProfileField('onboarding_complete');
 
-      if (onboardingComplete && sqliteOnboarding !== 'true') {
-        // Zustand says onboarded but SQLite has no record.
-        // Check if userId exists in SQLite — if yes, this is an existing user
-        // predating Build 24. Backfill SQLite and trust Zustand.
-        // If no userId anywhere, it is a truly blank install — safe to reset.
-        const storeState = require('./src/store/useStore').useStore.getState();
-        const sqliteUserId = getProfileField('user_id');
+        if (onboardingComplete && sqliteOnboarding !== 'true') {
+          // Zustand says onboarded but SQLite has no record.
+          // Check if userId exists in SQLite — if yes, this is an existing user
+          // predating Build 24. Backfill SQLite and trust Zustand.
+          // If no userId anywhere, it is a truly blank install — safe to reset.
+          const storeState = require('./src/store/useStore').useStore.getState();
+          const sqliteUserId = getProfileField('user_id');
 
-        if (!storeState.userId && !sqliteUserId) {
-          // Truly blank — reset to onboarding
-          console.warn('[Herald] Blank install detected — resetting');
-          hardReset();
-        } else {
-          // Existing user predating Build 24 — backfill SQLite, preserve state
-          setProfileField('onboarding_complete', 'true');
-          setProfileField('user_id', storeState.userId);
-          if (storeState.name) setProfileField('name', storeState.name);
-          if (storeState.aiName) setProfileField('ai_name', storeState.aiName);
-          console.log('[Herald] Backfilled SQLite for pre-Build-24 user');
+          if (!storeState.userId && !sqliteUserId) {
+            // Truly blank — reset to onboarding
+            console.warn('[Herald] Blank install detected — resetting');
+            hardReset();
+          } else {
+            // Has a userId — but may be a Samsung backup restore on a fresh install.
+            // Verify the Railway profile actually exists before trusting restored state.
+            // If Railway returns 404 or errors, the userId is stale — hard reset.
+            const restoredUserId = storeState.userId || sqliteUserId;
+            try {
+              const { API_BASE } = require('./src/constants/api');
+              const check = await fetch(
+                `${API_BASE}/user/export/${restoredUserId}?access_code=herald2026`,
+                { signal: AbortSignal.timeout(4000) }
+              );
+              if (check.ok || check.status === 403) {
+                // 200 = confirmed. 403 = user exists but code mismatch — still a real user.
+                // Both cases: legitimate existing user, backfill SQLite and trust state.
+                setProfileField('onboarding_complete', 'true');
+                setProfileField('user_id', restoredUserId);
+                if (storeState.name) setProfileField('name', storeState.name);
+                if (storeState.aiName) setProfileField('ai_name', storeState.aiName);
+                console.log('[Herald] Railway profile verified or access mismatch — backfilled SQLite');
+              } else if (check.status === 404) {
+                // User genuinely not found — Samsung restore of a deleted/nonexistent account.
+                console.warn('[Herald] Railway profile not found (404) — resetting to onboarding');
+                hardReset();
+              } else {
+                // Any other status (500, etc) — be safe, trust restored state.
+                setProfileField('onboarding_complete', 'true');
+                setProfileField('user_id', restoredUserId);
+                if (storeState.name) setProfileField('name', storeState.name);
+                if (storeState.aiName) setProfileField('ai_name', storeState.aiName);
+                console.log('[Herald] Railway check inconclusive — trusted restored state');
+              }
+            } catch {
+              // Network unavailable — cannot verify. Trust restored state to avoid
+              // forcing re-onboarding on users who are just offline.
+              setProfileField('onboarding_complete', 'true');
+              setProfileField('user_id', restoredUserId);
+              if (storeState.name) setProfileField('name', storeState.name);
+              if (storeState.aiName) setProfileField('ai_name', storeState.aiName);
+              console.log('[Herald] Network unavailable — trusted restored state');
+            }
+          }
         }
+      } catch {
+        // SQLite not ready — pass through, next open will catch it
       }
-    } catch {
-      // SQLite not ready — pass through, next open will catch it
-    }
-    setSqliteChecked(true);
+      setSqliteChecked(true);
+    })();
   }, [_hasHydrated]);
 
   useEffect(() => {
