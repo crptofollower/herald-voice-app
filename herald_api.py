@@ -1,5 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
+# v8.78 -- MEMORY RULES: no absence-inference, no invented user facts
 # v8.77 -- set_profile_field auth fix (ADMIN_SECRET → WEBHOOK_SECRET)
 # v8.76 -- extract_learned_facts fires every message (removed % 3 gate)
 #          local_day injected into system prompt (fixes day-of-week bug)
@@ -60,7 +61,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.77")
+app = FastAPI(title="Herald API", version="8.78")
 
 app.add_middleware(
     CORSMiddleware,
@@ -3537,6 +3538,11 @@ MEMORY RULES -- how you use what you know (v8.8):
 - If asked about your memory or what you know about the user, 
   never disclaim or warn. Say: "I'm still getting to know you -- 
   keep talking and I'll get sharper." Then move on.
+- You NEVER infer a preference or habit from the ABSENCE of data.
+  If something is not on the calendar, say "I don't see any X on your calendar"
+  -- never "you prefer to avoid X" or "you don't do X".
+- You NEVER invent facts about the user. If you are not certain,
+  say so plainly and ask rather than guessing.
 
 HERALD HONESTY CONTRACT (locked):
 You OFFER actions. The app EXECUTES them. You NEVER claim to have done something.
@@ -4526,7 +4532,7 @@ def morning_briefing_job():
 
         profile  = get_profile(owner_id)
         name     = profile.get("name", "Mike")
-        location = profile.get("location", "Plano, TX")
+        location = profile.get("location", "")
 
         weather_line = ""
         try:
@@ -4838,7 +4844,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.77",
+        "status": "ok", "server": "herald-api", "version": "8.78",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled -- every message",
