@@ -1,5 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
+# v8.77 -- set_profile_field auth fix (ADMIN_SECRET → WEBHOOK_SECRET)
 # v8.76 -- extract_learned_facts fires every message (removed % 3 gate)
 #          local_day injected into system prompt (fixes day-of-week bug)
 #          /admin/set_profile_field endpoint added
@@ -59,7 +60,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.76")
+app = FastAPI(title="Herald API", version="8.77")
 
 app.add_middleware(
     CORSMiddleware,
@@ -4837,7 +4838,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.76",
+        "status": "ok", "server": "herald-api", "version": "8.77",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled -- every message",
@@ -6692,7 +6693,7 @@ async def admin_set_profile_field(request: Request):
     except Exception:
         return JSONResponse({"error": "invalid json"}, status_code=400)
     secret = body.get("secret", "")
-    if secret != ADMIN_SECRET:
+    if not WEBHOOK_SECRET or secret != WEBHOOK_SECRET:
         return JSONResponse({"error": "unauthorized"}, status_code=403)
     user_id = body.get("user_id", "")
     field = body.get("field", "")
