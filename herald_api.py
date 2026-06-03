@@ -1,5 +1,8 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
+# v8.76 -- extract_learned_facts fires every message (removed % 3 gate)
+#          local_day injected into system prompt (fixes day-of-week bug)
+#          /admin/set_profile_field endpoint added
 # v8.75 -- life_moments ALTER TABLE migration for legacy narrow schemas
 #          life_tracker cycle_type migration (NOT NULL default patch)
 #          /user/export accepts profile owner_code match
@@ -56,7 +59,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.75")
+app = FastAPI(title="Herald API", version="8.76")
 
 app.add_middleware(
     CORSMiddleware,
@@ -3244,7 +3247,7 @@ def increment_trust_level(user_id, message):
         print(f"[HERALD] trust_level {user_id}: {old_level} -> {trust_level}")
 
 
-def build_system(profile, local_time=None, owner=False, empire=None, lat=None, lng=None, location_label=None, local_date=None, device_context=None):
+def build_system(profile, local_time=None, owner=False, empire=None, lat=None, lng=None, location_label=None, local_date=None, local_day=None, device_context=None):
     now      = local_time or datetime.now().strftime("%A, %B %d %Y %I:%M %p")
     name     = profile.get("name", "")
     ai_name  = profile.get("ai_name", "Herald")
@@ -3266,7 +3269,7 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
     else:
         loc_line = "Location not yet learned -- ask naturally when relevant. NEVER say you do not have GPS access or cannot see location. You simply do not know it yet."
 
-    date_line = f"Today is {local_date}." if local_date else ""
+    date_line = f"Today is {local_day}, {local_date}." if local_date and local_day else (f"Today is {local_date}." if local_date else "")
 
     all_memory = list(dict.fromkeys((memories + notes)[-12:]))
     notes_line = ("What this user has told you (remember and use naturally): "
@@ -3904,6 +3907,7 @@ def build_ask_context(data):
     history        = data.get("history", [])
     local_time     = data.get("local_time", None)
     local_date     = data.get("local_date", None)
+    local_day      = data.get("local_day", None)
     device_context = data.get("device_context", None)
     lat            = data.get("lat", None)
     lng            = data.get("lng", None)
@@ -4007,7 +4011,7 @@ def build_ask_context(data):
         system = _cached[1]
     else:
         system = build_system(profile, local_time, owner, empire,
-            lat, lng, location_label, local_date=local_date,
+            lat, lng, location_label, local_date=local_date, local_day=local_day,
             device_context=device_context)
         _system_prompt_cache[_cache_key] = (_now_ts, system)
     messages = [{"role": "system", "content": system}]
@@ -4833,10 +4837,10 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.75",
+        "status": "ok", "server": "herald-api", "version": "8.76",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
-        "learning_loop": "enabled (throttled -- every 3rd message)",
+        "learning_loop": "enabled -- every message",
         "watcher_system": "enabled (explicit + implicit + gas + travel/task/research)",
         "model_routing": "Haiku default / Sonnet for judgment",
         "streaming": "enabled (/ask/stream)",
@@ -5235,6 +5239,8 @@ async def ask(request: Request):
         increment_trust_level(_pre_user_id, _pre_message)
 
     _local_date = data.get("local_date", "") or ""
+    _local_day = datetime.now().strftime("%A")
+    data["local_day"] = _local_day
     data["message"] = resolve_relative_dates(data.get("message", "").strip(), _local_date)
 
     ctx, err = await run_in_threadpool(build_ask_context, data)
@@ -5309,22 +5315,21 @@ async def ask(request: Request):
         "_last_message_at": datetime.now().isoformat()
     })
 
-    if msg_count % 3 == 0:
-        threading.Thread(
-            target=extract_learned_facts,
-            args=(user_id, message, reply),
-            daemon=True
-        ).start()
-        threading.Thread(
-            target=update_personality_profile,
-            args=(user_id, message),
-            daemon=True
-        ).start()
-        threading.Thread(
-            target=_run_watcher_pipeline,
-            args=(message, profile, user_id),
-            daemon=True
-        ).start()
+    threading.Thread(
+        target=extract_learned_facts,
+        args=(user_id, message, reply),
+        daemon=True
+    ).start()
+    threading.Thread(
+        target=update_personality_profile,
+        args=(user_id, message),
+        daemon=True
+    ).start()
+    threading.Thread(
+        target=_run_watcher_pipeline,
+        args=(message, profile, user_id),
+        daemon=True
+    ).start()
 
     trial = get_trial_status(profile)
     return {"reply": reply, "action": action,
@@ -5561,6 +5566,8 @@ async def ask_stream(request: Request):
                 increment_trust_level(_pre_user_id, _pre_message)
 
             _local_date = data.get("local_date", "") or ""
+            _local_day = datetime.now().strftime("%A")
+            data["local_day"] = _local_day
             data["message"] = resolve_relative_dates(data.get("message", "").strip(), _local_date)
 
             ctx, err = await run_in_threadpool(build_ask_context, data)
@@ -5670,24 +5677,18 @@ async def ask_stream(request: Request):
                 })
 
                 extracted_facts = []
-                if msg_count % 3 == 0:
-                    _facts_before = len(get_profile(user_id).get("learned_facts", []))
-                    extract_learned_facts(user_id, message, reply)
-                    _new_facts = get_profile(user_id).get("learned_facts", [])[_facts_before:]
-                    extracted_facts = [
-                        {"category": f.get("category", ""), "value": f.get("value", "")}
-                        for f in _new_facts
-                    ]
-                    threading.Thread(
-                        target=update_personality_profile,
-                        args=(user_id, message),
-                        daemon=True
-                    ).start()
-                    threading.Thread(
-                        target=_run_watcher_pipeline,
-                        args=(message, profile, user_id),
-                        daemon=True
-                    ).start()
+                _facts_before = len(get_profile(user_id).get("learned_facts", []))
+                extract_learned_facts(user_id, message, reply)
+                _new_facts = get_profile(user_id).get("learned_facts", [])[_facts_before:]
+                extracted_facts = [
+                    {"category": f.get("category", ""), "value": f.get("value", "")}
+                    for f in _new_facts
+                ]
+                threading.Thread(
+                    target=update_personality_profile,
+                    args=(user_id, message),
+                    daemon=True
+                ).start()
 
                 yield _sse_event({**base_done, "full": reply, "action": action, "used_search": use_search, "facts": extracted_facts})
 
@@ -6682,6 +6683,31 @@ async def admin_clear_profile_field(request: Request):
     save_profile(user_id, profile)
     print(f"[HERALD] /admin/clear_profile_field: {user_id}.{field} cleared (was: {old_val})")
     return {"ok": True, "user_id": user_id, "field": field, "cleared_value": str(old_val)}
+
+@app.post("/admin/set_profile_field")
+async def admin_set_profile_field(request: Request):
+    """Set a specific profile field for a user. Admin only."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid json"}, status_code=400)
+    secret = body.get("secret", "")
+    if secret != ADMIN_SECRET:
+        return JSONResponse({"error": "unauthorized"}, status_code=403)
+    user_id = body.get("user_id", "")
+    field = body.get("field", "")
+    value = body.get("value")
+    if not user_id or not field:
+        return JSONResponse({"error": "user_id and field required"}, status_code=400)
+    CLEARABLE_FIELDS = [
+        "confirmed_city", "confirmed_lat", "confirmed_lng", "location",
+        "_briefing_confirm", "pending_watch_offer", "onboardingComplete",
+        "ai_name", "name", "access_code", "migration_complete"
+    ]
+    if field not in CLEARABLE_FIELDS:
+        return JSONResponse({"error": f"field '{field}' not settable"}, status_code=400)
+    save_profile_fields(user_id, {field: value})
+    return JSONResponse({"ok": True, "user_id": user_id, "field": field, "value": value})
 
 @app.get("/admin/dashboard")
 async def admin_dashboard(secret: str = ""):
