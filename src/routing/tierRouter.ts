@@ -3,7 +3,8 @@
 // Session L — Device-First Intelligence Layer
 // Build 20 fix: additional calendar phrase coverage (Bug 2 from Session L).
 
-import { getCachedEvents, formatCachedEventsForSpeech } from "../db/calendarCacheDB";
+import { getCachedEvents, formatCachedEventsForSpeech, refreshCalendarCache } from "../db/calendarCacheDB";
+import { calendarWriteIsRecent } from "../db/calendarState";
 import { getFactsSummary } from "../db/factDB";
 import { getProfileSummary } from "../db/profileDB";
 import { getMedicalSummary } from "../db/medicalDB";
@@ -39,12 +40,16 @@ const TIER1_SIGNALS = {
     /anything (on|scheduled) today/i,
     /is there anything on my calendar (for )?today/i,
     /anything on my calendar/i,
+    /what('s| is) (happening|going on) today/i,
+    /do i have anything (today|scheduled)/i,
   ],
   calendar_tomorrow: [
     /tomorrow/i,
     /what do i have tomorrow/i,
     /any (appointments|meetings|events) tomorrow/i,
     /schedule (for )?tomorrow/i,
+    /do i have anything tomorrow/i,
+    /is there anything tomorrow/i,
   ],
   calendar_week: [
     /this (coming )?week/i,
@@ -54,6 +59,12 @@ const TIER1_SIGNALS = {
     /what do i have this week/i,
     /week('s| is) schedule/i,
     /what('s| is) (on|scheduled) this week/i,
+    /any (flights?|hotels?|stays?|trips?|travel|reservations?)/i,
+    /do i have any (flights?|hotels?|stays?|trips?|travel|appointments?|meetings?|events?|reservations?)/i,
+    /am i (traveling|flying|staying|booked)/i,
+    /what (flights?|hotels?|trips?|reservations?) do i have/i,
+    /is there (a |any )?.*(hotel|flight|stay|trip|reservation)/i,
+    /any (upcoming|scheduled) (travel|trips?|flights?)/i,
   ],
   medical: [
     /what (medication|medications|meds|pills) am i (on|taking)/i,
@@ -100,30 +111,40 @@ const TIER3_SIGNALS = [
 
 // ─── classifyQuery ────────────────────────────────────────────────────────────
 
-export function classifyQuery(message: string): TierDecision {
+async function getTier1CalendarEvents(
+  window: "today" | "tomorrow" | "this week"
+): Promise<ReturnType<typeof getCachedEvents>> {
+  if (calendarWriteIsRecent()) {
+    await refreshCalendarCache();
+  }
+  return getCachedEvents(window);
+}
+
+export async function classifyQuery(message: string): Promise<TierDecision> {
   const msg = message.trim();
 
   // Tier 1: calendar today — exclude if tomorrow or week is present
   if (
     TIER1_SIGNALS.calendar_today.some((p) => p.test(msg)) &&
-    !TIER1_SIGNALS.calendar_tomorrow[0].test(msg) &&
-    !TIER1_SIGNALS.calendar_week[0].test(msg)
+    !TIER1_SIGNALS.calendar_tomorrow.some((p) => p.test(msg)) &&
+    !TIER1_SIGNALS.calendar_week.some((p) => p.test(msg))
   ) {
-    const events = getCachedEvents("today");
+    const events = await getTier1CalendarEvents("today");
     const response = formatCachedEventsForSpeech(events, "today");
     return { tier: 1, tier1Response: response, reason: "calendar:today" };
   }
 
   // Tier 1: calendar tomorrow
   if (TIER1_SIGNALS.calendar_tomorrow.some((p) => p.test(msg))) {
-    const events = getCachedEvents("tomorrow");
+    const events = await getTier1CalendarEvents("tomorrow");
     const response = formatCachedEventsForSpeech(events, "tomorrow");
     return { tier: 1, tier1Response: response, reason: "calendar:tomorrow" };
   }
 
   // Tier 1: calendar this week
-  if (TIER1_SIGNALS.calendar_week.some((p) => p.test(msg))) {
-    const events = getCachedEvents("this week");
+  const hasNearMe = /\b(near me|near here|nearest|closest|close to me)\b/i.test(msg);
+  if (TIER1_SIGNALS.calendar_week.some((p) => p.test(msg)) && !hasNearMe) {
+    const events = await getTier1CalendarEvents("this week");
     const response = formatCachedEventsForSpeech(events, "this week");
     return { tier: 1, tier1Response: response, reason: "calendar:week" };
   }

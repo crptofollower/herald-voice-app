@@ -128,9 +128,9 @@ export function getCachedEvents(
 
   return db.getAllSync<CachedEvent>(
     `SELECT * FROM calendar_cache
-     WHERE start_ms >= ? AND start_ms <= ?
+     WHERE start_ms <= ? AND end_ms >= ?
      ORDER BY start_ms ASC;`,
-    [windowStartMs, windowEndMs]
+    [windowEndMs, windowStartMs]
   );
 }
 

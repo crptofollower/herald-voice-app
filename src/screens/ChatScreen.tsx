@@ -861,7 +861,7 @@ export default function ChatScreen() {
         startRecording();
       }
     },
-    enabled: !isStreaming && !sendingRef.current && !isRecording,
+    enabled: false,
   });
 
   useEffect(() => {
@@ -1163,6 +1163,26 @@ export default function ChatScreen() {
       .replace(/^(the address (i('m| am) looking for( is)?|is)|directions? to( the)?|navigate to( the)?|take me to( the)?)\s*/i, '')
       .trim();
 
+    // Bug 7 fix: "nearest X" queries use live GPS, not stored home location.
+    // Proximity intent — call GPS at query time, not onboarding time.
+    const isProximityQuery = /\b(nearest|near me|near here|closest|close to me|from here|directions from here|from my location|from where i am)\b/i.test(query);
+    let liveOrigin: string | null = null;
+    if (isProximityQuery) {
+      try {
+        const { requestForegroundPermissionsAsync, getCurrentPositionAsync, Accuracy } = await import('expo-location');
+        const { status } = await requestForegroundPermissionsAsync();
+        if (status === 'granted') {
+          const loc = await getCurrentPositionAsync({
+            accuracy: Accuracy.Balanced,
+            timeInterval: 3000,
+          });
+          liveOrigin = `${loc.coords.latitude},${loc.coords.longitude}`;
+        }
+      } catch {
+        // Silent — fall through to stored location or no origin
+      }
+    }
+
     // Check if destination is a person/relationship rather than an address
     const looksLikePlace = /\d|street|st\b|ave\b|avenue|drive|dr\b|road|rd\b|blvd|lane|ln\b|way\b|court|ct\b|highway|hwy|mall|airport|hospital|park\b/i.test(destination);
 
@@ -1190,8 +1210,12 @@ export default function ChatScreen() {
     }
 
     const encoded = encodeURIComponent(destination);
-    const googleApp = `comgooglemaps://?q=${encoded}`;
-    const googleWeb = `https://maps.google.com/maps?q=${encoded}`;
+    const googleApp = liveOrigin
+      ? `comgooglemaps://?q=${encoded}&saddr=${liveOrigin}`
+      : `comgooglemaps://?q=${encoded}`;
+    const googleWeb = liveOrigin
+      ? `https://maps.google.com/maps?saddr=${liveOrigin}&daddr=${encoded}`
+      : `https://maps.google.com/maps?q=${encoded}`;
     try {
       const canGoogle = await Linking.canOpenURL(googleApp);
       await Linking.openURL(canGoogle ? googleApp : googleWeb);
@@ -1356,7 +1380,7 @@ export default function ChatScreen() {
       grubhub:          { deep: "intent:#Intent;package=com.grubhub.android;end",      fallback: "https://grubhub.com" },
       instacart:        { deep: "intent:#Intent;package=com.instacart.client;end",     fallback: "https://instacart.com" },
       // ── Dining ───────────────────────────────────────────────────────────
-      chilis:           { deep: "chilis://",         fallback: "https://chilis.com" },
+      chilis:           { deep: "intent:#Intent;package=com.chilifresh.chilis;end", fallback: "https://chilis.com" },
       starbucks:        { deep: "intent:#Intent;package=com.starbucks.mobilecard;end", fallback: "https://starbucks.com" },
       chipotle:         { deep: "intent:#Intent;package=com.chipotle.ordering;end",    fallback: "https://chipotle.com" },
       // ── Shopping ─────────────────────────────────────────────────────────
@@ -1390,14 +1414,14 @@ export default function ChatScreen() {
       hilton:           { deep: "intent:#Intent;package=com.hilton.android.hhonors;end", fallback: "https://hilton.com" },
       marriott:         { deep: "marriottbonvoy://", fallback: "https://marriott.com" },
       marriottbonvoy:   { deep: "marriottbonvoy://", fallback: "https://marriott.com" },
-      hyatt:            { deep: "world://",          fallback: "https://hyatt.com" },
+      hyatt:            { deep: "intent:#Intent;package=com.hyatt.android;end",     fallback: "https://hyatt.com" },
       ihg:              { deep: "intent:#Intent;package=com.ihg.apps.android;end",     fallback: "https://ihg.com" },
       // ── Car rental ───────────────────────────────────────────────────────
       hertz:            { deep: "intent:#Intent;package=com.hertz.mobile.android;end", fallback: "https://hertz.com" },
       enterprise:       { deep: "intent:#Intent;package=com.ehi.enterprise;end",       fallback: "https://enterprise.com" },
       avis:             { deep: "intent:#Intent;package=com.avis.androidapp;end",      fallback: "https://avis.com" },
-      nationalcar:      { deep: "nationalcar://",    fallback: "https://nationalcar.com" },
-      budget:           { deep: "budget://",         fallback: "https://budget.com" },
+      nationalcar:      { deep: "intent:#Intent;package=com.nationalcar;end",       fallback: "https://nationalcar.com" },
+      budget:           { deep: "intent:#Intent;package=com.budget.android;end",    fallback: "https://budget.com" },
       // ── Travel ───────────────────────────────────────────────────────────
       tripadvisor:      { deep: "tripadvisor://",    fallback: "https://tripadvisor.com" },
       // ── Streaming ────────────────────────────────────────────────────────
@@ -1456,17 +1480,17 @@ export default function ChatScreen() {
                             "googlephotos://"
                           ], fallback: "https://photos.google.com" },
       // ── Samsung Health (Samsung only — correct) ────────────────────────────
-      health:           { deep: "com.sec.android.app.shealth://" },
-      shealth:          { deep: "com.sec.android.app.shealth://" },
-      samsunghealth:    { deep: "com.sec.android.app.shealth://" },
-      walking:          { deep: "com.sec.android.app.shealth://" },
-      workout:          { deep: "com.sec.android.app.shealth://" },
-      steps:            { deep: "com.sec.android.app.shealth://" },
-      healthconnect:    { deep: "com.google.android.apps.healthdata://" },
+      health:           { deep: "com.sec.android.app.shealth://", fallback: "https://www.samsung.com/us/samsunghealthapp/" },
+      shealth:          { deep: "com.sec.android.app.shealth://", fallback: "https://www.samsung.com/us/samsunghealthapp/" },
+      samsunghealth:    { deep: "com.sec.android.app.shealth://", fallback: "https://www.samsung.com/us/samsunghealthapp/" },
+      walking:          { deep: "com.sec.android.app.shealth://", fallback: "https://www.samsung.com/us/samsunghealthapp/" },
+      workout:          { deep: "com.sec.android.app.shealth://", fallback: "https://www.samsung.com/us/samsunghealthapp/" },
+      steps:            { deep: "com.sec.android.app.shealth://", fallback: "https://www.samsung.com/us/samsunghealthapp/" },
+      healthconnect:    { deep: "com.google.android.apps.healthdata://", fallback: "https://health.google/health-connect-android/" },
       // ── Samsung specific (Samsung only — correct) ──────────────────────────
       samsungpay:       { deep: "samsungpay://",     fallback: "https://www.samsung.com/us/samsung-pay/" },
       samsungwallet:    { deep: "samsungpay://",     fallback: "https://www.samsung.com/us/samsung-pay/" },
-      bixby:            { deep: "bixby://",          fallback: "" },
+      bixby:            { deep: "bixby://",          fallback: "https://www.samsung.com/us/apps/bixby/" },
       // ── Device / system (all Android) ─────────────────────────────────────
       settings:         { deep: "intent:#Intent;action=android.settings.SETTINGS;end" },
       dialer:           { deep: "intent:#Intent;action=android.intent.action.DIAL;end" },
