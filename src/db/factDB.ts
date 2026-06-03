@@ -430,3 +430,66 @@ export function getPendingObservations(minConfidence = 0.5): Array<{
     return [];
   }
 }
+
+// ─── extractFactsLocally ──────────────────────────────────────────────────────
+//
+// Pattern-based fact extraction — no LLM, no network, under 5ms.
+// Runs BEFORE every network call in sendMessage().
+// Writes personal facts to device SQLite immediately.
+// Railway extraction is additive — it refines what device already captured.
+// Works fully offline.
+
+const LOCAL_PATTERNS: Array<{
+  pattern: RegExp;
+  category: string;
+  extract: (m: RegExpMatchArray) => string;
+  importance: number;
+}> = [
+  // Family relationships
+  { pattern: /\bmy (wife|husband|spouse)(?:'s name)? is (\w+)/i,       category: 'relationships', extract: m => `${m[1]}: ${m[2]}`,        importance: 90 },
+  { pattern: /\bmy (son|daughter|child)(?:'s name)? is (\w+)/i,        category: 'relationships', extract: m => `${m[1]}: ${m[2]}`,        importance: 90 },
+  { pattern: /\bmy (mom|dad|mother|father)(?:'s name)? is (\w+)/i,     category: 'relationships', extract: m => `${m[1]}: ${m[2]}`,        importance: 85 },
+  { pattern: /\bmy (brother|sister)(?:'s name)? is (\w+)/i,            category: 'relationships', extract: m => `${m[1]}: ${m[2]}`,        importance: 80 },
+  { pattern: /\b(\w+) is my (wife|husband|son|daughter|mom|dad)\b/i,   category: 'relationships', extract: m => `${m[2]}: ${m[1]}`,        importance: 90 },
+
+  // Medical
+  { pattern: /\bmy doctor is (Dr\.?\s*\w+(?:\s+\w+)?)/i,              category: 'medical',       extract: m => `doctor: ${m[1]}`,          importance: 95 },
+  { pattern: /\bi('m| am) (taking|on) (\w+(?:\s+\w+)?)\b/i,           category: 'medications',   extract: m => `medication: ${m[3]}`,      importance: 95 },
+  { pattern: /\bi('m| am) allergic to (\w+(?:\s+\w+)?)\b/i,           category: 'medical',       extract: m => `allergy: ${m[2]}`,         importance: 95 },
+  { pattern: /\bdiagnosed with (\w+(?:\s+\w+)?)\b/i,                   category: 'medical',       extract: m => `condition: ${m[1]}`,       importance: 95 },
+
+  // Location
+  { pattern: /\bi live in ([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i,         category: 'location',      extract: m => `lives in: ${m[1]}`,        importance: 85 },
+  { pattern: /\bi('m| am) from ([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i,    category: 'location',      extract: m => `from: ${m[2]}`,            importance: 75 },
+
+  // Work
+  { pattern: /\bi work (?:at|for) ([\w\s]+?)(?:\.|,|$)/i,             category: 'work',          extract: m => `employer: ${m[1].trim()}`, importance: 80 },
+  { pattern: /\bi('m| am) an? (nurse|doctor|teacher|engineer|manager|director|lawyer|accountant|developer|contractor|consultant|retired|veteran)(?:\b)/i, category: 'work', extract: m => `role: ${m[2].trim()}`, importance: 70 },
+
+  // Preferences
+  { pattern: /\bi (love|really like|enjoy) ([\w\s]+?)(?:\.|,|$)/i,    category: 'preferences',   extract: m => `likes: ${m[2].trim()}`,    importance: 60 },
+  { pattern: /\bi (hate|don't like|dislike) ([\w\s]+?)(?:\.|,|$)/i,   category: 'preferences',   extract: m => `dislikes: ${m[2].trim()}`, importance: 60 },
+
+  // People
+  { pattern: /\b(\w+) is my (friend|colleague|boss|neighbor|pastor|coach)\b/i, category: 'relationships', extract: m => `${m[2]}: ${m[1]}`, importance: 75 },
+];
+
+export function extractFactsLocally(userMessage: string): void {
+  if (!userMessage || userMessage.trim().length < 5) return;
+
+  for (const { pattern, category, extract, importance } of LOCAL_PATTERNS) {
+    const match = userMessage.match(pattern);
+    if (!match) continue;
+    const value = extract(match).trim();
+    if (!value || value.length < 3 || value.length > 120) continue;
+    try {
+      writeFact(value, category, {
+        confidence: 'stated',
+        importanceScore: importance,
+        contextType: 'active',
+      });
+    } catch {
+      // Silent — never block the message send
+    }
+  }
+}

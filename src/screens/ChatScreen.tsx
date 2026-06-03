@@ -82,7 +82,7 @@ import {
 } from "../db/contactsDB";
 import { writeMedicalFact, writeMedicalRecord, writeMedication, writeMedicalContact } from "../db/medicalDB";
 import { drainPendingWrites, getPendingCount, queueWrite } from "../db/pendingWritesDB";
-import { _registerContactExtractor, writeFacts } from "../db/factDB";
+import { _registerContactExtractor, writeFacts, extractFactsLocally } from "../db/factDB";
 
 interface IntentAction {
   type: string;
@@ -147,47 +147,6 @@ const THINKING_PHRASES = [
   "Hang tight...",
   "Let me think through that...",
 ];
-
-const CALENDAR_QUERY_PATTERNS = [
-  /what('s| is) on my calendar/i,
-  /what do i have (today|tomorrow|this week)/i,
-  /any (appointments|meetings|events) (today|tomorrow)/i,
-  /my schedule (today|tomorrow|this week)/i,
-  /what('s| is) (scheduled|planned) (today|tomorrow)/i,
-];
-
-async function readCalendarDirect(text: string): Promise<string | null> {
-  try {
-    const { status } = await Calendar.getCalendarPermissionsAsync(); // check only
-    if (status !== 'granted') return null;
-    const isTomorrow = /tomorrow/i.test(text);
-    const isThisWeek = /this week/i.test(text);
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-    if (isTomorrow) start.setDate(start.getDate() + 1);
-    const end = new Date(start);
-    if (isThisWeek) end.setDate(end.getDate() + 7);
-    end.setHours(23, 59, 59, 999);
-    const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
-    const events = await Calendar.getEventsAsync(calendars.map(c => c.id), start, end);
-    const sorted = events
-      .filter(e => e.title)
-      .sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime());
-    const dayLabel = isTomorrow ? 'tomorrow' : isThisWeek ? 'this week' : 'today';
-    if (sorted.length === 0) return `Your calendar is clear ${dayLabel}.`;
-    const lines = sorted.map(e => {
-      const t = new Date(e.startDate).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-      return isThisWeek
-        ? `${e.title} on ${new Date(e.startDate).toLocaleDateString([], { weekday: 'long' })} at ${t}`
-        : `${e.title} at ${t}`;
-    });
-    return lines.length === 1
-      ? `You have ${lines[0]} ${dayLabel}.`
-      : `${dayLabel.charAt(0).toUpperCase() + dayLabel.slice(1)} you have: ${lines.join(', ')}.`;
-  } catch {
-    return null;
-  }
-}
 
 function extractFact(userMsg: string, aiReply: string, category: string): string | null {
   if (category === 'medication' || category === 'medical') {
@@ -590,40 +549,33 @@ export default function ChatScreen() {
     const networkState = await Network.getNetworkStateAsync();
     const isOffline = !networkState.isConnected || !networkState.isInternetReachable;
     if (isOffline) {
-      if (CALENDAR_QUERY_PATTERNS.some((p) => p.test(text))) {
-        const calAnswer = await readCalendarDirect(text);
-        if (calAnswer) {
+      // Run tier router first — device actions work offline
+      const offlineTier = await classifyQuery(text);
+      if (offlineTier.tier === 1) {
+        if (offlineTier.actionIntent) {
+          // Fall through to action intent handling below (after offline check)
+        } else if (offlineTier.tier1Response) {
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-          addMessage({ id: generateId('msg'), role: 'assistant', content: calAnswer, timestamp: Date.now() });
-          speak(calAnswer);
+          addMessage({ id: generateId('msg'), role: 'assistant', content: offlineTier.tier1Response, timestamp: Date.now() });
+          speak(offlineTier.tier1Response);
           setInputText('');
           sendingRef.current = false;
           return;
         }
       }
-      // Try device memory next
-      const localAnswer = answerFromDevice(text);
-      const offlineReply = localAnswer ??
-        "I'm offline right now, but I can still help — ask me about your calendar, schedule, medications, or anything personal.";
-      addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-      addMessage({ id: generateId('msg'), role: 'assistant', content: offlineReply, timestamp: Date.now() });
-      speak(offlineReply);
-      setInputText('');
-      sendingRef.current = false;
-      return;
-    }
-
-    // ── Calendar on-device -- read expo-calendar directly, zero network ────
-    if (CALENDAR_QUERY_PATTERNS.some((p) => p.test(text))) {
-      const calAnswer = await readCalendarDirect(text);
-      if (calAnswer) {
+      if (!offlineTier.actionIntent) {
+        // No device action — try local memory, then offline message
+        const localAnswer = answerFromDevice(text);
+        const offlineReply = localAnswer ??
+          "I'm offline right now, but I can still help — ask me about your calendar, schedule, medications, or anything personal.";
         addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-        addMessage({ id: generateId('msg'), role: 'assistant', content: calAnswer, timestamp: Date.now() });
-        speak(calAnswer);
+        addMessage({ id: generateId('msg'), role: 'assistant', content: offlineReply, timestamp: Date.now() });
+        speak(offlineReply);
         setInputText('');
         sendingRef.current = false;
         return;
       }
+      // Has actionIntent — fall through to action handling below
     }
 
     // ── Tier router — device-first before any network call ───────────────────
@@ -632,11 +584,267 @@ export default function ChatScreen() {
     // Tier 3: default — existing network path unchanged.
     const tierDecision = await classifyQuery(text);
 
-    if (tierDecision.tier === 1 && tierDecision.tier1Response) {
-      handleTier1(tierDecision.tier1Response, text, addMessage, speak, generateId);
-      sendingRef.current = false;
-      setInputText("");
-      return;
+    if (tierDecision.tier === 1) {
+      // Device action intent — alarm or SMS, no network needed
+      if (tierDecision.actionIntent) {
+        if (tierDecision.actionIntent.type === 'alarm') {
+          const { time, label } = tierDecision.actionIntent;
+          const [h, m] = time.split(':');
+          const alarmUrl = `intent:#Intent;action=android.intent.action.SET_ALARM;S.android.intent.extra.alarm.MESSAGE=${encodeURIComponent(label)};i.android.intent.extra.alarm.HOUR=${h};i.android.intent.extra.alarm.MINUTES=${m};B.android.intent.extra.alarm.SKIP_UI=false;end`;
+          const samsungUrl = `intent:#Intent;action=android.intent.action.SET_ALARM;package=com.samsung.android.clockpackage;S.android.intent.extra.alarm.MESSAGE=${encodeURIComponent(label)};i.android.intent.extra.alarm.HOUR=${h};i.android.intent.extra.alarm.MINUTES=${m};B.android.intent.extra.alarm.SKIP_UI=false;end`;
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          let alarmOpened = false;
+          try { await Linking.openURL(alarmUrl); alarmOpened = true; }
+          catch {
+            try { await Linking.openURL(samsungUrl); alarmOpened = true; }
+            catch {}
+          }
+          const alarmDate = new Date();
+          alarmDate.setHours(parseInt(h, 10), parseInt(m, 10), 0, 0);
+          const spoken = alarmDate.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+          const reply = alarmOpened
+            ? `Alarm set for ${spoken}.`
+            : `I couldn't open the clock app. Open it manually and set an alarm for ${spoken}.`;
+          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+          speak(reply);
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+        if (tierDecision.actionIntent.type === 'sms') {
+          const { contact, message } = tierDecision.actionIntent;
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          await handleSMSAction(`${contact}|${message}`);
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+
+        // Time — pure device clock
+        if (tierDecision.actionIntent.type === 'time') {
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          const t = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+          const reply = `It's ${t}.`;
+          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+          speak(reply);
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+
+        // Date — pure device clock
+        if (tierDecision.actionIntent.type === 'date') {
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          const d = new Date().toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
+          const reply = `It's ${d}.`;
+          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+          speak(reply);
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+
+        // Call — resolve contact on device, fire tel: intent
+        if (tierDecision.actionIntent.type === 'call') {
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          const resolved = await resolveContactPhone(tierDecision.actionIntent.contact);
+          if (resolved?.phone) {
+            await Linking.openURL(`tel:${resolved.phone.replace(/\D/g, '')}`);
+            const reply = `Calling ${resolved.name}.`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          } else {
+            const reply = `I don't have a number for ${tierDecision.actionIntent.contact}. Tell me their number and I'll remember it.`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          }
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+
+        if (tierDecision.actionIntent.type === 'reminder') {
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          try {
+            const Notifications = await import('expo-notifications');
+            const { status } = await Notifications.requestPermissionsAsync();
+            if (status !== 'granted') {
+              const reply = `I need notification permission to set reminders. Check your settings and try again.`;
+              addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+              speak(reply);
+              sendingRef.current = false;
+              setInputText('');
+              return;
+            }
+            const [h, m] = tierDecision.actionIntent.time.split(':').map(Number);
+            const trigger = new Date();
+            trigger.setHours(h, m, 0, 0);
+            if (trigger <= new Date()) trigger.setDate(trigger.getDate() + 1);
+
+            // Write to SQLite FIRST — if this fails, don't schedule
+            const { getDB } = await import('../db/schema');
+            const db = getDB();
+            const remId = `rem_${Date.now()}`;
+            db.runSync(
+              `INSERT INTO reminders (id, body, remind_at, fired, created_at) VALUES (?, ?, ?, 0, ?);`,
+              [remId, tierDecision.actionIntent.body, trigger.toISOString(), new Date().toISOString()]
+            );
+
+            // SQLite succeeded — now schedule notification
+            await Notifications.scheduleNotificationAsync({
+              content: { title: 'Herald', body: tierDecision.actionIntent.body, sound: true },
+              trigger: { type: 'date', date: trigger },
+            });
+
+            // One-time Samsung battery optimization prompt
+            try {
+              const shown = await AsyncStorage.getItem('herald_battery_prompt');
+              if (!shown) {
+                await AsyncStorage.setItem('herald_battery_prompt', 'true');
+                setTimeout(() => {
+                  addMessage({
+                    id: generateId('msg'),
+                    role: 'assistant',
+                    content: `One tip: to make sure reminders always reach you, go to Settings → Battery → App power management and set Herald to "Unrestricted". Samsung sometimes delays notifications otherwise.`,
+                    timestamp: Date.now(),
+                  });
+                }, 3000);
+              }
+            } catch {}
+
+            const displayTime = trigger.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+            const reply = `I'll remind you to ${tierDecision.actionIntent.body} at ${displayTime}.`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          } catch {
+            const reply = `Something went wrong setting that reminder. Try again.`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          }
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+
+        // Note capture — write to device SQLite, zero network
+        if (tierDecision.actionIntent.type === 'note_capture') {
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          try {
+            const { getDB } = await import('../db/schema');
+            const db = getDB();
+            db.runSync(
+              `INSERT INTO notes (id, body, created_at, updated_at) VALUES (?, ?, ?, ?);`,
+              [`note_${Date.now()}`, tierDecision.actionIntent.body, new Date().toISOString(), new Date().toISOString()]
+            );
+            const reply = `Got it — noted.`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          } catch {
+            const reply = `Something went wrong saving that note. Try again.`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          }
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+
+        // Note read — read from device SQLite, zero network
+        if (tierDecision.actionIntent.type === 'note_read') {
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          try {
+            const { getDB } = await import('../db/schema');
+            const db = getDB();
+            const notes = db.getAllSync<{ body: string; created_at: string }>(
+              `SELECT body, created_at FROM notes ORDER BY created_at DESC LIMIT 10;`
+            );
+            const reply = notes.length === 0
+              ? `You don't have any notes yet.`
+              : `Here are your notes: ${notes.map(n => n.body).join('. ')}.`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          } catch {
+            const reply = `I couldn't read your notes right now. Try again.`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          }
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+
+        // List add — write to device SQLite, zero network
+        if (tierDecision.actionIntent.type === 'list_add') {
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          try {
+            const { getDB } = await import('../db/schema');
+            const db = getDB();
+            const listName = tierDecision.actionIntent.listName;
+            // Get or create list
+            let list = db.getFirstSync<{ id: string }>(
+              `SELECT id FROM lists WHERE name = ?;`, [listName]
+            );
+            if (!list) {
+              const listId = `list_${Date.now()}`;
+              db.runSync(
+                `INSERT INTO lists (id, name, created_at) VALUES (?, ?, ?);`,
+                [listId, listName, new Date().toISOString()]
+              );
+              list = { id: listId };
+            }
+            db.runSync(
+              `INSERT INTO list_items (id, list_id, body, checked, created_at) VALUES (?, ?, ?, 0, ?);`,
+              [`item_${Date.now()}`, list.id, tierDecision.actionIntent.item, new Date().toISOString()]
+            );
+            const reply = `Added ${tierDecision.actionIntent.item} to your ${listName} list.`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          } catch {
+            const reply = `Something went wrong adding that. Try again.`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          }
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+
+        // List read — read from device SQLite, zero network
+        if (tierDecision.actionIntent.type === 'list_read') {
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          try {
+            const { getDB } = await import('../db/schema');
+            const db = getDB();
+            const listName = tierDecision.actionIntent.listName;
+            const items = db.getAllSync<{ body: string }>(
+              `SELECT li.body FROM list_items li
+               JOIN lists l ON l.id = li.list_id
+               WHERE l.name = ? AND li.checked = 0
+               ORDER BY li.created_at ASC;`,
+              [listName]
+            );
+            const reply = items.length === 0
+              ? `Your ${listName} list is empty.`
+              : `On your ${listName} list: ${items.map(i => i.body).join(', ')}.`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          } catch {
+            const reply = `I couldn't read your list right now. Try again.`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          }
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+      }
+      // Tier 1 read response — calendar, medical, profile
+      if (tierDecision.tier1Response) {
+        handleTier1(tierDecision.tier1Response, text, addMessage, speak, generateId);
+        sendingRef.current = false;
+        setInputText('');
+        return;
+      }
     }
 
     // Legacy device interceptor — keep as fallback for patterns not yet
@@ -717,6 +925,9 @@ export default function ChatScreen() {
       minute: '2-digit',
       hour12: false,
     });
+
+    // Extract facts from user message locally — no LLM, no network, offline-safe
+    try { extractFactsLocally(text); } catch {}
 
     const abortController = askHeraldStream(
       {

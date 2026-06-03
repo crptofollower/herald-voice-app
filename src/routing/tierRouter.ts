@@ -16,6 +16,17 @@ export type Tier = 1 | 2 | 3;
 export interface TierDecision {
   tier: Tier;
   tier1Response?: string;
+  actionIntent?:
+    | { type: 'alarm';    time: string;  label: string }
+    | { type: 'sms';     contact: string; message: string }
+    | { type: 'time' }
+    | { type: 'date' }
+    | { type: 'call';    contact: string }
+    | { type: 'reminder'; body: string; time: string }
+    | { type: 'note_capture'; body: string }
+    | { type: 'note_read' }
+    | { type: 'list_add'; item: string; listName: string }
+    | { type: 'list_read'; listName: string };
   localContext?: LocalContext;
   reason: string;
 }
@@ -109,6 +120,71 @@ const TIER3_SIGNALS = [
   /latest|recent|today('s)? (news|headlines)/i,
 ];
 
+const ALARM_SIGNALS = [
+  /\b(set|create|put)?\s*(an?\s+)?(alarm|timer)\b/i,
+  /\bwake\s+me\s+(up\s+)?(at|in)\b/i,
+  /\bwake\s+me\s+up\b/i,
+];
+
+const SMS_SIGNALS = [
+  /\b(text|message|msg)\s+\w+/i,
+  /\bsend\s+(a\s+)?(text|message)\s+to\b/i,
+  /\btell\s+\w+\s+that\b/i,
+];
+
+const TIME_SIGNALS = [
+  /\bwhat (time|hour) is it\b/i,
+  /\bwhat's the time\b/i,
+  /\bdo you know the time\b/i,
+  /\bwhat time is it\b/i,
+];
+
+const DATE_SIGNALS = [
+  /\bwhat (day|date) is (it|today)\b/i,
+  /\bwhat's today\b/i,
+  /\bwhat('s| is) the date\b/i,
+  /\bwhat day is it\b/i,
+  /\btoday's date\b/i,
+];
+
+const CALL_SIGNALS = [
+  /\b(call|phone|dial|ring)\s+\w+/i,
+  /\bcan you (call|phone)\s+\w+/i,
+  /\bgive\s+\w+\s+a (call|ring)\b/i,
+];
+
+const REMINDER_SIGNALS = [
+  /\bremind me\b/i,
+  /\bdon't let me forget\b/i,
+  /\bremember to\b/i,
+  /\bdon't forget to\b/i,
+];
+
+const NOTE_CAPTURE_SIGNALS = [
+  /\b(note|jot|write down|record) (this|that)\b/i,
+  /\bnote that\b/i,
+  /\bjot this down\b/i,
+  /^remember that\b/i,
+];
+
+const NOTE_READ_SIGNALS = [
+  /\bwhat are my notes\b/i,
+  /\bshow (me )?my notes\b/i,
+  /\bread (me )?my notes\b/i,
+  /\bwhat (have|did) i (note|jot|write)\b/i,
+];
+
+const LIST_ADD_SIGNALS = [
+  /\badd (.+) to (my |the )?(grocery |shopping |to.?do |)\blist\b/i,
+  /\bput (.+) on (my |the )?(grocery |shopping |to.?do |)\blist\b/i,
+];
+
+const LIST_READ_SIGNALS = [
+  /\bwhat('s| is) on my (grocery |shopping |to.?do |)\blist\b/i,
+  /\bshow (me )?my (grocery |shopping |to.?do |)\blist\b/i,
+  /\bread (me )?my (grocery |shopping |to.?do |)\blist\b/i,
+];
+
 // ─── classifyQuery ────────────────────────────────────────────────────────────
 
 async function getTier1CalendarEvents(
@@ -123,6 +199,106 @@ async function getTier1CalendarEvents(
 export async function classifyQuery(message: string): Promise<TierDecision> {
   const msg = message.trim();
 
+  // Device action: alarm — parse on device, zero network
+  if (ALARM_SIGNALS.some((p) => p.test(msg))) {
+    const { parseAlarmIntent } = await import('../utils/parseTime');
+    const parsed = parseAlarmIntent(msg);
+    if (parsed) {
+      return {
+        tier: 1,
+        actionIntent: { type: 'alarm', time: parsed.time, label: parsed.label },
+        reason: 'action:alarm',
+      };
+    }
+  }
+
+  // Device action: SMS — parse on device, zero network
+  if (SMS_SIGNALS.some((p) => p.test(msg))) {
+    const { parseSmsIntent } = await import('../utils/parseTime');
+    const parsed = parseSmsIntent(msg);
+    if (parsed) {
+      return {
+        tier: 1,
+        actionIntent: { type: 'sms', contact: parsed.contact, message: parsed.message },
+        reason: 'action:sms',
+      };
+    }
+  }
+
+  // Device: time — pure device clock, zero network
+  if (TIME_SIGNALS.some((p) => p.test(msg))) {
+    return { tier: 1, actionIntent: { type: 'time' }, reason: 'action:time' };
+  }
+
+  // Device: date — pure device clock, zero network
+  const hasWeather = /\bweather\b/i.test(msg);
+  if (DATE_SIGNALS.some((p) => p.test(msg)) && !hasWeather) {
+    return { tier: 1, actionIntent: { type: 'date' }, reason: 'action:date' };
+  }
+
+  // Device: call — resolves contact on device, fires tel: intent
+  if (CALL_SIGNALS.some((p) => p.test(msg))) {
+    const CALL_EXCLUDE = /^(me|you|back|again|later|now|soon|ahead|us|them|it|that)$/i;
+    const contactMatch =
+      msg.match(/\b(?:call|phone|dial|ring)\s+((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+)?\w+(?:\s+\w+)?)/i) ??
+      msg.match(/\bgive\s+((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+)?\w+(?:\s+\w+)?)\s+a\s+(?:call|ring)\b/i);
+    const rawContact = contactMatch?.[1]?.trim() ?? '';
+    const contact = CALL_EXCLUDE.test(rawContact.split(' ')[0]) ? '' : rawContact;
+    if (contact) {
+      return {
+        tier: 1,
+        actionIntent: { type: 'call', contact },
+        reason: 'action:call',
+      };
+    }
+  }
+
+  // Device: reminder — parse on device, schedule local notification
+  if (REMINDER_SIGNALS.some((p) => p.test(msg))) {
+    const { parseReminderIntent } = await import('../utils/parseTime');
+    const parsed = parseReminderIntent(msg);
+    if (parsed) {
+      return {
+        tier: 1,
+        actionIntent: { type: 'reminder', body: parsed.body, time: parsed.time },
+        reason: 'action:reminder',
+      };
+    }
+  }
+
+  // Device: note capture — write to SQLite, zero network
+  if (NOTE_CAPTURE_SIGNALS.some((p) => p.test(msg))) {
+    const bodyMatch = msg.match(/note that (.+)/i)?.[1] ??
+                      msg.match(/(?:note|jot|record|remember that) (.+)/i)?.[1] ??
+                      msg.replace(/^(note|jot|write down|record|remember)\s+(this|that)?\s*/i, '').trim();
+    if (bodyMatch && bodyMatch.length > 2) {
+      return { tier: 1, actionIntent: { type: 'note_capture', body: bodyMatch.trim() }, reason: 'action:note_capture' };
+    }
+  }
+
+  // Device: note read — read from SQLite, zero network
+  if (NOTE_READ_SIGNALS.some((p) => p.test(msg))) {
+    return { tier: 1, actionIntent: { type: 'note_read' }, reason: 'action:note_read' };
+  }
+
+  // Device: list add — write to SQLite, zero network
+  if (LIST_ADD_SIGNALS.some((p) => p.test(msg))) {
+    const addMatch = msg.match(/\badd (.+?) to (?:my |the )?(\w+)?\s*list/i) ??
+                     msg.match(/\bput (.+?) on (?:my |the )?(\w+)?\s*list/i);
+    if (addMatch) {
+      const item = addMatch[1]?.trim() ?? '';
+      const listName = (addMatch[2]?.trim() ?? 'grocery').toLowerCase();
+      if (item) return { tier: 1, actionIntent: { type: 'list_add', item, listName }, reason: 'action:list_add' };
+    }
+  }
+
+  // Device: list read — read from SQLite, zero network
+  if (LIST_READ_SIGNALS.some((p) => p.test(msg))) {
+    const nameMatch = msg.match(/my (\w+) list/i);
+    const listName = (nameMatch?.[1]?.trim() ?? 'grocery').toLowerCase();
+    return { tier: 1, actionIntent: { type: 'list_read', listName }, reason: 'action:list_read' };
+  }
+
   // Tier 1: calendar today — exclude if tomorrow or week is present
   if (
     TIER1_SIGNALS.calendar_today.some((p) => p.test(msg)) &&
@@ -135,7 +311,8 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   }
 
   // Tier 1: calendar tomorrow
-  if (TIER1_SIGNALS.calendar_tomorrow.some((p) => p.test(msg))) {
+  const hasWeatherTomorrow = /\bweather\b/i.test(msg);
+  if (TIER1_SIGNALS.calendar_tomorrow.some((p) => p.test(msg)) && !hasWeatherTomorrow) {
     const events = await getTier1CalendarEvents("tomorrow");
     const response = formatCachedEventsForSpeech(events, "tomorrow");
     return { tier: 1, tier1Response: response, reason: "calendar:tomorrow" };

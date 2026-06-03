@@ -68,12 +68,20 @@ function heraldSpeak(text: string) {
     .map((s) => s.trim())
     .filter(Boolean);
   if (sentences.length === 0) return;
-  // Speak first sentence immediately, queue the rest
-  sentences.forEach((sentence, i) => {
-    setTimeout(() => {
-      Speech.speak(sentence, { rate: 0.92, pitch: 1.0 });
-    }, i * 50); // small stagger so Android queues correctly
-  });
+
+  // Chain sentences using onDone callback — NOT setTimeout.
+  // setTimeout interrupts previous speech on Android.
+  // onDone fires only after the utterance fully completes.
+  const speakNext = (index: number) => {
+    if (index >= sentences.length) return;
+    Speech.speak(sentences[index], {
+      rate: 0.92,
+      pitch: 1.0,
+      onDone: () => speakNext(index + 1),
+      onStopped: () => {},  // swallow — fires when Speech.stop() is called
+    });
+  };
+  speakNext(0);
 }
 
 // ─── Fade wrapper ─────────────────────────────────────────────────────────────

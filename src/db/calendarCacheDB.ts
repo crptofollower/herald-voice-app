@@ -66,8 +66,20 @@ export async function refreshCalendarCache(): Promise<void> {
 
         // Parse startDate/endDate safely — expo-calendar returns strings on Android
         // that may not be standard ISO. new Date() handles most formats.
-        const startMs = event.startDate ? new Date(event.startDate).getTime() : now;
-        const endMs = event.endDate ? new Date(event.endDate).getTime() : now;
+        let startMs = event.startDate ? new Date(event.startDate).getTime() : now;
+        let endMs = event.endDate ? new Date(event.endDate).getTime() : now;
+
+        // All-day events on Android are stored as UTC midnight.
+        // This causes them to appear on the wrong day in local time.
+        // Normalize: shift to local midnight so overlap queries work correctly.
+        if (event.allDay) {
+          const startLocal = new Date(startMs);
+          startLocal.setHours(0, 0, 0, 0);
+          startMs = startLocal.getTime();
+          const endLocal = new Date(endMs);
+          endLocal.setHours(23, 59, 59, 999);
+          endMs = endLocal.getTime();
+        }
 
         // Skip events with unparseable dates
         if (isNaN(startMs) || isNaN(endMs)) continue;

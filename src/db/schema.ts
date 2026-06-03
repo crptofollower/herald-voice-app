@@ -2,7 +2,7 @@
 // Herald device SQLite — table definitions and migration runner.
 // Session L — Device-First Intelligence Layer
 //
-// SCHEMA VERSION: 3
+// SCHEMA VERSION: 5
 // v1: Initial schema — facts, profile, medical, calendar_cache (ISO strings), life_tracker
 // v2: calendar_cache rebuilt with Unix ms timestamps (timezone fix)
 // v3: Entity graph + importance scoring + temporal awareness (locked Session L spec)
@@ -31,7 +31,7 @@
 
 import * as SQLite from "expo-sqlite";
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 5;
 export const DB_NAME = "herald_device.db";
 
 // ─── Open database ────────────────────────────────────────────────────────────
@@ -63,7 +63,7 @@ export async function runMigrations(): Promise<void> {
   `);
 
   const row = db.getFirstSync<{ version: number }>(
-    "SELECT version FROM schema_meta LIMIT 1;"
+    "SELECT version FROM schema_meta ORDER BY version DESC LIMIT 1;"
   );
   const currentVersion = row?.version ?? 0;
 
@@ -414,6 +414,44 @@ const MIGRATIONS: Record<number, (db: SQLite.SQLiteDatabase) => void> = {
       CREATE INDEX IF NOT EXISTS idx_contacts_importance
         ON contacts(importance DESC);
 
+    `);
+  },
+
+  // ── v4: Reminders table ────────────────────────────────────────────────────
+  4: (db) => {
+    db.execSync(`
+      CREATE TABLE IF NOT EXISTS reminders (
+        id          TEXT PRIMARY KEY,
+        body        TEXT NOT NULL,
+        remind_at   TEXT NOT NULL,
+        fired       INTEGER DEFAULT 0,
+        created_at  TEXT NOT NULL
+      );
+    `);
+  },
+
+  // ── v5: Notes, lists, list_items ──────────────────────────────────────────
+  5: (db) => {
+    db.execSync(`
+      CREATE TABLE IF NOT EXISTS notes (
+        id         TEXT PRIMARY KEY,
+        body       TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS lists (
+        id         TEXT PRIMARY KEY,
+        name       TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS list_items (
+        id         TEXT PRIMARY KEY,
+        list_id    TEXT NOT NULL,
+        body       TEXT NOT NULL,
+        checked    INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (list_id) REFERENCES lists(id)
+      );
     `);
   },
 };
