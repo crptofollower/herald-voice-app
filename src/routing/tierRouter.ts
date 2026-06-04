@@ -93,6 +93,8 @@ const TIER1_SIGNALS = {
     /what city (am i in|do i live in)/i,
     /what('s| is) my (location|address|city|town)/i,
     /who am i/i,
+    /\bwhere are we\b/i,
+    /\bwhere am i\b/i,
   ],
 };
 
@@ -135,6 +137,7 @@ const SMS_SIGNALS = [
   /\b(text|message|msg)\s+\w+/i,
   /\bsend\s+(a\s+)?(text|message)\s+to\b/i,
   /\btell\s+\w+\s+that\b/i,
+  /\bcan you (text|message)\s+\w+/i,
 ];
 
 const TIME_SIGNALS = [
@@ -163,6 +166,8 @@ const REMINDER_SIGNALS = [
   /\bdon't let me forget\b/i,
   /\bremember to\b/i,
   /\bdon't forget to\b/i,
+  /\bcan you set a reminder\b/i,
+  /\bset a reminder\b/i,
 ];
 
 const NOTE_CAPTURE_SIGNALS = [
@@ -170,6 +175,9 @@ const NOTE_CAPTURE_SIGNALS = [
   /\bnote that\b/i,
   /\bjot this down\b/i,
   /^remember that\b/i,
+  /\bcan you make a note\b/i,
+  /\bmake a note (to|that|about)\b/i,
+  /\bcan you note\b/i,
 ];
 
 const NOTE_READ_SIGNALS = [
@@ -190,6 +198,8 @@ const LIST_READ_SIGNALS = [
   /\bwhat('s| is) on my (grocery |shopping |to.?do |)\blist\b/i,
   /\bshow (me )?my (grocery |shopping |to.?do |)\blist\b/i,
   /\bread (me )?my (grocery |shopping |to.?do |)\blist\b/i,
+  /\bis there (anything|something) on my (grocery |shopping |to.?do )?\blist\b/i,
+  /\bcheck my (grocery |shopping |to.?do )?\blist\b/i,
 ];
 
 // ─── classifyQuery ────────────────────────────────────────────────────────────
@@ -224,6 +234,20 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     const { parseAlarmIntent } = await import('../utils/parseTime');
     const parsed = parseAlarmIntent(msg);
     if (parsed) {
+      // If alarm has duration words but no clock time → treat as timer
+      const hasDuration = /\b(\d+)\s*(minute|min|hour|hr)s?\b/i.test(msg);
+      const hasClockTime = /\b\d{1,2}(:\d{2})?\s*(am|pm)\b/i.test(msg) || /\bat\s+\d{1,2}\b/i.test(msg);
+      if (hasDuration && !hasClockTime) {
+        const { parseTimerIntent } = await import('../utils/parseTime');
+        const timerParsed = parseTimerIntent(msg);
+        if (timerParsed) {
+          return {
+            tier: 1,
+            actionIntent: { type: 'timer', minutes: timerParsed.minutes, label: timerParsed.label },
+            reason: 'action:timer:rerouted',
+          };
+        }
+      }
       return {
         tier: 1,
         actionIntent: { type: 'alarm', time: parsed.time, label: parsed.label },
@@ -273,24 +297,16 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     }
   }
 
-  // Device: reminder — parse on device, schedule local notification
-  if (REMINDER_SIGNALS.some((p) => p.test(msg))) {
-    const { parseReminderIntent } = await import('../utils/parseTime');
-    const parsed = parseReminderIntent(msg);
-    if (parsed) {
-      return {
-        tier: 1,
-        actionIntent: { type: 'reminder', body: parsed.body, time: parsed.time },
-        reason: 'action:reminder',
-      };
-    }
-  }
-
   // Device: note capture — write to SQLite, zero network
   if (NOTE_CAPTURE_SIGNALS.some((p) => p.test(msg))) {
-    const bodyMatch = msg.match(/note that (.+)/i)?.[1] ??
-                      msg.match(/(?:note|jot|record|remember that) (.+)/i)?.[1] ??
-                      msg.replace(/^(note|jot|write down|record|remember)\s+(this|that)?\s*/i, '').trim();
+    const bodyMatch =
+      msg.match(/note that (.+)/i)?.[1] ??
+      msg.match(/make a note to (.+)/i)?.[1] ??
+      msg.match(/make a note (that|about) (.+)/i)?.[2] ??
+      msg.match(/can you make a note to (.+)/i)?.[1] ??
+      msg.match(/can you note (.+)/i)?.[1] ??
+      msg.match(/(?:note|jot|record|remember that) (.+)/i)?.[1] ??
+      msg.replace(/^(can you )?(note|jot|write down|record|remember|make a note)\s+(this|that|to|about)?\s*/i, '').trim();
     if (bodyMatch && bodyMatch.length > 2) {
       return { tier: 1, actionIntent: { type: 'note_capture', body: bodyMatch.trim() }, reason: 'action:note_capture' };
     }
@@ -344,6 +360,19 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     const events = await getTier1CalendarEvents("this week");
     const response = formatCachedEventsForSpeech(events, "this week");
     return { tier: 1, tier1Response: response, reason: "calendar:week" };
+  }
+
+  // Device: reminder — parse on device, schedule local notification
+  if (REMINDER_SIGNALS.some((p) => p.test(msg))) {
+    const { parseReminderIntent } = await import('../utils/parseTime');
+    const parsed = parseReminderIntent(msg);
+    if (parsed) {
+      return {
+        tier: 1,
+        actionIntent: { type: 'reminder', body: parsed.body, time: parsed.time },
+        reason: 'action:reminder',
+      };
+    }
   }
 
   // Tier 1: medical

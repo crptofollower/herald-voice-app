@@ -42,6 +42,7 @@ import {
 import * as Calendar from "expo-calendar";
 import * as Network from "expo-network";
 import * as Haptics from 'expo-haptics';
+import * as IntentLauncher from 'expo-intent-launcher';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useStore } from "../store/useStore";
 import { API_BASE } from "../constants/api";
@@ -82,7 +83,7 @@ import {
 } from "../db/contactsDB";
 import { writeMedicalFact, writeMedicalRecord, writeMedication, writeMedicalContact } from "../db/medicalDB";
 import { drainPendingWrites, getPendingCount, queueWrite } from "../db/pendingWritesDB";
-import { _registerContactExtractor, writeFacts, extractFactsLocally } from "../db/factDB";
+import { _registerContactExtractor, writeFacts, extractFactsLocally, getFactCount } from "../db/factDB";
 
 interface IntentAction {
   type: string;
@@ -548,9 +549,24 @@ export default function ChatScreen() {
     // ── Offline check -- skip network, answer from device or give warm message ──
     const networkState = await Network.getNetworkStateAsync();
     // Extract facts locally — runs offline and online
-    try { extractFactsLocally(text); } catch {}
+    let localFactsWritten = false;
+    try {
+      const beforeCount = getFactCount();
+      extractFactsLocally(text);
+      const afterCount = getFactCount();
+      localFactsWritten = afterCount > beforeCount;
+    } catch {}
     const isOffline = !networkState.isConnected || !networkState.isInternetReachable;
     if (isOffline) {
+      if (localFactsWritten) {
+        const reply = "Got it — I've saved that. You can ask me about it anytime.";
+        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+        speak(reply);
+        sendingRef.current = false;
+        setInputText('');
+        return;
+      }
       // Run tier router first — device actions work offline
       const offlineTier = await classifyQuery(text);
       if (offlineTier.tier === 1) {
@@ -592,14 +608,20 @@ export default function ChatScreen() {
         if (tierDecision.actionIntent.type === 'alarm') {
           const { time, label } = tierDecision.actionIntent;
           const [h, m] = time.split(':');
-          const alarmUrl = `intent:#Intent;action=android.intent.action.SET_ALARM;S.android.intent.extra.alarm.MESSAGE=${encodeURIComponent(label)};i.android.intent.extra.alarm.HOUR=${h};i.android.intent.extra.alarm.MINUTES=${m};B.android.intent.extra.alarm.SKIP_UI=true;end`;
-          const samsungUrl = `intent:#Intent;action=android.intent.action.SET_ALARM;package=com.samsung.android.clockpackage;S.android.intent.extra.alarm.MESSAGE=${encodeURIComponent(label)};i.android.intent.extra.alarm.HOUR=${h};i.android.intent.extra.alarm.MINUTES=${m};B.android.intent.extra.alarm.SKIP_UI=true;end`;
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
           let alarmOpened = false;
-          try { await Linking.openURL(alarmUrl); alarmOpened = true; }
-          catch {
-            try { await Linking.openURL(samsungUrl); alarmOpened = true; }
-            catch {}
+          if (Platform.OS === 'android') {
+            try {
+              await IntentLauncher.startActivityAsync('android.intent.action.SET_ALARM', {
+                extra: {
+                  'android.intent.extra.alarm.HOUR': parseInt(h, 10),
+                  'android.intent.extra.alarm.MINUTES': parseInt(m, 10),
+                  'android.intent.extra.alarm.MESSAGE': label,
+                  'android.intent.extra.alarm.SKIP_UI': true,
+                },
+              });
+              alarmOpened = true;
+            } catch {}
           }
           const alarmDate = new Date();
           alarmDate.setHours(parseInt(h, 10), parseInt(m, 10), 0, 0);
@@ -618,14 +640,27 @@ export default function ChatScreen() {
           const hours = Math.floor(minutes / 60);
           const mins = minutes % 60;
           const secs = 0;
-          const timerUrl = `intent:#Intent;action=android.intent.action.SET_TIMER;i.android.intent.extra.alarm.LENGTH=${minutes * 60};B.android.intent.extra.alarm.SKIP_UI=true;end`;
-          const samsungTimer = `intent:#Intent;action=android.intent.action.SET_TIMER;package=com.samsung.android.clockpackage;i.android.intent.extra.alarm.LENGTH=${minutes * 60};B.android.intent.extra.alarm.SKIP_UI=true;end`;
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
           let timerOpened = false;
-          try { await Linking.openURL(timerUrl); timerOpened = true; }
-          catch {
-            try { await Linking.openURL(samsungTimer); timerOpened = true; }
-            catch {}
+          try {
+            await IntentLauncher.startActivityAsync('android.intent.action.SET_TIMER', {
+              extra: {
+                'android.intent.extra.alarm.LENGTH': parseInt(String(minutes * 60), 10),
+                'android.intent.extra.alarm.SKIP_UI': true,
+              },
+            });
+            timerOpened = true;
+          } catch {
+            try {
+              await IntentLauncher.startActivityAsync('android.intent.action.SET_TIMER', {
+                extra: {
+                  'android.intent.extra.alarm.LENGTH': parseInt(String(minutes * 60), 10),
+                  'android.intent.extra.alarm.SKIP_UI': true,
+                },
+                packageName: 'com.samsung.android.clockpackage',
+              });
+              timerOpened = true;
+            } catch {}
           }
           const label = minutes >= 60
             ? `${hours > 0 ? hours + ' hour' + (hours > 1 ? 's' : '') : ''}${mins > 0 ? ' ' + mins + ' minute' + (mins > 1 ? 's' : '') : ''}`
@@ -1223,22 +1258,20 @@ export default function ChatScreen() {
           const alarmHour  = alarmTime.split(":")[0] || "0";
           const alarmMins  = alarmTime.split(":")[1] || "0";
 
-          // Correct Android SET_ALARM intent format
-          const alarmUrl = `intent:#Intent;action=android.intent.action.SET_ALARM;S.android.intent.extra.alarm.MESSAGE=${encodeURIComponent(alarmLabel)};i.android.intent.extra.alarm.HOUR=${alarmHour};i.android.intent.extra.alarm.MINUTES=${alarmMins};B.android.intent.extra.alarm.SKIP_UI=true;end`;
-
-          // Samsung Clock direct fallback
-          const samsungUrl = `intent:#Intent;action=android.intent.action.SET_ALARM;package=com.samsung.android.clockpackage;S.android.intent.extra.alarm.MESSAGE=${encodeURIComponent(alarmLabel)};i.android.intent.extra.alarm.HOUR=${alarmHour};i.android.intent.extra.alarm.MINUTES=${alarmMins};B.android.intent.extra.alarm.SKIP_UI=true;end`;
-
           // Generic clock app last resort
           const clockUrl = `intent:#Intent;action=android.intent.action.SHOW_ALARMS;end`;
 
           let opened = false;
-          try {
-            await Linking.openURL(alarmUrl);
-            opened = true;
-          } catch {
+          if (Platform.OS === 'android') {
             try {
-              await Linking.openURL(samsungUrl);
+              await IntentLauncher.startActivityAsync('android.intent.action.SET_ALARM', {
+                extra: {
+                  'android.intent.extra.alarm.HOUR': parseInt(alarmHour, 10),
+                  'android.intent.extra.alarm.MINUTES': parseInt(alarmMins, 10),
+                  'android.intent.extra.alarm.MESSAGE': alarmLabel,
+                  'android.intent.extra.alarm.SKIP_UI': true,
+                },
+              });
               opened = true;
             } catch {
               try {
@@ -1531,17 +1564,26 @@ export default function ChatScreen() {
     const resolved = contactRaw ? await resolveContactPhone(contactRaw) : null;
 
     if (offline) {
-      queueWrite('sms', {
-        phone: resolved?.phone ?? '',
-        body: messageText,
-        contactName: resolved?.name ?? contactRaw,
-      });
-      addMessage({
-        id: generateId("msg"),
-        role: "assistant",
-        content: `You're offline right now. I've saved that message to ${resolved?.name ?? contactRaw} and I'll send it when you're back online.`,
-        timestamp: Date.now(),
-      });
+      if (resolved?.phone) {
+        const smsUrl = `sms:${resolved.phone}?body=${body}`;
+        await Linking.openURL(smsUrl);
+        if (resolved.contactId) updateLastContact(resolved.contactId);
+        addMessage({
+          id: generateId("msg"),
+          role: "assistant",
+          content: `You're offline, but Messages is open to ${resolved.name} with your message ready — just hit send.`,
+          timestamp: Date.now(),
+        });
+      } else {
+        const smsUrl = Platform.OS === "ios" ? `sms:&body=${body}` : `sms:?body=${body}`;
+        await Linking.openURL(smsUrl);
+        addMessage({
+          id: generateId("msg"),
+          role: "assistant",
+          content: `You're offline, but Messages is open with your note ready — just pick ${resolved?.name ?? contactRaw} and hit send.`,
+          timestamp: Date.now(),
+        });
+      }
       return;
     }
 
