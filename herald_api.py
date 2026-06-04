@@ -1,5 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
+# v8.79 -- GPS auto-update confirmed location on /ask/stream when coords drift > ~20mi
 # v8.78 -- MEMORY RULES: no absence-inference, no invented user facts
 # v8.77 -- set_profile_field auth fix (ADMIN_SECRET → WEBHOOK_SECRET)
 # v8.76 -- extract_learned_facts fires every message (removed % 3 gate)
@@ -61,7 +62,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.78")
+app = FastAPI(title="Herald API", version="8.79")
 
 app.add_middleware(
     CORSMiddleware,
@@ -3919,6 +3920,27 @@ def build_ask_context(data):
     lat            = data.get("lat", None)
     lng            = data.get("lng", None)
     location_label = data.get("location_label", None)
+    profile = get_profile(user_id)
+    profile["user_id"] = user_id
+    # Auto-update confirmed location when live GPS arrives and differs from cached
+    if lat and lng and user_id:
+        try:
+            _cached_lat = profile.get("confirmed_lat")
+            _cached_lng = profile.get("confirmed_lng")
+            _needs_update = True
+            if _cached_lat is not None and _cached_lng is not None:
+                _dist = math.sqrt((float(lat) - float(_cached_lat)) ** 2 + (float(lng) - float(_cached_lng)) ** 2)
+                _needs_update = _dist > 0.3  # ~20 miles
+            if _needs_update:
+                _city_label = location_label or geocode_reverse(float(lat), float(lng))
+                if _city_label:
+                    profile["confirmed_city"] = _city_label
+                    profile["confirmed_lat"]  = float(lat)
+                    profile["confirmed_lng"]  = float(lng)
+                    save_profile(user_id, profile)
+                    print(f"[HERALD] GPS auto-update: {user_id} → {_city_label}")
+        except Exception as _e:
+            print(f"[HERALD] GPS auto-update failed (non-fatal): {_e}")
     auth_code      = data.get("auth_code", "").strip()
 
     msg_lower = message.lower()
@@ -3932,9 +3954,6 @@ def build_ask_context(data):
         save_profile_fields(user_id, {"auto_open_apps": True})
     owner     = is_owner(user_id, auth_code)
     empire = fetch_live_empire() if (owner and _is_freddie_msg(msg_lower)) else None
-
-    profile = get_profile(user_id)
-    profile["user_id"] = user_id
 
     if device_context and not (profile.get("name") or "").strip():
         for line in device_context.splitlines():
@@ -4844,7 +4863,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.78",
+        "status": "ok", "server": "herald-api", "version": "8.79",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled -- every message",
