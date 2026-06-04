@@ -18,6 +18,7 @@ export interface TierDecision {
   tier1Response?: string;
   actionIntent?:
     | { type: 'alarm';    time: string;  label: string }
+    | { type: 'timer'; minutes: number; label: string }
     | { type: 'sms';     contact: string; message: string }
     | { type: 'time' }
     | { type: 'date' }
@@ -121,9 +122,13 @@ const TIER3_SIGNALS = [
 ];
 
 const ALARM_SIGNALS = [
-  /\b(set|create|put)?\s*(an?\s+)?(alarm|timer)\b/i,
+  /\b(set|create|put)?\s*(an?\s+)?alarm\b/i,
   /\bwake\s+me\s+(up\s+)?(at|in)\b/i,
   /\bwake\s+me\s+up\b/i,
+];
+const TIMER_SIGNALS = [
+  /\b(set|create|put)?\s*(an?\s+)?timer\b/i,
+  /\bcountdown\b/i,
 ];
 
 const SMS_SIGNALS = [
@@ -172,6 +177,8 @@ const NOTE_READ_SIGNALS = [
   /\bshow (me )?my notes\b/i,
   /\bread (me )?my notes\b/i,
   /\bwhat (have|did) i (note|jot|write)\b/i,
+  /\bwhat('s| is) on my notes\b/i,
+  /\bmy notes\b/i,
 ];
 
 const LIST_ADD_SIGNALS = [
@@ -198,6 +205,19 @@ async function getTier1CalendarEvents(
 
 export async function classifyQuery(message: string): Promise<TierDecision> {
   const msg = message.trim();
+
+  // Device action: timer — duration-based, separate from alarm
+  if (TIMER_SIGNALS.some((p) => p.test(msg))) {
+    const { parseTimerIntent } = await import('../utils/parseTime');
+    const parsed = parseTimerIntent(msg);
+    if (parsed) {
+      return {
+        tier: 1,
+        actionIntent: { type: 'timer', minutes: parsed.minutes, label: parsed.label },
+        reason: 'action:timer',
+      };
+    }
+  }
 
   // Device action: alarm — parse on device, zero network
   if (ALARM_SIGNALS.some((p) => p.test(msg))) {

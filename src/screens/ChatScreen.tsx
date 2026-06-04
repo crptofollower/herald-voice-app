@@ -547,6 +547,8 @@ export default function ChatScreen() {
 
     // ── Offline check -- skip network, answer from device or give warm message ──
     const networkState = await Network.getNetworkStateAsync();
+    // Extract facts locally — runs offline and online
+    try { extractFactsLocally(text); } catch {}
     const isOffline = !networkState.isConnected || !networkState.isInternetReachable;
     if (isOffline) {
       // Run tier router first — device actions work offline
@@ -590,8 +592,8 @@ export default function ChatScreen() {
         if (tierDecision.actionIntent.type === 'alarm') {
           const { time, label } = tierDecision.actionIntent;
           const [h, m] = time.split(':');
-          const alarmUrl = `intent:#Intent;action=android.intent.action.SET_ALARM;S.android.intent.extra.alarm.MESSAGE=${encodeURIComponent(label)};i.android.intent.extra.alarm.HOUR=${h};i.android.intent.extra.alarm.MINUTES=${m};B.android.intent.extra.alarm.SKIP_UI=false;end`;
-          const samsungUrl = `intent:#Intent;action=android.intent.action.SET_ALARM;package=com.samsung.android.clockpackage;S.android.intent.extra.alarm.MESSAGE=${encodeURIComponent(label)};i.android.intent.extra.alarm.HOUR=${h};i.android.intent.extra.alarm.MINUTES=${m};B.android.intent.extra.alarm.SKIP_UI=false;end`;
+          const alarmUrl = `intent:#Intent;action=android.intent.action.SET_ALARM;S.android.intent.extra.alarm.MESSAGE=${encodeURIComponent(label)};i.android.intent.extra.alarm.HOUR=${h};i.android.intent.extra.alarm.MINUTES=${m};B.android.intent.extra.alarm.SKIP_UI=true;end`;
+          const samsungUrl = `intent:#Intent;action=android.intent.action.SET_ALARM;package=com.samsung.android.clockpackage;S.android.intent.extra.alarm.MESSAGE=${encodeURIComponent(label)};i.android.intent.extra.alarm.HOUR=${h};i.android.intent.extra.alarm.MINUTES=${m};B.android.intent.extra.alarm.SKIP_UI=true;end`;
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
           let alarmOpened = false;
           try { await Linking.openURL(alarmUrl); alarmOpened = true; }
@@ -605,6 +607,32 @@ export default function ChatScreen() {
           const reply = alarmOpened
             ? `Alarm set for ${spoken}.`
             : `I couldn't open the clock app. Open it manually and set an alarm for ${spoken}.`;
+          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+          speak(reply);
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+        if (tierDecision.actionIntent.type === 'timer') {
+          const { minutes } = tierDecision.actionIntent;
+          const hours = Math.floor(minutes / 60);
+          const mins = minutes % 60;
+          const secs = 0;
+          const timerUrl = `intent:#Intent;action=android.intent.action.SET_TIMER;i.android.intent.extra.alarm.LENGTH=${minutes * 60};B.android.intent.extra.alarm.SKIP_UI=true;end`;
+          const samsungTimer = `intent:#Intent;action=android.intent.action.SET_TIMER;package=com.samsung.android.clockpackage;i.android.intent.extra.alarm.LENGTH=${minutes * 60};B.android.intent.extra.alarm.SKIP_UI=true;end`;
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          let timerOpened = false;
+          try { await Linking.openURL(timerUrl); timerOpened = true; }
+          catch {
+            try { await Linking.openURL(samsungTimer); timerOpened = true; }
+            catch {}
+          }
+          const label = minutes >= 60
+            ? `${hours > 0 ? hours + ' hour' + (hours > 1 ? 's' : '') : ''}${mins > 0 ? ' ' + mins + ' minute' + (mins > 1 ? 's' : '') : ''}`
+            : `${minutes} minute${minutes > 1 ? 's' : ''}`;
+          const reply = timerOpened
+            ? `Timer set for ${label.trim()}.`
+            : `I couldn't open the clock app. Open it manually and set a timer for ${label.trim()}.`;
           addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
           speak(reply);
           sendingRef.current = false;
@@ -926,9 +954,6 @@ export default function ChatScreen() {
       hour12: false,
     });
 
-    // Extract facts from user message locally — no LLM, no network, offline-safe
-    try { extractFactsLocally(text); } catch {}
-
     const abortController = askHeraldStream(
       {
         user_id: userId,
@@ -1199,10 +1224,10 @@ export default function ChatScreen() {
           const alarmMins  = alarmTime.split(":")[1] || "0";
 
           // Correct Android SET_ALARM intent format
-          const alarmUrl = `intent:#Intent;action=android.intent.action.SET_ALARM;S.android.intent.extra.alarm.MESSAGE=${encodeURIComponent(alarmLabel)};i.android.intent.extra.alarm.HOUR=${alarmHour};i.android.intent.extra.alarm.MINUTES=${alarmMins};B.android.intent.extra.alarm.SKIP_UI=false;end`;
+          const alarmUrl = `intent:#Intent;action=android.intent.action.SET_ALARM;S.android.intent.extra.alarm.MESSAGE=${encodeURIComponent(alarmLabel)};i.android.intent.extra.alarm.HOUR=${alarmHour};i.android.intent.extra.alarm.MINUTES=${alarmMins};B.android.intent.extra.alarm.SKIP_UI=true;end`;
 
           // Samsung Clock direct fallback
-          const samsungUrl = `intent:#Intent;action=android.intent.action.SET_ALARM;package=com.samsung.android.clockpackage;S.android.intent.extra.alarm.MESSAGE=${encodeURIComponent(alarmLabel)};i.android.intent.extra.alarm.HOUR=${alarmHour};i.android.intent.extra.alarm.MINUTES=${alarmMins};B.android.intent.extra.alarm.SKIP_UI=false;end`;
+          const samsungUrl = `intent:#Intent;action=android.intent.action.SET_ALARM;package=com.samsung.android.clockpackage;S.android.intent.extra.alarm.MESSAGE=${encodeURIComponent(alarmLabel)};i.android.intent.extra.alarm.HOUR=${alarmHour};i.android.intent.extra.alarm.MINUTES=${alarmMins};B.android.intent.extra.alarm.SKIP_UI=true;end`;
 
           // Generic clock app last resort
           const clockUrl = `intent:#Intent;action=android.intent.action.SHOW_ALARMS;end`;

@@ -4,7 +4,7 @@
 // Used by tierRouter.ts for alarm and SMS intents.
 
 export function parseTimeFromText(text: string): { hour: number; minute: number } | null {
-  const t = text.toLowerCase();
+  const t = text.toLowerCase().replace(/\b(a)\.(m)\./gi, 'am').replace(/\b(p)\.(m)\./gi, 'pm');
 
   // "7am", "7 am", "7:00am", "7:00 am", "7:30 pm"
   const absolute = t.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
@@ -61,7 +61,7 @@ export function parseTimeFromText(text: string): { hour: number; minute: number 
 }
 
 export function parseAlarmIntent(text: string): { time: string; label: string } | null {
-  const isAlarm = /\b(alarm|wake me|wake up|timer)\b/i.test(text);
+  const isAlarm = /\b(alarm|wake me|wake up)\b/i.test(text);
   if (!isAlarm) return null;
   const parsed = parseTimeFromText(text);
   if (!parsed) return null;
@@ -73,6 +73,25 @@ export function parseAlarmIntent(text: string): { time: string; label: string } 
   const rawLabel = labelMatch?.[1]?.trim() ?? '';
   const label = (!rawLabel || DATE_WORDS.test(rawLabel)) ? 'Herald Alarm' : rawLabel;
   return { time: `${hh}:${mm}`, label };
+}
+
+export function parseTimerIntent(text: string): { minutes: number; label: string } | null {
+  const isTimer = /\b(timer|countdown)\b/i.test(text);
+  if (!isTimer) return null;
+  // "20 minutes", "2 hours", "90 seconds"
+  const t = text.toLowerCase();
+  const rel = t.match(/\bin\s+(?:an?\s+)?(\d+)?\s*(minute|min|hour|hr|second|sec)\b/i)
+           ?? t.match(/\bfor\s+(?:an?\s+)?(\d+)?\s*(minute|min|hour|hr|second|sec)\b/i)
+           ?? t.match(/\b(\d+)\s*(minute|min|hour|hr|second|sec)\b/i);
+  if (!rel) return null;
+  const amount = parseInt(rel[1] ?? '1');
+  const unit = rel[2].toLowerCase();
+  let minutes = 0;
+  if (unit.startsWith('h')) minutes = amount * 60;
+  else if (unit.startsWith('s')) minutes = Math.ceil(amount / 60);
+  else minutes = amount;
+  if (minutes <= 0) return null;
+  return { minutes, label: 'Herald Timer' };
 }
 
 export function parseSmsIntent(text: string): { contact: string; message: string } | null {
