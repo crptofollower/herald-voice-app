@@ -95,6 +95,8 @@ const TIER1_SIGNALS = {
     /who am i/i,
     /\bwhere are we\b/i,
     /\bwhere am i\b/i,
+    /\bdo you know my name\b/i,
+    /\byou don't remember\b/i,
   ],
 };
 
@@ -187,6 +189,9 @@ const NOTE_READ_SIGNALS = [
   /\bwhat (have|did) i (note|jot|write)\b/i,
   /\bwhat('s| is) on my notes\b/i,
   /\bmy notes\b/i,
+  /\bare there any notes\b/i,
+  /\bis there anything (in my |on my )?notes\b/i,
+  /\bany notes\b/i,
 ];
 
 const LIST_ADD_SIGNALS = [
@@ -231,23 +236,22 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
 
   // Device action: alarm — parse on device, zero network
   if (ALARM_SIGNALS.some((p) => p.test(msg))) {
-    const { parseAlarmIntent } = await import('../utils/parseTime');
+    const { parseAlarmIntent, parseTimerIntent } = await import('../utils/parseTime');
+    // If alarm has duration words but no clock time → treat as timer when parse succeeds
+    const hasDuration = /\b(\d+)\s*(minute|min|hour|hr)s?\b/i.test(msg);
+    const hasClockTime = /\b\d{1,2}(:\d{2})?\s*(am|pm)\b/i.test(msg) || /\bat\s+\d{1,2}\b/i.test(msg);
+    if (hasDuration && !hasClockTime) {
+      const timerParsed = parseTimerIntent(msg);
+      if (timerParsed) {
+        return {
+          tier: 1,
+          actionIntent: { type: 'timer', minutes: timerParsed.minutes, label: timerParsed.label },
+          reason: 'action:timer:rerouted',
+        };
+      }
+    }
     const parsed = parseAlarmIntent(msg);
     if (parsed) {
-      // If alarm has duration words but no clock time → treat as timer
-      const hasDuration = /\b(\d+)\s*(minute|min|hour|hr)s?\b/i.test(msg);
-      const hasClockTime = /\b\d{1,2}(:\d{2})?\s*(am|pm)\b/i.test(msg) || /\bat\s+\d{1,2}\b/i.test(msg);
-      if (hasDuration && !hasClockTime) {
-        const { parseTimerIntent } = await import('../utils/parseTime');
-        const timerParsed = parseTimerIntent(msg);
-        if (timerParsed) {
-          return {
-            tier: 1,
-            actionIntent: { type: 'timer', minutes: timerParsed.minutes, label: timerParsed.label },
-            reason: 'action:timer:rerouted',
-          };
-        }
-      }
       return {
         tier: 1,
         actionIntent: { type: 'alarm', time: parsed.time, label: parsed.label },

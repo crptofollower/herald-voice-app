@@ -197,6 +197,7 @@ export default function ChatScreen() {
   const [isWaiting, setIsWaiting] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [thinkingPhrase, setThinkingPhrase] = useState(THINKING_PHRASES[0]);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
 
   // ── Ambient mode state ────────────────────────────────────────────────────
   // sessionStart filters which messages are shown in the current session.
@@ -227,6 +228,16 @@ export default function ChatScreen() {
   const { speak, enqueueSentence, resetSpeech, stop, isSpeaking } = useSpeech();
   const [handsFreeMode, setHandsFreeMode] = useState(false);
   const handsFreeRef = useRef(false);
+
+  useEffect(() => {
+    const show = Keyboard.addListener('keyboardDidShow', (e) => setKeyboardHeight(e.endCoordinates.height));
+    const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboardHeight(0));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+
   useProactiveQueue();
   useCalendar();
   const { summary: healthSummary, syncHealth } = useHealthConnect();
@@ -420,6 +431,11 @@ export default function ChatScreen() {
   }, [userId]);
 
   useEffect(() => {
+    if (!userId || !name) return;
+    setProfileField('name', name);
+  }, [userId, name]);
+
+  useEffect(() => {
     if (!isWaiting) return;
     let index = 0;
     const interval = setInterval(() => {
@@ -560,6 +576,24 @@ export default function ChatScreen() {
         const afterCount = getFactCount();
         localFactsWritten = afterCount > beforeCount;
       } catch {}
+      if (!localFactsWritten) {
+        const medWrite =
+          /\b(i take|i'm on|i am on|prescribed|i use)\s+[\w\s]+/i.test(text) ||
+          /\b(i (went|saw|visited|had))\s+(the\s+)?(doctor|dentist|specialist|dr\.?)\b/i.test(text) ||
+          /\b(i have|i was diagnosed with|i suffer from)\s+[\w\s]+/i.test(text) ||
+          /\b(i take|i'm taking)\s+\w+/i.test(text);
+        if (medWrite && userId) {
+          try {
+            const medCategory = /\b(i (went|saw|visited|had))\s+(the\s+)?(doctor|dentist|specialist|dr\.?)\b/i.test(text)
+              ? 'visit'
+              : /\b(i take|i'm on|i am on|prescribed|i use|i'm taking)\s/i.test(text)
+                ? 'medication'
+                : 'medical';
+            writeMedicalFact(medCategory, text);
+            localFactsWritten = true;
+          } catch {}
+        }
+      }
     }
     const isOffline = !networkState.isConnected || !networkState.isInternetReachable;
     if (isOffline) {
@@ -1866,8 +1900,8 @@ export default function ChatScreen() {
       <SafeAreaView style={styles.safe}>
         <KeyboardAvoidingView
           style={styles.flex}
-          behavior="padding"
-          keyboardVerticalOffset={Platform.OS === "ios" ? 0 : insets.bottom}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          keyboardVerticalOffset={0}
         >
           <View style={styles.header}>
             <Text style={[styles.wordmark, { color: persona.colors.text }]}>
