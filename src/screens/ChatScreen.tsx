@@ -1866,8 +1866,8 @@ export default function ChatScreen() {
       <SafeAreaView style={styles.safe}>
         <KeyboardAvoidingView
           style={styles.flex}
-          behavior={Platform.OS === "ios" ? "padding" : "height"}
-          keyboardVerticalOffset={0}
+          behavior="padding"
+          keyboardVerticalOffset={Platform.OS === "ios" ? 0 : insets.bottom}
         >
           <View style={styles.header}>
             <Text style={[styles.wordmark, { color: persona.colors.text }]}>
