@@ -280,6 +280,21 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     return { tier: 1, actionIntent: { type: 'date' }, reason: 'action:date' };
   }
 
+  // Device: note capture — write to SQLite, zero network
+  if (NOTE_CAPTURE_SIGNALS.some((p) => p.test(msg))) {
+    const bodyMatch =
+      msg.match(/note that (.+)/i)?.[1] ??
+      msg.match(/make a note to (.+)/i)?.[1] ??
+      msg.match(/make a note (that|about) (.+)/i)?.[2] ??
+      msg.match(/can you make a note to (.+)/i)?.[1] ??
+      msg.match(/can you note (.+)/i)?.[1] ??
+      msg.match(/(?:note|jot|record|remember that) (.+)/i)?.[1] ??
+      msg.replace(/^(can you )?(note|jot|write down|record|remember|make a note)\s+(this|that|to|about)?\s*/i, '').trim();
+    if (bodyMatch && bodyMatch.length > 2) {
+      return { tier: 1, actionIntent: { type: 'note_capture', body: bodyMatch.trim() }, reason: 'action:note_capture' };
+    }
+  }
+
   // Device: call — resolves contact on device, fires tel: intent
   if (CALL_SIGNALS.some((p) => p.test(msg))) {
     const CALL_EXCLUDE = /^(me|you|back|again|later|now|soon|ahead|us|them|it|that)$/i;
@@ -294,21 +309,6 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
         actionIntent: { type: 'call', contact },
         reason: 'action:call',
       };
-    }
-  }
-
-  // Device: note capture — write to SQLite, zero network
-  if (NOTE_CAPTURE_SIGNALS.some((p) => p.test(msg))) {
-    const bodyMatch =
-      msg.match(/note that (.+)/i)?.[1] ??
-      msg.match(/make a note to (.+)/i)?.[1] ??
-      msg.match(/make a note (that|about) (.+)/i)?.[2] ??
-      msg.match(/can you make a note to (.+)/i)?.[1] ??
-      msg.match(/can you note (.+)/i)?.[1] ??
-      msg.match(/(?:note|jot|record|remember that) (.+)/i)?.[1] ??
-      msg.replace(/^(can you )?(note|jot|write down|record|remember|make a note)\s+(this|that|to|about)?\s*/i, '').trim();
-    if (bodyMatch && bodyMatch.length > 2) {
-      return { tier: 1, actionIntent: { type: 'note_capture', body: bodyMatch.trim() }, reason: 'action:note_capture' };
     }
   }
 

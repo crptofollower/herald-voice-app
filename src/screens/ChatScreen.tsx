@@ -546,19 +546,24 @@ export default function ChatScreen() {
     // automatically when the user confirms a launch intent.
     // "just open it" style phrases are no longer needed.
 
+    // ── Tier router — device-first before any network call ───────────────────
+    const tierDecision = await classifyQuery(text);
+
     // ── Offline check -- skip network, answer from device or give warm message ──
     const networkState = await Network.getNetworkStateAsync();
-    // Extract facts locally — runs offline and online
     let localFactsWritten = false;
-    try {
-      const beforeCount = getFactCount();
-      extractFactsLocally(text);
-      const afterCount = getFactCount();
-      localFactsWritten = afterCount > beforeCount;
-    } catch {}
+    if (!tierDecision.actionIntent) {
+      // Extract facts locally — only when not routing to a device action
+      try {
+        const beforeCount = getFactCount();
+        extractFactsLocally(text);
+        const afterCount = getFactCount();
+        localFactsWritten = afterCount > beforeCount;
+      } catch {}
+    }
     const isOffline = !networkState.isConnected || !networkState.isInternetReachable;
     if (isOffline) {
-      if (localFactsWritten) {
+      if (!tierDecision.actionIntent && localFactsWritten) {
         const reply = "Got it — I've saved that. You can ask me about it anytime.";
         addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
         addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
@@ -567,21 +572,19 @@ export default function ChatScreen() {
         setInputText('');
         return;
       }
-      // Run tier router first — device actions work offline
-      const offlineTier = await classifyQuery(text);
-      if (offlineTier.tier === 1) {
-        if (offlineTier.actionIntent) {
+      if (tierDecision.tier === 1) {
+        if (tierDecision.actionIntent) {
           // Fall through to action intent handling below (after offline check)
-        } else if (offlineTier.tier1Response) {
+        } else if (tierDecision.tier1Response) {
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-          addMessage({ id: generateId('msg'), role: 'assistant', content: offlineTier.tier1Response, timestamp: Date.now() });
-          speak(offlineTier.tier1Response);
+          addMessage({ id: generateId('msg'), role: 'assistant', content: tierDecision.tier1Response, timestamp: Date.now() });
+          speak(tierDecision.tier1Response);
           setInputText('');
           sendingRef.current = false;
           return;
         }
       }
-      if (!offlineTier.actionIntent) {
+      if (!tierDecision.actionIntent) {
         // No device action — try local memory, then offline message
         const localAnswer = answerFromDevice(text);
         const offlineReply = localAnswer ??
@@ -596,11 +599,9 @@ export default function ChatScreen() {
       // Has actionIntent — fall through to action handling below
     }
 
-    // ── Tier router — device-first before any network call ───────────────────
     // Tier 1: answer from device SQLite, no LLM, no network, under 200ms.
     // Tier 2: memory probe — attach structured local context to backend request.
     // Tier 3: default — existing network path unchanged.
-    const tierDecision = await classifyQuery(text);
 
     if (tierDecision.tier === 1) {
       // Device action intent — alarm or SMS, no network needed
@@ -621,7 +622,20 @@ export default function ChatScreen() {
                 },
               });
               alarmOpened = true;
-            } catch {}
+            } catch {
+              try {
+                await IntentLauncher.startActivityAsync('android.intent.action.SET_ALARM', {
+                  extra: {
+                    'android.intent.extra.alarm.HOUR': parseInt(h, 10),
+                    'android.intent.extra.alarm.MINUTES': parseInt(m, 10),
+                    'android.intent.extra.alarm.MESSAGE': label,
+                    'android.intent.extra.alarm.SKIP_UI': true,
+                  },
+                  packageName: 'com.sec.android.app.clockpackage',
+                });
+                alarmOpened = true;
+              } catch {}
+            }
           }
           const alarmDate = new Date();
           alarmDate.setHours(parseInt(h, 10), parseInt(m, 10), 0, 0);
@@ -657,7 +671,7 @@ export default function ChatScreen() {
                   'android.intent.extra.alarm.LENGTH': parseInt(String(minutes * 60), 10),
                   'android.intent.extra.alarm.SKIP_UI': true,
                 },
-                packageName: 'com.samsung.android.clockpackage',
+                packageName: 'com.sec.android.app.clockpackage',
               });
               timerOpened = true;
             } catch {}
