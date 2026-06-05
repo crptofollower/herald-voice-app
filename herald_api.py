@@ -1,5 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
+# v8.80 -- empty-memory prompt: no invented facts when user asks what you know
 # v8.79 -- GPS auto-update confirmed location on /ask/stream when coords drift > ~20mi
 # v8.78 -- MEMORY RULES: no absence-inference, no invented user facts
 # v8.77 -- set_profile_field auth fix (ADMIN_SECRET → WEBHOOK_SECRET)
@@ -62,7 +63,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.79")
+app = FastAPI(title="Herald API", version="8.80")
 
 app.add_middleware(
     CORSMiddleware,
@@ -3544,6 +3545,7 @@ MEMORY RULES -- how you use what you know (v8.8):
   -- never "you prefer to avoid X" or "you don't do X".
 - You NEVER invent facts about the user. If you are not certain,
   say so plainly and ask rather than guessing.
+- If the user asks what you know about them and you have no stored facts or life moments for this user, respond with exactly: 'You just got here — I don't know much about you yet. Tell me something and I'll start remembering it.' Do not invent bullet points, dates, or calendar information. Do not say you have a live feed. Do not reference any data you do not actually have.
 
 HERALD HONESTY CONTRACT (locked):
 You OFFER actions. The app EXECUTES them. You NEVER claim to have done something.
@@ -4863,7 +4865,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.79",
+        "status": "ok", "server": "herald-api", "version": "8.80",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled -- every message",
@@ -6619,6 +6621,7 @@ async def user_export(user_id: str, request: Request, secret: str = ""):
     print(f"[HERALD] /user/export: exported all personal data for {user_id}")
     return {
         "ok": True,
+        "version": "8.80",
         "user_id": user_id,
         "exported_at": datetime.now().isoformat(),
         "profile": profile,
@@ -6776,7 +6779,7 @@ async def admin_dashboard(secret: str = ""):
 
         return {
             "ok": True,
-            "version": "8.55",
+            "version": "8.80",
             "user_count": len(users),
             "users": sorted(users, key=lambda x: x["msg_count"], reverse=True),
             "waitlist_count": waitlist_count,
