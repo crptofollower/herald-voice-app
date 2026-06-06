@@ -86,6 +86,11 @@ const TIER1_SIGNALS = {
     /my doctor('s name)?/i,
     /medical (history|records|info)/i,
     /what do you (have|know) about my (health|medical|medications|meds)/i,
+    /\bwhat do i take\b/i,
+    /\bwhat am i (taking|on)\b/i,
+    /\bwhat (should i|do i) take\b/i,
+    /\bmy (meds|medications|pills|prescriptions)\b/i,
+    /\bdo i take (any )?(medication|meds|pills)\b/i,
   ],
   profile: [
     /what('s| is) my name/i,
@@ -97,6 +102,11 @@ const TIER1_SIGNALS = {
     /\bwhere am i\b/i,
     /\bdo you know my name\b/i,
     /\byou don't remember\b/i,
+    /\bdo you know my \w+('s)? name\b/i,
+    /\bwhat('s| is) my \w+('s)? name\b/i,
+    /\bwhat('s| is) my age\b/i,
+    /\bhow old am i\b/i,
+    /\bdo you know (how old i am|my age)\b/i,
   ],
 };
 
@@ -200,11 +210,14 @@ const LIST_ADD_SIGNALS = [
 ];
 
 const LIST_READ_SIGNALS = [
-  /\bwhat('s| is) on my (grocery |shopping |to.?do |)\blist\b/i,
+  /\bwhat('s| is) on my (grocery |shopping |to.?do )?\blist\b/i,
+  /\bwhat('s| is) on (the )?(grocery |shopping |to.?do )?\blist\b/i,
   /\bshow (me )?my (grocery |shopping |to.?do |)\blist\b/i,
   /\bread (me )?my (grocery |shopping |to.?do |)\blist\b/i,
   /\bis there (anything|something) on my (grocery |shopping |to.?do )?\blist\b/i,
   /\bcheck my (grocery |shopping |to.?do )?\blist\b/i,
+  /\bdo i have (anything|something) on my (grocery |shopping |to.?do )?\blist\b/i,
+  /\bdo i have a (grocery |shopping |to.?do )?\blist\b/i,
 ];
 
 // ─── classifyQuery ────────────────────────────────────────────────────────────
@@ -232,22 +245,33 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
         reason: 'action:timer',
       };
     }
+    const minuteMatch = msg.match(/\b(\d+)\s*(?:minute|min)s?\b/i);
+    const hourMatch = msg.match(/\b(\d+)\s*(?:hour|hr)s?\b/i);
+    const fallbackMinutes = minuteMatch
+      ? parseInt(minuteMatch[1], 10)
+      : hourMatch ? parseInt(hourMatch[1], 10) * 60 : null;
+    if (fallbackMinutes) {
+      return {
+        tier: 1,
+        actionIntent: { type: 'timer', minutes: fallbackMinutes, label: `${fallbackMinutes} minute timer` },
+        reason: 'action:timer:fallback',
+      };
+    }
   }
 
   // Device action: alarm — parse on device, zero network
   if (ALARM_SIGNALS.some((p) => p.test(msg))) {
-    const { parseAlarmIntent, parseTimerIntent } = await import('../utils/parseTime');
-    // If alarm has duration words but no clock time → treat as timer when parse succeeds
+    const { parseAlarmIntent } = await import('../utils/parseTime');
     const hasDuration = /\b(\d+)\s*(minute|min|hour|hr)s?\b/i.test(msg);
     const hasClockTime = /\b\d{1,2}(:\d{2})?\s*(am|pm)\b/i.test(msg) || /\bat\s+\d{1,2}\b/i.test(msg);
     if (hasDuration && !hasClockTime) {
-      const timerParsed = parseTimerIntent(msg);
-      if (timerParsed) {
-        return {
-          tier: 1,
-          actionIntent: { type: 'timer', minutes: timerParsed.minutes, label: timerParsed.label },
-          reason: 'action:timer:rerouted',
-        };
+      const dur = msg.match(/\b(\d+)\s*(minute|min|hour|hr)s?\b/i);
+      if (dur) {
+        const n = parseInt(dur[1], 10);
+        const minutes = /^h/i.test(dur[2]) ? n * 60 : n;
+        if (minutes > 0) {
+          return { tier: 1, actionIntent: { type: 'timer', minutes, label: `${minutes} minute timer` }, reason: 'action:timer:rerouted' };
+        }
       }
     }
     const parsed = parseAlarmIntent(msg);
@@ -269,6 +293,17 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
         tier: 1,
         actionIntent: { type: 'sms', contact: parsed.contact, message: parsed.message },
         reason: 'action:sms',
+      };
+    }
+    const contactOnly =
+      msg.match(/\b(?:can\s+you\s+)?(?:text|message|msg)\s+to\s+((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+|Ms\.?\s+)?\w+)/i)?.[1] ??
+      msg.match(/\b(?:can\s+you\s+)?(?:text|message|msg)\s+((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+|Ms\.?\s+)?\w+)/i)?.[1];
+    const SMS_EXCLUDE = /^(me|you|us|them|it|myself|yourself)$/i;
+    if (contactOnly && !SMS_EXCLUDE.test(contactOnly.trim())) {
+      return {
+        tier: 1,
+        actionIntent: { type: 'sms', contact: contactOnly.trim(), message: '' },
+        reason: 'action:sms:no_body',
       };
     }
   }
@@ -300,7 +335,7 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   }
 
   // Device: call — resolves contact on device, fires tel: intent
-  if (CALL_SIGNALS.some((p) => p.test(msg))) {
+  if (CALL_SIGNALS.some((p) => p.test(msg)) && !REMINDER_SIGNALS.some((p) => p.test(msg))) {
     const CALL_EXCLUDE = /^(me|you|back|again|later|now|soon|ahead|us|them|it|that)$/i;
     const contactMatch =
       msg.match(/\b(?:call|phone|dial|ring)\s+((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+)?\w+(?:\s+\w+)?)/i) ??

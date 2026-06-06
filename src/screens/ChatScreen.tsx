@@ -68,10 +68,11 @@ import { useHealthConnect } from "../hooks/useHealthConnect";
 import { useDeviceMemory } from "../hooks/useDeviceMemory";
 import { answerFromDevice } from '../utils/localAnswers';
 import { classifyQuery } from "../routing/tierRouter";
-import { handleTier1, buildTier2DeviceContext, writeProfileFromOnboarding } from "../routing/tier1Responses";
+import { handleTier1, buildTier2DeviceContext, buildAmbientDeviceContext, writeProfileFromOnboarding } from "../routing/tier1Responses";
 import { refreshCalendarCache } from "../db/calendarCacheDB";
 import { markCalendarWrite } from "../db/calendarState";
-import { initDB } from "../db/useDeviceDB";
+import { initDB, isDBReady } from "../db/useDeviceDB";
+import { runMigration } from "../routing/migration";
 import { setProfileField, setProfileFields } from "../db/profileDB";
 import {
   writeContact,
@@ -203,6 +204,7 @@ export default function ChatScreen() {
   // sessionStart filters which messages are shown in the current session.
   // Old messages stay in the store for API context but aren't rendered.
   const [sessionStart, setSessionStart] = useState(() => Date.now());
+  const sessionStartRef = useRef(sessionStart);
   const lastInteractionRef = useRef(Date.now());
 
   const flatListRef = useRef<FlatList>(null);
@@ -266,6 +268,7 @@ export default function ChatScreen() {
       liveGreetingAddedRef.current = false;
       const newSessionStart = Date.now();
       setSessionStart(newSessionStart);
+      sessionStartRef.current = newSessionStart;
       // Scroll back to bottom for fresh session
       isAtBottomRef.current = true;
       if (!userId) return;
@@ -319,6 +322,22 @@ export default function ChatScreen() {
             streamAbortRef.current.abort();
             resetStreamState();
           }
+          // Write session summary to SQLite on background
+          void (async () => {
+            try {
+              const sessionMessages = useStore.getState().messages.filter(
+                (m) => m.timestamp >= sessionStartRef.current
+              );
+              if (sessionMessages.length >= 2) {
+                const summary = sessionMessages
+                  .slice(-10)
+                  .map((m) => `${m.role === 'user' ? 'User' : 'Herald'}: ${m.content.slice(0, 200)}`)
+                  .join('\n');
+                const { writeSessionSummary } = await import('../db/sessionDB');
+                writeSessionSummary(summary);
+              }
+            } catch {}
+          })();
         }
         if (nextState === "active") {
           const idleMs = Date.now() - lastInteractionRef.current;
@@ -375,6 +394,9 @@ export default function ChatScreen() {
   useEffect(() => {
     if (!userId) return;
     initDB().then(async () => {
+      try {
+        await runMigration(userId);
+      } catch {}
       refreshCalendarCache();
       AsyncStorage.getItem('herald_health_sync').then(last => {
         const now = Date.now();
@@ -554,7 +576,7 @@ export default function ChatScreen() {
     lastSentRef.current = now;
     sendingRef.current = true;
     try {
-    const historySnapshot = messages.map(({ role, content }) => ({ role, content }));
+    const historySnapshot = messages.slice(-20).map(({ role, content }) => ({ role, content }));
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
@@ -563,6 +585,11 @@ export default function ChatScreen() {
     // "just open it" style phrases are no longer needed.
 
     // ── Tier router — device-first before any network call ───────────────────
+    if (!isDBReady()) {
+      try {
+        await initDB();
+      } catch {}
+    }
     const tierDecision = await classifyQuery(text);
 
     // ── Offline check -- skip network, answer from device or give warm message ──
@@ -578,10 +605,11 @@ export default function ChatScreen() {
       } catch {}
       if (!localFactsWritten) {
         const medWrite =
-          /\b(i take|i'm on|i am on|prescribed|i use)\s+[\w\s]+/i.test(text) ||
-          /\b(i (went|saw|visited|had))\s+(the\s+)?(doctor|dentist|specialist|dr\.?)\b/i.test(text) ||
-          /\b(i have|i was diagnosed with|i suffer from)\s+[\w\s]+/i.test(text) ||
-          /\b(i take|i'm taking)\s+\w+/i.test(text);
+          /\b(i take|i'm on|i am on|prescribed|i use|i'm taking)\s+[\w\s]+/i.test(text) ||
+          /\b(i (went|saw|visited|had))\s+(the\s+|my\s+)?(doctor|dentist|specialist|dr\.?|physician|therapist)\b/i.test(text) ||
+          /\b(i have|i was diagnosed with|i suffer from|i've been diagnosed)\s+[\w\s]+/i.test(text) ||
+          /\b(my doctor|my physician|my specialist)\s+(wants?|told|said|recommended|prescribed)\b/i.test(text) ||
+          /\b(put me on|starting me on|prescribed me)\s+[\w\s]+/i.test(text);
         if (medWrite && userId) {
           try {
             const medCategory = /\b(i (went|saw|visited|had))\s+(the\s+)?(doctor|dentist|specialist|dr\.?)\b/i.test(text)
@@ -1046,7 +1074,7 @@ export default function ChatScreen() {
         local_date,
         device_context: tierDecision.tier === 2 && tierDecision.localContext
           ? buildTier2DeviceContext(tierDecision.localContext)
-          : getContextBlock() || undefined,
+          : buildAmbientDeviceContext(getContextBlock() || undefined),
         persona: personaKey,
         lat: lat ?? undefined,
         lng: lng ?? undefined,

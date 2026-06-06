@@ -113,7 +113,7 @@ export function parseSmsIntent(text: string): { contact: string; message: string
 export function parseReminderIntent(
   text: string
 ): { body: string; time: string } | null {
-  const isReminder = /\b(remind me|don't let me forget|remember to|don't forget)\b/i.test(text);
+  const isReminder = /\b(remind me|don't let me forget|remember to|don't forget|set a reminder|reminder to)\b/i.test(text);
   if (!isReminder) return null;
 
   const parsed = parseTimeFromText(text);
@@ -127,6 +127,7 @@ export function parseReminderIntent(
   // "remind me at 3pm to call the doctor" → "call the doctor"
   const bodyMatch =
     text.match(/remind me to (.+?)(?:\s+at\s+|\s+in\s+|$)/i)?.[1] ??
+    text.match(/(?:set a |a )?reminder to (.+?)(?:\s+at\s+|\s+in\s+|$)/i)?.[1] ??
     text.match(/remind me at .+? to (.+)/i)?.[1] ??
     text.match(/don't (?:let me )?forget to (.+?)(?:\s+at\s+|\s+in\s+|$)/i)?.[1] ??
     text.match(/remember to (.+?)(?:\s+at\s+|\s+in\s+|$)/i)?.[1];
