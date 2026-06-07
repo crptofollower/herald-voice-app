@@ -32,7 +32,7 @@ export function parseTimeFromText(text: string): { hour: number; minute: number 
   }
 
   // "in 30 minutes", "in 2 hours", "in an hour"
-  const relative = t.match(/\bin\s+(?:an?\s+)?(\d+)?\s*(minute|min|hour|hr)/i);
+  const relative = t.match(/\b(?:in|for)\s+(?:an?\s+)?(\d+)?\s*(minute|min|hour|hr)/i);
   if (relative) {
     const amount = parseInt(relative[1] ?? '1');
     const unit = relative[2].toLowerCase();
@@ -82,7 +82,7 @@ export function parseTimerIntent(text: string): { minutes: number; label: string
   const t = text.toLowerCase();
   const rel = t.match(/\bin\s+(?:an?\s+)?(\d+)?\s*(minute|min|hour|hr|second|sec)\b/i)
            ?? t.match(/\bfor\s+(?:an?\s+)?(\d+)?\s*(minute|min|hour|hr|second|sec)\b/i)
-           ?? t.match(/\b(\d+)\s*(minute|min|hour|hr|second|sec)\b/i);
+           ?? t.match(/\b(\d+)[\s-]*(minute|min|hour|hr|second|sec)\b/i);
   if (!rel) return null;
   const amount = parseInt(rel[1] ?? '1');
   const unit = rel[2].toLowerCase();
@@ -92,6 +92,46 @@ export function parseTimerIntent(text: string): { minutes: number; label: string
   else minutes = amount;
   if (minutes <= 0) return null;
   return { minutes, label: 'Herald Timer' };
+}
+
+/** Returns handleCalendarAction value string: title|YYYY-MM-DD|HH:MM */
+export function parseCalendarWriteIntent(text: string): string | null {
+  const hasCalendar = /\b(calendar|schedule)\b/i.test(text);
+  const hasWriteVerb = /\b(put|add|schedule|create|book|make)\b/i.test(text);
+  if (!hasCalendar || !hasWriteVerb) return null;
+
+  const isRead =
+    /\b(what('s| is)|what do i have|do i have anything|anything on my|show me my)\b/i.test(text) &&
+    !hasWriteVerb;
+  if (isRead) return null;
+
+  let title = 'Appointment';
+  const titleMatch =
+    text.match(/\bput (.+?) on my calendar/i) ??
+    text.match(/\badd (.+?) to (?:my )?calendar/i) ??
+    text.match(/\bschedule (.+?) on (?:my )?calendar/i);
+  if (titleMatch?.[1]) {
+    const raw = titleMatch[1].trim();
+    if (raw && !/^(that|this|it)$/i.test(raw)) {
+      title = raw.replace(/\s+(at|on|for)\s+[\d:.apm\s]+.*$/i, '').trim() || raw;
+    }
+  }
+
+  const parsed = parseTimeFromText(text);
+  const time = parsed
+    ? `${String(parsed.hour).padStart(2, '0')}:${String(parsed.minute).padStart(2, '0')}`
+    : '';
+
+  let date = '';
+  if (/\btomorrow\b/i.test(text)) {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    date = d.toLocaleDateString('en-CA');
+  } else if (/\btoday\b/i.test(text)) {
+    date = new Date().toLocaleDateString('en-CA');
+  }
+
+  return `${title}|${date}|${time}`;
 }
 
 export function parseSmsIntent(text: string): { contact: string; message: string } | null {
