@@ -84,7 +84,8 @@ import {
 } from "../db/contactsDB";
 import { writeMedicalFact, writeMedicalRecord, writeMedication, writeMedicalContact } from "../db/medicalDB";
 import { drainPendingWrites, getPendingCount, queueWrite } from "../db/pendingWritesDB";
-import { _registerContactExtractor, writeFacts, extractFactsLocally, getFactCount } from "../db/factDB";
+import { _registerContactExtractor, writeFacts, extractFactsLocally, getFactCount, isMedicalCaptureIntent, medicalCategoryFromText } from "../db/factDB";
+import { launchAndroidTimer } from "../utils/androidClock";
 
 interface IntentAction {
   type: string;
@@ -595,45 +596,25 @@ export default function ChatScreen() {
     // ── Offline check -- skip network, answer from device or give warm message ──
     const networkState = await Network.getNetworkStateAsync();
     let localFactsWritten = false;
-    if (!tierDecision.actionIntent) {
-      // Extract facts locally — only when not routing to a device action
+    const isTier1Read = tierDecision.tier === 1 && !!tierDecision.tier1Response;
+    if (!tierDecision.actionIntent && !isTier1Read) {
+      // Extract facts locally — skip calendar/medical/profile reads (Bug 1)
       try {
         const beforeCount = getFactCount();
         extractFactsLocally(text);
         const afterCount = getFactCount();
         localFactsWritten = afterCount > beforeCount;
       } catch {}
-      if (!localFactsWritten) {
-        const medWrite =
-          /\b(i take|i'm on|i am on|prescribed|i use|i'm taking)\s+[\w\s]+/i.test(text) ||
-          /\b(i (went|saw|visited|had))\s+(the\s+|my\s+)?(doctor|dentist|specialist|dr\.?|physician|therapist)\b/i.test(text) ||
-          /\b(i have|i was diagnosed with|i suffer from|i've been diagnosed)\s+[\w\s]+/i.test(text) ||
-          /\b(my doctor|my physician|my specialist)\s+(wants?|told|said|recommended|prescribed)\b/i.test(text) ||
-          /\b(put me on|starting me on|prescribed me)\s+[\w\s]+/i.test(text);
-        if (medWrite && userId) {
+      if (!localFactsWritten && isMedicalCaptureIntent(text) && userId) {
           try {
-            const medCategory = /\b(i (went|saw|visited|had))\s+(the\s+)?(doctor|dentist|specialist|dr\.?)\b/i.test(text)
-              ? 'visit'
-              : /\b(i take|i'm on|i am on|prescribed|i use|i'm taking)\s/i.test(text)
-                ? 'medication'
-                : 'medical';
-            writeMedicalFact(medCategory, text);
+            writeMedicalFact(medicalCategoryFromText(text), text);
             localFactsWritten = true;
           } catch {}
-        }
       }
     }
     const isOffline = !networkState.isConnected || !networkState.isInternetReachable;
     if (isOffline) {
-      if (!tierDecision.actionIntent && localFactsWritten) {
-        const reply = "Got it — I've saved that. You can ask me about it anytime.";
-        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-        speak(reply);
-        sendingRef.current = false;
-        setInputText('');
-        return;
-      }
+      // Tier 1 reads/actions before save confirmation (Bug 1 — priority inversion)
       if (tierDecision.tier === 1) {
         if (tierDecision.actionIntent) {
           // Fall through to action intent handling below (after offline check)
@@ -645,6 +626,15 @@ export default function ChatScreen() {
           sendingRef.current = false;
           return;
         }
+      }
+      if (!tierDecision.actionIntent && localFactsWritten) {
+        const reply = "Got it — I've saved that. You can ask me about it anytime.";
+        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+        speak(reply);
+        sendingRef.current = false;
+        setInputText('');
+        return;
       }
       if (!tierDecision.actionIntent) {
         // No device action — try local memory, then offline message
@@ -715,29 +705,10 @@ export default function ChatScreen() {
           const { minutes } = tierDecision.actionIntent;
           const hours = Math.floor(minutes / 60);
           const mins = minutes % 60;
-          const secs = 0;
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-          let timerOpened = false;
-          try {
-            await IntentLauncher.startActivityAsync('android.intent.action.SET_TIMER', {
-              extra: {
-                'android.intent.extra.alarm.LENGTH': parseInt(String(minutes * 60), 10),
-                'android.intent.extra.alarm.SKIP_UI': true,
-              },
-            });
-            timerOpened = true;
-          } catch {
-            try {
-              await IntentLauncher.startActivityAsync('android.intent.action.SET_TIMER', {
-                extra: {
-                  'android.intent.extra.alarm.LENGTH': parseInt(String(minutes * 60), 10),
-                  'android.intent.extra.alarm.SKIP_UI': true,
-                },
-                packageName: 'com.sec.android.app.clockpackage',
-              });
-              timerOpened = true;
-            } catch {}
-          }
+          const timerOpened = Platform.OS === 'android'
+            ? await launchAndroidTimer(minutes * 60)
+            : false;
           const label = minutes >= 60
             ? `${hours > 0 ? hours + ' hour' + (hours > 1 ? 's' : '') : ''}${mins > 0 ? ' ' + mins + ' minute' + (mins > 1 ? 's' : '') : ''}`
             : `${minutes} minute${minutes > 1 ? 's' : ''}`;
@@ -754,6 +725,13 @@ export default function ChatScreen() {
           const { contact, message } = tierDecision.actionIntent;
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
           await handleSMSAction(`${contact}|${message}`);
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+        if (tierDecision.actionIntent.type === 'calendar_write') {
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          await handleCalendarAction(tierDecision.actionIntent.value);
           sendingRef.current = false;
           setInputText('');
           return;
@@ -1407,20 +1385,7 @@ export default function ChatScreen() {
       return;
     }
 
-    // Check network — queue for later if offline
-    const _calNetState = await Network.getNetworkStateAsync();
-    const _calOffline = !_calNetState.isConnected || !_calNetState.isInternetReachable;
-    if (_calOffline) {
-      queueWrite('calendar', { value, context: conversationContext });
-      addMessage({
-        id: generateId("msg"),
-        role: "assistant",
-        content: `You're offline right now. I've saved "${title}" and I'll add it to your calendar when you're back online.`,
-        timestamp: Date.now(),
-      });
-      return;
-    }
-
+    // Calendar writes use device CalendarProvider — no network required (Bug 3)
     const { status } = await Calendar.requestCalendarPermissionsAsync();
     if (status !== "granted") {
       addMessage({
