@@ -10,12 +10,25 @@
   <uses-permission android:name="android.permission.VIBRATE"/>
   <uses-permission android:name="android.permission.WRITE_CALENDAR"/>
   <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
+  <uses-permission android:name="com.android.alarm.permission.SET_ALARM"/>
   <queries>
     <intent>
       <action android:name="android.intent.action.VIEW"/>
       <category android:name="android.intent.category.BROWSABLE"/>
       <data android:scheme="https"/>
     </intent>
+    <intent>
+      <action android:name="android.intent.action.SET_TIMER"/>
+    </intent>
+    <intent>
+      <action android:name="android.intent.action.SET_ALARM"/>
+    </intent>
+    <intent>
+      <action android:name="android.intent.action.SHOW_TIMERS"/>
+    </intent>
+    <package android:name="com.google.android.deskclock"/>
+    <package android:name="com.sec.android.app.clockpackage"/>
+    <package android:name="com.samsung.android.clockpackage"/>
   </queries>
   <application android:name=".MainApplication" android:label="@string/app_name" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:allowBackup="true" android:theme="@style/AppTheme" android:supportsRtl="true" android:enableOnBackInvokedCallback="false">
     <meta-data android:name="expo.modules.updates.ENABLED" android:value="false"/>

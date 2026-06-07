@@ -115,8 +115,10 @@ export async function refreshCalendarCache(): Promise<void> {
 // Returns cached events for 'today', 'tomorrow', or 'this week'.
 // Compares Unix milliseconds — no timezone string parsing.
 
+export type CalendarWindow = "today" | "tomorrow" | "this week" | "next week";
+
 export function getCachedEvents(
-  window: "today" | "tomorrow" | "this week"
+  window: CalendarWindow
 ): CachedEvent[] {
   const db = getDB();
 
@@ -132,6 +134,13 @@ export function getCachedEvents(
   } else if (window === "tomorrow") {
     windowStartMs = todayStart.getTime() + 24 * 60 * 60 * 1000;
     windowEndMs = windowStartMs + 24 * 60 * 60 * 1000 - 1;
+  } else if (window === "next week") {
+    const nextMonday = new Date(todayStart);
+    const day = nextMonday.getDay();
+    const daysUntilNextMonday = day === 0 ? 1 : 8 - day;
+    nextMonday.setDate(nextMonday.getDate() + daysUntilNextMonday);
+    windowStartMs = nextMonday.getTime();
+    windowEndMs = windowStartMs + 7 * 24 * 60 * 60 * 1000 - 1;
   } else {
     // this week — 7 days from start of today
     windowStartMs = todayStart.getTime();
@@ -153,11 +162,13 @@ export function getCachedEvents(
 
 export function formatCachedEventsForSpeech(
   events: CachedEvent[],
-  window: "today" | "tomorrow" | "this week"
+  window: CalendarWindow
 ): string {
   const dayLabel =
     window === "tomorrow"
       ? "tomorrow"
+      : window === "next week"
+      ? "next week"
       : window === "this week"
       ? "this week"
       : "today";
@@ -170,7 +181,7 @@ export function formatCachedEventsForSpeech(
     // start_ms is now a number — no string parsing needed
     const start = new Date(e.start_ms);
     if (e.all_day) {
-      return window === "this week"
+      return window === "this week" || window === "next week"
         ? `${e.title} on ${start.toLocaleDateString([], { weekday: "long" })}`
         : e.title;
     }
@@ -178,7 +189,7 @@ export function formatCachedEventsForSpeech(
       hour: "numeric",
       minute: "2-digit",
     });
-    return window === "this week"
+    return window === "this week" || window === "next week"
       ? `${e.title} on ${start.toLocaleDateString([], { weekday: "long" })} at ${timeStr}`
       : `${e.title} at ${timeStr}`;
   });

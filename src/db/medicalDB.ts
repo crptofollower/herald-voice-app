@@ -3,9 +3,10 @@
 // Session L — Device-First Intelligence Layer
 //
 // Three tables: medical_records, medications, medical_contacts.
-// Medical data NEVER leaves the device. These tables are never synced
-// to Railway — they are populated from the onFacts pipeline and from
-// the one-time Railway migration in migration.ts.
+// Device SQLite is the runtime source of truth for Tier 1 medical queries.
+// Rows are written from on-device chat (writeMedicalFact, SSE onFacts) and
+// may be bootstrapped once from Railway via migration.ts (/user/export).
+// Ongoing use does not sync these tables back to the cloud.
 //
 // This file fixes the Session W gap: medical data was extracted by the
 // backend and stored on Railway only. From Session L forward, medical
@@ -174,9 +175,12 @@ export function writeMedicalFact(
   if (!value?.trim()) return;
 
   if (category === "medication") {
-    // Check for duplicate by name (first word of value)
     const db = getDB();
-    const nameGuess = value.split(/[\s,]/)[0]?.trim() ?? value;
+    const drugMatch = value.match(
+      /\b(?:i\s+|i'm\s+|i am\s+)?(?:take|taking|am\s+on|is\s+on|on|prescribed|using)\s+([A-Za-z][\w-]*)/i
+    );
+    const nameGuess = (drugMatch?.[1] ?? value.split(/[\s,]/)[0]?.trim() ?? value)
+      .replace(/[.,;:!?]+$/, "");
     const existing = db.getFirstSync<{ id: string }>(
       "SELECT id FROM medications WHERE LOWER(name) = ? LIMIT 1;",
       [nameGuess.toLowerCase()]
@@ -204,40 +208,43 @@ export function writeMedicalFact(
 // Called by tier1Responses.ts for Tier 1 medical queries.
 
 export function getMedicalSummary(): string {
-  const meds = getActiveMedications();
-  const contacts = getMedicalContacts();
-  const records = getMedicalRecords().slice(0, 3); // most recent 3
+  const empty = "I don't have any medical information stored yet.";
+  try {
+    const meds = getActiveMedications();
+    const contacts = getMedicalContacts();
+    const records = getMedicalRecords().slice(0, 3); // most recent 3
 
-  const parts: string[] = [];
+    const parts: string[] = [];
 
-  if (meds.length > 0) {
-    const medList = meds
-      .map((m) => {
-        let s = m.name;
-        if (m.dosage) s += ` ${m.dosage}`;
-        if (m.frequency) s += `, ${m.frequency}`;
-        return s;
-      })
-      .join("; ");
-    parts.push(
-      meds.length === 1
-        ? `You're currently on ${medList}.`
-        : `You're currently on ${meds.length} medications: ${medList}.`
-    );
+    if (meds.length > 0) {
+      const medList = meds
+        .map((m) => {
+          let s = m.name;
+          if (m.dosage) s += ` ${m.dosage}`;
+          if (m.frequency) s += `, ${m.frequency}`;
+          return s;
+        })
+        .join("; ");
+      parts.push(
+        meds.length === 1
+          ? `You're currently on ${medList}.`
+          : `You're currently on ${meds.length} medications: ${medList}.`
+      );
+    }
+
+    if (contacts.length > 0) {
+      const primary = contacts.find((c) => c.is_primary) ?? contacts[0];
+      parts.push(`Your primary doctor is ${primary.name}${primary.specialty ? `, ${primary.specialty}` : ""}.`);
+    }
+
+    if (records.length > 0 && records[0].doctor_name) {
+      parts.push(`Your most recent visit was with ${records[0].doctor_name}${records[0].visit_date ? ` on ${records[0].visit_date}` : ""}.`);
+    }
+
+    return parts.length > 0 ? parts.join(" ") : empty;
+  } catch {
+    return empty;
   }
-
-  if (contacts.length > 0) {
-    const primary = contacts.find((c) => c.is_primary) ?? contacts[0];
-    parts.push(`Your primary doctor is ${primary.name}${primary.specialty ? `, ${primary.specialty}` : ""}.`);
-  }
-
-  if (records.length > 0 && records[0].doctor_name) {
-    parts.push(`Your most recent visit was with ${records[0].doctor_name}${records[0].visit_date ? ` on ${records[0].visit_date}` : ""}.`);
-  }
-
-  return parts.length > 0
-    ? parts.join(" ")
-    : "I don't have any medical information stored yet.";
 }
 
 // ─── Bulk import (used by migration.ts) ──────────────────────────────────────

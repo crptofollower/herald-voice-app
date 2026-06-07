@@ -93,12 +93,13 @@ export async function runMigration(userId: string): Promise<void> {
 
       // ── Life moments → facts (one-time classification pass) ─────────────────
       // life_moments are raw conversation pairs stored on Railway.
-      // We classify each assistant turn into typed facts here.
+      // We classify each USER turn into typed facts (facts live in what the
+      // user said, not in Herald's replies).
       // This is the one-time conversion — from Session L forward, facts are
       // written directly to device SQLite as structured data.
       if (Array.isArray(data.life_moments)) {
         for (const moment of data.life_moments) {
-          if (moment.role === "assistant" && moment.content) {
+          if (moment.role === "user" && moment.content) {
             const classified = classifyMoment(moment.content);
             if (classified) {
               writeFact(classified.fact, classified.category, "stated");
@@ -131,7 +132,7 @@ export async function runMigration(userId: string): Promise<void> {
 
 // ─── classifyMoment ───────────────────────────────────────────────────────────
 //
-// Classifies a raw life_moment assistant turn into a typed fact.
+// Classifies a raw life_moment USER turn into a typed fact.
 // Intentionally conservative — only extracts high-confidence facts.
 // Returns null for noise (greetings, filler, weather responses etc.)
 

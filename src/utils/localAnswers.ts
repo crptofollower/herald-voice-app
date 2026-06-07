@@ -1,9 +1,19 @@
-import { getLocalProfile, getLocalMedical, getTopLocalMemories } from '../hooks/useDeviceMemory';
-
+// src/utils/localAnswers.ts
 // ─── Personal query interceptor ───────────────────────────────────────────────
 // Checks if a message can be answered from device SQLite instantly.
 // Returns an answer string if yes, null if the query should go to Railway.
 // Zero network. Zero OpenRouter cost. Under 200ms.
+//
+// Build 8: reads the SQLite layer (profileDB / medicalDB / factDB) — the SAME
+// store tierRouter and the onFacts pipeline write to. Previously this read the
+// legacy useDeviceMemory hook, which diverged from SQLite: a med captured via
+// onFacts landed in SQLite but was invisible here, so this path could answer
+// "I don't have any medications saved" while Tier 1 answered correctly. One
+// source of truth now.
+
+import { getProfileField } from '../db/profileDB';
+import { getActiveMedications, getMedicalRecords } from '../db/medicalDB';
+import { getTopFacts } from '../db/factDB';
 
 const NAME_PATTERNS = [
   /what('?s| is) my name/i,
@@ -43,15 +53,41 @@ const MEDICAL_PATTERNS = [
 ];
 
 function matchesAny(text: string, patterns: RegExp[]): boolean {
-  return patterns.some(p => p.test(text));
+  return patterns.some((p) => p.test(text));
+}
+
+// City may have been written under any of these keys depending on path:
+//   'city'           — set by upgradeLiveGreeting (setProfileField)
+//   'confirmed_city' — imported verbatim from Railway by migration.ts
+//   'location'       — older Railway profile shape
+function getCity(): string | null {
+  return (
+    getProfileField('city') ||
+    getProfileField('confirmed_city') ||
+    getProfileField('location') ||
+    null
+  );
+}
+
+function formatMedication(m: { name: string; dosage?: string; frequency?: string }): string {
+  let s = m.name;
+  if (m.dosage) s += ` ${m.dosage}`;
+  if (m.frequency) s += `, ${m.frequency}`;
+  return s;
 }
 
 export function answerFromDevice(message: string): string | null {
   const msg = message.trim();
-  const profile = getLocalProfile();
-  const name = profile.name || null;
-  const aiName = profile.ai_name || "Herald";
-  const city = profile.confirmed_city || profile.location || null;
+
+  // If the DB isn't ready, fall through to Railway rather than throw.
+  let name: string | null;
+  let city: string | null;
+  try {
+    name = getProfileField('name');
+    city = getCity();
+  } catch {
+    return null;
+  }
 
   // ── Name query ──────────────────────────────────────────────────────────────
   if (matchesAny(msg, NAME_PATTERNS)) {
@@ -70,10 +106,11 @@ export function answerFromDevice(message: string): string | null {
     const lines: string[] = [];
     if (name) lines.push(`Your name is ${name}.`);
     if (city) lines.push(`You're based in ${city}.`);
-    const memories = getTopLocalMemories(5);
-    if (memories.length > 0) {
+    let facts: ReturnType<typeof getTopFacts> = [];
+    try { facts = getTopFacts(5); } catch {}
+    if (facts.length > 0) {
       lines.push(`Here's what I remember about you:`);
-      memories.forEach(m => lines.push(`• ${m.summary}`));
+      facts.forEach((f) => lines.push(`• ${f.fact}`));
     }
     if (lines.length === 0) {
       return `I'm still learning about you. The more we talk, the more I'll know.`;
@@ -83,23 +120,31 @@ export function answerFromDevice(message: string): string | null {
 
   // ── Medication query ────────────────────────────────────────────────────────
   if (matchesAny(msg, MEDICATION_PATTERNS)) {
-    const meds = getLocalMedical('medication');
+    let meds: ReturnType<typeof getActiveMedications> = [];
+    try { meds = getActiveMedications(); } catch {}
     if (meds.length === 0) {
       return `I don't have any medications saved for you yet. You can tell me what you're taking and I'll remember it.`;
     }
-    const list = meds.map(m => `• ${m.summary}`).join(' ');
+    const list = meds.map((m) => `• ${formatMedication(m)}`).join(' ');
     return `Here are the medications I have on file for you: ${list}`;
   }
 
   // ── Medical history query ───────────────────────────────────────────────────
   if (matchesAny(msg, MEDICAL_PATTERNS)) {
-    const visits = getLocalMedical('visit');
-    const followups = getLocalMedical('followup');
-    const all = [...visits, ...followups];
-    if (all.length === 0) {
+    let records: ReturnType<typeof getMedicalRecords> = [];
+    try { records = getMedicalRecords(); } catch {}
+    if (records.length === 0) {
       return `I don't have any medical visits saved yet.`;
     }
-    const list = all.slice(0, 5).map(m => `• ${m.summary}`).join(' ');
+    const list = records
+      .slice(0, 5)
+      .map((r) => {
+        const who = r.doctor_name || 'a visit';
+        const when = r.visit_date ? ` on ${r.visit_date}` : '';
+        const what = r.diagnosis || r.reason || r.notes || '';
+        return `• ${who}${when}${what ? ` — ${what}` : ''}`;
+      })
+      .join(' ');
     return `Here's what I have in your medical history: ${list}`;
   }
 

@@ -18,6 +18,13 @@ export async function initDB(): Promise<void> {
     try {
       await runMigrations();
 
+      try {
+        const { importLegacyDatabases } = await import("./legacyMigration");
+        await importLegacyDatabases();
+      } catch (e) {
+        console.warn("[Herald] legacy import skipped:", e);
+      }
+
       // Expire temporal facts — wrapped in try-catch so a failure here
       // never blocks app init. Import is lazy to avoid circular dependency.
       try {

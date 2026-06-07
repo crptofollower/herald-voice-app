@@ -8,6 +8,8 @@ import { calendarWriteIsRecent } from "../db/calendarState";
 import { getFactsSummary } from "../db/factDB";
 import { getProfileSummary } from "../db/profileDB";
 import { getMedicalSummary } from "../db/medicalDB";
+import { detectMedicalEvent } from "../utils/detectMedicalEvent";
+import type { MedicalEvent } from "../utils/detectMedicalEvent";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -28,7 +30,8 @@ export interface TierDecision {
     | { type: 'note_read' }
     | { type: 'list_add'; item: string; listName: string }
     | { type: 'list_read'; listName: string }
-    | { type: 'calendar_write'; value: string };
+    | { type: 'calendar_write'; value: string }
+    | { type: 'medical_capture'; event: MedicalEvent };
   localContext?: LocalContext;
   reason: string;
 }
@@ -404,6 +407,16 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
         return { tier: 1, actionIntent: { type: 'calendar_write', value }, reason: 'action:calendar_write' };
       }
     }
+  }
+
+  // Device: medical capture — past-tense medical events only
+  const medEvent = detectMedicalEvent(msg);
+  if (medEvent && medEvent.tense === 'past') {
+    return {
+      tier: 1,
+      actionIntent: { type: 'medical_capture', event: medEvent },
+      reason: 'action:medical_capture',
+    };
   }
 
   // Tier 1: calendar today — exclude if tomorrow, this week, or next week is present

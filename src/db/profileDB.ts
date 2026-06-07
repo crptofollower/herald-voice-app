@@ -80,12 +80,16 @@ export function setProfileFields(fields: Record<string, string>): void {
 // Example: "Your name is Mike. You're in The Colony, TX. Your companion is Herald."
 
 export function getProfileSummary(): string {
-  const p = getProfile();
-  const parts: string[] = [];
-  if (p.name) parts.push(`Your name is ${p.name}.`);
-  if (p.city) parts.push(`You're in ${p.city}.`);
-  if (p.ai_name) parts.push(`Your companion is ${p.ai_name}.`);
-  return parts.join(" ");
+  try {
+    const p = getProfile();
+    const parts: string[] = [];
+    if (p.name) parts.push(`Your name is ${p.name}.`);
+    if (p.city) parts.push(`You're in ${p.city}.`);
+    if (p.ai_name) parts.push(`Your companion is ${p.ai_name}.`);
+    return parts.join(" ");
+  } catch {
+    return "";
+  }
 }
 
 // ─── isOnboardingComplete ─────────────────────────────────────────────────────

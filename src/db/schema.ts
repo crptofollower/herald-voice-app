@@ -2,7 +2,7 @@
 // Herald device SQLite — table definitions and migration runner.
 // Session L — Device-First Intelligence Layer
 //
-// SCHEMA VERSION: 5
+// SCHEMA VERSION: 6
 // v1: Initial schema — facts, profile, medical, calendar_cache (ISO strings), life_tracker
 // v2: calendar_cache rebuilt with Unix ms timestamps (timezone fix)
 // v3: Entity graph + importance scoring + temporal awareness (locked Session L spec)
@@ -31,7 +31,7 @@
 
 import * as SQLite from "expo-sqlite";
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 export const DB_NAME = "herald_device.db";
 
 // ─── Open database ────────────────────────────────────────────────────────────
@@ -451,6 +451,29 @@ const MIGRATIONS: Record<number, (db: SQLite.SQLiteDatabase) => void> = {
         checked    INTEGER DEFAULT 0,
         created_at TEXT NOT NULL,
         FOREIGN KEY (list_id) REFERENCES lists(id)
+      );
+    `);
+  },
+
+  // ── v6: tables that previously lived only in herald_local.db / herald_sessions.db ──
+  6: (db) => {
+    db.execSync(`
+      CREATE TABLE IF NOT EXISTS local_preferences (
+        category TEXT NOT NULL,
+        value    TEXT NOT NULL,
+        count    INTEGER DEFAULT 1,
+        PRIMARY KEY (category, value)
+      );
+      CREATE TABLE IF NOT EXISTS session_summaries (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        summary    TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS pending_clarifications (
+        id         TEXT PRIMARY KEY,
+        record_id  TEXT NOT NULL,
+        slot       TEXT NOT NULL,
+        created_at TEXT NOT NULL
       );
     `);
   },

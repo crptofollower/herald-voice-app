@@ -4,7 +4,7 @@
 // Uses real JPG scene images from assets/ folder.
 // ImageBackground fills the screen, dark overlay keeps text readable.
 
-import React, { useMemo } from "react";
+import React from "react";
 import { StyleSheet, ImageBackground, View } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { PERSONAS, type PersonaKey } from "../constants/personas";
@@ -29,12 +29,6 @@ const IMAGES_NIGHT: Record<PersonaKey, ReturnType<typeof require>> = {
   mountain: require("../../assets/mountain-night.png"),
 };
 
-// Night: 8pm (20:00) through 5:59am. Day: everything else.
-function isNightTime(): boolean {
-  const hour = new Date().getHours();
-  return hour >= 20 || hour < 6;
-}
-
 // ─── Component ────────────────────────────────────────────────────────────────
 
 interface Props {
@@ -43,23 +37,28 @@ interface Props {
   style?: object;
 }
 
-export function PersonaBackground({ persona, children, style }: Props) {
-  // Evaluated once per render -- changes naturally at next open after 8pm/6am.
-  // No interval needed: users open the app; it picks the right image then.
-  const source = useMemo(
-    () => (isNightTime() ? IMAGES_NIGHT[persona] : IMAGES_DAY[persona]),
-    [persona]
-  );
+export function PersonaBackground({ persona: personaKey, children, style }: Props) {
+  const persona = {
+    ...PERSONAS[personaKey],
+    wallpaper: IMAGES_DAY[personaKey],
+    wallpaperNight: IMAGES_NIGHT[personaKey],
+  };
+
+  const hour = new Date().getHours();
+  const isNight = hour >= 20 || hour < 6;
+  const imageSource = isNight && persona.wallpaperNight
+    ? persona.wallpaperNight
+    : persona.wallpaper;
 
   return (
     <ImageBackground
-      source={source}
+      source={imageSource}
       style={[styles.container, style]}
       resizeMode="cover"
     >
       {/* Dark overlay so text stays readable over any scene */}
       <LinearGradient
-        colors={PERSONAS[persona].gradient}
+        colors={persona.gradient}
         locations={[0, 0.30, 0.62, 1.0]}
         style={StyleSheet.absoluteFill}
       />

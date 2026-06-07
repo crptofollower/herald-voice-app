@@ -22,6 +22,7 @@
 //   confirmed — user confirmed Herald's inference
 
 import { getDB } from "./schema";
+import { writeMedicalFact } from "./medicalDB";
 // contactsDB imported lazily to avoid circular dependency
 let _extractContact: ((fact: string) => void) | null = null;
 export function _registerContactExtractor(fn: (fact: string) => void): void {
@@ -220,13 +221,17 @@ export function getFactsByCategory(category: string, limit = 20): Fact[] {
 // Used to build the local context block sent to backend on Tier 2 queries.
 
 export function getTopFacts(limit = 20): Fact[] {
-  const db = getDB();
-  return db.getAllSync<Fact>(
-    `SELECT * FROM facts
-     WHERE (valid_until IS NULL OR valid_until > date('now'))
-     ORDER BY use_count DESC, source_date DESC LIMIT ?;`,
-    [limit]
-  );
+  try {
+    const db = getDB();
+    return db.getAllSync<Fact>(
+      `SELECT * FROM facts
+       WHERE (valid_until IS NULL OR valid_until > date('now'))
+       ORDER BY use_count DESC, source_date DESC LIMIT ?;`,
+      [limit]
+    );
+  } catch {
+    return [];
+  }
 }
 
 // ─── getFactsSummary ──────────────────────────────────────────────────────────
@@ -244,41 +249,82 @@ const CATEGORY_PRIORITY: Record<string, number> = {
 };
 
 export function getFactsSummary(): string {
+  try {
+    const db = getDB();
+    const facts = db.getAllSync<Fact>(
+      `SELECT * FROM facts
+       WHERE (valid_until IS NULL OR valid_until > date('now'))
+         AND (context_type IS NULL OR context_type != 'corrected')
+       ORDER BY
+         COALESCE(importance_score, 50) DESC,
+         use_count DESC
+       LIMIT 60;`
+    );
+    if (facts.length === 0) return "";
+
+    const grouped: Record<string, string[]> = {};
+    for (const f of facts) {
+      if (!grouped[f.category]) grouped[f.category] = [];
+      if (grouped[f.category].length < 4) grouped[f.category].push(f.fact);
+    }
+
+    // Sort categories by priority — medical always first
+    const sorted = Object.entries(grouped).sort(([a], [b]) => {
+      const pa = CATEGORY_PRIORITY[a] ?? 99;
+      const pb = CATEGORY_PRIORITY[b] ?? 99;
+      return pa - pb;
+    });
+
+    const lines: string[] = [];
+    let totalFacts = 0;
+    for (const [cat, items] of sorted) {
+      if (totalFacts >= 30) break;
+      const label = cat.charAt(0).toUpperCase() + cat.slice(1);
+      const slice = items.slice(0, Math.min(4, 30 - totalFacts));
+      lines.push(`${label}: ${slice.join("; ")}`);
+      totalFacts += slice.length;
+    }
+    return lines.join("\n");
+  } catch {
+    return "";
+  }
+}
+
+// ─── getAmbientFactsSummary ───────────────────────────────────────────────────
+// Compact memory block injected on EVERY normal turn so Herald can surface memory
+// proactively in conversation — not only when asked "what do you know about me."
+// EXCLUDES medical/medication on purpose: those stay device-only (Tier 1) and
+// probe-only (Tier 2) until Option B (sensitive-turn tagging) + encryption ship.
+export function getAmbientFactsSummary(limit = 12): string {
   const db = getDB();
-  const facts = db.getAllSync<Fact>(
-    `SELECT * FROM facts
-     WHERE (valid_until IS NULL OR valid_until > date('now'))
-       AND (context_type IS NULL OR context_type != 'corrected')
-     ORDER BY
-       COALESCE(importance_score, 50) DESC,
-       use_count DESC
-     LIMIT 60;`
-  );
-  if (facts.length === 0) return "";
-
-  const grouped: Record<string, string[]> = {};
-  for (const f of facts) {
-    if (!grouped[f.category]) grouped[f.category] = [];
-    if (grouped[f.category].length < 4) grouped[f.category].push(f.fact);
+  try {
+    const facts = db.getAllSync<Fact>(
+      `SELECT * FROM facts
+       WHERE (valid_until IS NULL OR valid_until > date('now'))
+         AND (context_type IS NULL OR context_type != 'corrected')
+         AND category NOT IN ('medical','medication','medications')
+       ORDER BY COALESCE(importance_score, 50) DESC, use_count DESC
+       LIMIT ?;`,
+      [limit]
+    );
+    if (facts.length === 0) return "";
+    return facts.map((f) => `${f.category}: ${f.fact}`).join("; ");
+  } catch {
+    return "";
   }
+}
 
-  // Sort categories by priority — medical always first
-  const sorted = Object.entries(grouped).sort(([a], [b]) => {
-    const pa = CATEGORY_PRIORITY[a] ?? 99;
-    const pb = CATEGORY_PRIORITY[b] ?? 99;
-    return pa - pb;
-  });
-
-  const lines: string[] = [];
-  let totalFacts = 0;
-  for (const [cat, items] of sorted) {
-    if (totalFacts >= 30) break;
-    const label = cat.charAt(0).toUpperCase() + cat.slice(1);
-    const slice = items.slice(0, Math.min(4, 30 - totalFacts));
-    lines.push(`${label}: ${slice.join("; ")}`);
-    totalFacts += slice.length;
-  }
-  return lines.join("\n");
+// ─── expireTemporalFacts ──────────────────────────────────────────────────────
+// Housekeeping sweep called from initDB. Downgrades expired "active" facts to
+// "historical." Reads already filter by valid_until, so this is consistency, not
+// correctness — but it removes the dead-import lie in useDeviceDB.ts.
+export function expireTemporalFacts(): void {
+  const db = getDB();
+  try {
+    db.runSync(
+      "UPDATE facts SET context_type = 'historical' WHERE valid_until IS NOT NULL AND valid_until <= date('now') AND context_type = 'active';"
+    );
+  } catch {}
 }
 
 // ─── markFactUsed ─────────────────────────────────────────────────────────────
@@ -474,6 +520,37 @@ const LOCAL_PATTERNS: Array<{
   { pattern: /\b(\w+) is my (friend|colleague|boss|neighbor|pastor|coach)\b/i, category: 'relationships', extract: m => `${m[2]}: ${m[1]}`, importance: 75 },
 ];
 
+/** Calendar read queries — must not trigger medical capture (Bug 1). */
+export function isCalendarReadIntent(text: string): boolean {
+  return (
+    /\b(calendar|schedule|appointment|meeting|event)\b/i.test(text) &&
+    /\b(do i have|what('s| is) on|what do i have|anything on|any (appointments|meetings|events))\b/i.test(text)
+  );
+}
+
+/** Offline medical capture — excludes calendar reads and broad "i have" false positives. */
+export function isMedicalCaptureIntent(text: string): boolean {
+  if (isCalendarReadIntent(text)) return false;
+  return (
+    /\b(i take|i'm on|i am on|prescribed|i use|i'm taking)\s+[\w\s]+/i.test(text) ||
+    /\b(i (went|saw|visited|had))\s+(the\s+|my\s+)?(doctor|dentist|specialist|dr\.?|physician|therapist)\b/i.test(text) ||
+    /\b(i was diagnosed with|i suffer from|i've been diagnosed)\s+[\w\s]+/i.test(text) ||
+    /\b(i have)\s+(a\s+)?(diagnosis|condition|allergy|allergies|asthma|diabetes|cancer|arthritis|anxiety|depression|hypertension)\b/i.test(text) ||
+    /\b(my doctor|my physician|my specialist)\s+(wants?|told|said|recommended|prescribed)\b/i.test(text) ||
+    /\b(put me on|starting me on|prescribed me)\s+[\w\s]+/i.test(text)
+  );
+}
+
+export function medicalCategoryFromText(text: string): 'medication' | 'medical' | 'visit' {
+  if (/\b(i (went|saw|visited|had))\s+(the\s+)?(doctor|dentist|specialist|dr\.?)\b/i.test(text)) {
+    return 'visit';
+  }
+  if (/\b(i take|i'm on|i am on|prescribed|i use|i'm taking)\s/i.test(text)) {
+    return 'medication';
+  }
+  return 'medical';
+}
+
 export function extractFactsLocally(userMessage: string): void {
   if (!userMessage || userMessage.trim().length < 5) return;
 
@@ -488,6 +565,13 @@ export function extractFactsLocally(userMessage: string): void {
         importanceScore: importance,
         contextType: 'active',
       });
+      // Mirror medication/medical facts into medicalDB (Bug 5 — use raw message for drug parse)
+      if (category === 'medications' || category === 'medical') {
+        writeMedicalFact(
+          category === 'medications' ? 'medication' : 'medical',
+          userMessage
+        );
+      }
     } catch {
       // Silent — never block the message send
     }

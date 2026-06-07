@@ -72,6 +72,8 @@ import { handleTier1, buildTier2DeviceContext, buildAmbientDeviceContext, writeP
 import { refreshCalendarCache } from "../db/calendarCacheDB";
 import { markCalendarWrite } from "../db/calendarState";
 import { initDB, isDBReady } from "../db/useDeviceDB";
+import { getPendingClarification, clearClarification } from "../db/clarificationDB";
+import { getDB } from "../db/schema";
 import { runMigration } from "../routing/migration";
 import { setProfileField, setProfileFields } from "../db/profileDB";
 import {
@@ -591,6 +593,27 @@ export default function ChatScreen() {
         await initDB();
       } catch {}
     }
+
+    const pending = getPendingClarification();
+    if (pending) {
+      const db = getDB();
+      if (pending.slot === 'doctor_name') {
+        db.runSync('UPDATE medical_records SET doctor_name = ? WHERE id = ?', [text.trim(), pending.record_id]);
+      } else if (pending.slot === 'dosage') {
+        db.runSync('UPDATE medications SET dosage = ? WHERE id = ?', [text.trim(), pending.record_id]);
+      } else if (pending.slot === 'drug_name') {
+        db.runSync('UPDATE medications SET name = ? WHERE id = ?', [text.trim(), pending.record_id]);
+      }
+      clearClarification(pending.id);
+      const reply = "Got it — I've saved that.";
+      addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+      addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+      speak(reply);
+      setInputText('');
+      sendingRef.current = false;
+      return;
+    }
+
     const tierDecision = await classifyQuery(text);
 
     // ── Offline check -- skip network, answer from device or give warm message ──
@@ -732,6 +755,17 @@ export default function ChatScreen() {
         if (tierDecision.actionIntent.type === 'calendar_write') {
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
           await handleCalendarAction(tierDecision.actionIntent.value);
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+        if (tierDecision.actionIntent.type === 'medical_capture') {
+          const { captureMedicalEvent } = await import('../utils/captureMedicalEvent');
+          const result = captureMedicalEvent(tierDecision.actionIntent.event);
+          const reply = result.followUpQuestion ?? "Got it — I've saved that.";
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+          speak(reply);
           sendingRef.current = false;
           setInputText('');
           return;

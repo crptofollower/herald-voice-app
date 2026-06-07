@@ -3,23 +3,7 @@
 // Written on app background. Read by buildAmbientDeviceContext on every turn.
 // No LLM involved — raw message excerpts, under 1000 chars per session.
 
-import * as SQLite from 'expo-sqlite';
-
-let _db: SQLite.SQLiteDatabase | null = null;
-
-function getDB(): SQLite.SQLiteDatabase {
-  if (!_db) {
-    _db = SQLite.openDatabaseSync('herald_sessions.db');
-    _db.execSync(`
-      CREATE TABLE IF NOT EXISTS session_summaries (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        summary TEXT NOT NULL,
-        created_at INTEGER NOT NULL
-      );
-    `);
-  }
-  return _db;
-}
+import { getDB } from './schema';
 
 export function writeSessionSummary(summary: string): void {
   try {
