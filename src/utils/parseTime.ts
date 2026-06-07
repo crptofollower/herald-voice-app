@@ -63,7 +63,26 @@ export function parseTimeFromText(text: string): { hour: number; minute: number 
 export function parseAlarmIntent(text: string): { time: string; label: string } | null {
   const isAlarm = /\b(alarm|wake me|wake up)\b/i.test(text);
   if (!isAlarm) return null;
-  const parsed = parseTimeFromText(text);
+
+  const t = text.toLowerCase();
+  const duration =
+    t.match(/\b(?:in|for)\s+(?:an?\s+)?(\d+)?\s*(minute|min|hour|hr|second|sec)\b/i)
+    ?? t.match(/\b(\d+)[\s-]*(minute|min|hour|hr|second|sec)\s+alarm\b/i);
+
+  let parsed: { hour: number; minute: number } | null = null;
+  if (duration) {
+    const amount = parseInt(duration[1] ?? '1', 10);
+    const unit = (duration[2] ?? 'minute').toLowerCase();
+    let minutes = amount;
+    if (unit.startsWith('h')) minutes = amount * 60;
+    else if (unit.startsWith('s')) minutes = Math.max(1, Math.ceil(amount / 60));
+    if (minutes > 0) {
+      const target = new Date(Date.now() + minutes * 60000);
+      parsed = { hour: target.getHours(), minute: target.getMinutes() };
+    }
+  }
+
+  if (!parsed) parsed = parseTimeFromText(text);
   if (!parsed) return null;
   const hh = String(parsed.hour).padStart(2, '0');
   const mm = String(parsed.minute).padStart(2, '0');
