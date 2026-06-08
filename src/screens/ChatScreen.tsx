@@ -596,22 +596,67 @@ export default function ChatScreen() {
 
     const pending = getPendingClarification();
     if (pending) {
-      const db = getDB();
-      if (pending.slot === 'doctor_name') {
-        db.runSync('UPDATE medical_records SET doctor_name = ? WHERE id = ?', [text.trim(), pending.record_id]);
-      } else if (pending.slot === 'dosage') {
-        db.runSync('UPDATE medications SET dosage = ? WHERE id = ?', [text.trim(), pending.record_id]);
-      } else if (pending.slot === 'drug_name') {
-        db.runSync('UPDATE medications SET name = ? WHERE id = ?', [text.trim(), pending.record_id]);
+      const looksLikeQuestion = /\b(am i|do i|do you|what|who|when|where|how|is there|are there|have you|can you)\b/i.test(text.trim());
+      const looksLikeNewIntent = /\b(remind me|set a|add|note that|what's on|show me|call|text)\b/i.test(text.trim());
+      if (!looksLikeQuestion && !looksLikeNewIntent) {
+        const db = getDB();
+        if (pending.slot === 'doctor_name') {
+          db.runSync('UPDATE medical_records SET doctor_name = ? WHERE id = ?', [text.trim(), pending.record_id]);
+        } else if (pending.slot === 'dosage') {
+          db.runSync('UPDATE medications SET dosage = ? WHERE id = ?', [text.trim(), pending.record_id]);
+        } else if (pending.slot === 'drug_name') {
+          db.runSync('UPDATE medications SET name = ? WHERE id = ?', [text.trim(), pending.record_id]);
+        }
+        clearClarification(pending.id);
+        const reply = "Got it — I've saved that.";
+        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+        speak(reply);
+        setInputText('');
+        sendingRef.current = false;
+        return;
       }
       clearClarification(pending.id);
-      const reply = "Got it — I've saved that.";
-      addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-      addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-      speak(reply);
-      setInputText('');
-      sendingRef.current = false;
-      return;
+    }
+
+    // ── Multi-intent: "add X to my list and note Y" — split and handle both ──
+    const multiListNote = text.match(
+      /\badd (.+?) to (?:my |the )?(?:\w+ )?list\b.+?\b(?:note|jot|remember|write down)\b(.+)/i
+    ) ?? text.match(
+      /\b(?:note|jot|remember|write down)\b(.+?)\band\b.+?\badd (.+?) to (?:my |the )?(?:\w+ )?list/i
+    );
+    if (multiListNote) {
+      const listItem = (multiListNote[1] ?? multiListNote[2])?.trim();
+      const noteBody = (multiListNote[2] ?? multiListNote[1])?.trim();
+      if (listItem && noteBody) {
+        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+        try {
+          const { getDB } = await import('../db/schema');
+          const db = getDB();
+          // Write list item
+          let list = db.getFirstSync<{ id: string }>(`SELECT id FROM lists WHERE name = ?;`, ['grocery']);
+          if (!list) {
+            const listId = `list_${Date.now()}`;
+            db.runSync(`INSERT INTO lists (id, name, created_at) VALUES (?, ?, ?);`, [listId, 'grocery', new Date().toISOString()]);
+            list = { id: listId };
+          }
+          db.runSync(`INSERT INTO list_items (id, list_id, body, checked, created_at) VALUES (?, ?, ?, 0, ?);`,
+            [`item_${Date.now()}`, list.id, listItem, new Date().toISOString()]);
+          // Write note
+          db.runSync(`INSERT INTO notes (id, body, created_at, updated_at) VALUES (?, ?, ?, ?);`,
+            [`note_${Date.now()}`, noteBody, new Date().toISOString(), new Date().toISOString()]);
+          const reply = `Got it — added ${listItem} to your list and noted: ${noteBody}.`;
+          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+          speak(reply);
+        } catch {
+          const reply = `Something went wrong saving that. Try again.`;
+          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+          speak(reply);
+        }
+        sendingRef.current = false;
+        setInputText('');
+        return;
+      }
     }
 
     const tierDecision = await classifyQuery(text);
@@ -633,6 +678,35 @@ export default function ChatScreen() {
             writeMedicalFact(medicalCategoryFromText(text), text);
             localFactsWritten = true;
           } catch {}
+      }
+      if (!localFactsWritten) {
+        const isPersonalWrite =
+          /\bmy (wife|husband|spouse|partner|son|daughter|child|kids?|brother|sister|mom|dad|mother|father)('?s name)? is\b/i.test(text) ||
+          /\bmy name is\b/i.test(text) ||
+          /\bi('?m| am) [\d]+ years? old\b/i.test(text) ||
+          /\bi live in\b/i.test(text);
+        if (isPersonalWrite) localFactsWritten = true;
+
+        // Phone number capture — "my daughter's number is 555-1234"
+        const phoneCapture = text.match(
+          /\bmy ([\w\s-]+?)(?:'?s)?\s+(?:number|phone|cell|mobile)\s+(?:is\s+)?([\d\s\-\(\)\+\.]{7,})/i
+        );
+        if (phoneCapture) {
+          const relationship = phoneCapture[1].trim().toLowerCase();
+          const phone = phoneCapture[2].replace(/\D/g, '');
+          if (phone.length >= 7) {
+            try {
+              const { findContactByRelationship, writeContact: writeContactFn } = await import('../db/contactsDB');
+              const existing = findContactByRelationship(relationship);
+              if (existing) {
+                writeContactFn({ name: existing.name, relationship, phone, importance: existing.importance });
+              } else {
+                writeContactFn({ name: relationship, relationship, phone, importance: 7 });
+              }
+              localFactsWritten = true;
+            } catch {}
+          }
+        }
       }
     }
     const isOffline = !networkState.isConnected || !networkState.isInternetReachable;
@@ -974,9 +1048,17 @@ export default function ChatScreen() {
                ORDER BY li.created_at ASC;`,
               [listName]
             );
-            const reply = items.length === 0
+            // Dedup — case-insensitive, keep first occurrence
+            const seen = new Set<string>();
+            const unique = items.filter(i => {
+              const key = i.body.trim().toLowerCase();
+              if (seen.has(key)) return false;
+              seen.add(key);
+              return true;
+            });
+            const reply = unique.length === 0
               ? `Your ${listName} list is empty.`
-              : `On your ${listName} list: ${items.map(i => i.body).join(', ')}.`;
+              : `On your ${listName} list: ${unique.map(i => i.body).join(', ')}.`;
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
           } catch {

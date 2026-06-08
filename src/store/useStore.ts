@@ -20,7 +20,7 @@ import type { PersonaKey } from "../constants/personas";
 import type { Message, ProactiveItem, FreddieStatus } from "../api/herald";
 import { DEFAULT_PERSONA } from "../constants/personas";
 
-const STORE_SCHEMA_VERSION = 4;
+const STORE_SCHEMA_VERSION = 5;
 
 // ─── Slices ───────────────────────────────────────────────────────────────────
 
@@ -181,7 +181,7 @@ export const useStore = create<Store>()(
         }),
     }),
     {
-      name: "herald-store-v4",
+      name: "herald-store-v5",
       storage: createJSONStorage(() => AsyncStorage),
 onRehydrateStorage: () => (state) => {
         if (!state) {

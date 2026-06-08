@@ -42,6 +42,28 @@ const MEDICATION_PATTERNS = [
   /what do i take/i,
   /what am i taking/i,
   /list my (meds?|medications?|pills?)/i,
+  /am i (on|taking) any (medications?|meds?|pills?|prescriptions?)/i,
+  /am i on any (medications?|meds?|pills?)/i,
+  /do you have (any )?medication (listed |saved )?(for me)?/i,
+  /are there any medications (you have |saved )?(for me)?/i,
+  /do i take (any )?(medications?|meds?|pills?)/i,
+  /what pills (am i|do i) take/i,
+];
+
+const FAMILY_PATTERNS = [
+  /what do you know about my family/i,
+  /tell me about my family/i,
+  /who is my (wife|husband|spouse|partner|son|daughter|child|kids?|brother|sister|mom|dad|mother|father)/i,
+  /what('?s| is) my (wife|husband|spouse|partner)('?s)? name/i,
+  /do you know my (wife|husband|spouse|partner|son|daughter|child|kids?)/i,
+  /my (wife|husband|spouse|partner|son|daughter|child|kids?|brother|sister|mom|dad)/i,
+];
+
+const PERSONAL_FACT_PATTERNS = [
+  /do you know (anything about me|who i am)/i,
+  /what do you know about me/i,
+  /what have you (saved|stored|remembered) (about me|for me)/i,
+  /do you (have|know) (anything|something) (about me|personal)/i,
 ];
 
 const MEDICAL_PATTERNS = [
@@ -146,6 +168,37 @@ export function answerFromDevice(message: string): string | null {
       })
       .join(' ');
     return `Here's what I have in your medical history: ${list}`;
+  }
+
+  // ── Family / relationship query ──────────────────────────────────────────────
+  if (matchesAny(msg, FAMILY_PATTERNS)) {
+    let facts: ReturnType<typeof getTopFacts> = [];
+    try { facts = getTopFacts(20); } catch {}
+    const familyFacts = facts.filter(f =>
+      /wife|husband|spouse|partner|son|daughter|child|kids?|brother|sister|mom|dad|mother|father|family|grandchild|grandkids/i.test(f.fact)
+    );
+    if (familyFacts.length > 0) {
+      const list = familyFacts.map(f => `• ${f.fact}`).join(' ');
+      return `Here's what I have about your family: ${list}`;
+    }
+    return `I don't have any family information saved yet. Tell me about your family and I'll remember it.`;
+  }
+
+  // ── Personal facts query ─────────────────────────────────────────────────────
+  if (matchesAny(msg, PERSONAL_FACT_PATTERNS)) {
+    const lines: string[] = [];
+    if (name) lines.push(`Your name is ${name}.`);
+    if (city) lines.push(`You're in ${city}.`);
+    let facts: ReturnType<typeof getTopFacts> = [];
+    try { facts = getTopFacts(8); } catch {}
+    if (facts.length > 0) {
+      lines.push(`Here's what I know about you:`);
+      facts.forEach(f => lines.push(`• ${f.fact}`));
+    }
+    if (lines.length === 0) {
+      return `I'm still learning about you. The more we talk, the more I'll know.`;
+    }
+    return lines.join(' ');
   }
 
   // ── No local answer -- send to Railway ─────────────────────────────────────
