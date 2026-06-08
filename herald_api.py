@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.80 -- empty-memory prompt: no invented facts when user asks what you know
+# v8.81 -- device_context cache bypass: device memory now fresh every turn
 # v8.79 -- GPS auto-update confirmed location on /ask/stream when coords drift > ~20mi
 # v8.78 -- MEMORY RULES: no absence-inference, no invented user facts
 # v8.77 -- set_profile_field auth fix (ADMIN_SECRET → WEBHOOK_SECRET)
@@ -63,7 +63,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.80")
+app = FastAPI(title="Herald API", version="8.81")
 
 app.add_middleware(
     CORSMiddleware,
@@ -4036,12 +4036,19 @@ def build_ask_context(data):
     _cached = _system_prompt_cache.get(_cache_key)
     _now_ts = _time.time()
     if _cached and (_now_ts - _cached[0]) < _SYSTEM_PROMPT_TTL:
+        # Cache hit — use cached prompt but always inject fresh device_context.
+        # device_context changes every turn so it must never be served from cache.
         system = _cached[1]
     else:
+        # Build without device_context — cache the expensive profile/personality part only
         system = build_system(profile, local_time, owner, empire,
             lat, lng, location_label, local_date=local_date, local_day=local_day,
-            device_context=device_context)
+            device_context=None)
         _system_prompt_cache[_cache_key] = (_now_ts, system)
+    # Always inject device_context fresh — never cached.
+    # Use naturally. Do not announce retrieval. Do not list facts robotically.
+    if device_context:
+        system = system + f"\n\nDevice memory (use naturally, never announce or list): {device_context}"
     messages = [{"role": "system", "content": system}]
     messages += history[-20:]
     messages.append({"role": "user", "content": message})
@@ -4865,7 +4872,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.80",
+        "status": "ok", "server": "herald-api", "version": "8.81",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled -- every message",
@@ -6621,7 +6628,7 @@ async def user_export(user_id: str, request: Request, secret: str = ""):
     print(f"[HERALD] /user/export: exported all personal data for {user_id}")
     return {
         "ok": True,
-        "version": "8.80",
+        "version": "8.81",
         "user_id": user_id,
         "exported_at": datetime.now().isoformat(),
         "profile": profile,
@@ -6779,7 +6786,7 @@ async def admin_dashboard(secret: str = ""):
 
         return {
             "ok": True,
-            "version": "8.80",
+            "version": "8.81",
             "user_count": len(users),
             "users": sorted(users, key=lambda x: x["msg_count"], reverse=True),
             "waitlist_count": waitlist_count,
