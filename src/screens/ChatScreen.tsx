@@ -673,10 +673,10 @@ export default function ChatScreen() {
         /\bmy ([\w]+(?:\s+[\w]+)?)'?s?\s+(?:number|phone|cell|mobile)\s+(?:is\s+)?([\d\s\-\(\)\+\.]{7,})/i
       );
       const phoneCapture2 = text.match(
-        /\bmy (?:friend|buddy|brother|sister|son|daughter|wife|husband|mom|dad|neighbor|doctor|pharmacy)\s+([\w]+)\s+(?:his|her|their)?\s*(?:number|phone|cell|mobile)\s+(?:is\s+)?([\d\s\-\(\)\+\.]{7,})/i
+        /\bmy (?:friend|buddy|brother|sister|son|daughter|wife|husband|mom|dad|neighbor|doctor|pharmacy)\s+([\w]+)\s+(?:his|her|their)?\s*(?:phone\s+)?(?:number|phone|cell|mobile)\s+(?:is\s+)?([\d\s\-\(\)\+\.]{7,})/i
       );
       const phoneCapture3 = text.match(
-        /([\w]+)'s\s+(?:number|phone|cell|mobile)\s+(?:is\s+)?([\d\s\-\(\)\+\.]{7,})/i
+        /([\w]+)'s\s+(?:phone\s+)?(?:number|phone|cell|mobile)\s+(?:is\s+)?([\d\s\-\(\)\+\.]{7,})/i
       );
 
       let captureName: string | null = null;
