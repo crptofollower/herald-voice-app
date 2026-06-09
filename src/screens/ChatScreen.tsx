@@ -675,6 +675,9 @@ export default function ChatScreen() {
       const phoneCapture2 = text.match(
         /\bmy (?:friend|buddy|brother|sister|son|daughter|wife|husband|mom|dad|neighbor|doctor|pharmacy)\s+([\w]+)\s+(?:his|her|their)?\s*(?:number|phone|cell|mobile)\s+(?:is\s+)?([\d\s\-\(\)\+\.]{7,})/i
       );
+      const phoneCapture3 = text.match(
+        /([\w]+)'s\s+(?:number|phone|cell|mobile)\s+(?:is\s+)?([\d\s\-\(\)\+\.]{7,})/i
+      );
 
       let captureName: string | null = null;
       let capturePhone: string | null = null;
@@ -683,6 +686,9 @@ export default function ChatScreen() {
         // "my friend Johnny his phone is..." — name is group 1, phone is group 2
         captureName = phoneCapture2[1].trim().toLowerCase();
         capturePhone = phoneCapture2[2].replace(/\D/g, '');
+      } else if (phoneCapture3) {
+        captureName = phoneCapture3[1].trim().toLowerCase();
+        capturePhone = phoneCapture3[2].replace(/\D/g, '');
       } else if (phoneCapture1) {
         // "my daughter's number is..." — relationship is group 1, phone is group 2
         captureName = phoneCapture1[1].trim().toLowerCase();

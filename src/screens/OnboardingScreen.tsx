@@ -237,7 +237,7 @@ export default function OnboardingScreen() {
   if (step === "code") {
     return (
       <BeachBg>
-        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "padding"} style={{ flex: 1 }}>
           <View style={styles.centered}>
             <Text style={styles.stepCaption}>Step 1 of 7  ·  about 5 minutes</Text>
             <Text style={[styles.stepHeadline, { fontFamily: "SourceSerif4-Regular" }]}>
@@ -274,7 +274,7 @@ export default function OnboardingScreen() {
   if (step === "name") {
     return (
       <BeachBg>
-        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "padding"} style={{ flex: 1 }}>
           <View style={styles.centered}>
             <Text style={styles.stepCaption}>Step 2 of 7</Text>
             <Text style={[styles.stepHeadline, { fontFamily: "SourceSerif4-Regular" }]}>
@@ -312,7 +312,7 @@ export default function OnboardingScreen() {
     const firstName = name.trim() || "there";
     return (
       <BeachBg>
-        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "padding"} style={{ flex: 1 }}>
           <View style={styles.centered}>
             <Text style={styles.stepGreeting}>Good to meet you, {firstName}.</Text>
             <Text style={[styles.stepHeadline, { fontFamily: "SourceSerif4-Regular" }]}>
