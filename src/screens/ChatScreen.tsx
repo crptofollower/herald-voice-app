@@ -666,12 +666,48 @@ export default function ChatScreen() {
     let localFactsWritten = false;
     const isTier1Read = tierDecision.tier === 1 && !!tierDecision.tier1Response;
     if (!tierDecision.actionIntent && !isTier1Read) {
+      // Phone number capture — handles natural speech variations
+      // Pattern 1: "my daughter's number is 555..." / "my daughter Sarah's number is..."
+      // Pattern 2: "my friend Johnny his phone number is..." / "my buddy Tom his cell is..."
+      const phoneCapture1 = text.match(
+        /\bmy ([\w]+(?:\s+[\w]+)?)'?s?\s+(?:number|phone|cell|mobile)\s+(?:is\s+)?([\d\s\-\(\)\+\.]{7,})/i
+      );
+      const phoneCapture2 = text.match(
+        /\bmy (?:friend|buddy|brother|sister|son|daughter|wife|husband|mom|dad|neighbor|doctor|pharmacy)\s+([\w]+)\s+(?:his|her|their)?\s*(?:number|phone|cell|mobile)\s+(?:is\s+)?([\d\s\-\(\)\+\.]{7,})/i
+      );
+
+      let captureName: string | null = null;
+      let capturePhone: string | null = null;
+
+      if (phoneCapture2) {
+        // "my friend Johnny his phone is..." — name is group 1, phone is group 2
+        captureName = phoneCapture2[1].trim().toLowerCase();
+        capturePhone = phoneCapture2[2].replace(/\D/g, '');
+      } else if (phoneCapture1) {
+        // "my daughter's number is..." — relationship is group 1, phone is group 2
+        captureName = phoneCapture1[1].trim().toLowerCase();
+        capturePhone = phoneCapture1[2].replace(/\D/g, '');
+      }
+
+      if (captureName && capturePhone && capturePhone.length >= 7) {
+        try {
+          const { findContactByRelationship, findContactByName, writeContact: writeContactFn } = await import('../db/contactsDB');
+          const existing = findContactByRelationship(captureName) || findContactByName(captureName);
+          if (existing) {
+            writeContactFn({ name: existing.name, relationship: existing.relationship ?? captureName, phone: capturePhone, importance: existing.importance });
+          } else {
+            writeContactFn({ name: captureName, relationship: captureName, phone: capturePhone, importance: 7 });
+          }
+          localFactsWritten = true;
+        } catch {}
+      }
+
       // Extract facts locally — skip calendar/medical/profile reads (Bug 1)
       try {
         const beforeCount = getFactCount();
         extractFactsLocally(text);
         const afterCount = getFactCount();
-        localFactsWritten = afterCount > beforeCount;
+        if (afterCount > beforeCount) localFactsWritten = true;
       } catch {}
       if (!localFactsWritten && isMedicalCaptureIntent(text) && userId) {
           try {
@@ -686,42 +722,6 @@ export default function ChatScreen() {
           /\bi('?m| am) [\d]+ years? old\b/i.test(text) ||
           /\bi live in\b/i.test(text);
         if (isPersonalWrite) localFactsWritten = true;
-
-        // Phone number capture — handles natural speech variations
-        // Pattern 1: "my daughter's number is 555..." / "my daughter Sarah's number is..."
-        // Pattern 2: "my friend Johnny his phone number is..." / "my buddy Tom his cell is..."
-        const phoneCapture1 = text.match(
-          /\bmy ([\w]+(?:\s+[\w]+)?)'?s?\s+(?:number|phone|cell|mobile)\s+(?:is\s+)?([\d\s\-\(\)\+\.]{7,})/i
-        );
-        const phoneCapture2 = text.match(
-          /\bmy (?:friend|buddy|brother|sister|son|daughter|wife|husband|mom|dad|neighbor|doctor|pharmacy)\s+([\w]+)\s+(?:his|her|their)?\s*(?:number|phone|cell|mobile)\s+(?:is\s+)?([\d\s\-\(\)\+\.]{7,})/i
-        );
-
-        let captureName: string | null = null;
-        let capturePhone: string | null = null;
-
-        if (phoneCapture2) {
-          // "my friend Johnny his phone is..." — name is group 1, phone is group 2
-          captureName = phoneCapture2[1].trim().toLowerCase();
-          capturePhone = phoneCapture2[2].replace(/\D/g, '');
-        } else if (phoneCapture1) {
-          // "my daughter's number is..." — relationship is group 1, phone is group 2
-          captureName = phoneCapture1[1].trim().toLowerCase();
-          capturePhone = phoneCapture1[2].replace(/\D/g, '');
-        }
-
-        if (captureName && capturePhone && capturePhone.length >= 7) {
-          try {
-            const { findContactByRelationship, findContactByName, writeContact: writeContactFn } = await import('../db/contactsDB');
-            const existing = findContactByRelationship(captureName) || findContactByName(captureName);
-            if (existing) {
-              writeContactFn({ name: existing.name, relationship: existing.relationship ?? captureName, phone: capturePhone, importance: existing.importance });
-            } else {
-              writeContactFn({ name: captureName, relationship: captureName, phone: capturePhone, importance: 7 });
-            }
-            localFactsWritten = true;
-          } catch {}
-        }
       }
     }
     const isOffline = !networkState.isConnected || !networkState.isInternetReachable;
@@ -2024,7 +2024,7 @@ export default function ChatScreen() {
       <SafeAreaView style={styles.safe}>
         <KeyboardAvoidingView
           style={styles.flex}
-          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          behavior={Platform.OS === "ios" ? "padding" : "padding"}
           keyboardVerticalOffset={0}
         >
           <View style={styles.header}>
