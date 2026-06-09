@@ -687,25 +687,40 @@ export default function ChatScreen() {
           /\bi live in\b/i.test(text);
         if (isPersonalWrite) localFactsWritten = true;
 
-        // Phone number capture — "my daughter's number is 555-1234"
-        const phoneCapture = text.match(
-          /\bmy ([\w\s-]+?)(?:'?s)?\s+(?:number|phone|cell|mobile)\s+(?:is\s+)?([\d\s\-\(\)\+\.]{7,})/i
+        // Phone number capture — handles natural speech variations
+        // Pattern 1: "my daughter's number is 555..." / "my daughter Sarah's number is..."
+        // Pattern 2: "my friend Johnny his phone number is..." / "my buddy Tom his cell is..."
+        const phoneCapture1 = text.match(
+          /\bmy ([\w]+(?:\s+[\w]+)?)'?s?\s+(?:number|phone|cell|mobile)\s+(?:is\s+)?([\d\s\-\(\)\+\.]{7,})/i
         );
-        if (phoneCapture) {
-          const relationship = phoneCapture[1].trim().toLowerCase();
-          const phone = phoneCapture[2].replace(/\D/g, '');
-          if (phone.length >= 7) {
-            try {
-              const { findContactByRelationship, writeContact: writeContactFn } = await import('../db/contactsDB');
-              const existing = findContactByRelationship(relationship);
-              if (existing) {
-                writeContactFn({ name: existing.name, relationship, phone, importance: existing.importance });
-              } else {
-                writeContactFn({ name: relationship, relationship, phone, importance: 7 });
-              }
-              localFactsWritten = true;
-            } catch {}
-          }
+        const phoneCapture2 = text.match(
+          /\bmy (?:friend|buddy|brother|sister|son|daughter|wife|husband|mom|dad|neighbor|doctor|pharmacy)\s+([\w]+)\s+(?:his|her|their)?\s*(?:number|phone|cell|mobile)\s+(?:is\s+)?([\d\s\-\(\)\+\.]{7,})/i
+        );
+
+        let captureName: string | null = null;
+        let capturePhone: string | null = null;
+
+        if (phoneCapture2) {
+          // "my friend Johnny his phone is..." — name is group 1, phone is group 2
+          captureName = phoneCapture2[1].trim().toLowerCase();
+          capturePhone = phoneCapture2[2].replace(/\D/g, '');
+        } else if (phoneCapture1) {
+          // "my daughter's number is..." — relationship is group 1, phone is group 2
+          captureName = phoneCapture1[1].trim().toLowerCase();
+          capturePhone = phoneCapture1[2].replace(/\D/g, '');
+        }
+
+        if (captureName && capturePhone && capturePhone.length >= 7) {
+          try {
+            const { findContactByRelationship, findContactByName, writeContact: writeContactFn } = await import('../db/contactsDB');
+            const existing = findContactByRelationship(captureName) || findContactByName(captureName);
+            if (existing) {
+              writeContactFn({ name: existing.name, relationship: existing.relationship ?? captureName, phone: capturePhone, importance: existing.importance });
+            } else {
+              writeContactFn({ name: captureName, relationship: captureName, phone: capturePhone, importance: 7 });
+            }
+            localFactsWritten = true;
+          } catch {}
         }
       }
     }

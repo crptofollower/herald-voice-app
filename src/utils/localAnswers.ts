@@ -48,6 +48,10 @@ const MEDICATION_PATTERNS = [
   /are there any medications (you have |saved )?(for me)?/i,
   /do i take (any )?(medications?|meds?|pills?)/i,
   /what pills (am i|do i) take/i,
+  /do you have any medical information (on|about|for) me/i,
+  /what medical information do you have/i,
+  /do you have my (medical|health) (information|history|records?)/i,
+  /what('?s| is) my (medical|health) history/i,
 ];
 
 const FAMILY_PATTERNS = [
