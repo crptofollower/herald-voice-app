@@ -221,6 +221,7 @@ const NOTE_READ_SIGNALS = [
 const LIST_ADD_SIGNALS = [
   /\badd (.+) to (my |the )?(grocery |shopping |to.?do |)\blist\b/i,
   /\bput (.+) on (my |the )?(grocery |shopping |to.?do |)\blist\b/i,
+  /\badd to (my |the )?(grocery |shopping |to.?do )?\blist\b (.+)/i,
 ];
 
 const LIST_READ_SIGNALS = [
@@ -251,9 +252,9 @@ const TODO_READ_SIGNALS = [
   /\bwhat('s| is) on my (to.?do|todo) list\b/i,
   /\bshow (me )?my (to.?do|todo)s?\b/i,
   /\bwhat do I (need to|have to) do\b/i,
-  /\bwhat('s| is) on my list\b/i,
   /\bany (open |pending )?(to.?do|todo)s?\b/i,
   /\bwhat (tasks|things) do I have\b/i,
+  /\bdo I have (anything |something )?on my (to.?do|todo) list\b/i,
 ];
 
 const TODO_COMPLETE_SIGNALS = [
@@ -442,10 +443,13 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   // Device: list add — write to SQLite, zero network
   if (LIST_ADD_SIGNALS.some((p) => p.test(msg))) {
     const addMatch = msg.match(/\badd (.+?) to (?:my |the )?(\w+)?\s*list/i) ??
-                     msg.match(/\bput (.+?) on (?:my |the )?(\w+)?\s*list/i);
+                     msg.match(/\bput (.+?) on (?:my |the )?(\w+)?\s*list/i) ??
+                     msg.match(/\badd to (?:my |the )?(\w+)?\s*list\s+(.+)/i);
     if (addMatch) {
-      const raw = addMatch[1]?.trim() ?? '';
-      const listName = (addMatch[2]?.trim() ?? 'grocery').toLowerCase();
+      const isInverted = /\badd to (?:my |the )?\w*\s*list\s+/i.test(msg);
+      const raw = isInverted ? (addMatch[2]?.trim() ?? '') : (addMatch[1]?.trim() ?? '');
+      const listNameRaw = isInverted ? (addMatch[1]?.trim() ?? '') : (addMatch[2]?.trim() ?? '');
+      const listName = (listNameRaw || 'grocery').toLowerCase();
       const items = raw
         .split(/,|\band\b/i)
         .map(s => s.trim())
