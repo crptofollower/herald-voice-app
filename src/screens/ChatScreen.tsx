@@ -707,51 +707,55 @@ export default function ChatScreen() {
     const networkState = await Network.getNetworkStateAsync();
     let localFactsWritten = false;
     const isTier1Read = tierDecision.tier === 1 && !!tierDecision.tier1Response;
+
+    // Phone capture runs unconditionally — dual-intent sentences need both phone + medical
+    const phoneCapture1 = text.match(
+      /\bmy ([\w]+(?:\s+[\w]+)?)'?s?\s+(?:number|phone|cell|mobile)\s+(?:is\s+)?([\d\s\-\(\)\+\.]{7,})/i
+    );
+    const phoneCapture2 = text.match(
+      /\bmy (?:friend|buddy|brother|sister|son|daughter|wife|husband|mom|dad|neighbor|doctor|pharmacy)\s+([\w]+)\s+(?:his|her|their)?\s*(?:phone\s+)?(?:number|phone|cell|mobile)\s+(?:is\s+)?([\d\s\-\(\)\+\.]{7,})/i
+    );
+    const phoneCapture3 = text.match(
+      /([\w]+)'s\s+(?:phone\s+)?(?:number|phone|cell|mobile)\s+(?:is\s+)?([\d\s\-\(\)\+\.]{7,})/i
+    );
+    const relationMatch = text.match(/\bmy (friend|buddy|brother|sister|son|daughter|wife|husband|mom|dad|neighbor|doctor|pharmacy)\b/i);
+    const captureRelationship = relationMatch ? relationMatch[1].trim().toLowerCase() : null;
+
+    let captureName: string | null = null;
+    let capturePhone: string | null = null;
+
+    if (phoneCapture2) {
+      captureName = phoneCapture2[1].trim().toLowerCase();
+      capturePhone = phoneCapture2[2].replace(/\D/g, '');
+    } else if (phoneCapture3) {
+      captureName = phoneCapture3[1].trim().toLowerCase();
+      capturePhone = phoneCapture3[2].replace(/\D/g, '');
+    } else if (phoneCapture1) {
+      captureName = phoneCapture1[1].trim().toLowerCase();
+      capturePhone = phoneCapture1[2].replace(/\D/g, '');
+    }
+
+    if (captureName && capturePhone && capturePhone.length >= 7) {
+      const isShortNumber = capturePhone.length < 10;
+      try {
+        const { findContactByRelationship, findContactByName, writeContact: writeContactFn } = await import('../db/contactsDB');
+        const existing = findContactByRelationship(captureName) || findContactByName(captureName);
+        localFactsWritten = true;
+        if (existing) {
+          writeContactFn({ name: existing.name, relationship: existing.relationship ?? captureRelationship ?? captureName, phone: capturePhone, importance: existing.importance });
+        } else {
+          writeContactFn({ name: captureName, relationship: captureRelationship ?? captureName, phone: capturePhone, importance: 7 });
+        }
+        if (isShortNumber) {
+          const warning = `Got it — I saved ${captureName}'s number, but it looks a bit short. Want to double-check it?`;
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          addMessage({ id: generateId('msg'), role: 'assistant', content: warning, timestamp: Date.now() });
+          speak(warning);
+        }
+      } catch (e) { console.warn('phoneCapture write failed:', e); }
+    }
+
     if (!tierDecision.actionIntent && !isTier1Read) {
-      // Phone number capture — handles natural speech variations
-      // Pattern 1: "my daughter's number is 555..." / "my daughter Sarah's number is..."
-      // Pattern 2: "my friend Johnny his phone number is..." / "my buddy Tom his cell is..."
-      const phoneCapture1 = text.match(
-        /\bmy ([\w]+(?:\s+[\w]+)?)'?s?\s+(?:number|phone|cell|mobile)\s+(?:is\s+)?([\d\s\-\(\)\+\.]{7,})/i
-      );
-      const phoneCapture2 = text.match(
-        /\bmy (?:friend|buddy|brother|sister|son|daughter|wife|husband|mom|dad|neighbor|doctor|pharmacy)\s+([\w]+)\s+(?:his|her|their)?\s*(?:phone\s+)?(?:number|phone|cell|mobile)\s+(?:is\s+)?([\d\s\-\(\)\+\.]{7,})/i
-      );
-      const phoneCapture3 = text.match(
-        /([\w]+)'s\s+(?:phone\s+)?(?:number|phone|cell|mobile)\s+(?:is\s+)?([\d\s\-\(\)\+\.]{7,})/i
-      );
-      const relationMatch = text.match(/\bmy (friend|buddy|brother|sister|son|daughter|wife|husband|mom|dad|neighbor|doctor|pharmacy)\b/i);
-      const captureRelationship = relationMatch ? relationMatch[1].trim().toLowerCase() : null;
-
-      let captureName: string | null = null;
-      let capturePhone: string | null = null;
-
-      if (phoneCapture2) {
-        // "my friend Johnny his phone is..." — name is group 1, phone is group 2
-        captureName = phoneCapture2[1].trim().toLowerCase();
-        capturePhone = phoneCapture2[2].replace(/\D/g, '');
-      } else if (phoneCapture3) {
-        captureName = phoneCapture3[1].trim().toLowerCase();
-        capturePhone = phoneCapture3[2].replace(/\D/g, '');
-      } else if (phoneCapture1) {
-        // "my daughter's number is..." — relationship is group 1, phone is group 2
-        captureName = phoneCapture1[1].trim().toLowerCase();
-        capturePhone = phoneCapture1[2].replace(/\D/g, '');
-      }
-
-      if (captureName && capturePhone && capturePhone.length >= 7) {
-        try {
-          const { findContactByRelationship, findContactByName, writeContact: writeContactFn } = await import('../db/contactsDB');
-          const existing = findContactByRelationship(captureName) || findContactByName(captureName);
-          localFactsWritten = true;
-          if (existing) {
-            writeContactFn({ name: existing.name, relationship: existing.relationship ?? captureRelationship ?? captureName, phone: capturePhone, importance: existing.importance });
-          } else {
-            writeContactFn({ name: captureName, relationship: captureRelationship ?? captureName, phone: capturePhone, importance: 7 });
-          }
-        } catch (e) { console.warn('phoneCapture write failed:', e); }
-      }
-
       // Extract facts locally — skip calendar/medical/profile reads (Bug 1)
       try {
         const beforeCount = getFactCount();
