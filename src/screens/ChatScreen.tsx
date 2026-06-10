@@ -678,6 +678,8 @@ export default function ChatScreen() {
       const phoneCapture3 = text.match(
         /([\w]+)'s\s+(?:phone\s+)?(?:number|phone|cell|mobile)\s+(?:is\s+)?([\d\s\-\(\)\+\.]{7,})/i
       );
+      const relationMatch = text.match(/\bmy (friend|buddy|brother|sister|son|daughter|wife|husband|mom|dad|neighbor|doctor|pharmacy)\b/i);
+      const captureRelationship = relationMatch ? relationMatch[1].trim().toLowerCase() : null;
 
       let captureName: string | null = null;
       let capturePhone: string | null = null;
@@ -699,13 +701,13 @@ export default function ChatScreen() {
         try {
           const { findContactByRelationship, findContactByName, writeContact: writeContactFn } = await import('../db/contactsDB');
           const existing = findContactByRelationship(captureName) || findContactByName(captureName);
-          if (existing) {
-            writeContactFn({ name: existing.name, relationship: existing.relationship ?? captureName, phone: capturePhone, importance: existing.importance });
-          } else {
-            writeContactFn({ name: captureName, relationship: captureName, phone: capturePhone, importance: 7 });
-          }
           localFactsWritten = true;
-        } catch {}
+          if (existing) {
+            writeContactFn({ name: existing.name, relationship: existing.relationship ?? captureRelationship ?? captureName, phone: capturePhone, importance: existing.importance });
+          } else {
+            writeContactFn({ name: captureName, relationship: captureRelationship ?? captureName, phone: capturePhone, importance: 7 });
+          }
+        } catch (e) { console.warn('phoneCapture write failed:', e); }
       }
 
       // Extract facts locally — skip calendar/medical/profile reads (Bug 1)
