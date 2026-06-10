@@ -181,6 +181,9 @@ const CALL_SIGNALS = [
   /\bgive\s+\w+\s+a (call|ring)\b/i,
 ];
 
+/** Phone-number statement — let ChatScreen phone-capture handle, not call intent. */
+const CALL_NUMBER_STATEMENT = /(?:number|phone|cell|mobile)\s+(?:is\s+)?[\d\s\-\(\)\+\.]{7,}/i;
+
 const REMINDER_SIGNALS = [
   /\bremind me\b/i,
   /\bdon't let me forget\b/i,
@@ -356,7 +359,7 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   }
 
   // Device: call — resolves contact on device, fires tel: intent
-  if (CALL_SIGNALS.some((p) => p.test(msg)) && !REMINDER_SIGNALS.some((p) => p.test(msg))) {
+  if (CALL_SIGNALS.some((p) => p.test(msg)) && !REMINDER_SIGNALS.some((p) => p.test(msg)) && !CALL_NUMBER_STATEMENT.test(msg)) {
     const CALL_EXCLUDE = /^(me|you|back|again|later|now|soon|ahead|us|them|it|that)$/i;
     const contactMatch =
       msg.match(/\b(?:call|phone|dial|ring)\s+((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+)?\w+(?:\s+\w+)?)/i) ??
