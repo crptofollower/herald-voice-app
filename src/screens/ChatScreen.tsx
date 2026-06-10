@@ -224,6 +224,7 @@ export default function ChatScreen() {
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const tokenBatchRef = useRef<string>('');
   const batchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingTodoCompleteRef = useRef<{ id: string; body: string } | null>(null);
 
   // ── Scroll snap prevention ────────────────────────────────────────────────
   // Only auto-scroll to bottom when user is already near the bottom.
@@ -659,6 +660,47 @@ export default function ChatScreen() {
       }
     }
 
+    // Pending todo completion confirm — check before routing
+    const YES = /^(yes|yeah|yep|correct|right|10-4)$/i;
+    const NO = /^(no|nope|not yet|negative)$/i;
+    if (pendingTodoCompleteRef.current) {
+      const pending = pendingTodoCompleteRef.current;
+      if (YES.test(text.trim())) {
+        pendingTodoCompleteRef.current = null;
+        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+        try {
+          const { getDB } = await import('../db/schema');
+          const db = getDB();
+          db.runSync(
+            `UPDATE list_items SET checked = 1 WHERE id = ?;`,
+            [pending.id]
+          );
+          const reply = `Done — crossed off '${pending.body}'.`;
+          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+          speak(reply);
+        } catch {
+          const reply = `Couldn't update that. Try again.`;
+          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+          speak(reply);
+        }
+        sendingRef.current = false;
+        setInputText('');
+        return;
+      }
+      if (NO.test(text.trim())) {
+        pendingTodoCompleteRef.current = null;
+        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+        const reply = `Got it — leaving '${pending.body}' on your list.`;
+        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+        speak(reply);
+        sendingRef.current = false;
+        setInputText('');
+        return;
+      }
+      // Not a yes/no — clear pending and fall through to normal routing
+      pendingTodoCompleteRef.current = null;
+    }
+
     const tierDecision = await classifyQuery(text);
 
     // ── Offline check -- skip network, answer from device or give warm message ──
@@ -1027,24 +1069,25 @@ export default function ChatScreen() {
           try {
             const { getDB } = await import('../db/schema');
             const db = getDB();
-            const listName = tierDecision.actionIntent.listName;
-            // Get or create list
-            let list = db.getFirstSync<{ id: string }>(
-              `SELECT id FROM lists WHERE name = ?;`, [listName]
-            );
+            const { items, listName } = tierDecision.actionIntent;
+            let list = db.getFirstSync<{ id: string }>(`SELECT id FROM lists WHERE name = ?;`, [listName]);
             if (!list) {
               const listId = `list_${Date.now()}`;
-              db.runSync(
-                `INSERT INTO lists (id, name, created_at) VALUES (?, ?, ?);`,
-                [listId, listName, new Date().toISOString()]
-              );
+              db.runSync(`INSERT INTO lists (id, name, created_at) VALUES (?, ?, ?);`, [listId, listName, new Date().toISOString()]);
               list = { id: listId };
             }
-            db.runSync(
-              `INSERT INTO list_items (id, list_id, body, checked, created_at) VALUES (?, ?, ?, 0, ?);`,
-              [`item_${Date.now()}`, list.id, tierDecision.actionIntent.item, new Date().toISOString()]
-            );
-            const reply = `Added ${tierDecision.actionIntent.item} to your ${listName} list.`;
+            for (const item of items) {
+              db.runSync(
+                `INSERT INTO list_items (id, list_id, body, checked, created_at) VALUES (?, ?, ?, 0, ?);`,
+                [`item_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, list.id, item, new Date().toISOString()]
+              );
+            }
+            const preview = items.length <= 3
+              ? items.join(', ')
+              : `${items.slice(0, 2).join(', ')} and ${items.length - 2} more`;
+            const reply = items.length === 1
+              ? `Added ${items[0]} to your ${listName} list.`
+              : `Added ${items.length} items to your ${listName} list: ${preview}. Sound right?`;
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
           } catch {
@@ -1086,6 +1129,110 @@ export default function ChatScreen() {
             speak(reply);
           } catch {
             const reply = `I couldn't read your list right now. Try again.`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          }
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+
+        if (tierDecision.actionIntent.type === 'todo_add') {
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          try {
+            const { getDB } = await import('../db/schema');
+            const db = getDB();
+            let todoList = db.getFirstSync<{ id: string }>(`SELECT id FROM lists WHERE name = ?;`, ['todos']);
+            if (!todoList) {
+              const listId = `list_todos_${Date.now()}`;
+              db.runSync(`INSERT INTO lists (id, name, created_at) VALUES (?, ?, ?);`, [listId, 'todos', new Date().toISOString()]);
+              todoList = { id: listId };
+            }
+            db.runSync(
+              `INSERT INTO list_items (id, list_id, body, checked, created_at) VALUES (?, ?, ?, 0, ?);`,
+              [`todo_${Date.now()}`, todoList.id, tierDecision.actionIntent.body, new Date().toISOString()]
+            );
+            const openCount = db.getFirstSync<{ n: number }>(
+              `SELECT COUNT(*) as n FROM list_items li JOIN lists l ON l.id = li.list_id WHERE l.name = 'todos' AND li.checked = 0;`
+            )?.n ?? 1;
+            const reply = openCount === 1
+              ? `Got it — '${tierDecision.actionIntent.body}' is on your list.`
+              : `Got it — '${tierDecision.actionIntent.body}' added. You've got ${openCount} open to-dos.`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          } catch {
+            const reply = `Couldn't save that. Try again.`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          }
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+
+        if (tierDecision.actionIntent.type === 'todo_read') {
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          try {
+            const { getDB } = await import('../db/schema');
+            const db = getDB();
+            const items = db.getAllSync<{ body: string }>(
+              `SELECT li.body FROM list_items li JOIN lists l ON l.id = li.list_id WHERE l.name = 'todos' AND li.checked = 0 ORDER BY li.created_at ASC;`
+            );
+            const reply = items.length === 0
+              ? `You're all clear — nothing on your to-do list.`
+              : `You've got ${items.length} open: ${items.map(i => i.body).join(', ')}.`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          } catch {
+            const reply = `Couldn't read your to-dos right now. Try again.`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          }
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+
+        if (tierDecision.actionIntent.type === 'todo_complete') {
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          try {
+            const { getDB } = await import('../db/schema');
+            const db = getDB();
+            const items = db.getAllSync<{ id: string; body: string }>(
+              `SELECT li.id, li.body FROM list_items li JOIN lists l ON l.id = li.list_id WHERE l.name = 'todos' AND li.checked = 0;`
+            );
+            if (items.length === 0) {
+              const reply = `Nothing open on your to-do list.`;
+              addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+              speak(reply);
+              sendingRef.current = false;
+              setInputText('');
+              return;
+            }
+            const rawLower = tierDecision.actionIntent.raw.toLowerCase();
+            const stopWords = new Set(['i','the','a','an','to','of','and','or','my','me','it','that','this','have','had','been','was','did','do']);
+            const keywords = rawLower.split(/\W+/).filter(w => w.length > 2 && !stopWords.has(w));
+            let bestMatch: { id: string; body: string } | null = null;
+            let bestScore = 0;
+            for (const item of items) {
+              const itemLower = item.body.toLowerCase();
+              const score = keywords.filter(k => itemLower.includes(k)).length;
+              if (score > bestScore) { bestScore = score; bestMatch = item; }
+            }
+            if (!bestMatch || bestScore === 0) {
+              const reply = `I couldn't match that to anything on your list. Want me to read your to-dos?`;
+              addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+              speak(reply);
+              sendingRef.current = false;
+              setInputText('');
+              return;
+            }
+            pendingTodoCompleteRef.current = bestMatch;
+            const reply = `Just to make sure — you're saying you've completed '${bestMatch.body}'? I can mark that off your list.`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          } catch {
+            const reply = `Something went wrong. Try again.`;
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
           }
