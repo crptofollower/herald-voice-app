@@ -28,8 +28,11 @@ export interface TierDecision {
     | { type: 'reminder'; body: string; time: string }
     | { type: 'note_capture'; body: string }
     | { type: 'note_read' }
-    | { type: 'list_add'; item: string; listName: string }
+    | { type: 'list_add'; items: string[]; listName: string }
     | { type: 'list_read'; listName: string }
+    | { type: 'todo_add'; body: string }
+    | { type: 'todo_read' }
+    | { type: 'todo_complete'; raw: string }
     | { type: 'calendar_write'; value: string }
     | { type: 'medical_capture'; event: MedicalEvent };
   localContext?: LocalContext;
@@ -231,6 +234,38 @@ const LIST_READ_SIGNALS = [
   /\bdo i have a (grocery |shopping |to.?do )?\blist\b/i,
 ];
 
+const TODO_ADD_SIGNALS = [
+  /\bI need to\b/i,
+  /\bI have to\b/i,
+  /\bI gotta\b/i,
+  /\bI've got to\b/i,
+  /\bdon't let me forget\b/i,
+  /\bI should\b/i,
+  /\bI must\b/i,
+];
+
+// Dates that route to reminder/calendar instead of todo
+const TODO_DATE_SIGNALS = /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|this week|at \d|by \d|\d+am|\d+pm|tonight|morning|afternoon|evening)\b/i;
+
+const TODO_READ_SIGNALS = [
+  /\bwhat('s| is) on my (to.?do|todo) list\b/i,
+  /\bshow (me )?my (to.?do|todo)s?\b/i,
+  /\bwhat do I (need to|have to) do\b/i,
+  /\bwhat('s| is) on my list\b/i,
+  /\bany (open |pending )?(to.?do|todo)s?\b/i,
+  /\bwhat (tasks|things) do I have\b/i,
+];
+
+const TODO_COMPLETE_SIGNALS = [
+  /\bI (called|finished|completed|did|done|took care of|handled)\b/i,
+  /\bcross (off|that off)\b/i,
+  /\bmark (that |it )?done\b/i,
+  /\bI already\b/i,
+  /\bthat('s| is) done\b/i,
+  /\bI went to\b/i,
+  /\bI took\b/i,
+];
+
 // ─── classifyQuery ────────────────────────────────────────────────────────────
 
 async function getTier1CalendarEvents(
@@ -380,14 +415,44 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     return { tier: 1, actionIntent: { type: 'note_read' }, reason: 'action:note_read' };
   }
 
+  // Device: todo complete — fuzzy match against open items, confirm before write
+  if (TODO_COMPLETE_SIGNALS.some((p) => p.test(msg))) {
+    return {
+      tier: 1,
+      actionIntent: { type: 'todo_complete', raw: msg },
+      reason: 'action:todo_complete',
+    };
+  }
+
+  // Device: todo read
+  if (TODO_READ_SIGNALS.some((p) => p.test(msg))) {
+    return { tier: 1, actionIntent: { type: 'todo_read' }, reason: 'action:todo_read' };
+  }
+
+  // Device: todo add — trigger phrases WITHOUT a resolvable date (date = reminder, not todo)
+  if (TODO_ADD_SIGNALS.some((p) => p.test(msg)) && !TODO_DATE_SIGNALS.test(msg)) {
+    const body = msg
+      .replace(/^(I need to|I have to|I gotta|I've got to|don't let me forget|I should|I must)\s*/i, '')
+      .trim();
+    if (body.length > 2) {
+      return { tier: 1, actionIntent: { type: 'todo_add', body }, reason: 'action:todo_add' };
+    }
+  }
+
   // Device: list add — write to SQLite, zero network
   if (LIST_ADD_SIGNALS.some((p) => p.test(msg))) {
     const addMatch = msg.match(/\badd (.+?) to (?:my |the )?(\w+)?\s*list/i) ??
                      msg.match(/\bput (.+?) on (?:my |the )?(\w+)?\s*list/i);
     if (addMatch) {
-      const item = addMatch[1]?.trim() ?? '';
+      const raw = addMatch[1]?.trim() ?? '';
       const listName = (addMatch[2]?.trim() ?? 'grocery').toLowerCase();
-      if (item) return { tier: 1, actionIntent: { type: 'list_add', item, listName }, reason: 'action:list_add' };
+      const items = raw
+        .split(/,|\band\b/i)
+        .map(s => s.trim())
+        .filter(s => s.length > 0);
+      if (items.length > 0) {
+        return { tier: 1, actionIntent: { type: 'list_add', items, listName }, reason: 'action:list_add' };
+      }
     }
   }
 
