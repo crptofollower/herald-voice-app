@@ -38,7 +38,7 @@ import { writeProfileFromOnboarding } from '../routing/tier1Responses';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Step = "code" | "name" | "ainame" | "promise" | "notify" | "location" | "mic" | "persona" | "confirm";
+type Step = "welcome" | "code" | "name" | "ainame" | "promise" | "notify" | "location" | "mic" | "persona" | "confirm";
 
 const PERSONA_KEYS = Object.keys(PERSONAS) as PersonaKey[];
 
@@ -47,6 +47,7 @@ const BG_BOTTOM = "#0D2440";
 const ACCENT    = "#1A9B8A";
 
 const HERALD_SPEECH: Record<string, string> = {
+  welcome:  "Hi, I'm Herald. Think of me as a friend with a perfect memory. You tell me what matters, your appointments, your medications, the people in your life, and I remember it, so you don't have to. I only know what you tell me. Your information stays on your phone, not in the cloud somewhere. Nothing here is permanent. You can change anything later, or stop whenever you like. Ready when you are.",
   code:     "Let's get you set up. I will walk you through it one step at a time. Nothing here is permanent.",
   name:     "Who do I have the pleasure of meeting? Just your first name is perfect.",
   ainame:   "Good to meet you. What would you like to call me? Pick a name that feels easy to say out loud.",
@@ -98,10 +99,28 @@ function FadeIn({ children }: { children: React.ReactNode }) {
   return <Animated.View style={[{ flex: 1 }, { opacity }]}>{children}</Animated.View>;
 }
 
+const BEACH_IMAGE = require("../../assets/beach.jpg");
+
+const BeachBg = ({ children }: { children: React.ReactNode }) => (
+  <ImageBackground
+    source={BEACH_IMAGE}
+    style={{ flex: 1 }}
+    resizeMode="cover"
+  >
+    <LinearGradient
+      colors={["rgba(13,18,23,0.88)", "rgba(13,18,23,0.78)", "rgba(13,18,23,0.85)"]}
+      locations={[0, 0.5, 1]}
+      style={{ flex: 1 }}
+    >
+      <FadeIn>{children}</FadeIn>
+    </LinearGradient>
+  </ImageBackground>
+);
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function OnboardingScreen() {
-  const [step, setStep]               = useState<Step>("code");
+  const [step, setStep]               = useState<Step>("welcome");
   const [accessCode, setAccessCode]   = useState("");
   const [codeError, setCodeError]     = useState("");
   const [name, setName]               = useState("");
@@ -131,24 +150,6 @@ export default function OnboardingScreen() {
   }, [step]);
 
   useEffect(() => () => { Speech.stop(); }, []);
-
-  const BEACH_IMAGE = require("../../assets/beach.jpg");
-
-  const BeachBg = ({ children }: { children: React.ReactNode }) => (
-    <ImageBackground
-      source={BEACH_IMAGE}
-      style={{ flex: 1 }}
-      resizeMode="cover"
-    >
-      <LinearGradient
-        colors={["rgba(13,18,23,0.88)", "rgba(13,18,23,0.78)", "rgba(13,18,23,0.85)"]}
-        locations={[0, 0.5, 1]}
-        style={{ flex: 1 }}
-      >
-        <FadeIn>{children}</FadeIn>
-      </LinearGradient>
-    </ImageBackground>
-  );
 
   // ── Permission helpers ────────────────────────────────────────────────────
   const requestMic = async () => {
@@ -234,6 +235,38 @@ export default function OnboardingScreen() {
     }
   };
 
+  if (step === "welcome") {
+    return (
+      <BeachBg>
+        <View style={styles.centered}>
+          <Text style={[styles.stepHeadline, { fontFamily: "SourceSerif4-Regular" }]}>
+            Hi — I'm Herald.
+          </Text>
+          <Text style={styles.stepBody}>
+            Think of me as a friend with a perfect memory. You tell me what matters —
+            your appointments, your medications, the people in your life — and I remember it, so you
+            don't have to.
+          </Text>
+          <Text style={styles.stepBody}>
+            I only know what you tell me. Your information stays on your phone, not in
+            the cloud somewhere. Nothing here is permanent — you can change anything later, or stop
+            whenever you like.
+          </Text>
+          <Text style={styles.stepBody}>
+            Ready when you are.
+          </Text>
+          <TouchableOpacity
+            style={[styles.primaryBtn, { backgroundColor: "#4dd4d6" }]}
+            onPress={() => setStep("code")}
+            accessibilityRole="button"
+          >
+            <Text style={styles.primaryBtnText}>Get started</Text>
+          </TouchableOpacity>
+        </View>
+      </BeachBg>
+    );
+  }
+
   if (step === "code") {
     return (
       <BeachBg>
@@ -247,6 +280,7 @@ export default function OnboardingScreen() {
               I'll walk you through it one step at a time. Nothing here is permanent — you can change any of it later, or stop me whenever you like.
             </Text>
             <TextInput
+              autoFocus={true}
               style={[styles.codeInput, codeError ? styles.inputError : null]}
               placeholder="Enter your invite code"
               placeholderTextColor="rgba(255,255,255,0.35)"
@@ -284,6 +318,7 @@ export default function OnboardingScreen() {
               Just your first name is perfect — it's how I'll greet you from now on.
             </Text>
             <TextInput
+              autoFocus={true}
               style={styles.nameInput}
               placeholder="Type your name"
               placeholderTextColor="rgba(255,255,255,0.35)"
@@ -339,6 +374,7 @@ export default function OnboardingScreen() {
               ))}
             </View>
             <TextInput
+              autoFocus={true}
               style={styles.nameInput}
               placeholder="Or type something else…"
               placeholderTextColor="rgba(255,255,255,0.35)"
