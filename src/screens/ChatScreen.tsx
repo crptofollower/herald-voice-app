@@ -604,7 +604,9 @@ export default function ChatScreen() {
         if (pending.slot === 'doctor_name') {
           db.runSync('UPDATE medical_records SET doctor_name = ? WHERE id = ?', [text.trim(), pending.record_id]);
         } else if (pending.slot === 'dosage') {
-          db.runSync('UPDATE medications SET dosage = ? WHERE id = ?', [text.trim(), pending.record_id]);
+          const dosageMatch = text.match(/(\d+\s*(?:mg|mcg|ml|g|units?|tablets?|pills?|drops?|puffs?))/i);
+          const dosageValue = dosageMatch ? dosageMatch[1].trim() : text.trim();
+          db.runSync('UPDATE medications SET dosage = ? WHERE id = ?', [dosageValue, pending.record_id]);
         } else if (pending.slot === 'drug_name') {
           db.runSync('UPDATE medications SET name = ? WHERE id = ?', [text.trim(), pending.record_id]);
         }
