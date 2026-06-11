@@ -663,8 +663,8 @@ export default function ChatScreen() {
     }
 
     // Pending todo completion confirm — check before routing
-    const YES = /^(yes|yeah|yep|correct|right|10-4)$/i;
-    const NO = /^(no|nope|not yet|negative)$/i;
+    const YES = /^(yes|yeah|yep|correct|right|10-4)\b/i;
+    const NO = /^(no|nope|not yet|negative)\b/i;
     if (pendingTodoCompleteRef.current) {
       const pending = pendingTodoCompleteRef.current;
       if (YES.test(text.trim())) {
