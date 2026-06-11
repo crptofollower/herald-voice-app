@@ -263,6 +263,8 @@ const TODO_COMPLETE_SIGNALS = [
   /\bmark (that |it )?done\b/i,
   /\bI already\b/i,
   /\bthat('s| is) done\b/i,
+  /\bI (picked up|dropped off|returned|sent|submitted|paid|filed|bought|got|grabbed)\b/i,
+  /\bI (went to|made it to|got to|stopped by)\b/i,
 ];
 
 // ─── classifyQuery ────────────────────────────────────────────────────────────
@@ -450,7 +452,7 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
       const listNameRaw = isInverted ? (addMatch[1]?.trim() ?? '') : (addMatch[2]?.trim() ?? '');
       const listName = (listNameRaw || 'grocery').toLowerCase();
       const items = raw
-        .split(/,|\band\b/i)
+        .split(/\s*,\s*|\s+and\s+/i)
         .map(s => s.trim())
         .filter(s => s.length > 0);
       if (items.length > 0) {

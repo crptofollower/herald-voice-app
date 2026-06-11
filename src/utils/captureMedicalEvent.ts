@@ -14,16 +14,31 @@ export function captureMedicalEvent(event: MedicalEvent): CaptureResult {
   let followUpQuestion: string | null = null;
 
   if (event.type === 'medication') {
+    if (!event.drug_name) {
+      return {
+        recordId: '',
+        followUpSlot: 'drug_name',
+        followUpQuestion: "What medication is that?",
+      };
+    }
+    const NON_DRUG_WORDS = new Set([
+      'any', 'some', 'my', 'the', 'a', 'an', 'medication', 'medications',
+      'meds', 'pills', 'prescription', 'prescriptions', 'medicine', 'medicines'
+    ]);
+    if (NON_DRUG_WORDS.has(event.drug_name.trim().toLowerCase())) {
+      return {
+        recordId: '',
+        followUpSlot: 'drug_name',
+        followUpQuestion: "What medication is that?",
+      };
+    }
     recordId = writeMedication({
-      name: event.drug_name ?? 'Unknown',
+      name: event.drug_name,
       dosage: event.dosage,
       notes: event.raw,
       is_active: 1,
     });
-    if (!event.drug_name) {
-      followUpSlot = 'drug_name';
-      followUpQuestion = "I'll remember that. What medication is that for?";
-    } else if (!event.dosage) {
+    if (!event.dosage) {
       followUpSlot = 'dosage';
       followUpQuestion = "Got it. What's the dosage?";
     }
