@@ -772,14 +772,15 @@ export default function ChatScreen() {
         const addressRaw = m[2].trim()
           .replace(/[.!?]+$/, '')
           .trim();
-        if (whoRaw.length >= 2 && addressRaw.length >= 5) {
+        const NON_CONTACT_WORDS = /^(this|that|it|here|there|the|a|an|my|our|your)$/i;
+        if (whoRaw.length >= 2 && addressRaw.length >= 5 && !NON_CONTACT_WORDS.test(whoRaw)) {
           const existing = findContactByRelationship(whoRaw) ?? findContactByName(whoRaw);
-          if (existing) {
-            writeContact({ name: existing.name, relationship: existing.relationship, address: addressRaw, importance: existing.importance });
-          } else {
-            writeContact({ name: whoRaw, address: addressRaw, importance: 6 });
-          }
-          const ackReply = `Got it — I'll remember that for next time you need directions.`;
+          const contactId = existing
+            ? writeContact({ name: existing.name, relationship: existing.relationship, address: addressRaw, importance: existing.importance })
+            : writeContact({ name: whoRaw, address: addressRaw, importance: 6 });
+          const ackReply = contactId
+            ? `Got it — I'll remember that for next time you need directions.`
+            : `I'm not sure I caught that — can you say the address again?`;
           addMessage({ id: generateId('msg'), role: 'assistant', content: ackReply, timestamp: Date.now() });
           speak(ackReply);
           sendingRef.current = false;
