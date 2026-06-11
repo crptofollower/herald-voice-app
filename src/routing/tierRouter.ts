@@ -263,8 +263,6 @@ const TODO_COMPLETE_SIGNALS = [
   /\bmark (that |it )?done\b/i,
   /\bI already\b/i,
   /\bthat('s| is) done\b/i,
-  /\bI went to\b/i,
-  /\bI took\b/i,
 ];
 
 // ─── classifyQuery ────────────────────────────────────────────────────────────
@@ -432,7 +430,7 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   }
 
   // Device: todo add — trigger phrases WITHOUT a resolvable date (date = reminder, not todo)
-  if (TODO_ADD_SIGNALS.some((p) => p.test(msg)) && !TODO_DATE_SIGNALS.test(msg)) {
+  if (TODO_ADD_SIGNALS.some((p) => p.test(msg)) && !TODO_DATE_SIGNALS.test(msg) && !detectMedicalEvent(msg)) {
     const body = msg
       .replace(/^(I need to|I have to|I gotta|I've got to|don't let me forget|I should|I must)\s*/i, '')
       .trim();
