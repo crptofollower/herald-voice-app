@@ -25,6 +25,7 @@ export interface TierDecision {
     | { type: 'time' }
     | { type: 'date' }
     | { type: 'call';    contact: string }
+    | { type: 'navigation'; destination: string }
     | { type: 'reminder'; body: string; time: string }
     | { type: 'note_capture'; body: string }
     | { type: 'note_read' }
@@ -182,6 +183,15 @@ const CALL_SIGNALS = [
   /\b(call|phone|dial|ring)\s+\w+/i,
   /\bcan you (call|phone)\s+\w+/i,
   /\bgive\s+\w+\s+a (call|ring)\b/i,
+];
+
+const DIRECTIONS_SIGNALS = [
+  /\b(directions?|navigate|navigation)\s+to\b/i,
+  /\btake me to\b/i,
+  /\bhow do i get to\b/i,
+  /\bget me to\b/i,
+  /\bdrive to\b/i,
+  /\bway to\b/i,
 ];
 
 /** Phone-number statement — let ChatScreen phone-capture handle, not call intent. */
@@ -394,6 +404,26 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     }
   }
 
+  // Device: navigation — resolve contact/address on device, fire maps intent
+  if (DIRECTIONS_SIGNALS.some((p) => p.test(msg))) {
+    const destMatch =
+      msg.match(/\b(?:directions?|navigate|navigation)\s+to\s+(.+)/i)?.[1] ??
+      msg.match(/\btake me to\s+(.+)/i)?.[1] ??
+      msg.match(/\bhow do i get to\s+(.+)/i)?.[1] ??
+      msg.match(/\bget me to\s+(.+)/i)?.[1] ??
+      msg.match(/\bdrive to\s+(.+)/i)?.[1] ??
+      msg.match(/\bway to\s+(.+)/i)?.[1];
+    const destination = destMatch?.trim() ?? '';
+    const DIRECTIONS_EXCLUDE = /^(me|here|my location|where i am)$/i;
+    if (destination.length > 1 && !DIRECTIONS_EXCLUDE.test(destination)) {
+      return {
+        tier: 1,
+        actionIntent: { type: 'navigation', destination },
+        reason: 'action:navigation',
+      };
+    }
+  }
+
   // Device: call — resolves contact on device, fires tel: intent
   const TODO_ADD_PREFIX = /^(I need to|I have to|I gotta|I've got to|don't let me forget|I should|I must)\s+/i;
   if (CALL_SIGNALS.some((p) => p.test(msg)) && !REMINDER_SIGNALS.some((p) => p.test(msg)) && !CALL_NUMBER_STATEMENT.test(msg) && !TODO_ADD_PREFIX.test(msg)) {
@@ -402,7 +432,11 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
       msg.match(/\b(?:call|phone|dial|ring)\s+((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+)?\w+(?:\s+\w+)?)/i) ??
       msg.match(/\bgive\s+((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+)?\w+(?:\s+\w+)?)\s+a\s+(?:call|ring)\b/i);
     const rawContact = contactMatch?.[1]?.trim() ?? '';
-    const contact = CALL_EXCLUDE.test(rawContact.split(' ')[0]) ? '' : rawContact;
+    const strippedContact = rawContact
+      .replace(/^(a\s+)?number\s+for\s+/i, '')
+      .replace(/^the\s+number\s+for\s+/i, '')
+      .trim();
+    const contact = CALL_EXCLUDE.test(strippedContact.split(' ')[0]) ? '' : strippedContact;
     if (contact) {
       return {
         tier: 1,

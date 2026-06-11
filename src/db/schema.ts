@@ -2,7 +2,7 @@
 // Herald device SQLite — table definitions and migration runner.
 // Session L — Device-First Intelligence Layer
 //
-// SCHEMA VERSION: 6
+// SCHEMA VERSION: 7
 // v1: Initial schema — facts, profile, medical, calendar_cache (ISO strings), life_tracker
 // v2: calendar_cache rebuilt with Unix ms timestamps (timezone fix)
 // v3: Entity graph + importance scoring + temporal awareness (locked Session L spec)
@@ -31,7 +31,7 @@
 
 import * as SQLite from "expo-sqlite";
 
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 export const DB_NAME = "herald_device.db";
 
 // ─── Open database ────────────────────────────────────────────────────────────
@@ -476,5 +476,113 @@ const MIGRATIONS: Record<number, (db: SQLite.SQLiteDatabase) => void> = {
         created_at TEXT NOT NULL
       );
     `);
+  },
+
+  // ── v7: contacts.address + household memory schema ─────────────────────────
+  7: (db) => {
+    try {
+      db.execSync("ALTER TABLE contacts ADD COLUMN address TEXT;");
+    } catch {
+      /* column already exists — safe on reinstall */
+    }
+    db.execSync(`
+      CREATE TABLE IF NOT EXISTS properties (
+        id          TEXT PRIMARY KEY,
+        name        TEXT NOT NULL,
+        type        TEXT NOT NULL,
+        address     TEXT,
+        year        TEXT,
+        make        TEXT,
+        model       TEXT,
+        vin         TEXT,
+        notes       TEXT,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS service_providers (
+        id           TEXT PRIMARY KEY,
+        name         TEXT NOT NULL,
+        phone        TEXT,
+        category     TEXT NOT NULL,
+        property_id  TEXT,
+        notes        TEXT,
+        rating       INTEGER,
+        created_at   TEXT NOT NULL,
+        updated_at   TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS service_records (
+        id            TEXT PRIMARY KEY,
+        provider_id   TEXT,
+        property_id   TEXT NOT NULL,
+        service_type  TEXT NOT NULL,
+        service_date  TEXT NOT NULL,
+        cost          REAL,
+        notes         TEXT,
+        next_due      TEXT,
+        created_at    TEXT NOT NULL,
+        updated_at    TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS insurance_policies (
+        id             TEXT PRIMARY KEY,
+        property_id    TEXT,
+        type           TEXT NOT NULL,
+        carrier        TEXT,
+        agent_name     TEXT,
+        agent_phone    TEXT,
+        policy_number  TEXT,
+        premium        REAL,
+        premium_period TEXT,
+        renewal_date   TEXT,
+        notes          TEXT,
+        created_at     TEXT NOT NULL,
+        updated_at     TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS insurance_payments (
+        id          TEXT PRIMARY KEY,
+        policy_id   TEXT NOT NULL,
+        amount      REAL NOT NULL,
+        paid_date   TEXT NOT NULL,
+        period      TEXT,
+        notes       TEXT,
+        created_at  TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS legal_documents (
+        id           TEXT PRIMARY KEY,
+        type         TEXT NOT NULL,
+        location     TEXT,
+        contact_name TEXT,
+        contact_phone TEXT,
+        last_updated TEXT,
+        notes        TEXT,
+        created_at   TEXT NOT NULL,
+        updated_at   TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS documents (
+        id          TEXT PRIMARY KEY,
+        type        TEXT NOT NULL,
+        expires_at  TEXT,
+        issued_at   TEXT,
+        notes       TEXT,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS entity_attributes (
+        id          TEXT PRIMARY KEY,
+        entity_id   TEXT NOT NULL,
+        entity_type TEXT NOT NULL,
+        key         TEXT NOT NULL,
+        value       TEXT NOT NULL,
+        created_at  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+      );
+    `);
+    console.log("Herald schema V7: household memory tables added");
   },
 };

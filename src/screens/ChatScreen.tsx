@@ -757,6 +757,38 @@ export default function ChatScreen() {
       } catch (e) { console.warn('phoneCapture write failed:', e); }
     }
 
+    // Address capture — runs before extractFactsLocally (same rule as phone capture)
+    const ADDRESS_PATTERNS = [
+      /\bmy ([\w\s\-']+?)'?s?\s+(?:address|house|place|home)\s+is\s+(.+)/i,
+      /\b([\w\s\-']+?)\s+(?:lives?|is located)\s+at\s+(.+)/i,
+      /\bthe ([\w\s\-']+?)\s+is\s+(?:at|located at)\s+(.+)/i,
+      /\b([\w\s\-']+?)'?s?\s+(?:address|place)\s+is\s+(.+)/i,
+    ];
+
+    for (const pattern of ADDRESS_PATTERNS) {
+      const m = text.match(pattern);
+      if (m) {
+        const whoRaw = m[1].trim().toLowerCase().replace(/^my\s+/i, '');
+        const addressRaw = m[2].trim()
+          .replace(/[.!?]+$/, '')
+          .trim();
+        if (whoRaw.length >= 2 && addressRaw.length >= 5) {
+          const existing = findContactByRelationship(whoRaw) ?? findContactByName(whoRaw);
+          if (existing) {
+            writeContact({ name: existing.name, relationship: existing.relationship, address: addressRaw, importance: existing.importance });
+          } else {
+            writeContact({ name: whoRaw, address: addressRaw, importance: 6 });
+          }
+          const ackReply = `Got it — I'll remember that for next time you need directions.`;
+          addMessage({ id: generateId('msg'), role: 'assistant', content: ackReply, timestamp: Date.now() });
+          speak(ackReply);
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+      }
+    }
+
     if (!tierDecision.actionIntent && !isTier1Read) {
       // Extract facts locally — skip calendar/medical/profile reads (Bug 1)
       try {
@@ -951,6 +983,38 @@ export default function ChatScreen() {
             speak(reply);
           } else {
             const reply = `I don't have a number for ${tierDecision.actionIntent.contact}. Tell me their number and I'll remember it.`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          }
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+
+        // Navigation — resolve contact/address on device, fire maps intent (zero-tap)
+        if (tierDecision.actionIntent.type === 'navigation') {
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          const raw = tierDecision.actionIntent.destination;
+
+          const cleaned = raw
+            .replace(/^(my\s+|the\s+|our\s+)/i, '')
+            .replace(/'s\s*$/i, '')
+            .trim();
+
+          const contact = findContactByRelationship(cleaned) ?? findContactByName(cleaned);
+
+          if (contact?.address) {
+            await handleMapsAction(contact.address);
+            const reply = `Opening directions to ${contact.name}.`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          } else if (contact) {
+            const reply = `I know ${contact.name} but I don't have an address for them. Tell me their address and I'll remember it.`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          } else {
+            await handleMapsAction(raw);
+            const reply = `Opening directions to ${raw}.`;
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
           }

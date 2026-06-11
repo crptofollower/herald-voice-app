@@ -23,6 +23,7 @@ export interface Contact {
   name: string;
   relationship?: string;
   phone?: string;
+  address?: string;
   email?: string;
   birthday?: string;
   importance: number;       // 1-10
@@ -57,6 +58,7 @@ export function writeContact(
         `UPDATE contacts SET
            relationship  = COALESCE(?, relationship),
            phone         = COALESCE(?, phone),
+           address       = COALESCE(?, address),
            email         = COALESCE(?, email),
            birthday      = COALESCE(?, birthday),
            importance    = MAX(importance, ?),
@@ -66,6 +68,7 @@ export function writeContact(
         [
           contact.relationship ?? null,
           contact.phone ?? null,
+          contact.address ?? null,
           contact.email ?? null,
           contact.birthday ?? null,
           contact.importance ?? 5,
@@ -80,14 +83,15 @@ export function writeContact(
     const id = `c_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     db.runSync(
       `INSERT INTO contacts
-         (id, name, relationship, phone, email, birthday, importance,
+         (id, name, relationship, phone, address, email, birthday, importance,
           entity_id, os_contact_id, notes, last_contact, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
       [
         id,
         contact.name.trim(),
         contact.relationship ?? null,
         contact.phone ?? null,
+        contact.address ?? null,
         contact.email ?? null,
         contact.birthday ?? null,
         contact.importance ?? 5,
