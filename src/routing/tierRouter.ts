@@ -395,7 +395,8 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   }
 
   // Device: call — resolves contact on device, fires tel: intent
-  if (CALL_SIGNALS.some((p) => p.test(msg)) && !REMINDER_SIGNALS.some((p) => p.test(msg)) && !CALL_NUMBER_STATEMENT.test(msg)) {
+  const TODO_ADD_PREFIX = /^(I need to|I have to|I gotta|I've got to|don't let me forget|I should|I must)\s+/i;
+  if (CALL_SIGNALS.some((p) => p.test(msg)) && !REMINDER_SIGNALS.some((p) => p.test(msg)) && !CALL_NUMBER_STATEMENT.test(msg) && !TODO_ADD_PREFIX.test(msg)) {
     const CALL_EXCLUDE = /^(me|you|back|again|later|now|soon|ahead|us|them|it|that)$/i;
     const contactMatch =
       msg.match(/\b(?:call|phone|dial|ring)\s+((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+)?\w+(?:\s+\w+)?)/i) ??
