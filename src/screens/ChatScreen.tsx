@@ -90,6 +90,7 @@ import { writeMedicalFact, writeMedicalRecord, writeMedication, writeMedicalCont
 import { drainPendingWrites, getPendingCount, queueWrite } from "../db/pendingWritesDB";
 import { _registerContactExtractor, writeFacts, extractFactsLocally, getFactCount, isMedicalCaptureIntent, medicalCategoryFromText } from "../db/factDB";
 import { launchAndroidTimer } from "../utils/androidClock";
+import { captureHousehold } from '../utils/householdCapture';
 
 interface IntentAction {
   type: string;
@@ -790,6 +791,18 @@ export default function ChatScreen() {
           return;
         }
       }
+    }
+
+    // Household capture — runs before extractFactsLocally
+    // Same order rule as phone/address/emergency capture — never move below extractFactsLocally
+    const householdResult = captureHousehold(text);
+    if (householdResult) {
+      addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+      addMessage({ id: generateId('msg'), role: 'assistant', content: householdResult.ack, timestamp: Date.now() });
+      speak(householdResult.ack);
+      sendingRef.current = false;
+      setInputText('');
+      return;
     }
 
     // Emergency contact capture — runs before extractFactsLocally
