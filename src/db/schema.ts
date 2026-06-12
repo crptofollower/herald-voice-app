@@ -2,7 +2,7 @@
 // Herald device SQLite — table definitions and migration runner.
 // Session L — Device-First Intelligence Layer
 //
-// SCHEMA VERSION: 7
+// SCHEMA VERSION: 8
 // v1: Initial schema — facts, profile, medical, calendar_cache (ISO strings), life_tracker
 // v2: calendar_cache rebuilt with Unix ms timestamps (timezone fix)
 // v3: Entity graph + importance scoring + temporal awareness (locked Session L spec)
@@ -13,6 +13,7 @@
 //     facts table: +entity_id, +importance_score, +valid_until, +context_type
 //     Indexes: facts(category), facts(importance_score), facts(context_type)
 //     WAL mode enabled on getDB() open
+// v8: contacts.is_emergency flag (emergency safe word feature)
 //
 // RULE: NEVER modify a past migration. Always add at the next version number.
 //
@@ -31,7 +32,7 @@
 
 import * as SQLite from "expo-sqlite";
 
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 export const DB_NAME = "herald_device.db";
 
 // ─── Open database ────────────────────────────────────────────────────────────
@@ -584,5 +585,15 @@ const MIGRATIONS: Record<number, (db: SQLite.SQLiteDatabase) => void> = {
       );
     `);
     console.log("Herald schema V7: household memory tables added");
+  },
+
+  // ── v8: contacts.is_emergency ───────────────────────────────────────────────
+  8: (db) => {
+    try {
+      db.execSync("ALTER TABLE contacts ADD COLUMN is_emergency INTEGER DEFAULT 0;");
+    } catch {
+      /* column already exists — safe on reinstall */
+    }
+    console.log("Herald schema V8: is_emergency column added to contacts");
   },
 };
