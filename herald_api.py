@@ -1,5 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
+# v8.82 -- wttr.in: lat/lng coords when available; fallback 'Dallas, Texas, USA' (not 'Dallas TX')
 # v8.81 -- device_context cache bypass: device memory now fresh every turn
 # v8.79 -- GPS auto-update confirmed location on /ask/stream when coords drift > ~20mi
 # v8.78 -- MEMORY RULES: no absence-inference, no invented user facts
@@ -63,7 +64,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.81")
+app = FastAPI(title="Herald API", version="8.82")
 
 app.add_middleware(
     CORSMiddleware,
@@ -4362,7 +4363,16 @@ def get_direct_reply(ctx):
         # If user asks "weather in Chicago" we honor that -- explicit override only.
         confirmed_city = profile.get('confirmed_city', '')
         profile_loc    = profile.get('location', '')
-        gps_loc        = confirmed_city or profile_loc or 'Dallas TX'
+        confirmed_lat  = profile.get('confirmed_lat')
+        confirmed_lng  = profile.get('confirmed_lng')
+        if confirmed_lat and confirmed_lng:
+            gps_loc = f"{confirmed_lat},{confirmed_lng}"
+        elif confirmed_city:
+            gps_loc = confirmed_city
+        elif profile_loc:
+            gps_loc = profile_loc
+        else:
+            gps_loc = 'Dallas, Texas, USA'
         explicit_loc   = extract_weather_location(message, None)
         # Also check for named places mentioned in message that 
         # are not the user's home location
@@ -4872,7 +4882,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.81",
+        "status": "ok", "server": "herald-api", "version": "8.82",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled -- every message",
@@ -5497,7 +5507,16 @@ async def ask_stream(request: Request):
             ]
             if any(t in _pre_lower for t in _PRE_WEATHER_TRIGGERS):
                 _pw_profile  = _pre_profile
-                _pw_city     = _pw_profile.get('confirmed_city') or _pw_profile.get('location') or 'Dallas TX'
+                _pw_lat      = _pw_profile.get('confirmed_lat')
+                _pw_lng      = _pw_profile.get('confirmed_lng')
+                if _pw_lat and _pw_lng:
+                    _pw_city = f"{_pw_lat},{_pw_lng}"
+                elif _pw_profile.get('confirmed_city'):
+                    _pw_city = _pw_profile.get('confirmed_city')
+                elif _pw_profile.get('location'):
+                    _pw_city = _pw_profile.get('location')
+                else:
+                    _pw_city = 'Dallas, Texas, USA'
                 _pw_explicit = extract_weather_location(_pre_message, None)
                 _PRE_TIME_WORDS = {"the", "a", "an", "this", "that", "today", "tomorrow",
                                    "morning", "afternoon", "evening", "night", "week",
@@ -6628,7 +6647,7 @@ async def user_export(user_id: str, request: Request, secret: str = ""):
     print(f"[HERALD] /user/export: exported all personal data for {user_id}")
     return {
         "ok": True,
-        "version": "8.81",
+        "version": "8.82",
         "user_id": user_id,
         "exported_at": datetime.now().isoformat(),
         "profile": profile,
@@ -6786,7 +6805,7 @@ async def admin_dashboard(secret: str = ""):
 
         return {
             "ok": True,
-            "version": "8.81",
+            "version": "8.82",
             "user_count": len(users),
             "users": sorted(users, key=lambda x: x["msg_count"], reverse=True),
             "waitlist_count": waitlist_count,
@@ -7010,6 +7029,7 @@ def startup():
     print(f"[HERALD API] WeatherAPI:    {'YES (backup)' if WEATHER_KEY else 'not set'}")
     print(f"[HERALD API] Database:      {DB_FILE}")
     print(f"[HERALD API] Owner code:    {'SET' if OWNER_CODE else 'NOT SET'}")
+    print(f"[HERALD API] FIX v8.82: wttr.in uses confirmed_lat/lng; fallback Dallas, Texas, USA")
     print(f"[HERALD API] FIX v8.8: GPS city caching -- confirmed_city in profile, 20mi tolerance")
     print(f"[HERALD API] FIX v8.8: Memory rules -- no 'I remember', no raw GPS coords spoken")
     print(f"[HERALD API] FIX v8.8: Seed question for new users -- makes first session feel alive")
