@@ -31,6 +31,7 @@ export interface Contact {
   os_contact_id?: string;  // links to device contact if matched
   notes?: string;
   last_contact?: string;   // ISO date
+  is_emergency?: number;  // 1 = emergency contact, 0 = normal
   created_at: string;
   updated_at: string;
 }
@@ -63,6 +64,7 @@ export function writeContact(
            birthday      = COALESCE(?, birthday),
            importance    = MAX(importance, ?),
            notes         = COALESCE(?, notes),
+           is_emergency  = COALESCE(?, is_emergency),
            updated_at    = ?
          WHERE id = ?;`,
         [
@@ -73,6 +75,7 @@ export function writeContact(
           contact.birthday ?? null,
           contact.importance ?? 5,
           contact.notes ?? null,
+          contact.is_emergency ?? null,
           now,
           existing.id,
         ]
@@ -84,8 +87,8 @@ export function writeContact(
     db.runSync(
       `INSERT INTO contacts
          (id, name, relationship, phone, address, email, birthday, importance,
-          entity_id, os_contact_id, notes, last_contact, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+          entity_id, os_contact_id, notes, is_emergency, last_contact, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
       [
         id,
         contact.name.trim(),
@@ -98,6 +101,7 @@ export function writeContact(
         contact.entity_id ?? null,
         contact.os_contact_id ?? null,
         contact.notes ?? null,
+        contact.is_emergency ?? 0,
         contact.last_contact ?? null,
         now,
         now,
@@ -255,6 +259,37 @@ export function importContacts(contacts: Partial<Contact>[]): void {
       });
     }
   }
+}
+
+// ─── getEmergencyContact ──────────────────────────────────────────────────
+// Returns the contact flagged as emergency, or null if none set.
+export function getEmergencyContact(): Contact | null {
+  const db = getDB();
+  try {
+    return db.getFirstSync<Contact>(
+      "SELECT * FROM contacts WHERE is_emergency = 1 LIMIT 1;"
+    ) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// ─── setEmergencyContact ──────────────────────────────────────────────────
+// Clears any existing emergency flag, then sets it on the named contact.
+// Creates the contact if not found.
+export function setEmergencyContact(name: string, phone?: string): void {
+  const db = getDB();
+  const now = new Date().toISOString();
+  try {
+    db.runSync("UPDATE contacts SET is_emergency = 0, updated_at = ? WHERE is_emergency = 1;", [now]);
+    const existing = findContactByName(name);
+    if (existing) {
+      db.runSync("UPDATE contacts SET is_emergency = 1, updated_at = ? WHERE id = ?;", [now, existing.id]);
+      if (phone) db.runSync("UPDATE contacts SET phone = COALESCE(?, phone), updated_at = ? WHERE id = ?;", [phone, now, existing.id]);
+    } else {
+      writeContact({ name, phone, importance: 10, is_emergency: 1 });
+    }
+  } catch {}
 }
 
 // ─── resolvePhoneNumber ───────────────────────────────────────────────────────
