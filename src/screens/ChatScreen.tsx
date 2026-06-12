@@ -416,6 +416,13 @@ export default function ChatScreen() {
       // Register contact extractor so relationship facts auto-populate contacts table
       _registerContactExtractor(extractContactFromFact);
 
+      // Pre-request READ_CONTACTS permission at startup so resolveContactPhone
+      // never triggers a mid-conversation permission dialog.
+      try {
+        const Contacts = await import('expo-contacts');
+        await Contacts.requestPermissionsAsync();
+      } catch {}
+
       // Wire core identity to local_profile SQLite table
       const store = useStore.getState();
       const profileWrites: Record<string, string> = {};
