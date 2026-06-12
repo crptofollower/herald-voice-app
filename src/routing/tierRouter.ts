@@ -10,6 +10,7 @@ import { getProfileSummary } from "../db/profileDB";
 import { getMedicalSummary } from "../db/medicalDB";
 import { detectMedicalEvent } from "../utils/detectMedicalEvent";
 import type { MedicalEvent } from "../utils/detectMedicalEvent";
+import { detectHouseholdRead, type HouseholdReadIntent } from "../utils/householdRead";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -35,7 +36,8 @@ export interface TierDecision {
     | { type: 'todo_read' }
     | { type: 'todo_complete'; raw: string }
     | { type: 'calendar_write'; value: string }
-    | { type: 'medical_capture'; event: MedicalEvent };
+    | { type: 'medical_capture'; event: MedicalEvent }
+    | { type: 'household_read'; intent: HouseholdReadIntent };
   localContext?: LocalContext;
   reason: string;
 }
@@ -191,7 +193,6 @@ const DIRECTIONS_SIGNALS = [
   /\bhow do i get to\b/i,
   /\bget me to\b/i,
   /\bdrive to\b/i,
-  /\bway to\b/i,
 ];
 
 /** Phone-number statement — let ChatScreen phone-capture handle, not call intent. */
@@ -411,8 +412,7 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
       msg.match(/\btake me to\s+(.+)/i)?.[1] ??
       msg.match(/\bhow do i get to\s+(.+)/i)?.[1] ??
       msg.match(/\bget me to\s+(.+)/i)?.[1] ??
-      msg.match(/\bdrive to\s+(.+)/i)?.[1] ??
-      msg.match(/\bway to\s+(.+)/i)?.[1];
+      msg.match(/\bdrive to\s+(.+)/i)?.[1];
     const destination = destMatch?.trim() ?? '';
     const DIRECTIONS_EXCLUDE = /^(me|here|my location|where i am)$/i;
     if (destination.length > 1 && !DIRECTIONS_EXCLUDE.test(destination)) {
@@ -514,6 +514,16 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
         return { tier: 1, actionIntent: { type: 'calendar_write', value }, reason: 'action:calendar_write' };
       }
     }
+  }
+
+  // Device: household read-back — "who's my plumber", zero network
+  const householdRead = detectHouseholdRead(msg);
+  if (householdRead) {
+    return {
+      tier: 1,
+      actionIntent: { type: 'household_read', intent: householdRead },
+      reason: 'action:household_read',
+    };
   }
 
   // Device: medical capture — past-tense medical events only

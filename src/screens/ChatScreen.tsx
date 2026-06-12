@@ -91,6 +91,7 @@ import { drainPendingWrites, getPendingCount, queueWrite } from "../db/pendingWr
 import { _registerContactExtractor, writeFacts, extractFactsLocally, getFactCount, isMedicalCaptureIntent, medicalCategoryFromText } from "../db/factDB";
 import { launchAndroidTimer } from "../utils/androidClock";
 import { captureHousehold } from '../utils/householdCapture';
+import { answerHouseholdRead } from '../utils/householdRead';
 
 interface IntentAction {
   type: string;
@@ -228,6 +229,9 @@ export default function ChatScreen() {
   const tokenBatchRef = useRef<string>('');
   const batchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingTodoCompleteRef = useRef<{ id: string; body: string } | null>(null);
+  // Pending contact collection — when Herald asks "what's their number/address?"
+  // the next user message resolves this and executes the original intent.
+  const pendingContactCollectRef = useRef<{ action: 'call' | 'navigate' | 'text'; name: string; body?: string } | null>(null);
 
   // ── Scroll snap prevention ────────────────────────────────────────────────
   // Only auto-scroll to bottom when user is already near the bottom.
@@ -713,6 +717,101 @@ export default function ChatScreen() {
       pendingTodoCompleteRef.current = null;
     }
 
+    // ── Pending contact collection — user is providing a number or address ──
+    if (pendingContactCollectRef.current) {
+      const pending = pendingContactCollectRef.current;
+      const phoneMatch = text.match(/([\d\s\-\(\)\+\.]{7,})/);
+      const isLikelyAddress = text.length > 8 && /\d/.test(text) && /\b(st|ave|blvd|rd|dr|ln|way|ct|pl|circle|drive|street|road|court|lane|avenue)\b/i.test(text);
+
+      if (pending.action === 'call' && phoneMatch) {
+        const phone = phoneMatch[1].replace(/\D/g, '');
+        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+        pendingContactCollectRef.current = null;
+        try {
+          const existing = findContactByRelationship(pending.name) ?? findContactByName(pending.name);
+          if (existing) {
+            writeContact({ name: existing.name, relationship: existing.relationship ?? pending.name, phone, importance: existing.importance });
+          } else {
+            writeContact({ name: pending.name, relationship: pending.name, phone, importance: 7 });
+          }
+          await Linking.openURL(`tel:${phone}`);
+          const reply = `Got it — saved and calling ${pending.name} now.`;
+          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+          speak(reply);
+        } catch {
+          const reply = `Saved the number but couldn't open the dialer. Try calling ${pending.name} manually.`;
+          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+          speak(reply);
+        }
+        sendingRef.current = false;
+        setInputText('');
+        return;
+      }
+
+      // Accept as address: has a digit AND is longer than 5 chars.
+      // Drops the street-suffix regex that rejected real addresses like
+      // "123 Oak" or "4500 Main" without a spelled-out suffix.
+      const isLikelyAddressLoose = /\d/.test(text) && text.trim().length > 5;
+      if (pending.action === 'navigate' && isLikelyAddressLoose) {
+        const address = text.trim().replace(/[.!?]+$/, '');
+        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+        pendingContactCollectRef.current = null;
+        try {
+          const existing = findContactByRelationship(pending.name) ?? findContactByName(pending.name);
+          if (existing) {
+            writeContact({ name: existing.name, relationship: existing.relationship ?? pending.name, address, importance: existing.importance });
+          } else {
+            writeContact({ name: pending.name, address, importance: 6 });
+          }
+          await handleMapsAction(address);
+          const reply = `Got it — saved and opening directions to ${pending.name}.`;
+          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+          speak(reply);
+        } catch {
+          const reply = `Saved the address. Try asking for directions again.`;
+          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+          speak(reply);
+        }
+        sendingRef.current = false;
+        setInputText('');
+        return;
+      }
+
+      if (pending.action === 'text' && phoneMatch) {
+        const phone = phoneMatch[1].replace(/\D/g, '');
+        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+        pendingContactCollectRef.current = null;
+        try {
+          const existing = findContactByRelationship(pending.name) ?? findContactByName(pending.name);
+          if (existing) {
+            writeContact({ name: existing.name, relationship: existing.relationship ?? pending.name, phone, importance: existing.importance });
+          } else {
+            writeContact({ name: pending.name, relationship: pending.name, phone, importance: 7 });
+          }
+          const smsUrl = pending.body
+            ? `sms:${phone}?body=${encodeURIComponent(pending.body)}`
+            : `sms:${phone}`;
+          await Linking.openURL(smsUrl);
+          const reply = pending.body
+            ? `Got it — saved ${pending.name}'s number and opening a message with your note ready.`
+            : `Got it — saved ${pending.name}'s number and opening a message.`;
+          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+          speak(reply);
+        } catch {
+          const reply = `Saved the number. Try texting ${pending.name} again.`;
+          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+          speak(reply);
+        }
+        sendingRef.current = false;
+        setInputText('');
+        return;
+      }
+
+      // Looks like they changed their mind or said something unrelated
+      pendingContactCollectRef.current = null;
+      // Fall through to normal routing
+    }
+
     const tierDecision = await classifyQuery(text);
 
     // ── Offline check -- skip network, answer from device or give warm message ──
@@ -791,6 +890,7 @@ export default function ChatScreen() {
           const ackReply = contactId
             ? `Got it — I'll remember that for next time you need directions.`
             : `I'm not sure I caught that — can you say the address again?`;
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
           addMessage({ id: generateId('msg'), role: 'assistant', content: ackReply, timestamp: Date.now() });
           speak(ackReply);
           sendingRef.current = false;
@@ -822,10 +922,17 @@ export default function ChatScreen() {
       if (m) {
         const ecName = m[1].trim();
         const ecPhone = m[2]?.replace(/\D/g, '') ?? undefined;
-        setEmergencyContact(ecName, ecPhone);
-        const ackReply = ecPhone
-          ? `Got it — if you ever need help, I'll reach ${ecName} at that number.`
-          : `Got it — ${ecName} is your emergency contact. Tell me their number when you get a chance.`;
+        let ecAckReply: string;
+        try {
+          setEmergencyContact(ecName, ecPhone);
+          ecAckReply = ecPhone
+            ? `Got it — if you ever need help, I'll reach ${ecName} at that number.`
+            : `Got it — ${ecName} is your emergency contact. Tell me their number when you get a chance.`;
+        } catch {
+          ecAckReply = `Something went wrong saving that. Try again.`;
+        }
+        const ackReply = ecAckReply;
+        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
         addMessage({ id: generateId('msg'), role: 'assistant', content: ackReply, timestamp: Date.now() });
         speak(ackReply);
         sendingRef.current = false;
@@ -857,48 +964,11 @@ export default function ChatScreen() {
         if (isPersonalWrite) localFactsWritten = true;
       }
     }
-    const isOffline = !networkState.isConnected || !networkState.isInternetReachable;
-    if (isOffline) {
-      // Tier 1 reads/actions before save confirmation (Bug 1 — priority inversion)
-      if (tierDecision.tier === 1) {
-        if (tierDecision.actionIntent) {
-          // Fall through to action intent handling below (after offline check)
-        } else if (tierDecision.tier1Response) {
-          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-          addMessage({ id: generateId('msg'), role: 'assistant', content: tierDecision.tier1Response, timestamp: Date.now() });
-          speak(tierDecision.tier1Response);
-          setInputText('');
-          sendingRef.current = false;
-          return;
-        }
-      }
-      if (!tierDecision.actionIntent && localFactsWritten) {
-        const reply = "Got it — I'll remember that. You can ask me about it anytime.";
-        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-        speak(reply);
-        sendingRef.current = false;
-        setInputText('');
-        return;
-      }
-      if (!tierDecision.actionIntent) {
-        // No device action — try local memory, then offline message
-        const localAnswer = answerFromDevice(text);
-        const offlineReply = localAnswer ??
-          "I'm offline right now, but I can still help — ask me about your calendar, schedule, medications, or anything personal.";
-        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-        addMessage({ id: generateId('msg'), role: 'assistant', content: offlineReply, timestamp: Date.now() });
-        speak(offlineReply);
-        setInputText('');
-        sendingRef.current = false;
-        return;
-      }
-      // Has actionIntent — fall through to action handling below
-    }
-
-    // Emergency safe word — "Herald I need help" / "I need help" / "help me"
+    // ── Emergency safe word — runs BEFORE offline gate (SMS/GPS work offline) ──
+    // Negative lookahead prevents false-positives on "help me find/remember/set X"
     const EMERGENCY_SIGNALS = [
-      /\b(i need help|help me|call for help|i('m| am) having an emergency|this is an emergency|send help)\b/i,
+      /\b(i need help|call for help|i('m| am) having an emergency|this is an emergency|send help)\b/i,
+      /\bhelp me\b(?!\s+(?:find|remember|with|look|check|set|add|show|get|open|play|call|text|remind|schedule|book|order|understand|explain|figure|make|write|read|tell|search|navigate|go|turn|start|stop|cancel))/i,
       /\bherald.{0,10}(help|emergency|i('m| am) scared|i('ve| have) fallen)\b/i,
     ];
     if (EMERGENCY_SIGNALS.some(p => p.test(text))) {
@@ -932,6 +1002,48 @@ export default function ChatScreen() {
       sendingRef.current = false;
       setInputText('');
       return;
+    }
+
+    // ── Offline gate — runs AFTER emergency (emergency always fires) ─────────────────────────
+    // Fix: treat null isInternetReachable as ONLINE (not offline) — null means
+    // reachability check not yet complete, not that we're definitely offline.
+    const isOffline = networkState.isConnected === false ||
+      (networkState.isInternetReachable === false);
+    if (isOffline) {
+      // Tier 1 reads/actions pass through — they're device-local
+      if (tierDecision.tier === 1) {
+        if (tierDecision.actionIntent) {
+          // Fall through to action intent handling below
+        } else if (tierDecision.tier1Response) {
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          addMessage({ id: generateId('msg'), role: 'assistant', content: tierDecision.tier1Response, timestamp: Date.now() });
+          speak(tierDecision.tier1Response);
+          setInputText('');
+          sendingRef.current = false;
+          return;
+        }
+      }
+      if (!tierDecision.actionIntent && localFactsWritten) {
+        const reply = "Got it — I'll remember that. You can ask me about it anytime.";
+        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+        speak(reply);
+        sendingRef.current = false;
+        setInputText('');
+        return;
+      }
+      if (!tierDecision.actionIntent) {
+        const localAnswer = answerFromDevice(text);
+        const offlineReply = localAnswer ??
+          "I'm offline right now, but I can still help — ask me about your calendar, schedule, medications, or anything personal.";
+        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+        addMessage({ id: generateId('msg'), role: 'assistant', content: offlineReply, timestamp: Date.now() });
+        speak(offlineReply);
+        setInputText('');
+        sendingRef.current = false;
+        return;
+      }
+      // Has actionIntent — fall through to action handling below
     }
 
     // Tier 1: answer from device SQLite, no LLM, no network, under 200ms.
@@ -1007,7 +1119,22 @@ export default function ChatScreen() {
         if (tierDecision.actionIntent.type === 'sms') {
           const { contact, message } = tierDecision.actionIntent;
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-          await handleSMSAction(`${contact}|${message}`);
+          // Try to resolve contact number first
+          const resolvedSms = await resolveContactPhone(contact);
+          if (resolvedSms?.phone) {
+            const smsUrl = `sms:${resolvedSms.phone.replace(/\D/g, '')}${message ? `?body=${encodeURIComponent(message)}` : ''}`;
+            await Linking.openURL(smsUrl);
+            const reply = message
+              ? `Opening a message to ${resolvedSms.name} with your note ready.`
+              : `Opening a message to ${resolvedSms.name}.`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          } else {
+            const reply = `I don't have a number for ${contact}. What's their number?`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+            pendingContactCollectRef.current = { action: 'text', name: contact, body: message };
+          }
           sendingRef.current = false;
           setInputText('');
           return;
@@ -1024,6 +1151,15 @@ export default function ChatScreen() {
           const result = captureMedicalEvent(tierDecision.actionIntent.event);
           const reply = result.followUpQuestion ?? "Got it — I'll remember that.";
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+          speak(reply);
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+        if (tierDecision.actionIntent.type === 'household_read') {
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          const reply = answerHouseholdRead(tierDecision.actionIntent.intent);
           addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
           speak(reply);
           sendingRef.current = false;
@@ -1058,16 +1194,20 @@ export default function ChatScreen() {
         // Call — resolve contact on device, fire tel: intent
         if (tierDecision.actionIntent.type === 'call') {
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-          const resolved = await resolveContactPhone(tierDecision.actionIntent.contact);
+          const contactName = tierDecision.actionIntent.contact;
+          const resolved = await resolveContactPhone(contactName);
           if (resolved?.phone) {
             await Linking.openURL(`tel:${resolved.phone.replace(/\D/g, '')}`);
             const reply = `Calling ${resolved.name}.`;
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
           } else {
-            const reply = `I don't have a number for ${tierDecision.actionIntent.contact}. Tell me their number and I'll remember it.`;
+            // No number — ask to collect it, then call immediately after
+            const reply = `I don't have a number for ${contactName}. What's their number?`;
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
+            // Store pending call so next message resolves it
+            pendingContactCollectRef.current = { action: 'call', name: contactName };
           }
           sendingRef.current = false;
           setInputText('');
@@ -1092,9 +1232,10 @@ export default function ChatScreen() {
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
           } else if (contact) {
-            const reply = `I know ${contact.name} but I don't have an address for them. Tell me their address and I'll remember it.`;
+            const reply = `I know ${contact.name} but I don't have an address for them. What's their address?`;
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
+            pendingContactCollectRef.current = { action: 'navigate', name: contact.name };
           } else {
             await handleMapsAction(raw);
             const reply = `Opening directions to ${raw}.`;
