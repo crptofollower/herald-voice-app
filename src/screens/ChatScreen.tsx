@@ -614,7 +614,7 @@ export default function ChatScreen() {
           db.runSync('UPDATE medications SET name = ? WHERE id = ?', [text.trim(), pending.record_id]);
         }
         clearClarification(pending.id);
-        const reply = "Got it — I've saved that.";
+        const reply = "Got it — I've got that.";
         addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
         addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
         speak(reply);
@@ -752,7 +752,7 @@ export default function ChatScreen() {
           writeContactFn({ name: captureName, relationship: captureRelationship ?? captureName, phone: capturePhone, importance: 7 });
         }
         if (isShortNumber) {
-          const warning = `Got it — I saved ${captureName}'s number, but it looks a bit short. Want to double-check it?`;
+          const warning = `Got it — I've got ${captureName}'s number, but it looks a bit short. Want to double-check it?`;
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
           addMessage({ id: generateId('msg'), role: 'assistant', content: warning, timestamp: Date.now() });
           speak(warning);
@@ -866,7 +866,7 @@ export default function ChatScreen() {
         }
       }
       if (!tierDecision.actionIntent && localFactsWritten) {
-        const reply = "Got it — I've saved that. You can ask me about it anytime.";
+        const reply = "Got it — I'll remember that. You can ask me about it anytime.";
         addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
         addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
         speak(reply);
@@ -1015,7 +1015,7 @@ export default function ChatScreen() {
         if (tierDecision.actionIntent.type === 'medical_capture') {
           const { captureMedicalEvent } = await import('../utils/captureMedicalEvent');
           const result = captureMedicalEvent(tierDecision.actionIntent.event);
-          const reply = result.followUpQuestion ?? "Got it — I've saved that.";
+          const reply = result.followUpQuestion ?? "Got it — I'll remember that.";
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
           addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
           speak(reply);
