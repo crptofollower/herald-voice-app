@@ -83,6 +83,8 @@ import {
   extractContactFromFact,
   findContactByRelationship,
   findContactByName,
+  getEmergencyContact,
+  setEmergencyContact,
 } from "../db/contactsDB";
 import { writeMedicalFact, writeMedicalRecord, writeMedication, writeMedicalContact } from "../db/medicalDB";
 import { drainPendingWrites, getPendingCount, queueWrite } from "../db/pendingWritesDB";
@@ -790,6 +792,28 @@ export default function ChatScreen() {
       }
     }
 
+    // Emergency contact capture — runs before extractFactsLocally
+    const EMERGENCY_CONTACT_PATTERNS = [
+      /\bmy emergency contact is\s+([\w\s\-']+?)(?:\s+(?:and\s+)?(?:their|his|her)\s+(?:number|phone)\s+is\s+([\d\s\-\(\)\+\.]{7,}))?[.!?]?$/i,
+      /\bset\s+([\w\s\-']+?)\s+as\s+(?:my\s+)?emergency contact(?:\s+(?:their|his|her)?\s*(?:number|phone)\s+is\s+([\d\s\-\(\)\+\.]{7,}))?[.!?]?$/i,
+    ];
+    for (const pattern of EMERGENCY_CONTACT_PATTERNS) {
+      const m = text.match(pattern);
+      if (m) {
+        const ecName = m[1].trim();
+        const ecPhone = m[2]?.replace(/\D/g, '') ?? undefined;
+        setEmergencyContact(ecName, ecPhone);
+        const ackReply = ecPhone
+          ? `Got it — if you ever need help, I'll reach ${ecName} at that number.`
+          : `Got it — ${ecName} is your emergency contact. Tell me their number when you get a chance.`;
+        addMessage({ id: generateId('msg'), role: 'assistant', content: ackReply, timestamp: Date.now() });
+        speak(ackReply);
+        sendingRef.current = false;
+        setInputText('');
+        return;
+      }
+    }
+
     if (!tierDecision.actionIntent && !isTier1Read) {
       // Extract facts locally — skip calendar/medical/profile reads (Bug 1)
       try {
@@ -850,6 +874,44 @@ export default function ChatScreen() {
         return;
       }
       // Has actionIntent — fall through to action handling below
+    }
+
+    // Emergency safe word — "Herald I need help" / "I need help" / "help me"
+    const EMERGENCY_SIGNALS = [
+      /\b(i need help|help me|call for help|i('m| am) having an emergency|this is an emergency|send help)\b/i,
+      /\bherald.{0,10}(help|emergency|i('m| am) scared|i('ve| have) fallen)\b/i,
+    ];
+    if (EMERGENCY_SIGNALS.some(p => p.test(text))) {
+      addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+      const emergencyContact = getEmergencyContact();
+      if (!emergencyContact?.phone) {
+        const reply = `I want to help — but I don't have an emergency contact set up yet. Tell me who to reach and their number.`;
+        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+        speak(reply);
+        sendingRef.current = false;
+        setInputText('');
+        return;
+      }
+      // Get current GPS location
+      let locationText = '';
+      try {
+        const { requestForegroundPermissionsAsync, getCurrentPositionAsync, Accuracy } = await import('expo-location');
+        const { status } = await requestForegroundPermissionsAsync();
+        if (status === 'granted') {
+          const loc = await getCurrentPositionAsync({ accuracy: Accuracy.High, timeInterval: 3000 });
+          locationText = ` My location: https://maps.google.com/?q=${loc.coords.latitude},${loc.coords.longitude}`;
+        }
+      } catch { /* silent — send SMS without location if GPS fails */ }
+      // Open SMS to emergency contact pre-filled
+      const smsBody = encodeURIComponent(`Herald alert: I may need help.${locationText}`);
+      const smsUrl = `sms:${emergencyContact.phone}?body=${smsBody}`;
+      await Linking.openURL(smsUrl);
+      const reply = `Opening a message to ${emergencyContact.name}. Stay with me.`;
+      addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+      speak(reply);
+      sendingRef.current = false;
+      setInputText('');
+      return;
     }
 
     // Tier 1: answer from device SQLite, no LLM, no network, under 200ms.
