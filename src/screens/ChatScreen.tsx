@@ -1941,8 +1941,8 @@ export default function ChatScreen() {
         writeContact({ name, phone, importance: 5 });
         return { phone, name };
       }
-    } catch {
-      // expo-contacts not installed or permission denied — silent
+    } catch (e) {
+      console.warn('[resolveContactPhone] expo-contacts failed:', e);
     }
 
     return null;
