@@ -1013,7 +1013,9 @@ export default function ChatScreen() {
       // Tier 1 reads/actions pass through — they're device-local
       if (tierDecision.tier === 1) {
         if (tierDecision.actionIntent) {
-          // Fall through to action intent handling below
+          // Device-local action (household_read, medical_capture, alarm, etc.)
+          // intentionally falls through to the Tier 1 action handler below — it
+          // needs no network. Do NOT add a return here.
         } else if (tierDecision.tier1Response) {
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
           addMessage({ id: generateId('msg'), role: 'assistant', content: tierDecision.tier1Response, timestamp: Date.now() });

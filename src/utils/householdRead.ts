@@ -133,11 +133,18 @@ const SERVICE_READ_SIGNALS = [
   /\bnumber\s+for\s+(my|our|the)\b/i,
 ];
 
+// Insurance is detected in two steps: (1) is this an insurance QUESTION at all,
+// (2) optionally pull a type word ("home", "car"). We fire even with no type —
+// real phrasings often omit it ("who's my insurance with", "who's my insurance").
 const INSURANCE_READ_SIGNALS = [
-  /\bwho('s| is)?\s+(my|our)\s+([\w\s]+?)\s+insurance\b/i,
-  /\bwhat('s| is)?\s+(my|our)\s+([\w\s]+?)\s+insurance\b/i,
-  /\bwhat\s+insurance\b/i,
+  // typed: "who's my home insurance", "what's my car insurance with"
+  /\b(who|what)('s| is| do)?\s+(i|we)?\s*(have|got)?\s*(my|our)\s+([\w\s]+?)\s+insurance\b/i,
+  // typed with trailing "with": "who's my home insurance with"
   /\b(my|our)\s+([\w\s]+?)\s+insurance\b/i,
+  // typeless: "who's my insurance with", "who's my insurance", "what insurance do i have"
+  /\b(who|what)('s| is| do)?\s+(i|we)?\s*(have|got)?\s*(my|our)\s+insurance\b/i,
+  /\bwho\s+do\s+(i|we)\s+have\s+insurance\s+with\b/i,
+  /\bwhat\s+insurance\b/i,
 ];
 
 const LEGAL_READ_SIGNALS = [
@@ -151,6 +158,14 @@ const LEGAL_READ_SIGNALS = [
 export function detectHouseholdRead(text: string): HouseholdReadIntent | null {
   const lower = text.toLowerCase();
 
+  // Guard: this is the READ path. Statements ("my X is Y") are CAPTURE, handled
+  // upstream. If the text looks like a statement assigning a value, never treat
+  // it as a read — return null so it routes to capture / normal handling.
+  // A read is a question; a statement contains "is/are/'s <value>" after the noun.
+  const looksLikeStatement = /\bmy\s+[\w\s]+?\s+(?:is|are|'s)\s+\w+/i.test(text)
+    && !/^\s*(who|what|where|when|which|do|does|did)\b/i.test(text.trim());
+  if (looksLikeStatement) return null;
+
   // ── Legal (most specific — check first) ────────────────────────────────────
   if (LEGAL_READ_SIGNALS.some((p) => p.test(text))) {
     const docType = LEGAL_TYPES.find((t) => lower.includes(t));
@@ -161,12 +176,18 @@ export function detectHouseholdRead(text: string): HouseholdReadIntent | null {
 
   // ── Insurance ──────────────────────────────────────────────────────────────
   if (/\binsurance\b/i.test(text) && INSURANCE_READ_SIGNALS.some((p) => p.test(text))) {
-    // Pull the word before "insurance": "my home insurance" → "home"
-    const m = lower.match(/(?:my|our)\s+([\w\s]+?)\s+insurance/);
-    const spoken = m?.[1]?.trim() ?? '';
-    const lastWord = spoken.split(/\s+/).pop() ?? spoken;
-    const categories = INSURANCE_SYNONYMS[lastWord] ?? (lastWord ? [lastWord] : []);
-    // Even with an unknown type, fire — we'll honestly say what we have/don't.
+    // Try to pull a type word sitting directly before "insurance":
+    // "my home insurance" → "home". "my insurance with" → no type (null).
+    const m = lower.match(/(?:my|our)\s+([\w\s]+?)\s+insurance\b/);
+    let spoken = m?.[1]?.trim() ?? '';
+    // Guard: don't treat filler as a type. If the captured word is a stopword
+    // (e.g. matched nothing meaningful), drop it and query all policies.
+    const STOP = new Set(['', 'the', 'a', 'an', 'do', 'i', 'we', 'have', 'got']);
+    const lastWord = spoken.split(/\s+/).pop() ?? '';
+    if (STOP.has(lastWord)) spoken = '';
+    const categories = spoken
+      ? (INSURANCE_SYNONYMS[lastWord] ?? [lastWord])
+      : []; // empty categories → answerHouseholdRead queries ALL policies
     return { type: 'insurance', categories, spoken: spoken || 'insurance' };
   }
 
@@ -214,27 +235,50 @@ export function answerHouseholdRead(intent: HouseholdReadIntent): string {
     }
 
     if (intent.type === 'insurance') {
-      let rows: Array<{ carrier: string; agent_name: string | null; agent_phone: string | null; type: string }> = [];
+      type InsRow = { carrier: string; agent_name: string | null; agent_phone: string | null; type: string };
+      let rows: InsRow[] = [];
       if (intent.categories.length > 0) {
+        // Typed question ("home insurance") — query that type.
         const placeholders = intent.categories.map(() => '?').join(',');
-        rows = db.getAllSync(
+        rows = db.getAllSync<InsRow>(
           `SELECT carrier, agent_name, agent_phone, type FROM insurance_policies
            WHERE type IN (${placeholders})
            ORDER BY updated_at DESC;`,
           intent.categories
         );
+      } else {
+        // Typeless question ("who's my insurance with") — query ALL policies.
+        rows = db.getAllSync<InsRow>(
+          `SELECT carrier, agent_name, agent_phone, type FROM insurance_policies
+           ORDER BY updated_at DESC;`,
+          []
+        );
       }
+
       if (rows.length === 0) {
-        return `I don't have your ${intent.spoken} insurance saved yet. Tell me the carrier and I'll remember.`;
+        const what = intent.categories.length > 0 ? `${intent.spoken} insurance` : 'insurance';
+        return `I don't have your ${what} saved yet. Tell me the carrier and I'll remember.`;
       }
+
+      // Typeless with multiple policies → list them all by type.
+      if (intent.categories.length === 0 && rows.length > 1) {
+        const parts = rows.map((r) =>
+          r.type ? `${r.carrier} for ${r.type}` : r.carrier
+        );
+        return `You have ${joinNaturally(parts)}.`;
+      }
+
       const r = rows[0];
+      // Use the stored type as the label when the question was typeless.
+      const label = intent.categories.length > 0 ? intent.spoken : (r.type || '');
+      const lead = label ? `Your ${label} insurance is ${r.carrier}` : `Your insurance is with ${r.carrier}`;
       if (r.agent_name && r.agent_phone) {
-        return `Your ${intent.spoken} insurance is ${r.carrier}. Your agent is ${r.agent_name} — ${formatPhone(r.agent_phone)}.`;
+        return `${lead}. Your agent is ${r.agent_name} — ${formatPhone(r.agent_phone)}.`;
       }
       if (r.agent_name) {
-        return `Your ${intent.spoken} insurance is ${r.carrier}, and your agent is ${r.agent_name}.`;
+        return `${lead}, and your agent is ${r.agent_name}.`;
       }
-      return `Your ${intent.spoken} insurance is ${r.carrier}.`;
+      return `${lead}.`;
     }
 
     if (intent.type === 'legal_document') {
@@ -252,6 +296,15 @@ export function answerHouseholdRead(intent: HouseholdReadIntent): string {
   }
 
   return `I don't have that one saved yet.`;
+}
+
+// ─── joinNaturally ────────────────────────────────────────────────────────────
+// ["A", "B", "C"] → "A, B, and C"  |  ["A", "B"] → "A and B"  |  ["A"] → "A"
+function joinNaturally(items: string[]): string {
+  if (items.length === 0) return '';
+  if (items.length === 1) return items[0];
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(', ')}, and ${items[items.length - 1]}`;
 }
 
 // ─── formatPhone ──────────────────────────────────────────────────────────────
