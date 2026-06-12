@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.82 -- wttr.in: lat/lng coords when available; fallback 'Dallas, Texas, USA' (not 'Dallas TX')
+# v8.82 -- wttr.in: lat/lng when available; no hardcoded city fallback if location unknown
 # v8.81 -- device_context cache bypass: device memory now fresh every turn
 # v8.79 -- GPS auto-update confirmed location on /ask/stream when coords drift > ~20mi
 # v8.78 -- MEMORY RULES: no absence-inference, no invented user facts
@@ -2613,6 +2613,8 @@ def fetch_brave_search(query, count=3, freshness=None):
 
 # ── DIRECT API FUNCTIONS ──────────────────────────────────────────────────────
 
+WEATHER_NO_LOCATION = "I don't have your location yet — give me a moment and try again."
+
 def extract_weather_location(message, profile_location):
     msg = message.lower()
     # Only extract location after "in" or "at"
@@ -4372,7 +4374,7 @@ def get_direct_reply(ctx):
         elif profile_loc:
             gps_loc = profile_loc
         else:
-            gps_loc = 'Dallas, Texas, USA'
+            gps_loc = None
         explicit_loc   = extract_weather_location(message, None)
         # Also check for named places mentioned in message that 
         # are not the user's home location
@@ -4383,17 +4385,20 @@ def get_direct_reply(ctx):
             "alpharetta", "dallas", "houston", "austin",
         ]
         _msg_lower = message.lower()
+        _gps_loc_lower = (gps_loc or '').lower()
         _named_place = next(
             (kw for kw in _place_keywords 
-             if kw in _msg_lower and kw not in gps_loc.lower()), 
+             if kw in _msg_lower and kw not in _gps_loc_lower), 
             None
         )
-        if explicit_loc and explicit_loc.lower() not in gps_loc.lower():
+        if explicit_loc and (not gps_loc or explicit_loc.lower() not in _gps_loc_lower):
             loc = explicit_loc
         elif _named_place and explicit_loc:
             loc = explicit_loc
-        else:
+        elif gps_loc:
             loc = gps_loc
+        else:
+            return WEATHER_NO_LOCATION, False
         cached = cache_get(f'weather:{loc}', 'weather')
         if cached:
             return cached, False
@@ -5516,16 +5521,22 @@ async def ask_stream(request: Request):
                 elif _pw_profile.get('location'):
                     _pw_city = _pw_profile.get('location')
                 else:
-                    _pw_city = 'Dallas, Texas, USA'
+                    _pw_city = None
                 _pw_explicit = extract_weather_location(_pre_message, None)
                 _PRE_TIME_WORDS = {"the", "a", "an", "this", "that", "today", "tomorrow",
                                    "morning", "afternoon", "evening", "night", "week",
                                    "weekend", "hour", "minute", "second", "moment"}
                 _pw_first = _pw_explicit.split()[0].lower() if _pw_explicit else ""
-                if _pw_explicit and _pw_first not in _PRE_TIME_WORDS and _pw_explicit.lower() not in _pw_city.lower():
+                _pw_city_lower = (_pw_city or '').lower()
+                if _pw_explicit and _pw_first not in _PRE_TIME_WORDS and (not _pw_city or _pw_explicit.lower() not in _pw_city_lower):
                     _pw_loc = _pw_explicit
-                else:
+                elif _pw_city:
                     _pw_loc = _pw_city
+                else:
+                    yield _sse_event({"t": WEATHER_NO_LOCATION})
+                    yield _sse_event({"t": "[S]"})
+                    yield _sse_event({**_pre_done, "full": WEATHER_NO_LOCATION, "action": None, "used_search": False})
+                    return
                 _pw_cached = cache_get(f'weather:{_pw_loc}', 'weather')
                 _pw_result = _pw_cached or fetch_weather_direct(_pw_loc) or fetch_weather_backup(_pw_loc)
                 if not _pw_cached and _pw_result:
@@ -7029,7 +7040,7 @@ def startup():
     print(f"[HERALD API] WeatherAPI:    {'YES (backup)' if WEATHER_KEY else 'not set'}")
     print(f"[HERALD API] Database:      {DB_FILE}")
     print(f"[HERALD API] Owner code:    {'SET' if OWNER_CODE else 'NOT SET'}")
-    print(f"[HERALD API] FIX v8.82: wttr.in uses confirmed_lat/lng; fallback Dallas, Texas, USA")
+    print(f"[HERALD API] FIX v8.82: wttr.in lat/lng first; no weather without user location")
     print(f"[HERALD API] FIX v8.8: GPS city caching -- confirmed_city in profile, 20mi tolerance")
     print(f"[HERALD API] FIX v8.8: Memory rules -- no 'I remember', no raw GPS coords spoken")
     print(f"[HERALD API] FIX v8.8: Seed question for new users -- makes first session feel alive")
