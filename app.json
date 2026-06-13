@@ -53,12 +53,13 @@
         }
       ],
       "expo-sqlite",
+      "expo-contacts",
       [
         "expo-speech-recognition",
         {
           "microphonePermission": "Herald uses your microphone to hear your voice.",
           "speechRecognitionPermission": "Herald uses speech recognition to understand you.",
-          "androidSpeechServicePackages": ["com.google.android.googlequicksearchbox"]
+          "requiresOnDeviceRecognition": true
         }
       ],
       [
