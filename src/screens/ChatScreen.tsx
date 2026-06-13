@@ -61,6 +61,7 @@ import { ProactiveCard } from "../components/ProactiveCard";
 import { IntentCard, type ActionStatus } from "../components/IntentCard";
 import { generateId } from "../utils/id";
 import { normalizePhone } from "../utils/phone";
+import { normalizeInput } from "../utils/normalizeInput";
 import { useCalendar } from "../hooks/useCalendar";
 import { useLocation } from "../hooks/useLocation";
 import { useMic } from "../hooks/useMic";
@@ -590,6 +591,14 @@ export default function ChatScreen() {
     const now = Date.now();
     if (now - lastSentRef.current < 1000) return;
     if (sendingRef.current) return;
+    if (!text) return;
+
+    // ── Input front door ─────────────────────────────────────────────────────
+    // Normalize once, here, before ANY logic (capture, routing, display) touches
+    // the message. Makes input device-agnostic — curly quotes, unicode dashes/
+    // spaces from any keyboard or speech engine are folded to a canonical form so
+    // nothing downstream has to care which device produced the text.
+    text = normalizeInput(text);
     if (!text) return;
 
     lastSentRef.current = now;

@@ -6,6 +6,7 @@
 import { getCachedEvents, formatCachedEventsForSpeech, refreshCalendarCache, getCacheAge } from "../db/calendarCacheDB";
 import { calendarWriteIsRecent } from "../db/calendarState";
 import { getFactsSummary } from "../db/factDB";
+import { normalizeInput } from "../utils/normalizeInput";
 import { getProfileSummary } from "../db/profileDB";
 import { getMedicalSummary } from "../db/medicalDB";
 import { detectMedicalEvent } from "../utils/detectMedicalEvent";
@@ -303,7 +304,7 @@ function calendarSpeech(
 }
 
 export async function classifyQuery(message: string): Promise<TierDecision> {
-  const msg = message.trim();
+  const msg = normalizeInput(message);
 
   // Device action: timer — duration-based, separate from alarm
   if (TIMER_SIGNALS.some((p) => p.test(msg))) {
