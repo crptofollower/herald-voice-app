@@ -60,6 +60,7 @@ import { MessageBubble } from "../components/MessageBubble";
 import { ProactiveCard } from "../components/ProactiveCard";
 import { IntentCard, type ActionStatus } from "../components/IntentCard";
 import { generateId } from "../utils/id";
+import { normalizePhone } from "../utils/phone";
 import { useCalendar } from "../hooks/useCalendar";
 import { useLocation } from "../hooks/useLocation";
 import { useMic } from "../hooks/useMic";
@@ -231,7 +232,7 @@ export default function ChatScreen() {
   const pendingTodoCompleteRef = useRef<{ id: string; body: string } | null>(null);
   // Pending contact collection — when Herald asks "what's their number/address?"
   // the next user message resolves this and executes the original intent.
-  const pendingContactCollectRef = useRef<{ action: 'call' | 'navigate' | 'text'; name: string; body?: string } | null>(null);
+  const pendingContactCollectRef = useRef<{ action: 'call' | 'navigate' | 'text' | 'confirm_phone'; name: string; body?: string } | null>(null);
 
   // ── Scroll snap prevention ────────────────────────────────────────────────
   // Only auto-scroll to bottom when user is already near the bottom.
@@ -723,6 +724,40 @@ export default function ChatScreen() {
       const phoneMatch = text.match(/([\d\s\-\(\)\+\.]{7,})/);
       const isLikelyAddress = text.length > 8 && /\d/.test(text) && /\b(st|ave|blvd|rd|dr|ln|way|ct|pl|circle|drive|street|road|court|lane|avenue)\b/i.test(text);
 
+      // Re-validating a phone number Herald couldn't trust earlier (misheard digit
+      // count). Stay in this mode until we get a clean 10-digit number — never store
+      // a malformed one.
+      if (pending.action === 'confirm_phone') {
+        const reCheck = phoneMatch ? normalizePhone(phoneMatch[1]) : null;
+        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+        if (reCheck?.valid) {
+          pendingContactCollectRef.current = null;
+          try {
+            const existing = findContactByRelationship(pending.name) ?? findContactByName(pending.name);
+            if (existing) {
+              writeContact({ name: existing.name, relationship: existing.relationship ?? pending.name, phone: reCheck.normalized, importance: existing.importance });
+            } else {
+              writeContact({ name: pending.name, relationship: pending.name, phone: reCheck.normalized, importance: 7 });
+            }
+            const reply = `Perfect — saved ${pending.name}'s number as ${reCheck.spoken}.`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          } catch {
+            const reply = `I had trouble saving that — let's try once more. What's ${pending.name}'s number?`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          }
+        } else {
+          const heard = reCheck ? reCheck.spoken : text.trim();
+          const reply = `I still didn't catch a full 10-digit number — I heard ${heard}. Can you say ${pending.name}'s number again, slowly?`;
+          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+          speak(reply);
+        }
+        sendingRef.current = false;
+        setInputText('');
+        return;
+      }
+
       if (pending.action === 'call' && phoneMatch) {
         const phone = phoneMatch[1].replace(/\D/g, '');
         addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
@@ -847,21 +882,37 @@ export default function ChatScreen() {
     }
 
     if (captureName && capturePhone && capturePhone.length >= 7) {
-      const isShortNumber = capturePhone.length < 10;
+      const phoneCheck = normalizePhone(capturePhone);
       try {
         const { findContactByRelationship, findContactByName, writeContact: writeContactFn } = await import('../db/contactsDB');
         const existing = findContactByRelationship(captureName) || findContactByName(captureName);
         localFactsWritten = true;
-        if (existing) {
-          writeContactFn({ name: existing.name, relationship: existing.relationship ?? captureRelationship ?? captureName, phone: capturePhone, importance: existing.importance });
+
+        if (phoneCheck.valid) {
+          // Clean 10-digit number — store the normalized form.
+          if (existing) {
+            writeContactFn({ name: existing.name, relationship: existing.relationship ?? captureRelationship ?? captureName, phone: phoneCheck.normalized, importance: existing.importance });
+          } else {
+            writeContactFn({ name: captureName, relationship: captureRelationship ?? captureName, phone: phoneCheck.normalized, importance: 7 });
+          }
         } else {
-          writeContactFn({ name: captureName, relationship: captureRelationship ?? captureName, phone: capturePhone, importance: 7 });
-        }
-        if (isShortNumber) {
-          const warning = `Got it — I've got ${captureName}'s number, but it looks a bit short. Want to double-check it?`;
+          // Misheard digit count — do NOT store the bad number. Save the person,
+          // read back what was heard, and ask for the number again. The pending
+          // state lets the next reply (even bare digits) attach to this contact.
+          if (existing) {
+            writeContactFn({ name: existing.name, relationship: existing.relationship ?? captureRelationship ?? captureName, importance: existing.importance });
+          } else {
+            writeContactFn({ name: captureName, relationship: captureRelationship ?? captureName, importance: 7 });
+          }
+          pendingContactCollectRef.current = { action: 'confirm_phone', name: captureName };
+          const issueWord = phoneCheck.issue === 'long' ? 'a couple of digits too many' : 'a bit short';
+          const ask = `I heard ${captureName}'s number as ${phoneCheck.spoken}, but that looks like ${issueWord}. Can you say it again for me?`;
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-          addMessage({ id: generateId('msg'), role: 'assistant', content: warning, timestamp: Date.now() });
-          speak(warning);
+          addMessage({ id: generateId('msg'), role: 'assistant', content: ask, timestamp: Date.now() });
+          speak(ask);
+          sendingRef.current = false;
+          setInputText('');
+          return;
         }
       } catch (e) { console.warn('phoneCapture write failed:', e); }
     }

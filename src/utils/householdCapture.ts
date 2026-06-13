@@ -6,6 +6,7 @@
 
 import { getDB } from '../db/schema';
 import { generateId } from './id';
+import { normalizePhone } from './phone';
 
 export type HouseholdCaptureType = 'service_provider' | 'insurance' | 'legal_document';
 
@@ -135,15 +136,20 @@ export function captureHousehold(text: string): HouseholdCaptureResult | null {
       const insType = m[1]?.trim().toLowerCase() ?? '';
       const carrier = m[2]?.trim() ?? '';
       const agent = m[3]?.trim();
-      const phone = m[4]?.replace(/\D/g, '');
+      const phoneCheck = m[4] ? normalizePhone(m[4]) : null;
+      const phone = phoneCheck?.valid ? phoneCheck.normalized : undefined;
+      const phoneSuspect = !!phoneCheck && !phoneCheck.valid && phoneCheck.issue !== 'empty';
       if (insType.length >= 2 && carrier.length >= 2) {
         writeInsurancePolicy(insType, carrier, agent, phone);
+        const baseAck = agent
+          ? `Got it — ${carrier} for your ${insType} insurance, ${agent} is the agent.`
+          : `Got it — ${carrier} for your ${insType} insurance.`;
         return {
           type: 'insurance',
           captured: true,
-          ack: agent
-            ? `Got it — ${carrier} for your ${insType} insurance, ${agent} is the agent.`
-            : `Got it — ${carrier} for your ${insType} insurance.`,
+          ack: phoneSuspect
+            ? `${baseAck} I didn't catch the number clearly, though — you can tell me again anytime.`
+            : baseAck,
         };
       }
     }
@@ -155,15 +161,19 @@ export function captureHousehold(text: string): HouseholdCaptureResult | null {
     if (m) {
       const category = m[1]?.trim().toLowerCase() ?? '';
       const name = m[2]?.trim() ?? '';
-      const phone = m[3]?.replace(/\D/g, '');
+      const phoneCheck = m[3] ? normalizePhone(m[3]) : null;
+      const phone = phoneCheck?.valid ? phoneCheck.normalized : undefined;
+      const phoneSuspect = !!phoneCheck && !phoneCheck.valid && phoneCheck.issue !== 'empty';
       if (SERVICE_CATEGORIES.has(category) && name.length >= 2) {
         writeServiceProvider(category, name, phone);
         return {
           type: 'service_provider',
           captured: true,
           ack: phone
-            ? `Got it — ${name} is your ${category}, number noted.`
-            : `Got it — ${name} is your ${category}.`,
+            ? `Got it — ${name} is your ${category}, number saved as ${phoneCheck!.spoken}.`
+            : phoneSuspect
+              ? `Got it — ${name} is your ${category}. That number didn't sound complete, though — say "${name}'s number is ..." and I'll add it.`
+              : `Got it — ${name} is your ${category}.`,
         };
       }
     }

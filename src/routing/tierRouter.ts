@@ -116,8 +116,8 @@ const TIER1_SIGNALS = {
     /\bwhere am i\b/i,
     /\bdo you know my name\b/i,
     /\byou don't remember\b/i,
-    /\bdo you know my \w+('s)? name\b/i,
-    /\bwhat('s| is) my \w+('s)? name\b/i,
+    /\bdo you know my (first|last|middle|full|maiden|legal) name\b/i,
+    /\bwhat('s| is) my (first|last|middle|full|maiden|legal) name\b/i,
     /\bwhat('s| is) my age\b/i,
     /\bhow old am i\b/i,
     /\bdo you know (how old i am|my age)\b/i,
@@ -594,6 +594,83 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   if (TIER1_SIGNALS.medical.some((p) => p.test(msg))) {
     const response = getMedicalSummary();
     return { tier: 1, tier1Response: response, reason: "medical:summary" };
+  }
+
+  // Tier 1: family relationship name — "what's my wife's name", "who's my wife"
+  // Device-first, offline. Resolves to a confirmed person via the contacts table,
+  // then falls back to relationship facts ("wife: Shannon" format). Never fabricates
+  // — an honest miss if nothing is stored. Placed BEFORE the profile branch so a
+  // relationship question can never fall through to the profile dump.
+  {
+    const FAMILY_RELATIONS =
+      '(?:wife|husband|spouse|partner|son|daughter|child|mom|mother|dad|father|brother|sister|grandson|granddaughter|grandmother|grandfather|grandma|grandpa|mother-in-law|father-in-law|son-in-law|daughter-in-law)';
+    const familyPatterns = [
+      // "who is my wife" / "who's my daughter"
+      new RegExp(`\\bwho(?:'s| is)\\s+my\\s+(${FAMILY_RELATIONS})\\b`, 'i'),
+      // "what's my wife's name" / "what is my son's name" / "do you know my daughter's name"
+      new RegExp(`\\b(?:what(?:'s| is)|do you know|tell me)\\s+my\\s+(${FAMILY_RELATIONS})'s\\s+name\\b`, 'i'),
+    ];
+    let relation: string | null = null;
+    for (const p of familyPatterns) {
+      const m = msg.match(p);
+      if (m) { relation = m[1].toLowerCase().trim(); break; }
+    }
+    if (relation) {
+      // Synonym groups so "mother" matches a stored "mom", "spouse" matches "wife", etc.
+      const SYNONYMS: Record<string, string[]> = {
+        wife: ['wife', 'spouse', 'partner'],
+        husband: ['husband', 'spouse', 'partner'],
+        spouse: ['spouse', 'wife', 'husband', 'partner'],
+        partner: ['partner', 'spouse', 'wife', 'husband'],
+        mom: ['mom', 'mother'],
+        mother: ['mother', 'mom'],
+        dad: ['dad', 'father'],
+        father: ['father', 'dad'],
+        son: ['son', 'child'],
+        daughter: ['daughter', 'child'],
+        child: ['child', 'son', 'daughter'],
+      };
+      const candidates = SYNONYMS[relation] ?? [relation];
+
+      // 1. Contacts table — best source (carries a phone for any follow-on call/text)
+      let name: string | null = null;
+      try {
+        const { findContactByRelationship } = await import('../db/contactsDB');
+        for (const rel of candidates) {
+          const c = findContactByRelationship(rel);
+          if (c?.name) { name = c.name; break; }
+        }
+      } catch { /* contacts unavailable — fall through to facts */ }
+
+      // 2. Relationship facts — "wife: Shannon" format written by extractFactsLocally
+      if (!name) {
+        try {
+          const { getFactsByCategory } = await import('../db/factDB');
+          const relFacts = getFactsByCategory('relationships', 50);
+          for (const f of relFacts) {
+            const fm = f.fact.match(/^([\w-]+)\s*:\s*(.+)$/);
+            if (fm && candidates.includes(fm[1].toLowerCase().trim())) {
+              name = fm[2].trim();
+              break;
+            }
+          }
+        } catch { /* facts unavailable — honest miss below */ }
+      }
+
+      if (name) {
+        return {
+          tier: 1,
+          tier1Response: `Your ${relation}'s name is ${name}.`,
+          reason: 'family:relationship_name',
+        };
+      }
+      // Honest miss — never guess a name
+      return {
+        tier: 1,
+        tier1Response: `I don't have your ${relation}'s name stored yet. You can tell me anytime — just say "my ${relation} is ..." and I'll remember.`,
+        reason: 'family:relationship_name:miss',
+      };
+    }
   }
 
   // Tier 1: profile
