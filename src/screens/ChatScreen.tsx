@@ -320,6 +320,10 @@ export default function ChatScreen() {
     setIsStreaming(false);
     setStreamingContent("");
     tokenBatchRef.current = '';
+    if (batchTimerRef.current) {
+      clearTimeout(batchTimerRef.current);
+      batchTimerRef.current = null;
+    }
     if ((streamAbortRef.current as any)?._maxTimer) {
       clearTimeout((streamAbortRef.current as any)._maxTimer);
     }
@@ -411,18 +415,23 @@ export default function ChatScreen() {
       try {
         await runMigration(userId);
       } catch {}
-      setDbReady(true);
-      refreshCalendarCache();
-      AsyncStorage.getItem('herald_health_sync').then(last => {
-        const now = Date.now();
-        if (!last || now - parseInt(last) > 3_600_000) {
-          syncHealth();
-          AsyncStorage.setItem('herald_health_sync', String(now));
-        }
-      });
 
-      // Register contact extractor so relationship facts auto-populate contacts table
-      _registerContactExtractor(extractContactFromFact);
+      try {
+        await refreshCalendarCache();
+      } catch {}
+
+      try {
+        const last = await AsyncStorage.getItem('herald_health_sync');
+        const now = Date.now();
+        if (!last || now - parseInt(last, 10) > 3_600_000) {
+          syncHealth();
+          await AsyncStorage.setItem('herald_health_sync', String(now));
+        }
+      } catch {}
+
+      try {
+        _registerContactExtractor(extractContactFromFact);
+      } catch {}
 
       // Pre-request READ_CONTACTS permission at startup so resolveContactPhone
       // never triggers a mid-conversation permission dialog.
@@ -432,46 +441,54 @@ export default function ChatScreen() {
       } catch {}
 
       // Wire core identity to local_profile SQLite table
-      const store = useStore.getState();
-      const profileWrites: Record<string, string> = {};
-      if (store.name)    profileWrites.name    = store.name;
-      if (store.aiName)  profileWrites.ai_name = store.aiName;
-      if (store.persona) profileWrites.persona  = store.persona;
-      if (userId)        profileWrites.user_id  = userId;
-      if (Object.keys(profileWrites).length > 0) {
-        setProfileFields(profileWrites);
-      }
+      try {
+        const store = useStore.getState();
+        const profileWrites: Record<string, string> = {};
+        if (store.name)    profileWrites.name    = store.name;
+        if (store.aiName)  profileWrites.ai_name = store.aiName;
+        if (store.persona) profileWrites.persona  = store.persona;
+        if (userId)        profileWrites.user_id  = userId;
+        if (Object.keys(profileWrites).length > 0) {
+          setProfileFields(profileWrites);
+        }
+      } catch {}
+
+      setDbReady(true);
 
       // Drain any writes queued while offline — calendar events, SMS etc.
-      const pending = getPendingCount();
-      if (pending > 0) {
-        drainPendingWrites(async (write) => {
-          const payload = JSON.parse(write.payload);
-          if (write.type === 'calendar') {
-            await handleCalendarAction(payload.value, payload.context ?? '');
-          }
-          // SMS drain: open native messages — non-blocking best effort
-          if (write.type === 'sms') {
-            const { Linking } = await import('react-native');
-            const body = encodeURIComponent(payload.body ?? '');
-            const num  = payload.phone ?? '';
-            await Linking.openURL(num
-              ? `sms:${num}?body=${body}`
-              : `sms:?body=${body}`
-            );
-          }
-        }).then((drained) => {
-          if (drained > 0) {
-            addMessage({
-              id: generateId('msg'),
-              role: 'assistant',
-              content: `I went ahead and took care of ${drained} thing${drained > 1 ? 's' : ''} I had queued up while you were offline.`,
-              timestamp: Date.now(),
-            });
-          }
-        }).catch(() => {});
-      }
-    }).catch(() => {});
+      try {
+        const pending = getPendingCount();
+        if (pending > 0) {
+          drainPendingWrites(async (write) => {
+            const payload = JSON.parse(write.payload);
+            if (write.type === 'calendar') {
+              await handleCalendarAction(payload.value, payload.context ?? '');
+            }
+            // SMS drain: open native messages — non-blocking best effort
+            if (write.type === 'sms') {
+              const { Linking } = await import('react-native');
+              const body = encodeURIComponent(payload.body ?? '');
+              const num  = payload.phone ?? '';
+              await Linking.openURL(num
+                ? `sms:${num}?body=${body}`
+                : `sms:?body=${body}`
+              );
+            }
+          }).then((drained) => {
+            if (drained > 0) {
+              addMessage({
+                id: generateId('msg'),
+                role: 'assistant',
+                content: `I went ahead and took care of ${drained} thing${drained > 1 ? 's' : ''} I had queued up while you were offline.`,
+                timestamp: Date.now(),
+              });
+            }
+          }).catch(() => {});
+        }
+      } catch {}
+    }).catch(() => {
+      setDbReady(true);
+    });
   }, [userId]);
 
   useEffect(() => {
@@ -578,6 +595,10 @@ export default function ChatScreen() {
     })
       .then(() => clearTimeout(geocodeTimer))
       .catch(() => clearTimeout(geocodeTimer));
+    return () => {
+      geocodeController.abort();
+      clearTimeout(geocodeTimer);
+    };
   }, [available, userId, lat, lng]);
 
   // ── Auto-scroll (only when user is at bottom) ─────────────────────────────
@@ -626,19 +647,24 @@ export default function ChatScreen() {
       const looksLikeQuestion = /\b(am i|do i|do you|what|who|when|where|how|is there|are there|have you|can you)\b/i.test(text.trim());
       const looksLikeNewIntent = /\b(remind me|set a|add|note that|what's on|show me|call|text)\b/i.test(text.trim());
       if (!looksLikeQuestion && !looksLikeNewIntent) {
-        const db = getDB();
-        if (pending.slot === 'doctor_name') {
-          db.runSync('UPDATE medical_records SET doctor_name = ? WHERE id = ?', [text.trim(), pending.record_id]);
-        } else if (pending.slot === 'dosage') {
-          const dosageMatch = text.match(/(\d+\s*(?:mg|mcg|ml|g|units?|tablets?|pills?|drops?|puffs?))/i);
-          const dosageValue = dosageMatch ? dosageMatch[1].trim() : text.trim();
-          db.runSync('UPDATE medications SET dosage = ? WHERE id = ?', [dosageValue, pending.record_id]);
-        } else if (pending.slot === 'drug_name') {
-          db.runSync('UPDATE medications SET name = ? WHERE id = ?', [text.trim(), pending.record_id]);
+        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+        let reply: string;
+        try {
+          const db = getDB();
+          if (pending.slot === 'doctor_name') {
+            db.runSync('UPDATE medical_records SET doctor_name = ? WHERE id = ?', [text.trim(), pending.record_id]);
+          } else if (pending.slot === 'dosage') {
+            const dosageMatch = text.match(/(\d+\s*(?:mg|mcg|ml|g|units?|tablets?|pills?|drops?|puffs?))/i);
+            const dosageValue = dosageMatch ? dosageMatch[1].trim() : text.trim();
+            db.runSync('UPDATE medications SET dosage = ? WHERE id = ?', [dosageValue, pending.record_id]);
+          } else if (pending.slot === 'drug_name') {
+            db.runSync('UPDATE medications SET name = ? WHERE id = ?', [text.trim(), pending.record_id]);
+          }
+          reply = "Got it — I've got that.";
+        } catch {
+          reply = "I couldn't save that just now — want to try again?";
         }
         clearClarification(pending.id);
-        const reply = "Got it — I've got that.";
-        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
         addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
         speak(reply);
         setInputText('');
@@ -1212,11 +1238,17 @@ export default function ChatScreen() {
         }
         if (tierDecision.actionIntent.type === 'medical_capture') {
           const { captureMedicalEvent } = await import('../utils/captureMedicalEvent');
-          const result = captureMedicalEvent(tierDecision.actionIntent.event);
-          const reply = result.followUpQuestion ?? "Got it — I'll remember that.";
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-          speak(reply);
+          try {
+            const result = captureMedicalEvent(tierDecision.actionIntent.event);
+            const reply = result.followUpQuestion ?? "Got it — I'll remember that.";
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          } catch {
+            const reply = "I couldn't save that — could you try again?";
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          }
           sendingRef.current = false;
           setInputText('');
           return;
@@ -1802,6 +1834,17 @@ export default function ChatScreen() {
     setInputText("");
     } catch (e) {
       console.error('[Herald] sendMessage error:', e);
+      const isAbort =
+        (e instanceof Error && e.name === 'AbortError') ||
+        (typeof e === 'object' && e !== null && (e as { name?: string }).name === 'AbortError');
+      if (!isAbort) {
+        addMessage({
+          id: generateId('msg'),
+          role: 'assistant',
+          content: 'Sorry — something went wrong on my end. Try that again?',
+          timestamp: Date.now(),
+        });
+      }
       resetStreamState();
     }
   }, [userId, messages, personaKey, lat, lng, locationLabel, getContextBlock, addMessage, setError, resetSpeech, enqueueSentence, resetStreamState, stop]);
