@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { AppState, AppStateStatus } from "react-native";
 import { fetchProactiveQueue } from "../api/herald";
+import { getActiveTopics } from "../db/topicDB";
 import { useStore } from "../store/useStore";
 import { PROACTIVE_POLL_MS } from "../constants/api";
 
@@ -34,7 +35,8 @@ export function useProactiveQueue() {
     if (!userId || userId === "") return;
 
     try {
-      const result = await fetchProactiveQueue(userId);
+      const activeTopics = getActiveTopics();
+      const result = await fetchProactiveQueue(userId, activeTopics);
 
       // Backend returns { messages: [...] } — not { items: [...] }.
       // Guard against null/undefined to prevent phantom box.

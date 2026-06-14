@@ -91,6 +91,7 @@ import {
 import { writeMedicalFact, writeMedicalRecord, writeMedication, writeMedicalContact } from "../db/medicalDB";
 import { drainPendingWrites, getPendingCount, queueWrite } from "../db/pendingWritesDB";
 import { _registerContactExtractor, writeFacts, extractFactsLocally, getFactCount, isMedicalCaptureIntent, medicalCategoryFromText } from "../db/factDB";
+import { getActiveTopics, extractTopicsFromMessage, recordTopicMention } from "../db/topicDB";
 import { launchAndroidTimer } from "../utils/androidClock";
 import { captureHousehold } from '../utils/householdCapture';
 import { answerHouseholdRead } from '../utils/householdRead';
@@ -1719,6 +1720,10 @@ export default function ChatScreen() {
       hour12: false,
     });
 
+    const activeTopicsList = getActiveTopics();
+    const activeTopicsParam =
+      activeTopicsList.length > 0 ? activeTopicsList.join(",") : undefined;
+
     const abortController = askHeraldStream(
       {
         user_id: userId,
@@ -1733,6 +1738,7 @@ export default function ChatScreen() {
         lat: lat ?? undefined,
         lng: lng ?? undefined,
         location_label: locationLabel ?? undefined,
+        active_topics: activeTopicsParam,
       },
       {
         onToken: (token) => {
@@ -1815,6 +1821,13 @@ export default function ChatScreen() {
           }
           if (fullText.trim()) {
             addMessage({ id: generateId("msg"), role: "assistant", content: fullText, timestamp: Date.now() });
+            void Promise.resolve().then(() => {
+              try {
+                for (const topic of extractTopicsFromMessage(text)) {
+                  recordTopicMention(topic);
+                }
+              } catch {}
+            });
           }
           resetStreamState();
         },

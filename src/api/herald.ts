@@ -48,6 +48,7 @@ export interface AskPayload {
   location_label?: string;
   access_code?: string;
   owner_code?: string;
+  active_topics?: string;
 }
 
 export interface AskResponse {
@@ -401,13 +402,16 @@ export async function fetchGreeting(payload: GreetingPayload): Promise<GreetingR
 
 // ─── /proactive ───────────────────────────────────────────────────────────────
 
-export async function fetchProactiveQueue(userId: string): Promise<ProactiveResponse> {
+export async function fetchProactiveQueue(
+  userId: string,
+  activeTopics?: string[]
+): Promise<ProactiveResponse> {
   try {
-    // Backend returns {messages: [...]} — normalize to {items: [...]} here.
-    // The mismatch was silently swallowing all proactive messages and
-    // preventing lastPolled from ever being set (setProactiveItems threw
-    // on undefined, caught silently, debounce never fired → runaway polling).
-    const result = await apiFetch<any>(`/proactive/${userId}`);
+    const qs =
+      activeTopics && activeTopics.length > 0
+        ? `?active_topics=${encodeURIComponent(activeTopics.join(","))}`
+        : "";
+    const result = await apiFetch<any>(`/proactive/${userId}${qs}`);
     if (Array.isArray(result)) return { items: result, count: result.length };
     const items: ProactiveItem[] = result.items ?? result.messages ?? [];
     return { items, count: items.length };

@@ -2,7 +2,7 @@
 // Herald device SQLite — table definitions and migration runner.
 // Session L — Device-First Intelligence Layer
 //
-// SCHEMA VERSION: 8
+// SCHEMA VERSION: 9
 // v1: Initial schema — facts, profile, medical, calendar_cache (ISO strings), life_tracker
 // v2: calendar_cache rebuilt with Unix ms timestamps (timezone fix)
 // v3: Entity graph + importance scoring + temporal awareness (locked Session L spec)
@@ -14,6 +14,7 @@
 //     Indexes: facts(category), facts(importance_score), facts(context_type)
 //     WAL mode enabled on getDB() open
 // v8: contacts.is_emergency flag (emergency safe word feature)
+// v9: local_topics table (device-side topic tracking for briefings)
 //
 // RULE: NEVER modify a past migration. Always add at the next version number.
 //
@@ -32,7 +33,7 @@
 
 import * as SQLite from "expo-sqlite";
 
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 export const DB_NAME = "herald_device.db";
 
 // ─── Open database ────────────────────────────────────────────────────────────
@@ -595,5 +596,18 @@ const MIGRATIONS: Record<number, (db: SQLite.SQLiteDatabase) => void> = {
       /* column already exists — safe on reinstall */
     }
     console.log("Herald schema V8: is_emergency column added to contacts");
+  },
+
+  // ── v9: local_topics (device-side topic tracking) ───────────────────────────
+  9: (db) => {
+    db.execSync(`
+      CREATE TABLE IF NOT EXISTS local_topics (
+        topic TEXT PRIMARY KEY,
+        mention_count INTEGER DEFAULT 1,
+        last_mentioned TEXT,
+        created_at TEXT
+      );
+    `);
+    console.log("Herald schema V9: local_topics table added");
   },
 };
