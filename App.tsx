@@ -37,6 +37,11 @@ import { ONESIGNAL_APP_ID } from "./src/constants/api";
 import { runMigrations } from './src/migrations/runMigrations';
 import { runMigration } from './src/routing/migration';
 import { initDB, isDBReady } from './src/db/useDeviceDB';
+import {
+  runModelDownloadService,
+  retriggerOnWifi,
+} from './src/utils/modelDownloadService';
+import NetInfo from '@react-native-community/netinfo';
 
 export type RootStackParamList = {
   Onboarding: undefined;
@@ -205,6 +210,42 @@ export default function App() {
       setFontsReady(true);
     };
     loadFonts();
+  }, [dbState]);
+
+  useEffect(() => {
+    if (dbState !== 'ready') return;
+
+    runModelDownloadService({
+      onSmallModelReady: () => {
+        useStore.getState().setLocalLLMStatus('loading');
+      },
+      onLargeModelReady: () => {
+        useStore.getState().setLocalModelTier('large');
+        console.log('[Herald] Large model ready');
+      },
+      onProgress: (phase, pct) => {
+        if (phase === 'small') {
+          useStore.getState().setLocalLLMStatus('downloading');
+        }
+        console.log(`[Herald] Model ${phase}: ${Math.round(pct)}%`);
+      },
+      onError: (phase, err) => {
+        console.warn(`[Herald] Model error (${phase}):`, err.message);
+        if (phase === 'small' && err.message === 'wifi_required') {
+          return;
+        }
+        if (phase === 'small') {
+          useStore.getState().setLocalLLMStatus('unavailable');
+        }
+      },
+    });
+
+    const unsubscribe = NetInfo.addEventListener((state) => {
+      if (state.type === 'wifi' && state.isConnected) {
+        retriggerOnWifi();
+      }
+    });
+    return () => unsubscribe();
   }, [dbState]);
 
   useEffect(() => {

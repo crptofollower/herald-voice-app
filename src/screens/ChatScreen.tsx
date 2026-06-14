@@ -68,6 +68,7 @@ import { useMic } from "../hooks/useMic";
 import { useRaiseToWake } from "../hooks/useRaiseToWake";
 import { useHealthConnect } from "../hooks/useHealthConnect";
 import { useDeviceMemory } from "../hooks/useDeviceMemory";
+import { useLocalLLM } from '../hooks/useLocalLLM';
 import { answerFromDevice } from '../utils/localAnswers';
 import { classifyQuery } from "../routing/tierRouter";
 import { handleTier1, buildTier2DeviceContext, buildAmbientDeviceContext, writeProfileFromOnboarding } from "../routing/tier1Responses";
@@ -195,9 +196,13 @@ export default function ChatScreen() {
     markAllRead,
     isOwner,
     status: freddieStatus,
+    localLLMStatus,
   } = useStore();
 
   const persona = PERSONAS[personaKey] ?? PERSONAS[DEFAULT_PERSONA];
+
+  const { status: llmStatus, inferLocal, activeModel } = useLocalLLM();
+  void activeModel;
 
   const [inputText, setInputText] = useState("");
   const [showProactive, setShowProactive] = useState(false);
@@ -608,6 +613,26 @@ export default function ChatScreen() {
       flatListRef.current?.scrollToEnd({ animated: false });
     }
   }, [displayMessages.length, streamingContent]);
+
+  const buildLocalPrompt = useCallback((
+    userText: string,
+    contextBlock: string
+  ): string => {
+    const userName = useStore.getState().name ?? 'the user';
+    const time = new Date().toLocaleTimeString('en-US', {
+      hour: 'numeric', minute: '2-digit', hour12: true
+    });
+    return [
+      `You are Herald, a trusted personal AI companion for ${userName}.`,
+      `Current time: ${time}.`,
+      contextBlock ? `What you know about ${userName}: ${contextBlock}` : '',
+      `Answer naturally and conversationally. Be brief — 1-3 sentences.`,
+      `Never say you are an AI or that you cannot help. Just answer.`,
+      ``,
+      `${userName}: ${userText}`,
+      `Herald:`,
+    ].filter(Boolean).join('\n');
+  }, []);
 
   // ── Send ──────────────────────────────────────────────────────────────────
 
@@ -1125,13 +1150,54 @@ export default function ChatScreen() {
       }
       if (!tierDecision.actionIntent) {
         const localAnswer = answerFromDevice(text);
-        const offlineReply = localAnswer ??
-          "I'm offline right now, but I can still help — ask me about your calendar, schedule, medications, or anything personal.";
-        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-        addMessage({ id: generateId('msg'), role: 'assistant', content: offlineReply, timestamp: Date.now() });
+        if (localAnswer) {
+          addMessage({ id: generateId('msg'), role: 'user',
+            content: text, timestamp: Date.now() });
+          addMessage({ id: generateId('msg'), role: 'assistant',
+            content: localAnswer, timestamp: Date.now() });
+          speak(localAnswer);
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+
+        // Tier 1.5: try on-device LLM before showing offline message
+        if (llmStatus === 'ready') {
+          addMessage({ id: generateId('msg'), role: 'user',
+            content: text, timestamp: Date.now() });
+          setIsWaiting(true);
+          try {
+            const contextBlock = getContextBlock?.() ?? '';
+            const prompt = buildLocalPrompt(text, contextBlock);
+            const localReply = await inferLocal(prompt, 200);
+            if (localReply && localReply.trim().length > 0) {
+              const reply = localReply.trim();
+              addMessage({ id: generateId('msg'), role: 'assistant',
+                content: reply, timestamp: Date.now() });
+              speak(reply);
+              sendingRef.current = false;
+              setInputText('');
+              setIsWaiting(false);
+              return;
+            }
+          } catch {
+            // Fall through to offline message
+          } finally {
+            setIsWaiting(false);
+          }
+        }
+
+        const offlineReply = llmStatus === 'ready'
+          ? "I couldn't quite get that — try asking a different way."
+          : "I'm offline right now, but I can still help — ask me about " +
+            "your calendar, schedule, medications, or anything personal.";
+        addMessage({ id: generateId('msg'), role: 'user',
+          content: text, timestamp: Date.now() });
+        addMessage({ id: generateId('msg'), role: 'assistant',
+          content: offlineReply, timestamp: Date.now() });
         speak(offlineReply);
-        setInputText('');
         sendingRef.current = false;
+        setInputText('');
         return;
       }
       // Has actionIntent — fall through to action handling below
@@ -1664,6 +1730,27 @@ export default function ChatScreen() {
     }
     lastInteractionRef.current = now;
 
+    // Tier 1.5: try local LLM for Tier 2 queries (cheaper + faster)
+    if (tierDecision.tier === 2 && llmStatus === 'ready') {
+      try {
+        const contextBlock = getContextBlock?.() ?? '';
+        const prompt = buildLocalPrompt(text, contextBlock);
+        const localReply = await inferLocal(prompt, 300);
+        if (localReply && localReply.trim().length > 0) {
+          addMessage({ id: generateId('msg'), role: 'user',
+            content: text, timestamp: Date.now() });
+          addMessage({ id: generateId('msg'), role: 'assistant',
+            content: localReply.trim(), timestamp: Date.now() });
+          speak(localReply.trim());
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+      } catch {
+        // Fall through to Railway
+      }
+    }
+
     addMessage({
       id: generateId("msg"),
       role: "user",
@@ -1860,7 +1947,7 @@ export default function ChatScreen() {
       }
       resetStreamState();
     }
-  }, [userId, messages, personaKey, lat, lng, locationLabel, getContextBlock, addMessage, setError, resetSpeech, enqueueSentence, resetStreamState, stop]);
+  }, [userId, messages, personaKey, lat, lng, locationLabel, getContextBlock, addMessage, setError, resetSpeech, enqueueSentence, resetStreamState, stop, llmStatus, inferLocal, buildLocalPrompt]);
 
   const handleSend = useCallback(() => {
     sendMessage(inputText.trim());
@@ -2675,6 +2762,19 @@ export default function ChatScreen() {
             </View>
           )}
 
+          {localLLMStatus === 'downloading' && (
+            <View style={styles.modelDownloadBanner}>
+              <Text
+                style={[
+                  styles.modelDownloadText,
+                  { color: persona.colors.accent },
+                ]}
+              >
+                Setting up voice brain...
+              </Text>
+            </View>
+          )}
+
           {displayMessages.length === 0 && !isStreaming ? (
             <View style={styles.emptyState}>
               <Text style={[styles.emptyGreeting, { color: persona.colors.text }]}>
@@ -2909,6 +3009,17 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   freddieText: { fontSize: 13, lineHeight: 18 },
+
+  modelDownloadBanner: {
+    paddingHorizontal: 20,
+    paddingVertical: 6,
+  },
+  modelDownloadText: {
+    fontSize: 12,
+    fontWeight: '500',
+    textAlign: 'center',
+    opacity: 0.85,
+  },
 
   messageList: { paddingTop: 8, paddingBottom: 16 },
   emptyState: {

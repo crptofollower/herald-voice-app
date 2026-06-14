@@ -3,6 +3,7 @@
 // Falls through to Railway on any failure (inferLocal returns null).
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { AppState } from 'react-native';
 import { initLlama, type LlamaContext } from 'llama.rn';
 import {
   getActiveModelPath,
@@ -19,6 +20,12 @@ const INFERENCE_TIMEOUT_MS = 8_000;
 
 const STOP_TOKENS = ['\n\n', '<|end|>', '<|eot_id|>'];
 
+const LLAMA_INIT_BASE = {
+  n_ctx: 2048,
+  n_gpu_layers: 99,
+  devices: ['HTP0'] as const,
+};
+
 function modelKindFromPath(path: string): 'small' | 'large' {
   return path.includes(LARGE_MODEL.filename) ? 'large' : 'small';
 }
@@ -33,6 +40,7 @@ export function useLocalLLM(): {
 
   const ctxRef = useRef<LlamaContext | null>(null);
   const statusRef = useRef<LocalLLMStatus>('unavailable');
+  const activeModelRef = useRef<'small' | 'large' | null>(null);
   const mountedRef = useRef(true);
 
   const setStatusSafe = useCallback((next: LocalLLMStatus) => {
@@ -49,6 +57,7 @@ export function useLocalLLM(): {
         const modelPath = await getActiveModelPath();
         if (!modelPath) {
           if (!cancelled) {
+            activeModelRef.current = null;
             setActiveModel(null);
             setStatusSafe('unavailable');
           }
@@ -57,15 +66,17 @@ export function useLocalLLM(): {
 
         const kind = modelKindFromPath(modelPath);
         if (!cancelled) {
+          activeModelRef.current = kind;
           setActiveModel(kind);
           setStatusSafe('loading');
         }
 
         const ctx = await initLlama({
           model: modelPath,
-          n_ctx: 2048,
-          n_gpu_layers: 99,
+          ...LLAMA_INIT_BASE,
         });
+
+        console.log('[Herald LLM] GPU:', ctx.gpu, 'reason:', ctx.reasonNoGPU);
 
         if (cancelled) {
           await ctx.release();
@@ -78,17 +89,61 @@ export function useLocalLLM(): {
         console.error('[Herald] useLocalLLM load failed:', err);
         ctxRef.current = null;
         if (!cancelled) {
+          activeModelRef.current = null;
           setActiveModel(null);
           setStatusSafe('error');
         }
       }
     })();
 
+    const appStateSubscription = AppState.addEventListener(
+      'change',
+      async (nextState) => {
+        if (nextState !== 'active') return;
+        if (statusRef.current !== 'ready') return;
+
+        try {
+          const bestPath = await getActiveModelPath();
+          if (!bestPath) return;
+          const isLarge = bestPath.includes(LARGE_MODEL.filename);
+          const currentlyLarge = activeModelRef.current === 'large';
+          if (isLarge && !currentlyLarge) {
+            console.log('[Herald LLM] Upgrading to large model...');
+            statusRef.current = 'loading';
+            if (mountedRef.current) setStatus('loading');
+            try {
+              await ctxRef.current?.release();
+              ctxRef.current = null;
+              const newCtx = await initLlama({
+                model: bestPath,
+                ...LLAMA_INIT_BASE,
+              });
+              console.log('[Herald LLM] GPU:', newCtx.gpu, 'reason:', newCtx.reasonNoGPU);
+              ctxRef.current = newCtx;
+              activeModelRef.current = 'large';
+              if (mountedRef.current) setActiveModel('large');
+              statusRef.current = 'ready';
+              if (mountedRef.current) setStatus('ready');
+              console.log('[Herald LLM] Upgraded to large model');
+            } catch (e) {
+              console.warn('[Herald LLM] Upgrade failed:', e);
+              statusRef.current = 'ready';
+              if (mountedRef.current) setStatus('ready');
+            }
+          }
+        } catch (e) {
+          console.warn('[Herald LLM] Upgrade check failed:', e);
+        }
+      },
+    );
+
     return () => {
+      appStateSubscription.remove();
       cancelled = true;
       mountedRef.current = false;
       const ctx = ctxRef.current;
       ctxRef.current = null;
+      activeModelRef.current = null;
       statusRef.current = 'unavailable';
       if (ctx) {
         void ctx.release().catch((releaseErr) => {

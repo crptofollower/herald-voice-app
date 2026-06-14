@@ -20,6 +20,13 @@ import type { PersonaKey } from "../constants/personas";
 import type { Message, ProactiveItem, FreddieStatus } from "../api/herald";
 import { DEFAULT_PERSONA } from "../constants/personas";
 
+export type LocalLLMStatus =
+  | 'unavailable'
+  | 'downloading'
+  | 'loading'
+  | 'ready'
+  | 'error';
+
 const STORE_SCHEMA_VERSION = 5;
 
 // ─── Slices ───────────────────────────────────────────────────────────────────
@@ -83,11 +90,18 @@ interface HydrationState {
   setHasHydrated: (v: boolean) => void;
 }
 
+interface LocalLLMState {
+  localLLMStatus: LocalLLMStatus;
+  localModelTier: 'small' | 'large' | null;
+  setLocalLLMStatus: (status: LocalLLMStatus) => void;
+  setLocalModelTier: (tier: 'small' | 'large' | null) => void;
+}
+
 interface ResetState {
   hardReset: () => void;
 }
 
-type Store = UserState & ChatState & ProactiveState & FreddieState & HydrationState & ResetState;
+type Store = UserState & ChatState & ProactiveState & FreddieState & LocalLLMState & HydrationState & ResetState;
 
 // ─── Store ────────────────────────────────────────────────────────────────────
 
@@ -161,6 +175,12 @@ export const useStore = create<Store>()(
       statusAge: null,
       setFreddieStatus: (status) => set({ status, statusAge: Date.now() }),
 
+      // ── Local LLM (not persisted) ──────────────────────────────────────────
+      localLLMStatus: 'unavailable',
+      localModelTier: null,
+      setLocalLLMStatus: (localLLMStatus) => set({ localLLMStatus }),
+      setLocalModelTier: (localModelTier) => set({ localModelTier }),
+
       // ── Hydration flag ─────────────────────────────────────────────────────
       _hasHydrated: false,
       _schemaVersion: STORE_SCHEMA_VERSION,
@@ -177,6 +197,8 @@ export const useStore = create<Store>()(
           location: "", confirmedCity: "",
           items: [], unreadCount: 0, lastPolled: null,
           status: null, statusAge: null,
+          localLLMStatus: 'unavailable',
+          localModelTier: null,
           _schemaVersion: STORE_SCHEMA_VERSION,
         }),
     }),
