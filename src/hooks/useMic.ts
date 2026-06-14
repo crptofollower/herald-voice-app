@@ -83,6 +83,7 @@ export function useMic(onTranscript: (text: string) => void) {
         lang: 'en-US',
         interimResults: false,
         continuous: false,
+        requiresOnDeviceRecognition: true,
       });
       setIsRecording(true);
       maxTimer.current = setTimeout(() => stopRecording(), 30000);

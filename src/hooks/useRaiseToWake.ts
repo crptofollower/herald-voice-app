@@ -71,6 +71,7 @@ export function useRaiseToWake({ aiName, onWake, enabled }: UseRaiseToWakeOption
         lang: 'en-US',
         continuous: true,
         interimResults: true,
+        requiresOnDeviceRecognition: true,
       });
 
       ExpoSpeechRecognitionModule.addListener('result', (event: any) => {

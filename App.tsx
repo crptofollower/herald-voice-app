@@ -10,7 +10,7 @@
 
 import "react-native-gesture-handler";
 import React, { useEffect, useState } from "react";
-import { View } from "react-native";
+import { View, Text, TouchableOpacity } from "react-native";
 import { NavigationContainer } from "@react-navigation/native";
 import { createStackNavigator } from "@react-navigation/stack";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -36,7 +36,7 @@ import ChatScreen from "./src/screens/ChatScreen";
 import { ONESIGNAL_APP_ID } from "./src/constants/api";
 import { runMigrations } from './src/migrations/runMigrations';
 import { runMigration } from './src/routing/migration';
-import { initDB } from './src/db/useDeviceDB';
+import { initDB, isDBReady } from './src/db/useDeviceDB';
 
 export type RootStackParamList = {
   Onboarding: undefined;
@@ -159,12 +159,35 @@ function Navigation() {
 }
 
 export default function App() {
-  const [ready, setReady] = useState(false);
+  const [dbState, setDbState] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [dbError, setDbError] = useState<string | null>(null);
+  const [fontsReady, setFontsReady] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
     const init = async () => {
-      await runMigrations();
-      await initDB();
+      try {
+        await runMigrations();
+        await initDB();
+        if (!isDBReady()) {
+          throw new Error('Database initialized but not ready');
+        }
+        if (cancelled) return;
+        setDbState('ready');
+      } catch (e) {
+        if (cancelled) return;
+        console.error('[Herald] Startup DB init failed:', e);
+        setDbError(e instanceof Error ? e.message : 'Database failed to start');
+        setDbState('error');
+      }
+    };
+    init();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (dbState !== 'ready') return;
+    const loadFonts = async () => {
       try {
         await Font.loadAsync({
           "SourceSerif4-Light":    SourceSerif4_300Light,
@@ -179,10 +202,10 @@ export default function App() {
       } catch (e) {
         console.warn("[Herald] Font load failed:", e);
       }
-      setReady(true);
+      setFontsReady(true);
     };
-    init();
-  }, []);
+    loadFonts();
+  }, [dbState]);
 
   useEffect(() => {
     if (ONESIGNAL_APP_ID) {
@@ -194,7 +217,46 @@ export default function App() {
     }
   }, []);
 
-  if (!ready) return null;
+  if (dbState === 'loading') {
+    return <View style={{ flex: 1, backgroundColor: "#0A1628" }} />;
+  }
+
+  if (dbState === 'error') {
+    return (
+      <View style={{ flex: 1, backgroundColor: "#0A1628", justifyContent: 'center', alignItems: 'center', padding: 32 }}>
+        <Text style={{ color: '#FFFFFF', fontSize: 18, textAlign: 'center', marginBottom: 12 }}>
+          Herald couldn't start its local database.
+        </Text>
+        <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 14, textAlign: 'center', marginBottom: 24 }}>
+          {dbError ?? 'Unknown error'}
+        </Text>
+        <TouchableOpacity
+          onPress={() => {
+            setDbError(null);
+            setDbState('loading');
+            runMigrations()
+              .then(() => initDB())
+              .then(() => {
+                if (!isDBReady()) throw new Error('Database initialized but not ready');
+                setDbState('ready');
+              })
+              .catch((e) => {
+                console.error('[Herald] Startup DB retry failed:', e);
+                setDbError(e instanceof Error ? e.message : 'Database failed to start');
+                setDbState('error');
+              });
+          }}
+          style={{ backgroundColor: '#1A9B8A', paddingHorizontal: 20, paddingVertical: 12, borderRadius: 8 }}
+        >
+          <Text style={{ color: '#FFFFFF', fontSize: 16, fontWeight: '600' }}>Try again</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  if (!fontsReady) {
+    return <View style={{ flex: 1, backgroundColor: "#0A1628" }} />;
+  }
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>

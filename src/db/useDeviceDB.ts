@@ -2,8 +2,9 @@
 // Herald device SQLite — init wrapper.
 // Session L — Device-First Intelligence Layer
 //
-// Call initDB() once on app mount (in App.tsx).
-// All other db/ modules import getDB() from schema.ts directly.
+// Call initDB() once on app mount (in App.tsx) before any screen reads SQLite.
+// Safe to call again — concurrent and repeat calls share the same promise.
+// isDBReady() is true only after schema migrations and post-migration hooks finish.
 
 import { runMigrations } from "./schema";
 
@@ -17,7 +18,6 @@ export async function initDB(): Promise<void> {
   _initPromise = (async () => {
     try {
       await runMigrations();
-
       try {
         const { importLegacyDatabases } = await import("./legacyMigration");
         await importLegacyDatabases();
@@ -49,6 +49,7 @@ export async function initDB(): Promise<void> {
       }
 
       _initialized = true;
+      _initPromise = null;
     } catch (e) {
       _initPromise = null;
       console.error("[Herald] DB init failed:", e);
@@ -59,6 +60,7 @@ export async function initDB(): Promise<void> {
   return _initPromise;
 }
 
+/** True only after schema migrations and init hooks have completed successfully. */
 export function isDBReady(): boolean {
   return _initialized;
 }

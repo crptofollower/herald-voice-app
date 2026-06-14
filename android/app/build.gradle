@@ -90,7 +90,7 @@ android {
     namespace 'ai.apexempire.herald'
     defaultConfig {
         applicationId 'ai.apexempire.herald'
-        minSdkVersion 26
+        minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.1.0"

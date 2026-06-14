@@ -10,39 +10,82 @@
   <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
   <uses-permission android:name="android.permission.VIBRATE"/>
   <uses-permission android:name="android.permission.WRITE_CALENDAR"/>
+  <uses-permission android:name="android.permission.WRITE_CONTACTS"/>
   <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
   <uses-permission android:name="com.android.alarm.permission.SET_ALARM"/>
   <queries>
+    <package android:name="com.ubercab"/>
+    <package android:name="me.lyft.android"/>
+    <package android:name="com.doordash.consumer"/>
+    <package android:name="com.ubercab.eats"/>
+    <package android:name="com.grubhub.android"/>
+    <package android:name="com.instacart.client"/>
+    <package android:name="com.starbucks.mobilecard"/>
+    <package android:name="com.chipotle.ordering"/>
+    <package android:name="com.chilifresh.chilis"/>
+    <package android:name="com.walmart.android"/>
+    <package android:name="com.target.ui"/>
+    <package android:name="com.costco.costcomobile"/>
+    <package android:name="com.aa.android"/>
+    <package android:name="com.southwest.airlines"/>
+    <package android:name="com.united.mobile.android"/>
+    <package android:name="com.hilton.android.hhonors"/>
+    <package android:name="com.ihg.apps.android"/>
+    <package android:name="com.hertz.mobile.android"/>
+    <package android:name="com.ehi.enterprise"/>
+    <package android:name="com.avis.androidapp"/>
+    <package android:name="com.budget.android"/>
+    <package android:name="com.nationalcar"/>
+    <package android:name="com.hyatt.android"/>
+    <package android:name="com.hulu.plus"/>
+    <package android:name="com.disney.disneyplus"/>
+    <package android:name="com.hbo.hbonow"/>
+    <package android:name="com.peacocktv.peacockandroid"/>
+    <package android:name="com.cbs.ott"/>
+    <package android:name="com.espn.score_center"/>
+    <package android:name="com.cvs.launchers.cvs"/>
+    <package android:name="com.walgreens.riteaid.mobile"/>
+    <package android:name="com.goodrx"/>
+    <package android:name="com.chase.sig.android"/>
+    <package android:name="com.infonow.bofa"/>
+    <package android:name="com.wf.wellsfargomobile"/>
+    <package android:name="com.americanexpress.android.acctsvcs.us"/>
+    <package android:name="com.robinhood.android"/>
+    <package android:name="com.fidelity.android"/>
+    <package android:name="com.schwab.mobile"/>
+    <package android:name="com.venmo"/>
+    <package android:name="com.paypal.android.p2pmobile"/>
+    <package android:name="com.zellepay.zelle"/>
+    <package android:name="com.audible.application"/>
+    <package android:name="com.amazon.kindle"/>
+    <package android:name="com.facebook.katana"/>
+    <package android:name="org.aarp.aarpnow"/>
+    <package android:name="com.google.android.apps.photos"/>
+    <package android:name="com.sec.android.gallery3d"/>
+    <package android:name="com.samsung.android.clockpackage"/>
+    <package android:name="com.sec.android.app.clockpackage"/>
+    <package android:name="com.google.android.deskclock"/>
     <intent>
       <action android:name="android.intent.action.VIEW"/>
       <category android:name="android.intent.category.BROWSABLE"/>
       <data android:scheme="https"/>
     </intent>
+  </queries>
+  <queries>
+    <package android:name="com.google.android.as"/>
     <intent>
-      <action android:name="android.intent.action.SET_TIMER"/>
+      <action android:name="android.speech.RecognitionService"/>
     </intent>
-    <intent>
-      <action android:name="android.intent.action.SET_ALARM"/>
-    </intent>
-    <intent>
-      <action android:name="android.intent.action.SHOW_TIMERS"/>
-    </intent>
-    <package android:name="com.google.android.deskclock"/>
-    <package android:name="com.sec.android.app.clockpackage"/>
-    <package android:name="com.samsung.android.clockpackage"/>
   </queries>
   <application android:name=".MainApplication" android:label="@string/app_name" android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:allowBackup="false" android:theme="@style/AppTheme" android:supportsRtl="true" android:enableOnBackInvokedCallback="false">
+    <meta-data android:name="com.google.firebase.messaging.default_notification_color" android:resource="@color/notification_icon_color"/>
+    <meta-data android:name="com.google.firebase.messaging.default_notification_icon" android:resource="@drawable/notification_icon"/>
+    <meta-data android:name="expo.modules.notifications.default_notification_color" android:resource="@color/notification_icon_color"/>
+    <meta-data android:name="expo.modules.notifications.default_notification_icon" android:resource="@drawable/notification_icon"/>
     <meta-data android:name="expo.modules.updates.ENABLED" android:value="false"/>
     <meta-data android:name="expo.modules.updates.EXPO_UPDATES_CHECK_ON_LAUNCH" android:value="ALWAYS"/>
     <meta-data android:name="expo.modules.updates.EXPO_UPDATES_LAUNCH_WAIT_MS" android:value="0"/>
-    <activity
-        android:name=".MainActivity"
-        android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|uiMode"
-        android:launchMode="singleTask"
-        android:windowSoftInputMode="adjustResize"
-        android:theme="@style/Theme.App.SplashScreen"
-        android:exported="true"
-        android:screenOrientation="portrait">
+    <activity android:name=".MainActivity" android:configChanges="keyboard|keyboardHidden|orientation|screenSize|screenLayout|uiMode" android:launchMode="singleTask" android:windowSoftInputMode="adjustResize" android:theme="@style/Theme.App.SplashScreen" android:exported="true" android:screenOrientation="portrait">
       <intent-filter>
         <action android:name="android.intent.action.MAIN"/>
         <category android:name="android.intent.category.LAUNCHER"/>
@@ -53,7 +96,9 @@
         <category android:name="android.intent.category.BROWSABLE"/>
         <data android:scheme="herald"/>
       </intent-filter>
+      <intent-filter>
+        <action android:name="androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE"/>
+      </intent-filter>
     </activity>
-    <activity android:name="androidx.health.connect.client.permission.HealthPermissionActivity" />
   </application>
 </manifest>

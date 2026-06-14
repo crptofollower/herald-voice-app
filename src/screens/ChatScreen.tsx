@@ -208,6 +208,7 @@ export default function ChatScreen() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [thinkingPhrase, setThinkingPhrase] = useState(THINKING_PHRASES[0]);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [dbReady, setDbReady] = useState(false);
 
   // ── Ambient mode state ────────────────────────────────────────────────────
   // sessionStart filters which messages are shown in the current session.
@@ -410,6 +411,7 @@ export default function ChatScreen() {
       try {
         await runMigration(userId);
       } catch {}
+      setDbReady(true);
       refreshCalendarCache();
       AsyncStorage.getItem('herald_health_sync').then(last => {
         const now = Date.now();
@@ -473,9 +475,9 @@ export default function ChatScreen() {
   }, [userId]);
 
   useEffect(() => {
-    if (!userId || !name) return;
+    if (!userId || !name || !dbReady) return;
     setProfileField('name', name);
-  }, [userId, name]);
+  }, [userId, name, dbReady]);
 
   useEffect(() => {
     if (!isWaiting) return;
@@ -532,7 +534,7 @@ export default function ChatScreen() {
   // Use displayMessages not messages -- old sessions have messages.length > 0
   // but displayMessages is always empty on mount (sessionStart = Date.now()).
   useEffect(() => {
-    if (!userId || displayMessages.length > 0) return;
+    if (!userId || !dbReady || displayMessages.length > 0) return;
     if (greetingSentRef.current) return;
     greetingSentRef.current = true;
 
@@ -554,7 +556,7 @@ export default function ChatScreen() {
 
     // ── BACKGROUND LIVE ENHANCEMENT ──────────────────────────────────────────
     upgradeLiveGreeting(lat ?? undefined, lng ?? undefined, locationLabel ?? undefined);
-  }, [userId, available, lat, lng, locationLabel, displayMessages.length, getLocalGreeting, aiName, addMessage, speak, upgradeLiveGreeting]);
+  }, [userId, dbReady, available, lat, lng, locationLabel, displayMessages.length, getLocalGreeting, aiName, addMessage, speak, upgradeLiveGreeting]);
 
   // If GPS resolves within 3s of open, re-fetch greeting with real coords.
   useEffect(() => {
