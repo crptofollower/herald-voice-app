@@ -145,6 +145,15 @@
             }
           }
         }
+      ],
+      [
+        "llama.rn",
+        {
+          "enableEntitlements": true,
+          "entitlementsProfile": "production",
+          "forceCxx20": true,
+          "enableOpenCLAndHexagon": true
+        }
       ]
     ],
     "scheme": "herald",
