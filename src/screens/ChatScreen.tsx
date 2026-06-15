@@ -68,7 +68,7 @@ import { useMic } from "../hooks/useMic";
 import { useRaiseToWake } from "../hooks/useRaiseToWake";
 import { useHealthConnect } from "../hooks/useHealthConnect";
 import { useDeviceMemory } from "../hooks/useDeviceMemory";
-import { useLocalLLM } from '../hooks/useLocalLLM';
+import { useLocalLLM, classifyIntent } from '../hooks/useLocalLLM';
 import { answerFromDevice } from '../utils/localAnswers';
 import { classifyQuery } from "../routing/tierRouter";
 import { handleTier1, buildTier2DeviceContext, buildAmbientDeviceContext, writeProfileFromOnboarding } from "../routing/tier1Responses";
@@ -95,7 +95,7 @@ import { _registerContactExtractor, writeFacts, extractFactsLocally, getFactCoun
 import { getActiveTopics, extractTopicsFromMessage, recordTopicMention } from "../db/topicDB";
 import { launchAndroidTimer } from "../utils/androidClock";
 import { captureHousehold } from '../utils/householdCapture';
-import { answerHouseholdRead } from '../utils/householdRead';
+import { answerHouseholdRead, detectHouseholdRead } from '../utils/householdRead';
 
 interface IntentAction {
   type: string;
@@ -201,8 +201,12 @@ export default function ChatScreen() {
 
   const persona = PERSONAS[personaKey] ?? PERSONAS[DEFAULT_PERSONA];
 
-  const { status: llmStatus, inferLocal, activeModel } = useLocalLLM();
+  const { status: llmStatus, activeModel, getCtx } = useLocalLLM();
   void activeModel;
+
+  type ResolveContactFn = (nameOrRelation: string) => Promise<{ phone: string; name: string; contactId?: string } | null>;
+  const resolveContactPhoneRef = useRef<ResolveContactFn | null>(null);
+  const handleLaunchActionRef = useRef<((appName: string) => Promise<void>) | null>(null);
 
   const [inputText, setInputText] = useState("");
   const [showProactive, setShowProactive] = useState(false);
@@ -614,25 +618,144 @@ export default function ChatScreen() {
     }
   }, [displayMessages.length, streamingContent]);
 
-  const buildLocalPrompt = useCallback((
-    userText: string,
-    contextBlock: string
-  ): string => {
-    const userName = useStore.getState().name ?? 'the user';
-    const time = new Date().toLocaleTimeString('en-US', {
-      hour: 'numeric', minute: '2-digit', hour12: true
-    });
-    return [
-      `You are Herald, a trusted personal AI companion for ${userName}.`,
-      `Current time: ${time}.`,
-      contextBlock ? `What you know about ${userName}: ${contextBlock}` : '',
-      `Answer naturally and conversationally. Be brief — 1-3 sentences.`,
-      `Never say you are an AI or that you cannot help. Just answer.`,
-      ``,
-      `${userName}: ${userText}`,
-      `Herald:`,
-    ].filter(Boolean).join('\n');
-  }, []);
+  function getKnownContactNames(): string[] {
+    try {
+      const db = getDB();
+      const rows = db.getAllSync<{ name: string }>(
+        `SELECT DISTINCT name FROM contacts LIMIT 20`,
+      );
+      return rows.map((r) => r.name.split(' ')[0]);
+    } catch {
+      return [];
+    }
+  }
+
+  function getKnownListNames(): string[] {
+    try {
+      const db = getDB();
+      const rows = db.getAllSync<{ name: string }>(
+        `SELECT name FROM lists`,
+      );
+      return rows.map((r) => r.name);
+    } catch {
+      return ['grocery', 'todo'];
+    }
+  }
+
+  const dispatchLocalIntent = useCallback(async (
+    intent: Record<string, string | undefined>,
+    originalText: string,
+  ): Promise<void> => {
+    const replyAndReset = (msg: string) => {
+      addMessage({ id: generateId('msg'), role: 'assistant',
+        content: msg, timestamp: Date.now() });
+      speak(msg);
+      sendingRef.current = false;
+      setInputText('');
+    };
+    try {
+      const db = getDB();
+      switch (intent.type) {
+        case 'list_remove': {
+          const matches = db.getAllSync<{ id: string; body: string }>(
+            `SELECT li.id, li.body FROM list_items li
+             JOIN lists l ON l.id = li.list_id
+             WHERE l.name = ? AND li.checked = 0
+             AND lower(li.body) LIKE lower(?)`,
+            [intent.listName ?? 'grocery', `%${intent.item ?? ''}%`],
+          );
+          if (matches.length === 0) {
+            replyAndReset(`I don't see ${intent.item} on your list.`);
+          } else if (matches.length === 1) {
+            db.runSync(`UPDATE list_items SET checked = 1 WHERE id = ?`,
+              [matches[0].id]);
+            replyAndReset(`Removed ${matches[0].body} from your ${intent.listName ?? 'grocery'} list.`);
+          } else {
+            replyAndReset(`I see a few matches — which one did you mean?`);
+          }
+          break;
+        }
+        case 'list_add': {
+          const listName = intent.listName ?? 'grocery';
+          const item = intent.item ?? '';
+          let list = db.getFirstSync<{ id: string }>(`SELECT id FROM lists WHERE name = ?;`, [listName]);
+          if (!list) {
+            const listId = `list_${Date.now()}`;
+            db.runSync(`INSERT INTO lists (id, name, created_at) VALUES (?, ?, ?);`, [listId, listName, new Date().toISOString()]);
+            list = { id: listId };
+          }
+          db.runSync(
+            `INSERT INTO list_items (id, list_id, body, checked, created_at) VALUES (?, ?, ?, 0, ?);`,
+            [`item_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, list.id, item, new Date().toISOString()],
+          );
+          replyAndReset(`Added ${item} to your ${listName} list.`);
+          break;
+        }
+        case 'call': {
+          const contactName = intent.contact ?? '';
+          const resolved = await resolveContactPhoneRef.current?.(contactName);
+          if (resolved?.phone) {
+            await Linking.openURL(`tel:${resolved.phone.replace(/\D/g, '')}`);
+            replyAndReset(`Calling ${resolved.name}.`);
+          } else {
+            replyAndReset(`I don't have a number for ${contactName}. What's their number?`);
+            pendingContactCollectRef.current = { action: 'call', name: contactName };
+          }
+          break;
+        }
+        case 'household_read': {
+          const householdIntent = detectHouseholdRead(originalText);
+          if (householdIntent) {
+            replyAndReset(answerHouseholdRead(householdIntent));
+          } else {
+            replyAndReset(`I don't have that stored yet.`);
+          }
+          break;
+        }
+        case 'photo_open': {
+          let opened = false;
+          if (Platform.OS === 'android') {
+            const photoIntents = [
+              'intent:#Intent;action=android.intent.action.VIEW;type=image/*;package=com.google.android.apps.photos;end',
+              'intent:#Intent;action=android.intent.action.VIEW;type=image/*;package=com.sec.android.gallery3d;end',
+              'googlephotos://',
+            ];
+            for (const uri of photoIntents) {
+              try {
+                await Linking.openURL(uri);
+                opened = true;
+                break;
+              } catch { /* try next */ }
+            }
+          }
+          replyAndReset(opened
+            ? `Opening your photos.`
+            : `I couldn't open your gallery — try opening Photos manually.`);
+          break;
+        }
+        case 'app_open': {
+          const appName = intent.appName ?? 'app';
+          try {
+            await handleLaunchActionRef.current?.(appName);
+            replyAndReset(`Opening ${appName}.`);
+          } catch {
+            replyAndReset(`I couldn't open ${appName} — try opening it manually.`);
+          }
+          break;
+        }
+        case 'reminder': {
+          replyAndReset(
+            `Got it — I'll remind you about ${intent.body}${intent.time ? ` at ${intent.time}` : ''}.`,
+          );
+          break;
+        }
+        default:
+          replyAndReset(`I couldn't quite get that — try a different way.`);
+      }
+    } catch {
+      replyAndReset(`Sorry, I couldn't do that right now.`);
+    }
+  }, [addMessage, speak, setInputText]);
 
   // ── Send ──────────────────────────────────────────────────────────────────
 
@@ -1118,6 +1241,34 @@ export default function ChatScreen() {
       return;
     }
 
+    // Profile update — local SQLite, runs before offline gate
+    if (tierDecision.actionIntent?.type === 'profile_update') {
+      addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+      try {
+        const { field, value } = tierDecision.actionIntent;
+        const PROFILE_FIELD_MAP: Record<string, string> = {
+          insurance: 'insurance_provider',
+          doctor: 'primary_doctor',
+          pharmacy: 'pharmacy',
+          dentist: 'dentist',
+          specialist: 'specialist',
+          provider: 'insurance_provider',
+        };
+        const mappedKey = PROFILE_FIELD_MAP[field.toLowerCase()] ?? field.toLowerCase();
+        setProfileField(mappedKey, value);
+        const reply = `Got it — updated your ${field} to ${value}.`;
+        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+        speak(reply);
+      } catch {
+        const reply = `Something went wrong updating that. Try again.`;
+        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+        speak(reply);
+      }
+      sendingRef.current = false;
+      setInputText('');
+      return;
+    }
+
     // ── Offline gate — runs AFTER emergency (emergency always fires) ─────────────────────────
     // Fix: treat null isInternetReachable as ONLINE (not offline) — null means
     // reachability check not yet complete, not that we're definitely offline.
@@ -1161,36 +1312,33 @@ export default function ChatScreen() {
           return;
         }
 
-        // Tier 1.5: try on-device LLM before showing offline message
+        // Tier 1.5: classify intent with on-device LLM (JSON only — never prose)
         if (llmStatus === 'ready') {
-          addMessage({ id: generateId('msg'), role: 'user',
-            content: text, timestamp: Date.now() });
-          setIsWaiting(true);
           try {
-            const contextBlock = getContextBlock?.() ?? '';
-            const prompt = buildLocalPrompt(text, contextBlock);
-            const localReply = await inferLocal(prompt, 200);
-            if (localReply && localReply.trim().length > 0) {
-              const reply = localReply.trim();
-              addMessage({ id: generateId('msg'), role: 'assistant',
-                content: reply, timestamp: Date.now() });
-              speak(reply);
-              sendingRef.current = false;
-              setInputText('');
-              setIsWaiting(false);
+            const contacts = getKnownContactNames();
+            const lists = getKnownListNames();
+            const intentJson = await classifyIntent(
+              text, contacts, lists, getCtx(),
+            );
+            if (intentJson) {
+              const intent = JSON.parse(intentJson);
+              addMessage({ id: generateId('msg'), role: 'user',
+                content: text, timestamp: Date.now() });
+              await dispatchLocalIntent(intent, text);
               return;
             }
           } catch {
-            // Fall through to offline message
-          } finally {
-            setIsWaiting(false);
+            // fall through to honest fallback
           }
         }
 
-        const offlineReply = llmStatus === 'ready'
-          ? "I couldn't quite get that — try asking a different way."
-          : "I'm offline right now, but I can still help — ask me about " +
-            "your calendar, schedule, medications, or anything personal.";
+        // Honest offline fallback
+        const offlineReplies = [
+          "I'm not connected right now — ask me about your calendar, medications, contacts, or lists.",
+          "No connection at the moment. I can still help with anything on your phone — what do you need?",
+          "I'm offline but still here. Calendar, contacts, medications, lists — what do you need?",
+        ];
+        const offlineReply = offlineReplies[Math.floor(Math.random() * offlineReplies.length)];
         addMessage({ id: generateId('msg'), role: 'user',
           content: text, timestamp: Date.now() });
         addMessage({ id: generateId('msg'), role: 'assistant',
@@ -1323,6 +1471,56 @@ export default function ChatScreen() {
         if (tierDecision.actionIntent.type === 'household_read') {
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
           const reply = answerHouseholdRead(tierDecision.actionIntent.intent);
+          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+          speak(reply);
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+
+        if (tierDecision.actionIntent.type === 'photo_open') {
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          let opened = false;
+          if (Platform.OS === 'android') {
+            const photoIntents = [
+              'intent:#Intent;action=android.intent.action.VIEW;type=image/*;package=com.google.android.apps.photos;end',
+              'intent:#Intent;action=android.intent.action.VIEW;type=image/*;package=com.sec.android.gallery3d;end',
+              'googlephotos://',
+            ];
+            for (const uri of photoIntents) {
+              try {
+                await Linking.openURL(uri);
+                opened = true;
+                break;
+              } catch { /* try next */ }
+            }
+          }
+          const reply = opened
+            ? 'Opening your photos.'
+            : "I couldn't open your gallery — try opening Photos manually.";
+          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+          speak(reply);
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+
+        if (tierDecision.actionIntent.type === 'app_open') {
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          const { appName } = tierDecision.actionIntent;
+          let opened = false;
+          try {
+            if (appName.toLowerCase().includes('camera') || /\bselfie\b/i.test(text)) {
+              await IntentLauncher.startActivityAsync('android.media.action.IMAGE_CAPTURE', {});
+              opened = true;
+            } else {
+              await handleLaunchActionRef.current?.(appName);
+              opened = true;
+            }
+          } catch { /* fall through */ }
+          const reply = opened
+            ? `Opening ${appName}.`
+            : `I couldn't open ${appName} — try opening it manually.`;
           addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
           speak(reply);
           sendingRef.current = false;
@@ -1594,6 +1792,115 @@ export default function ChatScreen() {
           return;
         }
 
+        // List remove — soft-delete via checked=1, zero network
+        if (tierDecision.actionIntent.type === 'list_remove') {
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          try {
+            const db = getDB();
+            const { item, listName } = tierDecision.actionIntent;
+            const matches = db.getAllSync<{ id: string; body: string }>(
+              `SELECT li.id, li.body FROM list_items li
+               JOIN lists l ON l.id = li.list_id
+               WHERE l.name = ? AND li.checked = 0
+               AND lower(li.body) LIKE lower(?)`,
+              [listName, `%${item}%`],
+            );
+            let reply: string;
+            if (matches.length === 0) {
+              reply = `I don't see ${item} on your ${listName} list.`;
+            } else if (matches.length === 1) {
+              db.runSync(`UPDATE list_items SET checked = 1 WHERE id = ?;`, [matches[0].id]);
+              reply = `Removed ${matches[0].body} from your ${listName} list.`;
+            } else {
+              reply = `I see a few matches for ${item} — which one did you mean?`;
+            }
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          } catch {
+            const reply = `Something went wrong removing that. Try again.`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          }
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+
+        // List clear — mark all unchecked items checked=1, zero network
+        if (tierDecision.actionIntent.type === 'list_clear') {
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          try {
+            const db = getDB();
+            const { listName } = tierDecision.actionIntent;
+            const list = db.getFirstSync<{ id: string }>(`SELECT id FROM lists WHERE name = ?;`, [listName]);
+            if (!list) {
+              const reply = `Your ${listName} list is already empty.`;
+              addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+              speak(reply);
+            } else {
+              const openCount = db.getFirstSync<{ n: number }>(
+                `SELECT COUNT(*) as n FROM list_items WHERE list_id = ? AND checked = 0;`,
+                [list.id],
+              )?.n ?? 0;
+              if (openCount === 0) {
+                const reply = `Your ${listName} list is already empty.`;
+                addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+                speak(reply);
+              } else {
+                db.runSync(
+                  `UPDATE list_items SET checked = 1 WHERE list_id = ? AND checked = 0;`,
+                  [list.id],
+                );
+                const reply = `Cleared your ${listName} list.`;
+                addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+                speak(reply);
+              }
+            }
+          } catch {
+            const reply = `Something went wrong clearing that list. Try again.`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          }
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+
+        // List update — fuzzy match + UPDATE body, zero network
+        if (tierDecision.actionIntent.type === 'list_update') {
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          try {
+            const db = getDB();
+            const { oldItem, newItem, listName } = tierDecision.actionIntent;
+            const matches = db.getAllSync<{ id: string; body: string }>(
+              `SELECT li.id, li.body FROM list_items li
+               JOIN lists l ON l.id = li.list_id
+               WHERE l.name = ? AND li.checked = 0
+               AND lower(li.body) LIKE lower(?)`,
+              [listName, `%${oldItem}%`],
+            );
+            let reply: string;
+            if (matches.length === 0) {
+              reply = `I don't see ${oldItem} on your ${listName} list.`;
+            } else if (matches.length === 1) {
+              const prevBody = matches[0].body;
+              db.runSync(`UPDATE list_items SET body = ? WHERE id = ?;`, [newItem, matches[0].id]);
+              reply = `Updated ${prevBody} to ${newItem} on your ${listName} list.`;
+            } else {
+              reply = `I see a few matches for ${oldItem} — which one did you mean?`;
+            }
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          } catch {
+            const reply = `Something went wrong updating that. Try again.`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          }
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+
         if (tierDecision.actionIntent.type === 'todo_add') {
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
           try {
@@ -1729,27 +2036,6 @@ export default function ChatScreen() {
       return;
     }
     lastInteractionRef.current = now;
-
-    // Tier 1.5: try local LLM for Tier 2 queries (cheaper + faster)
-    if (tierDecision.tier === 2 && llmStatus === 'ready') {
-      try {
-        const contextBlock = getContextBlock?.() ?? '';
-        const prompt = buildLocalPrompt(text, contextBlock);
-        const localReply = await inferLocal(prompt, 300);
-        if (localReply && localReply.trim().length > 0) {
-          addMessage({ id: generateId('msg'), role: 'user',
-            content: text, timestamp: Date.now() });
-          addMessage({ id: generateId('msg'), role: 'assistant',
-            content: localReply.trim(), timestamp: Date.now() });
-          speak(localReply.trim());
-          sendingRef.current = false;
-          setInputText('');
-          return;
-        }
-      } catch {
-        // Fall through to Railway
-      }
-    }
 
     addMessage({
       id: generateId("msg"),
@@ -1947,7 +2233,7 @@ export default function ChatScreen() {
       }
       resetStreamState();
     }
-  }, [userId, messages, personaKey, lat, lng, locationLabel, getContextBlock, addMessage, setError, resetSpeech, enqueueSentence, resetStreamState, stop, llmStatus, inferLocal, buildLocalPrompt]);
+  }, [userId, messages, personaKey, lat, lng, locationLabel, getContextBlock, addMessage, setError, resetSpeech, enqueueSentence, resetStreamState, stop, llmStatus, getCtx, dispatchLocalIntent]);
 
   const handleSend = useCallback(() => {
     sendMessage(inputText.trim());
@@ -2377,6 +2663,7 @@ export default function ChatScreen() {
 
     return null;
   };
+  resolveContactPhoneRef.current = resolveContactPhone;
 
   const handleSMSAction = async (value: string) => {
     const pipeIdx = value.indexOf("|");
@@ -2626,6 +2913,7 @@ export default function ChatScreen() {
       `https://www.google.com/search?q=${encodeURIComponent(appName)}`
     );
   };
+  handleLaunchActionRef.current = handleLaunchAction;
 
   const handleConfirmIntent = useCallback(async () => {
     if (!pendingAction || actionStatus === "executing") return;

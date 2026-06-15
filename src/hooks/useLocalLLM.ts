@@ -34,6 +34,7 @@ export function useLocalLLM(): {
   status: LocalLLMStatus;
   inferLocal: (prompt: string, maxTokens?: number) => Promise<string | null>;
   activeModel: 'small' | 'large' | null;
+  getCtx: () => LlamaContext | null;
 } {
   const [status, setStatus] = useState<LocalLLMStatus>('unavailable');
   const [activeModel, setActiveModel] = useState<'small' | 'large' | null>(null);
@@ -189,5 +190,63 @@ export function useLocalLLM(): {
     [],
   );
 
-  return { status, inferLocal, activeModel };
+  const getCtx = useCallback(() => ctxRef.current, []);
+
+  return { status, inferLocal, activeModel, getCtx };
+}
+
+export async function classifyIntent(
+  userText: string,
+  knownContacts: string[],
+  knownLists: string[],
+  ctx: LlamaContext | null,
+): Promise<string | null> {
+  if (!ctx) return null;
+
+  const prompt = `You are an intent classifier. Respond with ONLY a JSON
+object or the word PASS. No explanation, no other text.
+
+INTENTS:
+{"type":"list_remove","item":"ITEM","listName":"LIST"}
+{"type":"list_add","item":"ITEM","listName":"LIST"}
+{"type":"call","contact":"NAME"}
+{"type":"sms","contact":"NAME","message":"MSG"}
+{"type":"photo_open"}
+{"type":"app_open","appName":"NAME"}
+{"type":"household_read","query":"QUERY"}
+{"type":"reminder","body":"WHAT","time":"WHEN"}
+
+Rules:
+- Known contacts: ${knownContacts.slice(0, 15).join(', ') || 'none'}
+- Known lists: ${knownLists.join(', ') || 'grocery, todo'}
+- "I got X" / "I picked up X" / "already have X" → list_remove
+- "running low on X" / "we need X" / "out of X" → list_add, listName=grocery
+- "call/ring/phone [name or relationship]" → call
+- "open [app]" / "show my photos" → photo_open or app_open
+- "who is my [doctor/dentist/etc]" / "what is my [fact]" → household_read
+- Anything needing live data, general knowledge, or unclear → PASS
+RESPOND WITH ONLY THE JSON OR THE WORD PASS.
+
+User: "${userText.replace(/"/g, '\\"')}"`;
+
+  try {
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('classify timeout')), 5000),
+    );
+    const completionPromise = ctx.completion({
+      messages: [{ role: 'user', content: prompt }],
+      n_predict: 60,
+      temperature: 0.1,
+      stop: ['\n', '<|end|>', '<|eot_id|>'],
+    });
+    const result = await Promise.race([completionPromise, timeoutPromise]);
+    const raw = result?.text?.trim();
+    if (!raw || raw === 'PASS') return null;
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+    JSON.parse(jsonMatch[0]);
+    return jsonMatch[0];
+  } catch {
+    return null;
+  }
 }

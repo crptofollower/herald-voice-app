@@ -32,13 +32,19 @@ export interface TierDecision {
     | { type: 'note_capture'; body: string }
     | { type: 'note_read' }
     | { type: 'list_add'; items: string[]; listName: string }
+    | { type: 'list_remove'; item: string; listName: string }
     | { type: 'list_read'; listName: string }
+    | { type: 'list_clear'; listName: string }
+    | { type: 'list_update'; oldItem: string; newItem: string; listName: string }
     | { type: 'todo_add'; body: string }
     | { type: 'todo_read' }
     | { type: 'todo_complete'; raw: string }
     | { type: 'calendar_write'; value: string }
     | { type: 'medical_capture'; event: MedicalEvent }
-    | { type: 'household_read'; intent: HouseholdReadIntent };
+    | { type: 'household_read'; intent: HouseholdReadIntent }
+    | { type: 'photo_open' }
+    | { type: 'app_open'; appName: string }
+    | { type: 'profile_update'; field: string; value: string };
   localContext?: LocalContext;
   reason: string;
 }
@@ -186,6 +192,7 @@ const CALL_SIGNALS = [
   /\b(call|phone|dial|ring)\s+\w+/i,
   /\bcan you (call|phone)\s+\w+/i,
   /\bgive\s+\w+\s+a (call|ring)\b/i,
+  /\b(call|ring|phone|dial)\s+(my\s+)?(wife|husband|mom|dad|mother|father|son|daughter|sister|brother)\b/i,
 ];
 
 const DIRECTIONS_SIGNALS = [
@@ -277,6 +284,46 @@ const TODO_COMPLETE_SIGNALS = [
   /\bthat('s| is) done\b/i,
   /\bI (picked up|dropped off|returned|sent|submitted|paid|filed|bought|got|grabbed)\b/i,
   /\bI (went to|made it to|got to|stopped by)\b/i,
+];
+
+const PHOTO_SIGNALS = [
+  /\b(open|show|view|see)\s+(my\s+)?(photos?|pictures?|gallery|images?|album)\b/i,
+  /\bphoto\s+(album|library|roll)\b/i,
+  /\b(go\s+to|take\s+me\s+to)\s+(my\s+)?(photos?|gallery)\b/i,
+];
+
+const APP_OPEN_SIGNALS = [
+  /\b(open|launch|start|pull\s+up)\s+(my\s+)?(banking|bank)\s*(app)?\b/i,
+  /\b(open|launch)\s+(my\s+)?(camera)\b/i,
+  /\btake\s+a?\s*selfie\b/i,
+];
+
+const LIST_REMOVE_SIGNALS = [
+  /\b(remove|take\s+off|delete|cross\s+off)\s+(.+?)\s+(from|off)\s+(my\s+)?(\w+\s+)?list\b/i,
+  /\b(i('?ve?)?|we)\s+(got|picked\s+up|grabbed|bought|already\s+have)\s+(?:the\s+)?(.+?)\s*$/i,
+  /\b(scratch|cross|mark)\s+off\s+(?:the\s+)?(.+?)\s+(from|on|off)?\s*(my|the)?\s*list\b/i,
+];
+
+const LIST_CLEAR_SIGNALS = [
+  /\b(clear|empty|reset|wipe)\s+(my\s+)?(\w+\s+)?list\b/i,
+  /\bmy\s+list\s+is\s+(done|empty|finished|complete)\b/i,
+  /\bwe\s+got\s+everything\b/i,
+];
+
+const LIST_UPDATE_SIGNALS = [
+  /\b(change|update|replace)\s+(.+?)\s+(to|with)\s+(.+?)\s+on\s+(my\s+)?(\w+\s+)?list\b/i,
+];
+
+const LIST_ADD_CONTEXTUAL_SIGNALS = [
+  /\bwe'?re?\s+(out\s+of|running\s+(low|out)\s+on?|almost\s+out\s+of)\s+(.+)/i,
+  /\b(need\s+to\s+(pick\s+up|get|buy)|gotta\s+get)\s+(.+)/i,
+  /\bdon'?t\s+forget\s+(the\s+)?(.+)/i,
+];
+
+const PROFILE_UPDATE_SIGNALS = [
+  /\b(change|update|my\s+new)\s+(my\s+)?(insurance|doctor|pharmacy|dentist|specialist|provider)\s+(is\s+|to\s+)(.+)/i,
+  /\bI\s+(changed|switched|updated)\s+my\s+(insurance|doctor|pharmacy|dentist)\s+(to\s+)?(.+)/i,
+  /\bmy\s+(insurance|doctor|pharmacy|dentist|specialist|provider)\s+(is\s+now|changed\s+to|is)\s+(.+)/i,
 ];
 
 // ─── classifyQuery ────────────────────────────────────────────────────────────
@@ -406,6 +453,11 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     }
   }
 
+  // Device: photo open — before navigation so "take me to my photos" isn't directions
+  if (PHOTO_SIGNALS.some((p) => p.test(msg))) {
+    return { tier: 1, actionIntent: { type: 'photo_open' }, reason: 'action:photo_open' };
+  }
+
   // Device: navigation — resolve contact/address on device, fire maps intent
   if (DIRECTIONS_SIGNALS.some((p) => p.test(msg))) {
     const destMatch =
@@ -459,6 +511,29 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
       actionIntent: { type: 'todo_complete', raw: msg },
       reason: 'action:todo_complete',
     };
+  }
+
+  // Device: list remove — after todo_complete so "I got X" doesn't become todo_complete
+  if (LIST_REMOVE_SIGNALS.some((p) => p.test(msg))) {
+    const m =
+      msg.match(
+        /\b(?:remove|take\s+off|delete|cross\s+off)\s+(.+?)\s+(?:from|off)\s+(?:my\s+)?(?:(\w+)\s+)?list\b/i,
+      ) ??
+      msg.match(
+        /\b(?:i(?:'?ve?)?|we)\s+(?:got|picked\s+up|grabbed|bought|already\s+have)\s+(?:the\s+)?(.+?)\s*$/i,
+      ) ??
+      msg.match(
+        /\b(?:scratch|cross|mark)\s+off\s+(?:the\s+)?(.+?)\s+(?:from|on|off)?\s*(?:my|the)?\s*list\b/i,
+      );
+    const item = (m?.[1] ?? '').trim();
+    const listName = (m?.[2] ?? 'grocery').toLowerCase();
+    if (item) {
+      return {
+        tier: 1,
+        actionIntent: { type: 'list_remove', item, listName },
+        reason: 'action:list_remove',
+      };
+    }
   }
 
   // Device: todo read
@@ -525,6 +600,82 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
       actionIntent: { type: 'household_read', intent: householdRead },
       reason: 'action:household_read',
     };
+  }
+
+  // Device: app open
+  if (APP_OPEN_SIGNALS.some((p) => p.test(msg))) {
+    const nameMatch = msg.match(
+      /\b(?:open|launch|start|pull\s+up)\s+(?:my\s+)?(.+?)(?:\s+app)?\s*$/i,
+    );
+    const appName = nameMatch?.[1]?.trim() ?? 'app';
+    return { tier: 1, actionIntent: { type: 'app_open', appName }, reason: 'action:app_open' };
+  }
+
+  // Device: list clear
+  if (LIST_CLEAR_SIGNALS.some((p) => p.test(msg))) {
+    const nm = msg.match(/(?:my\s+)?(\w+)\s+list\b/i);
+    const listName = (nm?.[1] ?? 'grocery').toLowerCase();
+    return { tier: 1, actionIntent: { type: 'list_clear', listName }, reason: 'action:list_clear' };
+  }
+
+  // Device: list update
+  if (LIST_UPDATE_SIGNALS.some((p) => p.test(msg))) {
+    const m = msg.match(
+      /\b(?:change|update|replace)\s+(.+?)\s+(?:to|with)\s+(.+?)\s+on\s+(?:my\s+)?(?:(\w+)\s+)?list\b/i,
+    );
+    const oldItem = (m?.[1] ?? '').trim();
+    const newItem = (m?.[2] ?? '').trim();
+    const listName = (m?.[3] ?? 'grocery').toLowerCase();
+    if (oldItem && newItem) {
+      return {
+        tier: 1,
+        actionIntent: { type: 'list_update', oldItem, newItem, listName },
+        reason: 'action:list_update',
+      };
+    }
+  }
+
+  // Device: contextual list add
+  if (
+    LIST_ADD_CONTEXTUAL_SIGNALS.some((p) => p.test(msg)) &&
+    !LIST_ADD_SIGNALS.some((p) => p.test(msg)) &&
+    !/\bdon'?t\s+forget\s+to\b/i.test(msg)
+  ) {
+    const m =
+      msg.match(/\b(?:running\s+(?:low|out)\s+on?|out\s+of|almost\s+out\s+of)\s+(.+)/i) ??
+      msg.match(/\b(?:need\s+to\s+(?:pick\s+up|get|buy)|gotta\s+get)\s+(.+)/i) ??
+      msg.match(/\bdon'?t\s+forget\s+(?:the\s+)?(.+)/i);
+    const item = (m?.[1] ?? '').trim();
+    if (item) {
+      return {
+        tier: 1,
+        actionIntent: { type: 'list_add', items: [item], listName: 'grocery' },
+        reason: 'action:list_add:contextual',
+      };
+    }
+  }
+
+  // Device: profile update
+  if (PROFILE_UPDATE_SIGNALS.some((p) => p.test(msg))) {
+    const m =
+      msg.match(
+        /\b(?:change|update|my\s+new)\s+(?:my\s+)?(insurance|doctor|pharmacy|dentist|specialist|provider)\s+(?:is\s+|to\s+)(.+)/i,
+      ) ??
+      msg.match(
+        /\bI\s+(?:changed|switched|updated)\s+my\s+(insurance|doctor|pharmacy|dentist)\s+(?:to\s+)?(.+)/i,
+      ) ??
+      msg.match(
+        /\bmy\s+(insurance|doctor|pharmacy|dentist|specialist|provider)\s+(?:is\s+now|changed\s+to|is)\s+(.+)/i,
+      );
+    const field = (m?.[1] ?? '').trim().toLowerCase();
+    const value = (m?.[2] ?? '').trim();
+    if (field && value) {
+      return {
+        tier: 1,
+        actionIntent: { type: 'profile_update', field, value },
+        reason: 'action:profile_update',
+      };
+    }
   }
 
   // Device: medical capture — past-tense medical events only
