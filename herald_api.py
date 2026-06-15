@@ -1,5 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
+# v8.83 -- wttr.in: confirmed_city before lat/lng so city names resolve correctly
 # v8.82 -- wttr.in: lat/lng when available; no hardcoded city fallback if location unknown
 # v8.81 -- device_context cache bypass: device memory now fresh every turn
 # v8.79 -- GPS auto-update confirmed location on /ask/stream when coords drift > ~20mi
@@ -64,7 +65,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.82")
+app = FastAPI(title="Herald API", version="8.83")
 
 app.add_middleware(
     CORSMiddleware,
@@ -2009,11 +2010,14 @@ Rules:
             val  = fact.get("value", "").strip()
             conf = fact.get("confidence", "medium")
             if cat and val:
-                exists = any(
-                    f.get("category") == cat and f.get("value") == val
-                    for f in learned
+                match = next(
+                    (f for f in learned if f.get("category") == cat and f.get("value") == val),
+                    None,
                 )
-                if not exists:
+                if match is not None:
+                    match["learned_at"] = datetime.now().isoformat()
+                    match["mention_count"] = match.get("mention_count", 1) + 1
+                else:
                     learned.append({
                         "category":   cat,
                         "value":      val,
@@ -2609,6 +2613,52 @@ def fetch_brave_search(query, count=3, freshness=None):
     except Exception as e:
         print(f"[HERALD] Brave search failed: {e}")
         return None
+
+
+BRIEFING_BASELINE_TOPICS = ["SPX", "Bitcoin"]
+
+
+def summarize_for_briefing(raw_search: str, topic: str) -> str:
+    """Condense Brave search results into one casual sentence for morning briefing."""
+    prompt = (
+        f"Condense this news search result about {topic} into one casual natural-language sentence. "
+        f"Friend tone, not a headline. No bullets or preamble.\n\n{raw_search[:500]}"
+    )
+    try:
+        result = call_openrouter(
+            [{"role": "user", "content": prompt}],
+            use_search=False,
+            model=HAIKU_MODEL,
+            timeout=8,
+            max_tokens=30,
+        )
+        if result and not result.startswith("I ran into") and not result.startswith("I did not"):
+            return result.strip()
+    except Exception as e:
+        print(f"[HERALD] summarize_for_briefing failed: {e}")
+    first = raw_search.split(".")[0].strip()[:100]
+    if not first:
+        return ""
+    if not first.endswith("."):
+        first += "."
+    return first
+
+
+def build_briefing_search_line(topics: list, max_topics: int = 2) -> str:
+    """Fetch and summarize news for up to max_topics briefing topics."""
+    snippets = []
+    for topic in (topics or [])[:max_topics]:
+        try:
+            result = fetch_brave_search(f"{topic} news today", count=2)
+            if result:
+                snippet = summarize_for_briefing(result, topic)
+                if snippet:
+                    snippets.append(snippet)
+        except Exception as e:
+            print(f"[HERALD] Briefing search for {topic} failed: {e}")
+    if snippets:
+        return " " + " ".join(snippets)
+    return ""
 
 
 # ── DIRECT API FUNCTIONS ──────────────────────────────────────────────────────
@@ -3291,7 +3341,33 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
     learned_facts = profile.get("learned_facts", [])
     facts_line = ""
     if learned_facts:
-        recent    = learned_facts[-20:]
+        now = datetime.now()
+        confidence_weights = {"high": 1.5, "medium": 1.0, "low": 0.6}
+
+        def _learned_fact_score(f):
+            conf = confidence_weights.get(str(f.get("confidence", "medium")).lower(), 1.0)
+            recency = 1.0
+            learned_at = f.get("learned_at")
+            if learned_at:
+                try:
+                    ts = learned_at.replace("Z", "+00:00") if isinstance(learned_at, str) and learned_at.endswith("Z") else learned_at
+                    dt = datetime.fromisoformat(ts)
+                    if getattr(dt, "tzinfo", None) is not None:
+                        dt = dt.replace(tzinfo=None)
+                    days = (now - dt).days
+                    if days <= 7:
+                        recency = 2.0
+                    elif days <= 30:
+                        recency = 1.5
+                    elif days <= 90:
+                        recency = 1.0
+                    else:
+                        recency = 0.5
+                except (ValueError, TypeError, AttributeError):
+                    recency = 1.0
+            return conf * recency
+
+        recent    = sorted(learned_facts, key=_learned_fact_score, reverse=True)[:20]
         facts_str = "; ".join([f"{f['value']} ({f['category']})" for f in recent])
         facts_line = f"Facts learned from conversation: {facts_str}"
 
@@ -3505,6 +3581,21 @@ YOUR RULES:
   BANNED:  "You might want to search for Mexican restaurants near you."
   The MAPS tag will open Google Maps which finds the exact address automatically.
 - Be diplomatically honest -- tell the truth with warmth. Never make things up.
+- HONEST UNCERTAINTY RULE: When you do not have a personal fact in
+  your context (a family member's schedule, someone's plans, a detail
+  not explicitly given to you above), say so like a friend would:
+  "I don't have that" / "You'd have to check with her" /
+  "I'm not sure about that one."
+  NEVER invent personal details. NEVER guess names, ages, plans,
+  schedules, or relationships not explicitly in your context.
+  BANNED: inventing children's names or ages, inventing a partner's
+  evening plans, inventing any personal fact not in the context block.
+  RIGHT: "I don't have Shannon's plans for tonight — you'd have
+  to check with her."
+  WRONG: "Shannon's planning a quiet evening in, possibly watching
+  a movie..."
+  This rule is absolute. A wrong personal fact destroys trust
+  permanently. Silence or honest uncertainty is always better.
 - Never mention Claude, OpenAI, Anthropic, or any AI model. You are {ai_name}.
 - You speak out loud via text-to-speech. Format ALL responses for listening, not reading.
 - You are {ai_name}. That is your only identity.
@@ -3709,12 +3800,12 @@ def parse_action(reply, local_date=None):
     return reply, None
 
 
-def call_openrouter(messages, use_search=True, model=None, timeout=25):
+def call_openrouter(messages, use_search=True, model=None, timeout=25, max_tokens=600):
     if not OPENROUTER_KEY:
         return "Configuration error: API key not set on server."
     if model is None:
         model = MODEL_SEARCH if use_search else MODEL_FAST
-    payload = json.dumps({"model": model, "max_tokens": 600, "messages": messages}).encode("utf-8")
+    payload = json.dumps({"model": model, "max_tokens": max_tokens, "messages": messages}).encode("utf-8")
     req = urllib.request.Request(OR_URL, data=payload, headers={
         "Content-Type": "application/json",
         "Authorization": f"Bearer {OPENROUTER_KEY}",
@@ -3925,6 +4016,8 @@ def build_ask_context(data):
     lat            = data.get("lat", None)
     lng            = data.get("lng", None)
     location_label = data.get("location_label", None)
+    # active_topics accepted from device for proactive briefing only — not used in /ask search
+    _ = data.get("active_topics", "")
     profile = get_profile(user_id)
     profile["user_id"] = user_id
     # Auto-update confirmed location when live GPS arrives and differs from cached
@@ -4367,10 +4460,10 @@ def get_direct_reply(ctx):
         profile_loc    = profile.get('location', '')
         confirmed_lat  = profile.get('confirmed_lat')
         confirmed_lng  = profile.get('confirmed_lng')
-        if confirmed_lat and confirmed_lng:
-            gps_loc = f"{confirmed_lat},{confirmed_lng}"
-        elif confirmed_city:
+        if confirmed_city:
             gps_loc = confirmed_city
+        elif confirmed_lat and confirmed_lng:
+            gps_loc = f"{confirmed_lat},{confirmed_lng}"
         elif profile_loc:
             gps_loc = profile_loc
         else:
@@ -4627,6 +4720,14 @@ def morning_briefing_job():
         except Exception as e:
             print(f"[HERALD] Briefing Freddie failed: {e}")
 
+        search_line = ""
+        try:
+            baseline = BRIEFING_BASELINE_TOPICS
+            topics = baseline[:2]  # scheduled job: baseline only
+            search_line = build_briefing_search_line(topics, max_topics=2)
+        except Exception as e:
+            print(f"[HERALD] Briefing search failed: {e}")
+
         now_hour = datetime.now().hour
         if now_hour < 12:
             salutation = "Good morning"
@@ -4680,16 +4781,17 @@ def morning_briefing_job():
                 print(f"[HERALD] Briefing medication check failed: {e}")
 
         weather_section  = weather_line  if prefs.get("include_weather",  True) else ""
+        search_section   = search_line
         moments_section  = moments_line  if prefs.get("include_tracker",  True) else ""
         tracker_section  = tracker_line  if prefs.get("include_calendar", True) else ""
         freddie_section  = freddie_line  if prefs.get("include_freddie",  True) else ""
 
-        # Brief tone -- just greeting + weather, skip the rest
+        # Brief tone -- just greeting + weather + search, skip the rest
         if prefs.get("tone") == "brief":
-            briefing = f"{salutation} {name}.{_opener} {weather_section}".strip()
+            briefing = f"{salutation} {name}.{_opener} {weather_section}{search_section}".strip()
         else:
             briefing = (
-                f"{salutation} {name}.{_opener} {weather_section}"
+                f"{salutation} {name}.{_opener} {weather_section}{search_section}"
                 f"{moments_section}{tracker_section}{medication_line}{freddie_section}"
             ).strip()
 
@@ -4887,7 +4989,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.82",
+        "status": "ok", "server": "herald-api", "version": "8.83",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled -- every message",
@@ -4930,7 +5032,7 @@ _proactive_poll_times: dict = {}
 _MIN_PROACTIVE_POLL_S = 30  # seconds
 
 @app.get("/proactive/{user_id}")
-def get_proactive(user_id: str):
+def get_proactive(user_id: str, active_topics: str = ""):
     if not user_id:
         return {"messages": []}
     now = time.time()
@@ -4939,6 +5041,27 @@ def get_proactive(user_id: str):
     _proactive_poll_times[user_id] = now
     profile = get_profile(user_id)
     queue   = profile.get("proactive_queue", [])
+
+    search_line = ""
+    if active_topics and active_topics.strip():
+        try:
+            device_topics = [t.strip() for t in active_topics.split(",") if t.strip()][:3]
+            combined = []
+            seen = set()
+            for t in device_topics + BRIEFING_BASELINE_TOPICS:
+                key = t.lower()
+                if key not in seen:
+                    seen.add(key)
+                    combined.append(t)
+            search_line = build_briefing_search_line(combined, max_topics=2)
+        except Exception as e:
+            print(f"[HERALD] Proactive briefing search failed: {e}")
+
+    if search_line:
+        for msg in queue:
+            if msg.get("type") == "morning_briefing":
+                msg["text"] = (msg.get("text", "") + search_line).strip()
+
     if not queue:
         return {"messages": []}
     profile["proactive_queue"] = []
@@ -5514,10 +5637,10 @@ async def ask_stream(request: Request):
                 _pw_profile  = _pre_profile
                 _pw_lat      = _pw_profile.get('confirmed_lat')
                 _pw_lng      = _pw_profile.get('confirmed_lng')
-                if _pw_lat and _pw_lng:
-                    _pw_city = f"{_pw_lat},{_pw_lng}"
-                elif _pw_profile.get('confirmed_city'):
+                if _pw_profile.get('confirmed_city'):
                     _pw_city = _pw_profile.get('confirmed_city')
+                elif _pw_lat and _pw_lng:
+                    _pw_city = f"{_pw_lat},{_pw_lng}"
                 elif _pw_profile.get('location'):
                     _pw_city = _pw_profile.get('location')
                 else:
@@ -6658,7 +6781,7 @@ async def user_export(user_id: str, request: Request, secret: str = ""):
     print(f"[HERALD] /user/export: exported all personal data for {user_id}")
     return {
         "ok": True,
-        "version": "8.82",
+        "version": "8.83",
         "user_id": user_id,
         "exported_at": datetime.now().isoformat(),
         "profile": profile,
@@ -6816,7 +6939,7 @@ async def admin_dashboard(secret: str = ""):
 
         return {
             "ok": True,
-            "version": "8.82",
+            "version": "8.83",
             "user_count": len(users),
             "users": sorted(users, key=lambda x: x["msg_count"], reverse=True),
             "waitlist_count": waitlist_count,
@@ -7040,7 +7163,7 @@ def startup():
     print(f"[HERALD API] WeatherAPI:    {'YES (backup)' if WEATHER_KEY else 'not set'}")
     print(f"[HERALD API] Database:      {DB_FILE}")
     print(f"[HERALD API] Owner code:    {'SET' if OWNER_CODE else 'NOT SET'}")
-    print(f"[HERALD API] FIX v8.82: wttr.in lat/lng first; no weather without user location")
+    print(f"[HERALD API] FIX v8.83: wttr.in confirmed_city first; lat/lng fallback")
     print(f"[HERALD API] FIX v8.8: GPS city caching -- confirmed_city in profile, 20mi tolerance")
     print(f"[HERALD API] FIX v8.8: Memory rules -- no 'I remember', no raw GPS coords spoken")
     print(f"[HERALD API] FIX v8.8: Seed question for new users -- makes first session feel alive")
