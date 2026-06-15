@@ -66,7 +66,6 @@ import { useCalendar } from "../hooks/useCalendar";
 import { useLocation } from "../hooks/useLocation";
 import { useMic } from "../hooks/useMic";
 import { useRaiseToWake } from "../hooks/useRaiseToWake";
-import { useHealthConnect } from "../hooks/useHealthConnect";
 import { useDeviceMemory } from "../hooks/useDeviceMemory";
 import { useLocalLLM, classifyIntent } from '../hooks/useLocalLLM';
 import { answerFromDevice } from '../utils/localAnswers';
@@ -266,7 +265,6 @@ export default function ChatScreen() {
 
   useProactiveQueue();
   useCalendar();
-  const { summary: healthSummary, syncHealth } = useHealthConnect();
   const { lat, lng, label: locationLabel, available } = useLocation();
   const {
     saveMemory: saveDeviceMemory,
@@ -428,15 +426,6 @@ export default function ChatScreen() {
 
       try {
         await refreshCalendarCache();
-      } catch {}
-
-      try {
-        const last = await AsyncStorage.getItem('herald_health_sync');
-        const now = Date.now();
-        if (!last || now - parseInt(last, 10) > 3_600_000) {
-          syncHealth();
-          await AsyncStorage.setItem('herald_health_sync', String(now));
-        }
       } catch {}
 
       try {
