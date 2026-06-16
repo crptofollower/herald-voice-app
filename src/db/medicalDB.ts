@@ -156,7 +156,7 @@ export function clearAllMedications(): number {
   // so the audit trail ("when did I clear these?") has its data from day one.
   // Recoverable — rows remain in the table with is_active=0.
   const res = db.runSync(
-    `UPDATE medications SET is_active = 0, removed_at = ? WHERE is_active = 1 OR removed_at IS NULL;`,
+    `UPDATE medications SET is_active = 0, removed_at = ? WHERE is_active = 1;`,
     [now]
   );
   return res.changes ?? 0;
@@ -226,7 +226,7 @@ export function writeMedicalFact(
     const db = getDB();
     const nameGuess = guessMedicationName(value);
     const existing = db.getFirstSync<{ id: string }>(
-      "SELECT id FROM medications WHERE LOWER(name) = ? LIMIT 1;",
+      "SELECT id FROM medications WHERE LOWER(name) = ? AND is_active = 1 LIMIT 1;",
       [nameGuess.toLowerCase()]
     );
     if (!existing) {
