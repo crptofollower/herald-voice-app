@@ -41,6 +41,8 @@ export interface TierDecision {
     | { type: 'todo_complete'; raw: string }
     | { type: 'calendar_write'; value: string }
     | { type: 'medical_capture'; event: MedicalEvent }
+    | { type: 'medical_remove'; name: string }
+    | { type: 'medical_clear' }
     | { type: 'household_read'; intent: HouseholdReadIntent }
     | { type: 'photo_open' }
     | { type: 'app_open'; appName: string }
@@ -299,7 +301,9 @@ const APP_OPEN_SIGNALS = [
 ];
 
 const LIST_REMOVE_SIGNALS = [
+  /\b(take|took|taking|get|got|pull|pulled|knock|knocked|cross|crossed|scratch|scratched|mark|marked)\s+(.+?)\s+(off|from|out\s+of)\s+(?:my\s+|the\s+)?(\w+\s+)?lists?\b/i,
   /\b(remove|take\s+off|delete|cross\s+off)\s+(.+?)\s+(from|off)\s+(my\s+)?(\w+\s+)?list\b/i,
+  /\b(?:take|get|knock|pull)\s+(.+?)\s+off\s+(?:my\s+|the\s+)?(?:\w+\s+)?lists?\b/i,
   /\b(i('?ve?)?|we)\s+(got|picked\s+up|grabbed|bought|already\s+have)\s+(?:the\s+)?(.+?)\s*$/i,
   /\b(scratch|cross|mark)\s+off\s+(?:the\s+)?(.+?)\s+(from|on|off)?\s*(my|the)?\s*list\b/i,
 ];
@@ -520,6 +524,9 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
         /\b(?:remove|take\s+off|delete|cross\s+off)\s+(.+?)\s+(?:from|off)\s+(?:my\s+)?(?:(\w+)\s+)?list\b/i,
       ) ??
       msg.match(
+        /\b(?:take|get|knock|pull)\s+(.+?)\s+off\s+(?:my\s+|the\s+)?(?:(\w+)\s+)?lists?\b/i,
+      ) ??
+      msg.match(
         /\b(?:i(?:'?ve?)?|we)\s+(?:got|picked\s+up|grabbed|bought|already\s+have)\s+(?:the\s+)?(.+?)\s*$/i,
       ) ??
       msg.match(
@@ -656,7 +663,11 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   }
 
   // Device: profile update
-  if (PROFILE_UPDATE_SIGNALS.some((p) => p.test(msg))) {
+  if (
+    PROFILE_UPDATE_SIGNALS.some((p) => p.test(msg)) &&
+    !/^\s*(do|does|did|who|what|which|is|are|can|could|would|where|when)\b/i.test(msg) &&
+    !/\bdo you (know|have)\b/i.test(msg)
+  ) {
     const m =
       msg.match(
         /\b(?:change|update|my\s+new)\s+(?:my\s+)?(insurance|doctor|pharmacy|dentist|specialist|provider)\s+(?:is\s+|to\s+)(.+)/i,
@@ -675,6 +686,28 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
         actionIntent: { type: 'profile_update', field, value },
         reason: 'action:profile_update',
       };
+    }
+  }
+
+  // Device: medical clear (wipe all) — BEFORE capture/read so it isn't swallowed.
+  if (
+    /\b(clear|wipe|reset|empty|delete all|remove all|start (over|fresh))\b/i.test(msg) &&
+    /\b(medication|medications|meds|prescriptions?|medical)\b/i.test(msg)
+  ) {
+    return { tier: 1, actionIntent: { type: 'medical_clear' }, reason: 'action:medical_clear' };
+  }
+
+  // Device: medical remove one — "stop taking X", "remove X from my meds", "no longer on X".
+  {
+    const medRemoveMatch =
+      msg.match(/\b(?:stop|stopped|quit|no longer)\s+(?:taking|on|using)\s+(.+?)[.!?]*$/i) ??
+      msg.match(/\b(?:remove|delete|take\s+off|drop)\s+(.+?)\s+(?:from|off)\s+(?:my\s+)?(?:medication|medications|meds|prescriptions?)(?:\s+list)?\b/i) ??
+      msg.match(/\bi'?m\s+off\s+(.+?)[.!?]*$/i);
+    if (medRemoveMatch) {
+      const name = (medRemoveMatch[1] ?? '').trim();
+      if (name && name.length >= 2) {
+        return { tier: 1, actionIntent: { type: 'medical_remove', name }, reason: 'action:medical_remove' };
+      }
     }
   }
 

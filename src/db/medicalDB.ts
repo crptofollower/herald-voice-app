@@ -128,6 +128,40 @@ export function getAllMedications(): Medication[] {
   );
 }
 
+/**
+ * Build A — deactivate (not delete) a medication by name match.
+ * For "stop taking X" / "remove X from my meds". Keeps history (is_active=0)
+ * so a med you were on for a month still exists as a past medication, but
+ * stops showing in "what am I on". Returns how many rows changed.
+ */
+export function deactivateMedicationByName(name: string): number {
+  const db = getDB();
+  const now = new Date().toISOString();
+  const res = db.runSync(
+    `UPDATE medications SET is_active = 0, removed_at = ? WHERE is_active = 1 AND lower(name) LIKE lower(?);`,
+    [now, `%${name.trim()}%`]
+  );
+  return res.changes ?? 0;
+}
+
+/**
+ * Build A — wipe ALL medications. For "clear my medications / start fresh".
+ * Destructive and irreversible, so callers MUST confirm before invoking.
+ * Also the cleanup path for corrupted rows. Returns how many rows removed.
+ */
+export function clearAllMedications(): number {
+  const db = getDB();
+  const now = new Date().toISOString();
+  // Soft-delete: never shred. Marks every active med inactive + stamps removed_at
+  // so the audit trail ("when did I clear these?") has its data from day one.
+  // Recoverable — rows remain in the table with is_active=0.
+  const res = db.runSync(
+    `UPDATE medications SET is_active = 0, removed_at = ? WHERE is_active = 1;`,
+    [now]
+  );
+  return res.changes ?? 0;
+}
+
 // ─── Medical Contacts ─────────────────────────────────────────────────────────
 
 export function writeMedicalContact(
@@ -168,6 +202,20 @@ export function getMedicalContacts(): MedicalContact[] {
 // This is intentionally simple — structured intake (the state machine) handles
 // the full multi-turn flow. This catches facts extracted from casual conversation.
 
+/**
+ * Build A — extract the best-guess medication name from a casual sentence.
+ * Exported so the confirm-gate can SHOW the guess ("save chocolate as a
+ * medication?") using the EXACT name that would be written. Pure: no DB,
+ * no side effects.
+ */
+export function guessMedicationName(value: string): string {
+  const drugMatch = value.match(
+    /\b(?:i\s+|i'm\s+|i am\s+)?(?:take|taking|am\s+on|is\s+on|on|prescribed|using)\s+([A-Za-z][\w-]*)/i
+  );
+  return (drugMatch?.[1] ?? value.split(/[\s,]/)[0]?.trim() ?? value)
+    .replace(/[.,;:!?]+$/, "");
+}
+
 export function writeMedicalFact(
   category: "medication" | "medical" | "visit",
   value: string
@@ -176,11 +224,7 @@ export function writeMedicalFact(
 
   if (category === "medication") {
     const db = getDB();
-    const drugMatch = value.match(
-      /\b(?:i\s+|i'm\s+|i am\s+)?(?:take|taking|am\s+on|is\s+on|on|prescribed|using)\s+([A-Za-z][\w-]*)/i
-    );
-    const nameGuess = (drugMatch?.[1] ?? value.split(/[\s,]/)[0]?.trim() ?? value)
-      .replace(/[.,;:!?]+$/, "");
+    const nameGuess = guessMedicationName(value);
     const existing = db.getFirstSync<{ id: string }>(
       "SELECT id FROM medications WHERE LOWER(name) = ? LIMIT 1;",
       [nameGuess.toLowerCase()]

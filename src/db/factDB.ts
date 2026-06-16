@@ -531,6 +531,7 @@ export function isCalendarReadIntent(text: string): boolean {
 /** Offline medical capture — excludes calendar reads and broad "i have" false positives. */
 export function isMedicalCaptureIntent(text: string): boolean {
   if (isCalendarReadIntent(text)) return false;
+  if (/\b(grocery|shopping|to-?do|todo)\s+lists?\b|\b(off|from|on|to)\s+(my|the)\s+lists?\b|\bmy\s+lists?\b/i.test(text)) return false; // Build A: lists are never medical
   return (
     /\b(i take|i'm on|i am on|prescribed|i use|i'm taking)\s+[\w\s]+/i.test(text) ||
     /\b(i (went|saw|visited|had))\s+(the\s+|my\s+)?(doctor|dentist|specialist|dr\.?|physician|therapist)\b/i.test(text) ||
@@ -538,6 +539,21 @@ export function isMedicalCaptureIntent(text: string): boolean {
     /\b(i have)\s+(a\s+)?(diagnosis|condition|allergy|allergies|asthma|diabetes|cancer|arthritis|anxiety|depression|hypertension)\b/i.test(text) ||
     /\b(my doctor|my physician|my specialist)\s+(wants?|told|said|recommended|prescribed)\b/i.test(text) ||
     /\b(put me on|starting me on|prescribed me)\s+[\w\s]+/i.test(text)
+  );
+}
+
+/**
+ * Build A — corroboration gate for medication writes.
+ * A medication mention is safe to auto-save only if it carries a real medical
+ * signal: a dosage (mg/mcg/ml/units) or an explicit medication noun. Bare
+ * "i take X" / "i'm on X" is NOT enough — those verbs are overloaded
+ * ("i take the bus", "i'm on a diet"). Uncorroborated mentions go through the
+ * interactive confirm-gate, never a silent write.
+ */
+export function isMedicationCorroborated(text: string): boolean {
+  return (
+    /\b\d+\s*(mg|mcg|ml|units?|milligrams?|micrograms?)\b/i.test(text) ||
+    /\b(medication|medicine|pill|tablet|capsule|prescription|prescribed|\brx\b|dose|dosage|inhaler|injection)\b/i.test(text)
   );
 }
 
@@ -566,7 +582,7 @@ export function extractFactsLocally(userMessage: string): void {
         contextType: 'active',
       });
       // Mirror medication/medical facts into medicalDB (Bug 5 — use raw message for drug parse)
-      if (category === 'medications' || category === 'medical') {
+      if (category === 'medical' || (category === 'medications' && isMedicationCorroborated(userMessage))) {
         writeMedicalFact(
           category === 'medications' ? 'medication' : 'medical',
           userMessage

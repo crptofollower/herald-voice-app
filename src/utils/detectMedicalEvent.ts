@@ -1,5 +1,10 @@
 // src/utils/detectMedicalEvent.ts
 // On-device medical event detection — no LLM, no network.
+//
+// Build A guardrail: this is the deterministic FLOOR for medical capture.
+// It must never misfire — a false medical event corrupts the medications
+// table (the trust-critical store). The LLM router (later build) refines
+// intent, but device-first, offline, this layer must fail toward NOT capturing.
 
 export type MedicalEvent = {
   type: 'medication' | 'visit' | 'advice';
@@ -18,6 +23,18 @@ const MEDICATION = /\b(take|taking|i'm on|prescribed|started)\b/i;
 const ADVICE = /\b(says i need to|told me to|advised me to|wants me to)\b/i;
 const CALENDAR_READ_START = /^\s*\b(what|when|do i have|show me)\b/i;
 const REMINDER_START = /\b(remind me|don't let me forget|set a reminder|reminder to)\b/i;
+
+// ─── List-context guard (Build A) ─────────────────────────────────────────────
+// List edits collide with medical triggers because "take ... off my list" and
+// "I'm on ..." share verbs with medication phrasing. Any sentence that refers to
+// a grocery / shopping / to-do list — or "off/from/on my list" — is a LIST
+// operation and must NEVER be read as a medical event. This is the deterministic
+// guard that stops "take chocolate milk off my grocery list" from becoming a
+// medication. Erring toward "not medical" here is correct: a missed capture is
+// recoverable; a corrupted medications table is a trust failure.
+const LIST_CONTEXT =
+  /\b(grocery|shopping|to-?do|todo)\s+lists?\b|\b(off|from|on|to)\s+(my|the)\s+lists?\b|\bmy\s+lists?\b/i;
+
 const DR_NAME = /Dr\.?\s+(\w+)/i;
 const SPECIALTY =
   /my (cardiologist|doctor|physician|specialist|therapist|dentist|neurologist|oncologist|psychiatrist)/i;
@@ -55,6 +72,8 @@ export function detectMedicalEvent(text: string): MedicalEvent | null {
   if (!raw) return null;
   if (CALENDAR_READ_START.test(raw)) return null;
   if (REMINDER_START.test(raw)) return null;
+  // Build A: never read a list operation as a medical event.
+  if (LIST_CONTEXT.test(raw)) return null;
 
   const hasPastVisit = PAST_VISIT.test(raw);
   const hasFutureVisit = FUTURE_VISIT.test(raw);

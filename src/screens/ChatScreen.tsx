@@ -88,9 +88,9 @@ import {
   getEmergencyContact,
   setEmergencyContact,
 } from "../db/contactsDB";
-import { writeMedicalFact, writeMedicalRecord, writeMedication, writeMedicalContact } from "../db/medicalDB";
+import { writeMedicalFact, writeMedicalRecord, writeMedication, writeMedicalContact, guessMedicationName, deactivateMedicationByName, clearAllMedications, getActiveMedications } from "../db/medicalDB";
 import { drainPendingWrites, getPendingCount, queueWrite } from "../db/pendingWritesDB";
-import { _registerContactExtractor, writeFacts, extractFactsLocally, getFactCount, isMedicalCaptureIntent, medicalCategoryFromText } from "../db/factDB";
+import { _registerContactExtractor, writeFacts, extractFactsLocally, getFactCount, isMedicalCaptureIntent, isMedicationCorroborated, medicalCategoryFromText } from "../db/factDB";
 import { getActiveTopics, extractTopicsFromMessage, recordTopicMention } from "../db/topicDB";
 import { launchAndroidTimer } from "../utils/androidClock";
 import { captureHousehold } from '../utils/householdCapture';
@@ -244,6 +244,8 @@ export default function ChatScreen() {
   // Pending contact collection — when Herald asks "what's their number/address?"
   // the next user message resolves this and executes the original intent.
   const pendingContactCollectRef = useRef<{ action: 'call' | 'navigate' | 'text' | 'confirm_phone'; name: string; body?: string } | null>(null);
+  const pendingMedConfirmRef = useRef<{ category: 'medication' | 'medical' | 'visit'; value: string; guessedName: string } | null>(null);
+  const pendingMedClearRef = useRef<{ count: number } | null>(null);
 
   // ── Scroll snap prevention ────────────────────────────────────────────────
   // Only auto-scroll to bottom when user is already near the bottom.
@@ -893,6 +895,64 @@ export default function ChatScreen() {
       pendingTodoCompleteRef.current = null;
     }
 
+    // ── Pending medication confirm (Build A — Option B) ──
+    if (pendingMedConfirmRef.current) {
+      const pendingMed = pendingMedConfirmRef.current;
+      if (YES.test(text.trim())) {
+        pendingMedConfirmRef.current = null;
+        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+        try { writeMedicalFact(pendingMed.category, pendingMed.value); } catch {}
+        const reply = `Got it — saved ${pendingMed.guessedName} to your medications.`;
+        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+        speak(reply);
+        sendingRef.current = false;
+        setInputText('');
+        return;
+      }
+      if (NO.test(text.trim())) {
+        pendingMedConfirmRef.current = null;
+        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+        const reply = `No problem — I won't add that.`;
+        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+        speak(reply);
+        sendingRef.current = false;
+        setInputText('');
+        return;
+      }
+      // Not a yes/no — discard the pending confirm and fall through (fail toward not writing)
+      pendingMedConfirmRef.current = null;
+    }
+
+    // ── Pending medication CLEAR confirm (Build A — destructive, soft-delete) ──
+    if (pendingMedClearRef.current) {
+      if (YES.test(text.trim())) {
+        pendingMedClearRef.current = null;
+        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+        let removed = 0;
+        try { removed = clearAllMedications(); } catch {}
+        const reply = removed > 0
+          ? `Done — cleared ${removed} ${removed === 1 ? 'medication' : 'medications'}. You can start fresh anytime.`
+          : `There were no active medications to clear.`;
+        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+        speak(reply);
+        sendingRef.current = false;
+        setInputText('');
+        return;
+      }
+      if (NO.test(text.trim())) {
+        pendingMedClearRef.current = null;
+        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+        const reply = `Okay — I left your medications as they are.`;
+        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+        speak(reply);
+        sendingRef.current = false;
+        setInputText('');
+        return;
+      }
+      // Not a yes/no — cancel the clear (fail safe: never wipe on ambiguity)
+      pendingMedClearRef.current = null;
+    }
+
     // ── Pending contact collection — user is providing a number or address ──
     if (pendingContactCollectRef.current) {
       const pending = pendingContactCollectRef.current;
@@ -1176,8 +1236,19 @@ export default function ChatScreen() {
         if (afterCount > beforeCount) localFactsWritten = true;
       } catch {}
       if (!localFactsWritten && isMedicalCaptureIntent(text) && userId) {
+          const medCategory = medicalCategoryFromText(text);
+          if (medCategory === 'medication' && !isMedicationCorroborated(text)) {
+            pendingMedConfirmRef.current = { category: medCategory, value: text, guessedName: guessMedicationName(text) };
+            addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+            const reply = `Want me to save ${guessMedicationName(text)} as a medication?`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+            sendingRef.current = false;
+            setInputText('');
+            return;
+          }
           try {
-            writeMedicalFact(medicalCategoryFromText(text), text);
+            writeMedicalFact(medCategory, text);
             localFactsWritten = true;
           } catch {}
       }
@@ -1442,9 +1513,22 @@ export default function ChatScreen() {
         }
         if (tierDecision.actionIntent.type === 'medical_capture') {
           const { captureMedicalEvent } = await import('../utils/captureMedicalEvent');
+          const medEvent = tierDecision.actionIntent.event;
+          // Build A Option B — uncorroborated medication: confirm before writing.
+          if (medEvent.type === 'medication' && !medEvent.dosage && !isMedicationCorroborated(medEvent.raw)) {
+            const guessedName = medEvent.drug_name ?? guessMedicationName(medEvent.raw);
+            pendingMedConfirmRef.current = { category: 'medication', value: medEvent.raw, guessedName };
+            addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+            const reply = `Want me to save ${guessedName} as a medication?`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+            sendingRef.current = false;
+            setInputText('');
+            return;
+          }
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
           try {
-            const result = captureMedicalEvent(tierDecision.actionIntent.event);
+            const result = captureMedicalEvent(medEvent);
             const reply = result.followUpQuestion ?? "Got it — I'll remember that.";
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
@@ -1453,6 +1537,40 @@ export default function ChatScreen() {
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
           }
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+        if (tierDecision.actionIntent.type === 'medical_remove') {
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          const removeName = tierDecision.actionIntent.name;
+          let changed = 0;
+          try { changed = deactivateMedicationByName(removeName); } catch {}
+          const reply = changed > 0
+            ? `Done — took ${removeName} off your current medications.`
+            : `I don't have ${removeName} in your current medications.`;
+          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+          speak(reply);
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+        if (tierDecision.actionIntent.type === 'medical_clear') {
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          let count = 0;
+          try { count = getActiveMedications().length; } catch {}
+          if (count === 0) {
+            const reply = `You don't have any medications saved right now.`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+            sendingRef.current = false;
+            setInputText('');
+            return;
+          }
+          pendingMedClearRef.current = { count };
+          const reply = `This will remove all ${count} of your medications. Are you sure?`;
+          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+          speak(reply);
           sendingRef.current = false;
           setInputText('');
           return;
@@ -1799,7 +1917,21 @@ export default function ChatScreen() {
               reply = `I don't see ${item} on your ${listName} list.`;
             } else if (matches.length === 1) {
               db.runSync(`UPDATE list_items SET checked = 1 WHERE id = ?;`, [matches[0].id]);
-              reply = `Removed ${matches[0].body} from your ${listName} list.`;
+              const remaining = db.getAllSync<{ body: string }>(
+                `SELECT li.body FROM list_items li JOIN lists l ON l.id = li.list_id
+                 WHERE l.name = ? AND li.checked = 0 ORDER BY li.created_at ASC;`,
+                [listName]
+              );
+              const seenLeft = new Set<string>();
+              const left = remaining.map(r => r.body).filter(b => {
+                const k = b.trim().toLowerCase();
+                if (seenLeft.has(k)) return false;
+                seenLeft.add(k);
+                return true;
+              });
+              reply = left.length === 0
+                ? `Done — ${matches[0].body} is off your ${listName} list. That clears it.`
+                : `Done — ${matches[0].body} is off. Still on your ${listName} list: ${left.join(', ')}.`;
             } else {
               reply = `I see a few matches for ${item} — which one did you mean?`;
             }

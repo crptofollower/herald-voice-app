@@ -33,7 +33,7 @@
 
 import * as SQLite from "expo-sqlite";
 
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 export const DB_NAME = "herald_device.db";
 
 // ─── Open database ────────────────────────────────────────────────────────────
@@ -609,5 +609,17 @@ const MIGRATIONS: Record<number, (db: SQLite.SQLiteDatabase) => void> = {
       );
     `);
     console.log("Herald schema V9: local_topics table added");
+  },
+
+  // ── v10: medications.removed_at (soft-delete audit track) ───────────────────
+  10: (db) => {
+    // SQLite ALTER TABLE supports ADD COLUMN — safe on existing rows (NULL default).
+    // Lays the audit-trail track: when a med is deactivated/cleared we stamp this.
+    try {
+      db.execSync("ALTER TABLE medications ADD COLUMN removed_at TEXT;");
+    } catch {
+      // column already exists (re-run safety) — ignore
+    }
+    console.log("Herald schema V10: medications.removed_at added");
   },
 };
