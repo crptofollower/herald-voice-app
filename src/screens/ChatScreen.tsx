@@ -247,6 +247,7 @@ export default function ChatScreen() {
   const pendingContactCollectRef = useRef<{ action: 'call' | 'navigate' | 'text' | 'confirm_phone'; name: string; body?: string } | null>(null);
   const pendingMedConfirmRef = useRef<{ category: 'medication' | 'medical' | 'visit'; value: string; guessedName: string } | null>(null);
   const pendingMedClearRef = useRef<{ count: number } | null>(null);
+  const pendingInsuranceRef = useRef<{ type: string; carrier: string; ack: string } | null>(null);
 
   // ── Scroll snap prevention ────────────────────────────────────────────────
   // Only auto-scroll to bottom when user is already near the bottom.
@@ -1199,10 +1200,45 @@ export default function ChatScreen() {
       }
     }
 
+    // ── Pending insurance confirm ──
+    if (pendingInsuranceRef.current) {
+      const pending = pendingInsuranceRef.current;
+      if (YES.test(text.trim())) {
+        pendingInsuranceRef.current = null;
+        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+        const { captureHouseholdInsurance } = await import('../utils/householdCapture');
+        captureHouseholdInsurance(pending.type, pending.carrier);
+        const reply = `Got it — ${pending.carrier} for your ${pending.type} insurance, saved.`;
+        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+        speak(reply);
+        sendingRef.current = false;
+        setInputText('');
+        return;
+      }
+      if (NO.test(text.trim())) {
+        pendingInsuranceRef.current = null;
+        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+        const reply = `No problem — what's the correct carrier?`;
+        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+        speak(reply);
+        sendingRef.current = false;
+        setInputText('');
+        return;
+      }
+      pendingInsuranceRef.current = null;
+    }
+
     // Household capture — runs before extractFactsLocally
     // Same order rule as phone/address/emergency capture — never move below extractFactsLocally
     const householdResult = captureHousehold(text);
     if (householdResult) {
+      if (householdResult.pendingConfirm) {
+        pendingInsuranceRef.current = {
+          type: householdResult.pendingConfirm.type,
+          carrier: householdResult.pendingConfirm.carrier,
+          ack: householdResult.ack,
+        };
+      }
       addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
       addMessage({ id: generateId('msg'), role: 'assistant', content: householdResult.ack, timestamp: Date.now() });
       speak(householdResult.ack);
@@ -1359,9 +1395,7 @@ export default function ChatScreen() {
           let finalResponse = tierDecision.tier1Response;
           if (tierDecision.llmWrap) {
             const wrapped = await inferLocal(
-              `You are Herald, a warm personal AI companion. The user asked: "${text}"\n` +
-              `You have this confirmed data: "${tierDecision.tier1Response}"\n` +
-              `Respond in one natural friendly sentence. Never invent or change any medication name or dosage. Keep it under 25 words.`,
+              `You are Herald. Report ONLY the following confirmed data in one warm sentence. Do NOT add medical explanations, drug descriptions, or any information not in the data. Do NOT refuse. Just say what's there.\nData: "${tierDecision.tier1Response}"\nUser asked: "${text}"`,
               60
             );
             if (wrapped) finalResponse = wrapped;
@@ -2154,9 +2188,7 @@ export default function ChatScreen() {
         let finalResponse = tierDecision.tier1Response;
         if (tierDecision.llmWrap) {
           const wrapped = await inferLocal(
-            `You are Herald, a warm personal AI companion. The user asked: "${text}"\n` +
-            `You have this confirmed data: "${tierDecision.tier1Response}"\n` +
-            `Respond in one natural friendly sentence. Never invent or change any medication name or dosage. Keep it under 25 words.`,
+            `You are Herald. Report ONLY the following confirmed data in one warm sentence. Do NOT add medical explanations, drug descriptions, or any information not in the data. Do NOT refuse. Just say what's there.\nData: "${tierDecision.tier1Response}"\nUser asked: "${text}"`,
             60
           );
           if (wrapped) finalResponse = wrapped;

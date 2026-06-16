@@ -14,6 +14,7 @@ export type HouseholdCaptureResult = {
   type: HouseholdCaptureType;
   captured: boolean;
   ack: string;
+  pendingConfirm?: { type: string; carrier: string };
 };
 
 // ─── Service provider patterns ────────────────────────────────────────────────
@@ -76,6 +77,11 @@ function writeInsurancePolicy(type: string, carrier: string, agentName?: string,
   const now = new Date().toISOString();
   const id = generateId('ins');
   try {
+    // Retire any existing active policy of the same type before inserting
+    db.runSync(
+      `UPDATE insurance_policies SET is_active = 0, updated_at = ? WHERE LOWER(type) = LOWER(?) AND is_active = 1;`,
+      [now, type.trim().toLowerCase()]
+    );
     db.runSync(
       `INSERT OR REPLACE INTO insurance_policies
          (id, type, carrier, agent_name, agent_phone, created_at, updated_at)
@@ -104,6 +110,12 @@ function writeLegalDocument(type: string, location: string): string {
   } catch {
     return '';
   }
+}
+
+// ─── captureHouseholdInsurance ────────────────────────────────────────────────
+// Confirmed write path — called from ChatScreen after user says yes.
+export function captureHouseholdInsurance(type: string, carrier: string): string {
+  return writeInsurancePolicy(type, carrier);
 }
 
 // ─── captureHousehold ─────────────────────────────────────────────────────────
@@ -141,16 +153,13 @@ export function captureHousehold(text: string): HouseholdCaptureResult | null {
       const phone = phoneCheck?.valid ? phoneCheck.normalized : undefined;
       const phoneSuspect = !!phoneCheck && !phoneCheck.valid && phoneCheck.issue !== 'empty';
       if (insType.length >= 2 && carrier.length >= 2) {
-        writeInsurancePolicy(insType, carrier, agent, phone);
-        const baseAck = agent
-          ? `Got it — ${carrier} for your ${insType} insurance, ${agent} is the agent.`
-          : `Got it — ${carrier} for your ${insType} insurance.`;
+        // Don't write yet — confirm first
+        // Return a special result that ChatScreen uses to set pendingInsuranceRef
         return {
           type: 'insurance',
-          captured: true,
-          ack: phoneSuspect
-            ? `${baseAck} I didn't catch the number clearly, though — you can tell me again anytime.`
-            : baseAck,
+          captured: false,
+          pendingConfirm: { type: insType, carrier },
+          ack: `Got it — ${carrier} for your ${insType} insurance, right?`,
         };
       }
     }

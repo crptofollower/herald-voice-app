@@ -33,7 +33,7 @@
 
 import * as SQLite from "expo-sqlite";
 
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
 export const DB_NAME = "herald_device.db";
 
 // ─── Open database ────────────────────────────────────────────────────────────
@@ -621,5 +621,17 @@ const MIGRATIONS: Record<number, (db: SQLite.SQLiteDatabase) => void> = {
       // column already exists (re-run safety) — ignore
     }
     console.log("Herald schema V10: medications.removed_at added");
+  },
+
+  // ── v11: insurance_policies.is_active (supersession support) ─────────────────
+  11: (db) => {
+    try {
+      db.execSync("ALTER TABLE insurance_policies ADD COLUMN is_active INTEGER DEFAULT 1;");
+    } catch {
+      // column already exists — safe on reinstall
+    }
+    // Activate all existing rows so nothing disappears after migration
+    db.execSync("UPDATE insurance_policies SET is_active = 1 WHERE is_active IS NULL;");
+    console.log("Herald schema V11: insurance_policies.is_active added");
   },
 };

@@ -242,7 +242,7 @@ export function answerHouseholdRead(intent: HouseholdReadIntent): string {
         const placeholders = intent.categories.map(() => '?').join(',');
         rows = db.getAllSync<InsRow>(
           `SELECT carrier, agent_name, agent_phone, type FROM insurance_policies
-           WHERE type IN (${placeholders})
+           WHERE type IN (${placeholders}) AND is_active = 1
            ORDER BY updated_at DESC;`,
           intent.categories
         );
@@ -250,6 +250,7 @@ export function answerHouseholdRead(intent: HouseholdReadIntent): string {
         // Typeless question ("who's my insurance with") — query ALL policies.
         rows = db.getAllSync<InsRow>(
           `SELECT carrier, agent_name, agent_phone, type FROM insurance_policies
+           WHERE is_active = 1
            ORDER BY updated_at DESC;`,
           []
         );
