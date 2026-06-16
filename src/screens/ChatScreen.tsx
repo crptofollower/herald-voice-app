@@ -68,8 +68,10 @@ import { useLocation } from "../hooks/useLocation";
 import { useMic } from "../hooks/useMic";
 import { useRaiseToWake } from "../hooks/useRaiseToWake";
 import { useDeviceMemory } from "../hooks/useDeviceMemory";
-import { useLocalLLM, classifyIntent } from '../hooks/useLocalLLM';
+import { useLocalLLM } from '../hooks/useLocalLLM';
+import { classifyWithLLM, phraseWithLLM } from '../hooks/llmLayers';
 import { answerFromDevice } from '../utils/localAnswers';
+import { writeTurnObservation } from '../utils/personaContext';
 import { classifyQuery } from "../routing/tierRouter";
 import { handleTier1, buildTier2DeviceContext, buildAmbientDeviceContext, writeProfileFromOnboarding } from "../routing/tier1Responses";
 import { refreshCalendarCache } from "../db/calendarCacheDB";
@@ -650,7 +652,7 @@ export default function ChatScreen() {
   const dispatchLocalIntent = useCallback(async (
     intent: Record<string, string | undefined>,
     originalText: string,
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     const replyAndReset = (msg: string) => {
       addMessage({ id: generateId('msg'), role: 'assistant',
         content: msg, timestamp: Date.now() });
@@ -678,7 +680,7 @@ export default function ChatScreen() {
           } else {
             replyAndReset(`I see a few matches — which one did you mean?`);
           }
-          break;
+          return true;
         }
         case 'list_add': {
           const listName = intent.listName ?? 'grocery';
@@ -694,7 +696,7 @@ export default function ChatScreen() {
             [`item_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, list.id, item, new Date().toISOString()],
           );
           replyAndReset(`Added ${item} to your ${listName} list.`);
-          break;
+          return true;
         }
         case 'call': {
           const contactName = intent.contact ?? '';
@@ -706,7 +708,7 @@ export default function ChatScreen() {
             replyAndReset(`I don't have a number for ${contactName}. What's their number?`);
             pendingContactCollectRef.current = { action: 'call', name: contactName };
           }
-          break;
+          return true;
         }
         case 'household_read': {
           const householdIntent = detectHouseholdRead(originalText);
@@ -715,7 +717,7 @@ export default function ChatScreen() {
           } else {
             replyAndReset(`I don't have that stored yet.`);
           }
-          break;
+          return true;
         }
         case 'photo_open': {
           let opened = false;
@@ -736,7 +738,7 @@ export default function ChatScreen() {
           replyAndReset(opened
             ? `Opening your photos.`
             : `I couldn't open your gallery — try opening Photos manually.`);
-          break;
+          return true;
         }
         case 'app_open': {
           const appName = intent.appName ?? 'app';
@@ -746,19 +748,105 @@ export default function ChatScreen() {
           } catch {
             replyAndReset(`I couldn't open ${appName} — try opening it manually.`);
           }
-          break;
+          return true;
         }
         case 'reminder': {
           replyAndReset(
             `Got it — I'll remind you about ${intent.body}${intent.time ? ` at ${intent.time}` : ''}.`,
           );
-          break;
+          return true;
+        }
+        case 'insurance_capture': {
+          const { type: insType, carrier, agent, phone } = intent as {
+            type: 'insurance_capture'; insType: string; carrier: string;
+            agent?: string; phone?: string;
+          };
+          void agent;
+          void phone;
+          if (!insType || !carrier || carrier.length < 2) {
+            replyAndReset(`I didn't quite catch that — who's your insurance with?`);
+            return true;
+          }
+          pendingInsuranceRef.current = {
+            type: insType,
+            carrier: carrier.trim(),
+            ack: `Got it — ${carrier} for your ${insType} insurance, right?`,
+          };
+          replyAndReset(`Got it — ${carrier} for your ${insType} insurance, right?`);
+          return true;
+        }
+        case 'service_capture': {
+          const { category, name, phone: svcPhone } = intent as {
+            type: 'service_capture'; category: string; name: string; phone?: string;
+          };
+          if (!category || !name || name.length < 2) return false;
+          const { captureHouseholdInsurance: _unused, writeServiceProvider } = await import('../utils/householdCapture');
+          void _unused;
+          writeServiceProvider(category, name, svcPhone);
+          replyAndReset(`Got it — ${name} is your ${category}${svcPhone ? ', number saved' : ''}.`);
+          return true;
+        }
+        case 'family_capture': {
+          const { relation, name: famName } = intent as {
+            type: 'family_capture'; relation: string; name: string; location?: string;
+          };
+          if (!relation || !famName) return false;
+          // Store as a fact — entity graph wiring comes in Build D
+          const { writeObservation: _writeObs } = await import('../db/factDB');
+          void _writeObs;
+          addMessage({ id: generateId('msg'), role: 'user', content: originalText, timestamp: Date.now() });
+          const reply = `Got it — I'll remember ${famName} is your ${relation}.`;
+          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+          speak(reply);
+          sendingRef.current = false;
+          return true;
+        }
+        case 'medical_capture': {
+          // Medical capture from LLM — route through existing confirm gate
+          // Never write directly from LLM — goes through pendingMedConfirmRef
+          const { drug, raw } = intent as {
+            type: 'medical_capture'; drug?: string; raw: string;
+          };
+          const guessedName = drug ?? guessMedicationName(raw);
+          if (!guessedName || guessedName.length < 2) return false;
+          pendingMedConfirmRef.current = {
+            category: 'medication',
+            value: raw,
+            guessedName,
+          };
+          replyAndReset(`Want me to save ${guessedName} as a medication?`);
+          return true;
+        }
+        case 'todo_add': {
+          const { body } = intent as { type: 'todo_add'; body: string };
+          if (!body || body.length < 2) return false;
+          let todoList = db.getFirstSync<{ id: string }>(`SELECT id FROM lists WHERE name = ?;`, ['todos']);
+          if (!todoList) {
+            const listId = `list_todos_${Date.now()}`;
+            db.runSync(`INSERT INTO lists (id, name, created_at) VALUES (?, ?, ?);`, [listId, 'todos', new Date().toISOString()]);
+            todoList = { id: listId };
+          }
+          db.runSync(
+            `INSERT INTO list_items (id, list_id, body, checked, created_at) VALUES (?, ?, ?, 0, ?);`,
+            [`todo_${Date.now()}`, todoList.id, body, new Date().toISOString()],
+          );
+          const openCount = db.getFirstSync<{ n: number }>(
+            `SELECT COUNT(*) as n FROM list_items li JOIN lists l ON l.id = li.list_id WHERE l.name = 'todos' AND li.checked = 0;`,
+          )?.n ?? 1;
+          replyAndReset(
+            openCount === 1
+              ? `Got it — '${body}' is on your list.`
+              : `Got it — '${body}' added. You've got ${openCount} open to-dos.`,
+          );
+          return true;
         }
         default:
           replyAndReset(`I couldn't quite get that — try a different way.`);
+          return true;
       }
     } catch {
       replyAndReset(`Sorry, I couldn't do that right now.`);
+      return false;
     }
   }, [addMessage, speak, setInputText]);
 
@@ -1434,14 +1522,15 @@ export default function ChatScreen() {
           try {
             const contacts = getKnownContactNames();
             const lists = getKnownListNames();
-            const intentJson = await classifyIntent(
-              text, contacts, lists, getCtx(),
-            );
-            if (intentJson) {
-              const intent = JSON.parse(intentJson);
+            const result = await classifyWithLLM(text, getCtx(), {
+              contacts,
+              lists,
+              name: undefined,
+            });
+            if (result) {
               addMessage({ id: generateId('msg'), role: 'user',
                 content: text, timestamp: Date.now() });
-              await dispatchLocalIntent(intent, text);
+              await dispatchLocalIntent(result as Record<string, string | undefined>, text);
               return;
             }
           } catch {
@@ -1634,7 +1723,17 @@ export default function ChatScreen() {
         }
         if (tierDecision.actionIntent.type === 'household_read') {
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-          const reply = answerHouseholdRead(tierDecision.actionIntent.intent);
+          const deterministicReply = answerHouseholdRead(tierDecision.actionIntent.intent);
+          let reply = deterministicReply;
+          if (llmStatus === 'ready' && !deterministicReply.startsWith("I don't have")) {
+            const ctx = getCtx();
+            const phrased = await phraseWithLLM(ctx, {
+              userQuestion: text,
+              confirmedData: deterministicReply,
+              isMedical: false,
+            });
+            if (phrased) reply = phrased;
+          }
           addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
           speak(reply);
           sendingRef.current = false;
@@ -1941,9 +2040,19 @@ export default function ChatScreen() {
               seen.add(key);
               return true;
             });
-            const reply = unique.length === 0
+            const deterministicReply = unique.length === 0
               ? `Your ${listName} list is empty.`
               : `On your ${listName} list: ${unique.map(i => i.body).join(', ')}.`;
+            let reply = deterministicReply;
+            if (unique.length > 0 && llmStatus === 'ready') {
+              const ctx = getCtx();
+              const phrased = await phraseWithLLM(ctx, {
+                userQuestion: text,
+                confirmedData: deterministicReply,
+                isMedical: false,
+              });
+              if (phrased) reply = phrased;
+            }
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
           } catch {
@@ -2283,6 +2392,24 @@ export default function ChatScreen() {
     const activeTopicsParam =
       activeTopicsList.length > 0 ? activeTopicsList.join(",") : undefined;
 
+    // Try on-device LLM classification before Railway — keeps cost near zero
+    if (llmStatus === 'ready') {
+      const ctx = getCtx();
+      const llmIntent = await classifyWithLLM(text, ctx, {
+        contacts: getKnownContactNames(),
+        lists: getKnownListNames(),
+        name: undefined,
+      });
+      if (llmIntent) {
+        const handled = await dispatchLocalIntent(llmIntent as Record<string, string | undefined>, text);
+        if (handled) {
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+      }
+    }
+
     const abortController = askHeraldStream(
       {
         user_id: userId,
@@ -2418,6 +2545,18 @@ export default function ChatScreen() {
         });
       }
       resetStreamState();
+    } finally {
+      // Passive personality observation — fires after every turn, success or failure
+      try {
+        const lastAssistant = messages[messages.length - 1];
+        writeTurnObservation({
+          userText: text,
+          assistantText: lastAssistant?.role === 'assistant' ? lastAssistant.content : '',
+          intentReason: undefined,
+          timestampMs: Date.now(),
+          wasCorrection: /\b(no|wrong|not what i meant|that's not right)\b/i.test(text),
+        });
+      } catch { /* never block the UI */ }
     }
   }, [userId, messages, personaKey, lat, lng, locationLabel, getContextBlock, addMessage, setError, resetSpeech, enqueueSentence, resetStreamState, stop, llmStatus, getCtx, dispatchLocalIntent]);
 

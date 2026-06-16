@@ -54,7 +54,7 @@ const LEGAL_PATTERNS = [
 ];
 
 // ─── writeServiceProvider ─────────────────────────────────────────────────────
-function writeServiceProvider(category: string, name: string, phone?: string): string {
+export function writeServiceProvider(category: string, name: string, phone?: string): string {
   const db = getDB();
   const now = new Date().toISOString();
   const id = generateId('sp');
