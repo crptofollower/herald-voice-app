@@ -778,8 +778,8 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
 
   // Tier 1: medical
   if (TIER1_SIGNALS.medical.some((p) => p.test(msg))) {
-    const rawSummary = getMedicalSummary();
-    return { tier: 1, tier1Response: rawSummary, reason: "medical:summary", llmWrap: true };
+    const response = getMedicalSummary();
+    return { tier: 1, tier1Response: response, reason: "medical:summary" };
   }
 
   // Tier 1: family relationship name — "what's my wife's name", "who's my wife"
