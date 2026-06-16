@@ -20,6 +20,7 @@ export type Tier = 1 | 2 | 3;
 export interface TierDecision {
   tier: Tier;
   tier1Response?: string;
+  llmWrap?: boolean;
   actionIntent?:
     | { type: 'alarm';    time: string;  label: string }
     | { type: 'timer'; minutes: number; label: string }
@@ -777,8 +778,8 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
 
   // Tier 1: medical
   if (TIER1_SIGNALS.medical.some((p) => p.test(msg))) {
-    const response = getMedicalSummary();
-    return { tier: 1, tier1Response: response, reason: "medical:summary" };
+    const rawSummary = getMedicalSummary();
+    return { tier: 1, tier1Response: rawSummary, reason: "medical:summary", llmWrap: true };
   }
 
   // Tier 1: family relationship name — "what's my wife's name", "who's my wife"

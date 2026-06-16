@@ -201,7 +201,7 @@ export default function ChatScreen() {
 
   const persona = PERSONAS[personaKey] ?? PERSONAS[DEFAULT_PERSONA];
 
-  const { status: llmStatus, activeModel, getCtx } = useLocalLLM();
+  const { status: llmStatus, activeModel, getCtx, inferLocal } = useLocalLLM();
   void activeModel;
 
   type ResolveContactFn = (nameOrRelation: string) => Promise<{ phone: string; name: string; contactId?: string } | null>;
@@ -1356,8 +1356,18 @@ export default function ChatScreen() {
           // needs no network. Do NOT add a return here.
         } else if (tierDecision.tier1Response) {
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-          addMessage({ id: generateId('msg'), role: 'assistant', content: tierDecision.tier1Response, timestamp: Date.now() });
-          speak(tierDecision.tier1Response);
+          let finalResponse = tierDecision.tier1Response;
+          if (tierDecision.llmWrap) {
+            const wrapped = await inferLocal(
+              `You are Herald, a warm personal AI companion. The user asked: "${text}"\n` +
+              `You have this confirmed data: "${tierDecision.tier1Response}"\n` +
+              `Respond in one natural friendly sentence. Never invent or change any medication name or dosage. Keep it under 25 words.`,
+              60
+            );
+            if (wrapped) finalResponse = wrapped;
+          }
+          addMessage({ id: generateId('msg'), role: 'assistant', content: finalResponse, timestamp: Date.now() });
+          speak(finalResponse);
           setInputText('');
           sendingRef.current = false;
           return;
@@ -2141,7 +2151,17 @@ export default function ChatScreen() {
       }
       // Tier 1 read response — calendar, medical, profile
       if (tierDecision.tier1Response) {
-        handleTier1(tierDecision.tier1Response, text, addMessage, speak, generateId);
+        let finalResponse = tierDecision.tier1Response;
+        if (tierDecision.llmWrap) {
+          const wrapped = await inferLocal(
+            `You are Herald, a warm personal AI companion. The user asked: "${text}"\n` +
+            `You have this confirmed data: "${tierDecision.tier1Response}"\n` +
+            `Respond in one natural friendly sentence. Never invent or change any medication name or dosage. Keep it under 25 words.`,
+            60
+          );
+          if (wrapped) finalResponse = wrapped;
+        }
+        handleTier1(finalResponse, text, addMessage, speak, generateId);
         sendingRef.current = false;
         setInputText('');
         return;

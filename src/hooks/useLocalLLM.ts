@@ -23,8 +23,7 @@ const STOP_TOKENS = ['\n\n', '<|end|>', '<|eot_id|>'];
 
 const LLAMA_INIT_BASE = {
   n_ctx: 2048,
-  n_gpu_layers: 99,
-  devices: ['HTP0'] as const,
+  n_gpu_layers: 0,
 };
 
 function modelKindFromPath(path: string): 'small' | 'large' {
