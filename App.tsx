@@ -42,6 +42,9 @@ import {
   retriggerOnWifi,
 } from './src/utils/modelDownloadService';
 import NetInfo from '@react-native-community/netinfo';
+import { LOCAL_LLM_ENABLED } from './src/constants/features';
+import { ErrorBoundary } from './src/components/ErrorBoundary';
+import { beacon } from './src/utils/diag';
 
 export type RootStackParamList = {
   Onboarding: undefined;
@@ -214,6 +217,7 @@ export default function App() {
 
   useEffect(() => {
     if (dbState !== 'ready') return;
+    if (!LOCAL_LLM_ENABLED) return; // LLM disabled — don't download models
 
     runModelDownloadService({
       onSmallModelReady: () => {
@@ -299,11 +303,15 @@ export default function App() {
     return <View style={{ flex: 1, backgroundColor: "#0A1628" }} />;
   }
 
+  beacon('app_render'); // got past DB + fonts; app is about to mount Navigation
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <QueryClientProvider client={queryClient}>
         <StatusBar style="auto" />
-        <Navigation />
+        <ErrorBoundary>
+          <Navigation />
+        </ErrorBoundary>
       </QueryClientProvider>
     </GestureHandlerRootView>
   );

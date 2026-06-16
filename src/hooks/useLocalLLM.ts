@@ -9,6 +9,7 @@ import {
   getActiveModelPath,
   LARGE_MODEL,
 } from '../utils/modelManager';
+import { LOCAL_LLM_ENABLED } from '../constants/features';
 
 export type LocalLLMStatus =
   | 'unavailable'
@@ -54,6 +55,17 @@ export function useLocalLLM(): {
     let cancelled = false;
 
     (async () => {
+      if (!LOCAL_LLM_ENABLED) {
+        // On-device LLM disabled (not a shipped feature; its native init is the
+        // top crash suspect on non-Snapdragon devices). Stay 'unavailable' so
+        // callers fall through to Railway, and never touch llama.rn.
+        if (!cancelled) {
+          activeModelRef.current = null;
+          setActiveModel(null);
+          setStatusSafe('unavailable');
+        }
+        return;
+      }
       try {
         const modelPath = await getActiveModelPath();
         if (!modelPath) {

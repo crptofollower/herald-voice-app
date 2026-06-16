@@ -62,6 +62,7 @@ import { IntentCard, type ActionStatus } from "../components/IntentCard";
 import { generateId } from "../utils/id";
 import { normalizePhone } from "../utils/phone";
 import { normalizeInput } from "../utils/normalizeInput";
+import { beacon } from "../utils/diag";
 import { useCalendar } from "../hooks/useCalendar";
 import { useLocation } from "../hooks/useLocation";
 import { useMic } from "../hooks/useMic";
@@ -418,9 +419,19 @@ export default function ChatScreen() {
     });
   }, []);
 
+  // Startup-settled beacon: fires ~6s after mount, PAST the window the old
+  // build crashed in (native llama.rn init). Its arrival on Railway = the
+  // startup danger window was survived. Its absence = something in startup
+  // (mic listener / calendar) is still killing the process.
+  useEffect(() => {
+    const t = setTimeout(() => beacon('startup_settled'), 6000);
+    return () => clearTimeout(t);
+  }, []);
+
   // ── Session L: init device SQLite and run one-time migration ─────────────
   useEffect(() => {
     if (!userId) return;
+    beacon('chat_mounted');
     initDB().then(async () => {
       try {
         await runMigration(userId);
@@ -455,6 +466,7 @@ export default function ChatScreen() {
       } catch {}
 
       setDbReady(true);
+      beacon('chat_db_ready');
 
       // Drain any writes queued while offline — calendar events, SMS etc.
       try {
@@ -536,6 +548,7 @@ export default function ChatScreen() {
               content: data.greeting,
               timestamp: Date.now() + 1,
             });
+            beacon('greeting_weather_rendered');
             if (greetingLabel) {
               saveDeviceProfile("confirmed_city", greetingLabel);
               // Mirror to local_profile SQLite — makes Tier 1 profile queries work

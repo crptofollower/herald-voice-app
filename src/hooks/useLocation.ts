@@ -165,28 +165,34 @@ export function useLocation(): LocationResult {
 
       // 7. Watch for movement after initial fix
       if (!cancelled) {
-        watchSubscription = await Location.watchPositionAsync(
-          {
-            accuracy: Location.Accuracy.Balanced,
-            distanceInterval: 1600,
-            timeInterval: 300000,
-          },
-          (newLocation) => {
-            if (cancelled) return;
-            const { latitude: watchLat, longitude: watchLng } = newLocation.coords;
-            if (!isValidWatchRegion(watchLat, watchLng)) return;
-            setLocation({
-              lat: watchLat,
-              lng: watchLng,
-              label: null,
-              available: true,
-            });
-          }
-        );
+        try {
+          watchSubscription = await Location.watchPositionAsync(
+            {
+              accuracy: Location.Accuracy.Balanced,
+              distanceInterval: 1600,
+              timeInterval: 300000,
+            },
+            (newLocation) => {
+              if (cancelled) return;
+              const { latitude: watchLat, longitude: watchLng } = newLocation.coords;
+              if (!isValidWatchRegion(watchLat, watchLng)) return;
+              setLocation({
+                lat: watchLat,
+                lng: watchLng,
+                label: null,
+                available: true,
+              });
+            }
+          );
+        } catch (e) {
+          console.warn('[Herald] watchPositionAsync failed:', e);
+        }
       }
     }
 
-    fetchLocation();
+    fetchLocation().catch((e) => {
+      console.warn('[Herald] location init failed:', e);
+    });
     return () => {
       cancelled = true;
       watchSubscription?.remove();
