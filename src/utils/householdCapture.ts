@@ -21,9 +21,10 @@ export type HouseholdCaptureResult = {
 // "my electrician's name is Mike, 972-555-0100"
 // "the guy who fixes my AC is Bob"
 const SERVICE_PATTERNS = [
-  /\bmy ([\w\s\-']+?)\s+is\s+([\w\s\-']+?)(?:[,.]?\s+(?:his|her|their)\s+(?:number|phone)\s+is\s+([\d\s\-\(\)\+\.]{7,}))?[.!?]?$/i,
-  /\bmy ([\w\s\-']+?)'?s?\s+name\s+is\s+([\w\s\-']+?)(?:[,.]?\s+([\d\s\-\(\)\+\.]{7,}))?[.!?]?$/i,
-  /\bthe (?:guy|person|woman|man|lady)\s+(?:who\s+)?(?:fixes?|does?|handles?|takes?\s+care\s+of)\s+my\s+([\w\s\-']+?)\s+is\s+([\w\s]+)[.!?]?$/i,
+  /\b(?:my|our)\s+([\w\s\-']+?)\s+is\s+([\w]+)(?:[,.]?\s+(?:his|her|their)\s+(?:phone\s+number|number|phone|cell)\s+is\s+([\d\s\-\(\)\+\.]{7,}))?[.!?]?$/i,
+  /\b(?:my|our)\s+([\w\s\-']+?)'?s?\s+name\s+is\s+([\w\s\-']+?)(?:[,.]?\s+([\d\s\-\(\)\+\.]{7,}))?[.!?]?$/i,
+  /\bthe (?:guy|person|woman|man|lady)\s+(?:who\s+)?(?:fixes?|does?|handles?|takes?\s+care\s+of)\s+(?:my|our)\s+([\w\s\-']+?)\s+is\s+([\w\s]+)[.!?]?$/i,
+  /\b(?:my|our)\s+(plumber|electrician|hvac|mechanic|roofer|handyman|contractor|painter|landscaper|cleaner|accountant|lawyer|attorney|vet|dentist|doctor|pool)\s+([\w]+)(?:[,.]?\s+(?:his|her|their)\s+(?:phone\s+number|number|phone|cell)\s+is\s+([\d\s\-\(\)\+\.]{7,}))?[.!?]?$/i,
 ];
 
 const SERVICE_CATEGORIES = new Set([
@@ -134,7 +135,7 @@ export function captureHousehold(text: string): HouseholdCaptureResult | null {
     const m = text.match(pattern);
     if (m) {
       const insType = m[1]?.trim().toLowerCase() ?? '';
-      const carrier = m[2]?.trim() ?? '';
+      const carrier = (m[2]?.trim() ?? '').replace(/^with\s+/i, '').split(/\s+and\s+/i)[0].trim();
       const agent = m[3]?.trim();
       const phoneCheck = m[4] ? normalizePhone(m[4]) : null;
       const phone = phoneCheck?.valid ? phoneCheck.normalized : undefined;
