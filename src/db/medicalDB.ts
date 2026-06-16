@@ -156,7 +156,7 @@ export function clearAllMedications(): number {
   // so the audit trail ("when did I clear these?") has its data from day one.
   // Recoverable — rows remain in the table with is_active=0.
   const res = db.runSync(
-    `UPDATE medications SET is_active = 0, removed_at = ? WHERE is_active = 1;`,
+    `UPDATE medications SET is_active = 0, removed_at = ? WHERE is_active = 1 OR removed_at IS NULL;`,
     [now]
   );
   return res.changes ?? 0;

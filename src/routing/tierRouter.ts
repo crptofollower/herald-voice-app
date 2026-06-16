@@ -691,7 +691,7 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
 
   // Device: medical clear (wipe all) — BEFORE capture/read so it isn't swallowed.
   if (
-    /\b(clear|wipe|reset|empty|delete all|remove all|start (over|fresh))\b/i.test(msg) &&
+    /\b(clear|wipe|reset|empty|delete|delete all|remove all|start (over|fresh))\b/i.test(msg) &&
     /\b(medication|medications|meds|prescriptions?|medical)\b/i.test(msg)
   ) {
     return { tier: 1, actionIntent: { type: 'medical_clear' }, reason: 'action:medical_clear' };
