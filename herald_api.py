@@ -1,5 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
+# v8.84 -- /diag breadcrumb + crash endpoints (Mickey Motorola crash forensics)
 # v8.83 -- wttr.in: confirmed_city before lat/lng so city names resolve correctly
 # v8.82 -- wttr.in: lat/lng when available; no hardcoded city fallback if location unknown
 # v8.81 -- device_context cache bypass: device memory now fresh every turn
@@ -65,7 +66,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.83")
+app = FastAPI(title="Herald API", version="8.84")
 
 app.add_middleware(
     CORSMiddleware,
@@ -4989,7 +4990,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.83",
+        "status": "ok", "server": "herald-api", "version": "8.84",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled -- every message",
@@ -5024,6 +5025,63 @@ def health():
         },
         "time": datetime.now().isoformat()
     }
+
+
+# ── DIAGNOSTICS ───────────────────────────────────────────────────────────────
+# Startup breadcrumbs + JS crash reports from devices we can't logcat (e.g.
+# Mickey's Motorola). The app POSTs a beacon BEFORE each risky native touchpoint;
+# the LAST stage received localizes a native crash JS can't catch. Kept in a
+# small in-memory ring (resets on redeploy) AND printed to Railway logs (durable).
+_diag_log: dict = {}          # user_id -> list[dict] (most recent last)
+_DIAG_MAX_PER_USER = 50
+
+def _diag_record(user_id: str, entry: dict) -> None:
+    bucket = _diag_log.setdefault(user_id, [])
+    bucket.append(entry)
+    if len(bucket) > _DIAG_MAX_PER_USER:
+        del bucket[: len(bucket) - _DIAG_MAX_PER_USER]
+
+@app.post("/diag/breadcrumb")
+async def diag_breadcrumb(request: Request):
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "bad json"}, status_code=400)
+    user_id = str(data.get("user_id", "unknown"))[:64]
+    stage   = str(data.get("stage", "unknown"))[:64]
+    ts      = str(data.get("ts", datetime.now().isoformat()))[:40]
+    _diag_record(user_id, {"kind": "breadcrumb", "stage": stage,
+                           "ts": ts, "rx": datetime.now().isoformat()})
+    print(f"[DIAG] {user_id} :: {stage} @ {ts}")
+    return {"ok": True}
+
+@app.post("/diag/crash")
+async def diag_crash(request: Request):
+    try:
+        data = await request.json()
+    except Exception:
+        return JSONResponse({"error": "bad json"}, status_code=400)
+    user_id = str(data.get("user_id", "unknown"))[:64]
+    kind    = str(data.get("kind", "js_error"))[:40]
+    message = str(data.get("message", ""))[:500]
+    stack   = str(data.get("stack", ""))[:2000]
+    comp    = str(data.get("component_stack", ""))[:2000]
+    ts      = str(data.get("ts", datetime.now().isoformat()))[:40]
+    _diag_record(user_id, {"kind": kind, "message": message, "stack": stack,
+                           "component_stack": comp, "ts": ts,
+                           "rx": datetime.now().isoformat()})
+    print(f"[DIAG CRASH] {user_id} :: {kind} :: {message}")
+    print(f"[DIAG CRASH] stack: {stack[:800]}")
+    return {"ok": True}
+
+@app.get("/diag/recent")
+def diag_recent(secret: str = "", user_id: str = ""):
+    if secret != "freddie_sync_2026":
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if user_id:
+        return {"ok": True, "user_id": user_id, "events": _diag_log.get(user_id, [])}
+    summary = {uid: (evts[-1] if evts else None) for uid, evts in _diag_log.items()}
+    return {"ok": True, "users": list(_diag_log.keys()), "latest": summary}
 
 
 # In-memory rate limit for proactive polling — backend safety net.
@@ -6781,7 +6839,7 @@ async def user_export(user_id: str, request: Request, secret: str = ""):
     print(f"[HERALD] /user/export: exported all personal data for {user_id}")
     return {
         "ok": True,
-        "version": "8.83",
+        "version": "8.84",
         "user_id": user_id,
         "exported_at": datetime.now().isoformat(),
         "profile": profile,
@@ -6939,7 +6997,7 @@ async def admin_dashboard(secret: str = ""):
 
         return {
             "ok": True,
-            "version": "8.83",
+            "version": "8.84",
             "user_count": len(users),
             "users": sorted(users, key=lambda x: x["msg_count"], reverse=True),
             "waitlist_count": waitlist_count,
@@ -7163,7 +7221,7 @@ def startup():
     print(f"[HERALD API] WeatherAPI:    {'YES (backup)' if WEATHER_KEY else 'not set'}")
     print(f"[HERALD API] Database:      {DB_FILE}")
     print(f"[HERALD API] Owner code:    {'SET' if OWNER_CODE else 'NOT SET'}")
-    print(f"[HERALD API] FIX v8.83: wttr.in confirmed_city first; lat/lng fallback")
+    print(f"[HERALD API] v8.84: /diag breadcrumb + crash endpoints (crash forensics)")
     print(f"[HERALD API] FIX v8.8: GPS city caching -- confirmed_city in profile, 20mi tolerance")
     print(f"[HERALD API] FIX v8.8: Memory rules -- no 'I remember', no raw GPS coords spoken")
     print(f"[HERALD API] FIX v8.8: Seed question for new users -- makes first session feel alive")
