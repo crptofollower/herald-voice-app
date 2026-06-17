@@ -778,7 +778,7 @@ export default function ChatScreen() {
           return true;
         }
         case 'insurance_capture': {
-          const { type: insType, carrier, agent, phone } = intent as {
+          const { type, insType, carrier, agent, phone } = intent as {
             type: 'insurance_capture'; insType: string; carrier: string;
             agent?: string; phone?: string;
           };
