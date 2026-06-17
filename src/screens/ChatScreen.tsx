@@ -683,19 +683,40 @@ export default function ChatScreen() {
           return true;
         }
         case 'list_add': {
-          const listName = intent.listName ?? 'grocery';
-          const item = intent.item ?? '';
+          const listName = ((intent.listName ?? 'grocery') as string).toString();
+          const rawIntent = intent as unknown as { items?: string[]; item?: string };
+          const itemList: string[] = Array.isArray(rawIntent.items) && rawIntent.items.length > 0
+            ? rawIntent.items.filter((i: string) => i?.trim().length > 0)
+            : rawIntent.item?.trim()
+              ? rawIntent.item.trim().split(/\s*,\s*|\s+and\s+/i).map((s: string) => s.trim()).filter(Boolean)
+              : [];
+          if (itemList.length === 0) return false;
           let list = db.getFirstSync<{ id: string }>(`SELECT id FROM lists WHERE name = ?;`, [listName]);
           if (!list) {
             const listId = `list_${Date.now()}`;
             db.runSync(`INSERT INTO lists (id, name, created_at) VALUES (?, ?, ?);`, [listId, listName, new Date().toISOString()]);
             list = { id: listId };
           }
-          db.runSync(
-            `INSERT INTO list_items (id, list_id, body, checked, created_at) VALUES (?, ?, ?, 0, ?);`,
-            [`item_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, list.id, item, new Date().toISOString()],
+          const now = new Date().toISOString();
+          for (const item of itemList) {
+            const exists = db.getFirstSync<{ id: string }>(
+              `SELECT li.id FROM list_items li JOIN lists l ON l.id = li.list_id
+               WHERE l.name = ? AND lower(li.body) = lower(?) AND li.checked = 0;`,
+              [listName, item]
+            );
+            if (!exists) {
+              db.runSync(
+                `INSERT INTO list_items (id, list_id, body, checked, created_at) VALUES (?, ?, ?, 0, ?);`,
+                [`item_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, list.id, item, now],
+              );
+            }
+          }
+          const itemNames = itemList.join(', ');
+          replyAndReset(
+            itemList.length === 1
+              ? `Got it — ${itemList[0]} is on your ${listName} list.`
+              : `Got it — added ${itemList.length} items to your ${listName} list: ${itemNames}.`
           );
-          replyAndReset(`Added ${item} to your ${listName} list.`);
           return true;
         }
         case 'call': {
