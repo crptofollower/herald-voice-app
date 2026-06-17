@@ -9,4 +9,15 @@ _tmp_handoff/
 _handoff_extract/
 design_handoff_persona_system/
 .do-commit.mjs
-scripts/
+# scripts/ is local-only by default (build artifacts, mirrors, node_modules)
+scripts/**
+# ...but track the heraldTest harness so the routing gate travels with the repo
+!scripts/heraldTest/
+!scripts/heraldTest/run.mjs
+!scripts/heraldTest/routeIntent.test.mjs
+!scripts/heraldTest/offlineCapture.mjs
+!scripts/heraldTest/package.json
+!scripts/heraldTest/package-lock.json
+# keep derived/installed files out — mirrors are copies of tracked src/, node_modules is installed
+scripts/heraldTest/node_modules/
+scripts/heraldTest/src/
