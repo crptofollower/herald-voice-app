@@ -4851,8 +4851,19 @@ def afternoon_checkin_job():
                 _recent = (_facts + _notes + _mem)[-3:] if (_facts or _notes or _mem) else []
 
                 if _recent:
-                    _context = _recent[-1] if isinstance(_recent[-1], str) else str(_recent[-1])
-                    _context = _context[:80] if len(_context) > 80 else _context
+                    _last = _recent[-1]
+                    if isinstance(_last, str):
+                        _context = _last
+                    elif isinstance(_last, dict):
+                        _context = (
+                            _last.get("value") or
+                            _last.get("text") or
+                            _last.get("fact") or
+                            next((v for v in _last.values() if isinstance(v, str) and len(v) > 3), "")
+                        )
+                    else:
+                        _context = ""
+                    _context = str(_context).strip()[:80]
                     _msg = (
                         f"Hey {first_name} -- afternoon check-in. "
                         f"How's everything going? Still thinking about {_context}?"
