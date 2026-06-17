@@ -17,6 +17,11 @@ export type HouseholdCaptureResult = {
   pendingConfirm?: { type: string; carrier: string };
 };
 
+export type HouseholdNeedsLLM = {
+  type: 'needs_llm';
+  reason: 'supersession' | 'ambiguous';
+};
+
 // ─── Service provider patterns ────────────────────────────────────────────────
 // "my plumber is Joe, his number is 555-1234"
 // "my electrician's name is Mike, 972-555-0100"
@@ -123,7 +128,7 @@ export function captureHouseholdInsurance(type: string, carrier: string): string
 // Returns null if no household pattern matched (caller falls through normally).
 // Returns HouseholdCaptureResult if matched — caller returns early with ack.
 
-export function captureHousehold(text: string): HouseholdCaptureResult | null {
+export function captureHousehold(text: string): HouseholdCaptureResult | HouseholdNeedsLLM | null {
 
   // Guard: never capture from list/calendar/profile read questions.
   // These look like statements but are actually read intents — "tell me my grocery list"
@@ -134,7 +139,7 @@ export function captureHousehold(text: string): HouseholdCaptureResult | null {
   // Guard: "remove X replace with Y" is an insurance update — route to LLM classifier.
   // captureHousehold can't handle supersession, so let it fall through to classifyWithLLM.
   const REPLACE_GUARD = /\b(remove|replace|switch|change|update)\b.{1,60}\b(replace|with|to)\b/i;
-  if (REPLACE_GUARD.test(text)) return null;
+  if (REPLACE_GUARD.test(text)) return { type: 'needs_llm', reason: 'supersession' };
 
   // ── Legal documents (check first — most specific patterns) ─────────────────
   for (const pattern of LEGAL_PATTERNS) {

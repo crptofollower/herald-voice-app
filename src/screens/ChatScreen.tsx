@@ -1386,7 +1386,23 @@ export default function ChatScreen() {
     // Household capture — runs before extractFactsLocally
     // Same order rule as phone/address/emergency capture — never move below extractFactsLocally
     const householdResult = captureHousehold(text);
-    if (householdResult) {
+
+    // LLM required — deterministic path can't handle this phrasing
+    if (householdResult && householdResult.type === 'needs_llm') {
+      if (llmStatus !== 'ready') {
+        const notReadyMsg = "Give me just a moment — I'm still waking up. Say that again in a sec.";
+        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+        addMessage({ id: generateId('msg'), role: 'assistant', content: notReadyMsg, timestamp: Date.now() });
+        speak(notReadyMsg);
+        sendingRef.current = false;
+        setInputText('');
+        return;
+      }
+      // LLM is ready — fall through to LLM-first block which already ran above.
+      // If it handled it, we already returned. If not, continue normal fallthrough.
+    }
+
+    if (householdResult && householdResult.type !== 'needs_llm') {
       if (householdResult.pendingConfirm) {
         pendingInsuranceRef.current = {
           type: householdResult.pendingConfirm.type,
