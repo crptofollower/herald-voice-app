@@ -247,6 +247,7 @@ const LIST_ADD_SIGNALS = [
 ];
 
 const LIST_READ_SIGNALS = [
+  /\b(tell|read\s+me|show)\s+(me\s+)?(my|the)\s+(\w+\s+)?list\b/i,
   /\bwhat('s| is) on my (grocery |shopping |to.?do )?\blist\b/i,
   /\bwhat('s| is) on (the )?(grocery |shopping |to.?do )?\blist\b/i,
   /\bshow (me )?my (grocery |shopping |to.?do |)\blist\b/i,

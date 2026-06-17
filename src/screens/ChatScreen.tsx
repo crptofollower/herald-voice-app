@@ -1184,6 +1184,33 @@ export default function ChatScreen() {
       // Fall through to normal routing
     }
 
+    // LLM-first capture — classifier runs before regex for natural language captures.
+    // Handles rambles like "I need apples oranges and milk" → splits into 3 items.
+    // Only fires for capture-signal inputs. Reads/actions fall through to classifyQuery.
+    const CAPTURE_SIGNALS = /\b(add|need|get|pick up|grab|i'm taking|i take|my .+ is|remove|delete|replace|switch)\b/i;
+    if (llmStatus === 'ready' && CAPTURE_SIGNALS.test(text)) {
+      try {
+        const llmCapture = await classifyWithLLM(text, getCtx(), {
+          contacts: getKnownContactNames(),
+          lists: getKnownListNames(),
+          name: undefined,
+        });
+        if (llmCapture) {
+          const handled = await dispatchLocalIntent(
+            llmCapture as Record<string, string | undefined>,
+            text,
+          );
+          if (handled) {
+            sendingRef.current = false;
+            setInputText('');
+            return;
+          }
+        }
+      } catch {
+        // LLM failed — fall through to regex classifyQuery
+      }
+    }
+
     const tierDecision = await classifyQuery(text);
 
     // ── Offline check -- skip network, answer from device or give warm message ──
@@ -2391,24 +2418,6 @@ export default function ChatScreen() {
     const activeTopicsList = getActiveTopics();
     const activeTopicsParam =
       activeTopicsList.length > 0 ? activeTopicsList.join(",") : undefined;
-
-    // Try on-device LLM classification before Railway — keeps cost near zero
-    if (llmStatus === 'ready') {
-      const ctx = getCtx();
-      const llmIntent = await classifyWithLLM(text, ctx, {
-        contacts: getKnownContactNames(),
-        lists: getKnownListNames(),
-        name: undefined,
-      });
-      if (llmIntent) {
-        const handled = await dispatchLocalIntent(llmIntent as Record<string, string | undefined>, text);
-        if (handled) {
-          sendingRef.current = false;
-          setInputText('');
-          return;
-        }
-      }
-    }
 
     const abortController = askHeraldStream(
       {

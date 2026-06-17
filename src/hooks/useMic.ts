@@ -9,7 +9,7 @@ export function useMic(onTranscript: (text: string) => void) {
   const maxTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bufferRef = useRef<string>('');
   const bufferTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const BUFFER_WINDOW = 2400;
+  const BUFFER_WINDOW = 3500;
 
   useSpeechRecognitionEvent('result', (event) => {
     if (event.isFinal) {
@@ -23,7 +23,7 @@ export function useMic(onTranscript: (text: string) => void) {
       if (bufferTimerRef.current) clearTimeout(bufferTimerRef.current);
 
       const wordCount = bufferRef.current.split(' ').length;
-      const delay = wordCount > 8 ? 1200 : BUFFER_WINDOW;
+      const delay = wordCount > 12 ? 1800 : BUFFER_WINDOW;
 
       bufferTimerRef.current = setTimeout(() => {
         const final = bufferRef.current.trim();
