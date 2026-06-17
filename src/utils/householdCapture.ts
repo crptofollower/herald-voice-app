@@ -133,7 +133,7 @@ export function captureHousehold(text: string): HouseholdCaptureResult | null {
 
   // Guard: "remove X replace with Y" is an insurance update — route to LLM classifier.
   // captureHousehold can't handle supersession, so let it fall through to classifyWithLLM.
-  const REPLACE_GUARD = /\b(remove|replace|switch|change|update)\b.{1,30}\b(replace|with|to)\b/i;
+  const REPLACE_GUARD = /\b(remove|replace|switch|change|update)\b.{1,60}\b(replace|with|to)\b/i;
   if (REPLACE_GUARD.test(text)) return null;
 
   // ── Legal documents (check first — most specific patterns) ─────────────────
