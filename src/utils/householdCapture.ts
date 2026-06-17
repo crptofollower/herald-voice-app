@@ -125,6 +125,17 @@ export function captureHouseholdInsurance(type: string, carrier: string): string
 
 export function captureHousehold(text: string): HouseholdCaptureResult | null {
 
+  // Guard: never capture from list/calendar/profile read questions.
+  // These look like statements but are actually read intents — "tell me my grocery list"
+  // can match service provider patterns ("my grocery" = category, "list" = name).
+  const READ_GUARD = /\b(what('s| is| are)|tell (me )?my|show (me )?my|read (me )?my|what do i have|do i have|who('s| is)|where('s| is))\b/i;
+  if (READ_GUARD.test(text)) return null;
+
+  // Guard: "remove X replace with Y" is an insurance update — route to LLM classifier.
+  // captureHousehold can't handle supersession, so let it fall through to classifyWithLLM.
+  const REPLACE_GUARD = /\b(remove|replace|switch|change|update)\b.{1,30}\b(replace|with|to)\b/i;
+  if (REPLACE_GUARD.test(text)) return null;
+
   // ── Legal documents (check first — most specific patterns) ─────────────────
   for (const pattern of LEGAL_PATTERNS) {
     const m = text.match(pattern);
