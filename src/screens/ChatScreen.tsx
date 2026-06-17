@@ -736,7 +736,7 @@ export default function ChatScreen() {
           if (householdIntent) {
             replyAndReset(answerHouseholdRead(householdIntent));
           } else {
-            replyAndReset(`I don't have that stored yet.`);
+            replyAndReset(`I'm not sure I caught that — were you telling me something to remember, or asking me to look something up?`);
           }
           return true;
         }
@@ -808,17 +808,27 @@ export default function ChatScreen() {
           return true;
         }
         case 'family_capture': {
-          const { relation, name: famName } = intent as {
+          const { relation, name: famName, location } = intent as {
             type: 'family_capture'; relation: string; name: string; location?: string;
           };
           if (!relation || !famName) return false;
-          // Store as a fact — entity graph wiring comes in Build D
-          const { writeObservation: _writeObs } = await import('../db/factDB');
-          void _writeObs;
           addMessage({ id: generateId('msg'), role: 'user', content: originalText, timestamp: Date.now() });
-          const reply = `Got it — I'll remember ${famName} is your ${relation}.`;
-          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-          speak(reply);
+          try {
+            const { writeFact } = await import('../db/factDB');
+            const factStr = location
+              ? `${famName} is my ${relation}, lives in ${location}`
+              : `${famName} is my ${relation}`;
+            writeFact(factStr, 'family', { confidence: 'stated', contextType: 'active' });
+            const reply = location
+              ? `Got it — I'll remember ${famName} is your ${relation} in ${location}.`
+              : `Got it — I'll remember ${famName} is your ${relation}.`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          } catch {
+            const reply = `I had trouble holding onto that — can you say it once more?`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          }
           sendingRef.current = false;
           return true;
         }
@@ -1205,11 +1215,10 @@ export default function ChatScreen() {
       // Fall through to normal routing
     }
 
-    // LLM-first capture — classifier runs before regex for natural language captures.
-    // Handles rambles like "I need apples oranges and milk" → splits into 3 items.
-    // Only fires for capture-signal inputs. Reads/actions fall through to classifyQuery.
-    const CAPTURE_SIGNALS = /\b(add|need|get|pick up|grab|i'm taking|i take|my .+ is|remove|delete|replace|switch)\b/i;
-    if (llmStatus === 'ready' && CAPTURE_SIGNALS.test(text)) {
+    // LLM-first capture — the on-device classifier is the single routing authority
+    // for captures. Runs on every input when ready; classifyQuery regex is the
+    // fallback floor (fires when the LLM returns null or isn't loaded).
+    if (llmStatus === 'ready') {
       try {
         const llmCapture = await classifyWithLLM(text, getCtx(), {
           contacts: getKnownContactNames(),
