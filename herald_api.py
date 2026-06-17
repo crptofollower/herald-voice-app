@@ -1,5 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
+# v8.85 -- afternoon_checkin: unwrap learned_facts dicts before spoken interpolation
 # v8.84 -- /diag breadcrumb + crash endpoints (Mickey Motorola crash forensics)
 # v8.83 -- wttr.in: confirmed_city before lat/lng so city names resolve correctly
 # v8.82 -- wttr.in: lat/lng when available; no hardcoded city fallback if location unknown
@@ -66,7 +67,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.84")
+app = FastAPI(title="Herald API", version="8.85")
 
 app.add_middleware(
     CORSMiddleware,
@@ -5001,7 +5002,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.84",
+        "status": "ok", "server": "herald-api", "version": "8.85",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled -- every message",
@@ -6850,7 +6851,7 @@ async def user_export(user_id: str, request: Request, secret: str = ""):
     print(f"[HERALD] /user/export: exported all personal data for {user_id}")
     return {
         "ok": True,
-        "version": "8.84",
+        "version": "8.85",
         "user_id": user_id,
         "exported_at": datetime.now().isoformat(),
         "profile": profile,
@@ -7008,7 +7009,7 @@ async def admin_dashboard(secret: str = ""):
 
         return {
             "ok": True,
-            "version": "8.84",
+            "version": "8.85",
             "user_count": len(users),
             "users": sorted(users, key=lambda x: x["msg_count"], reverse=True),
             "waitlist_count": waitlist_count,
@@ -7232,7 +7233,7 @@ def startup():
     print(f"[HERALD API] WeatherAPI:    {'YES (backup)' if WEATHER_KEY else 'not set'}")
     print(f"[HERALD API] Database:      {DB_FILE}")
     print(f"[HERALD API] Owner code:    {'SET' if OWNER_CODE else 'NOT SET'}")
-    print(f"[HERALD API] v8.84: /diag breadcrumb + crash endpoints (crash forensics)")
+    print(f"[HERALD API] v8.85: afternoon_checkin unwraps learned_facts dict before spoken text")
     print(f"[HERALD API] FIX v8.8: GPS city caching -- confirmed_city in profile, 20mi tolerance")
     print(f"[HERALD API] FIX v8.8: Memory rules -- no 'I remember', no raw GPS coords spoken")
     print(f"[HERALD API] FIX v8.8: Seed question for new users -- makes first session feel alive")
