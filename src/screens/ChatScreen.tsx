@@ -784,16 +784,26 @@ export default function ChatScreen() {
           };
           void agent;
           void phone;
-          if (!insType || !carrier || carrier.length < 2) {
+          // Guard against the on-device model echoing schema names or placeholders
+          // into data fields instead of real values. Deterministic floor — never
+          // speak a garbage carrier/type to the user; ask a clean question instead.
+          const BAD = /^(unknown|insurance_capture|insurance|none|null|n\/a)$/i;
+          const cleanCarrier = (carrier ?? '').trim();
+          const cleanType = (insType ?? '').trim();
+          const carrierOk = cleanCarrier.length >= 2 && !BAD.test(cleanCarrier);
+          const typeOk = cleanType.length >= 2 && !BAD.test(cleanType);
+          if (!carrierOk) {
+            addMessage({ id: generateId('msg'), role: 'user', content: originalText, timestamp: Date.now() });
             replyAndReset(`I didn't quite catch that — who's your insurance with?`);
             return true;
           }
-          pendingInsuranceRef.current = {
-            type: insType,
-            carrier: carrier.trim(),
-            ack: `Got it — ${carrier} for your ${insType} insurance, right?`,
-          };
-          replyAndReset(`Got it — ${carrier} for your ${insType} insurance, right?`);
+          const spokenType = typeOk ? cleanType : 'insurance';
+          const ack = typeOk
+            ? `Got it — ${cleanCarrier} for your ${spokenType} insurance, right?`
+            : `Got it — ${cleanCarrier} insurance, right?`;
+          pendingInsuranceRef.current = { type: cleanType || 'unknown', carrier: cleanCarrier, ack };
+          addMessage({ id: generateId('msg'), role: 'user', content: originalText, timestamp: Date.now() });
+          replyAndReset(ack);
           return true;
         }
         case 'service_capture': {
