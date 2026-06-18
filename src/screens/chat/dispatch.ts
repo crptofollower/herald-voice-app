@@ -9,6 +9,7 @@
 // imports this file yet. Subsequent stages (1.3 reads, 1.4 actions) fill the bodies.
 
 import type { MutableRefObject } from 'react';
+import type { LlamaContext } from 'llama.rn';
 import type { Message } from '../../api/herald';
 import type { TierDecision } from '../../routing/tierRouter';
 import { phraseWithLLM } from '../../hooks/llmLayers';
@@ -30,7 +31,7 @@ export interface DispatchDeps extends DispatchPendingRefs {
   sendingRef: MutableRefObject<boolean>;
   generateId: (prefix: string) => string;
   llmStatus: string;
-  getCtx: () => string;
+  getCtx: () => LlamaContext | null;
   inferLocal: (prompt: string, maxTokens: number) => Promise<string | null>;
   phraseWithLLM: typeof phraseWithLLM;
   resolveContactPhone: (nameOrRelation: string) => Promise<{ phone: string; name: string; contactId?: string } | null>;
@@ -43,13 +44,29 @@ export interface DispatchDeps extends DispatchPendingRefs {
 // Tier-1 READ dispatch (calendar/medical/family/profile). Filled in Stage 1.3.
 // isMedical reads are spoken verbatim — NEVER wrapped by the LLM (CLAUDE.md).
 export async function dispatchRead(
-  _response: string,
-  _llmWrap: boolean,
-  _isMedical: boolean,
-  _text: string,
-  _deps: DispatchDeps,
+  response: string,
+  llmWrap: boolean,
+  isMedical: boolean,
+  text: string,
+  deps: DispatchDeps,
 ): Promise<void> {
-  throw new Error('dispatchRead not yet implemented (Stage 1.3)');
+  const { addMessage, speak, generateId, inferLocal } = deps;
+  // User bubble — added once, here, for the routed read.
+  addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+
+  let finalResponse = response;
+  // Medical reads are NEVER LLM-wrapped (CLAUDE.md). Wrap only non-medical reads,
+  // and only when the router asked for it.
+  if (llmWrap && !isMedical) {
+    const wrapped = await inferLocal(
+      `You are Herald. Report ONLY the following confirmed data in one warm sentence. Do NOT add medical explanations, drug descriptions, or any information not in the data. Do NOT refuse. Just say what's there.\nData: "${response}"\nUser asked: "${text}"`,
+      60
+    );
+    if (wrapped) finalResponse = wrapped;
+  }
+
+  addMessage({ id: generateId('msg'), role: 'assistant', content: finalResponse, timestamp: Date.now() });
+  speak(finalResponse);
 }
 
 // Tier-1 ACTION dispatch (alarm/timer/sms/calendar/medical/call/nav/reminder/

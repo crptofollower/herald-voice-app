@@ -73,6 +73,8 @@ import { classifyWithLLM, phraseWithLLM } from '../hooks/llmLayers';
 import { answerFromDevice } from '../utils/localAnswers';
 import { writeTurnObservation } from '../utils/personaContext';
 import { classifyQuery } from "../routing/tierRouter";
+import { dispatchRead } from './chat/dispatch';
+import type { DispatchDeps } from './chat/dispatch';
 import { handleTier1, buildTier2DeviceContext, buildAmbientDeviceContext, writeProfileFromOnboarding } from "../routing/tier1Responses";
 import { refreshCalendarCache } from "../db/calendarCacheDB";
 import { markCalendarWrite } from "../db/calendarState";
@@ -1556,17 +1558,13 @@ export default function ChatScreen() {
           // intentionally falls through to the Tier 1 action handler below — it
           // needs no network. Do NOT add a return here.
         } else if (tierDecision.tier1Response) {
-          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-          let finalResponse = tierDecision.tier1Response;
-          if (tierDecision.llmWrap && !tierDecision.isMedical) {
-            const wrapped = await inferLocal(
-              `You are Herald. Report ONLY the following confirmed data in one warm sentence. Do NOT add medical explanations, drug descriptions, or any information not in the data. Do NOT refuse. Just say what's there.\nData: "${tierDecision.tier1Response}"\nUser asked: "${text}"`,
-              60
-            );
-            if (wrapped) finalResponse = wrapped;
-          }
-          addMessage({ id: generateId('msg'), role: 'assistant', content: finalResponse, timestamp: Date.now() });
-          speak(finalResponse);
+          await dispatchRead(
+            tierDecision.tier1Response,
+            tierDecision.llmWrap ?? false,
+            tierDecision.isMedical ?? false,
+            text,
+            buildDispatchDeps(),
+          );
           setInputText('');
           sendingRef.current = false;
           return;
@@ -2371,15 +2369,13 @@ export default function ChatScreen() {
       }
       // Tier 1 read response — calendar, medical, profile
       if (tierDecision.tier1Response) {
-        let finalResponse = tierDecision.tier1Response;
-        if (tierDecision.llmWrap && !tierDecision.isMedical) {
-          const wrapped = await inferLocal(
-            `You are Herald. Report ONLY the following confirmed data in one warm sentence. Do NOT add medical explanations, drug descriptions, or any information not in the data. Do NOT refuse. Just say what's there.\nData: "${tierDecision.tier1Response}"\nUser asked: "${text}"`,
-            60
-          );
-          if (wrapped) finalResponse = wrapped;
-        }
-        handleTier1(finalResponse, text, addMessage, speak, generateId);
+        await dispatchRead(
+          tierDecision.tier1Response,
+          tierDecision.llmWrap ?? false,
+          tierDecision.isMedical ?? false,
+          text,
+          buildDispatchDeps(),
+        );
         sendingRef.current = false;
         setInputText('');
         return;
@@ -3344,6 +3340,27 @@ export default function ChatScreen() {
     ),
     [persona]
   );
+
+  const buildDispatchDeps = useCallback((): DispatchDeps => ({
+    addMessage,
+    speak,
+    setInputText,
+    sendingRef,
+    generateId,
+    llmStatus,
+    getCtx,
+    inferLocal,
+    phraseWithLLM,
+    resolveContactPhone,
+    handleCalendarAction,
+    handleMapsAction,
+    launchAndroidTimer,
+    handleLaunchActionRef,
+    pendingContactCollectRef,
+    pendingMedConfirmRef,
+    pendingMedClearRef,
+    pendingTodoCompleteRef,
+  }), [addMessage, speak, llmStatus, getCtx, inferLocal]);
 
   // ── Render ────────────────────────────────────────────────────────────────
 
