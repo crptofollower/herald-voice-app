@@ -1564,7 +1564,7 @@ export default function ChatScreen() {
         } else if (tierDecision.tier1Response) {
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
           let finalResponse = tierDecision.tier1Response;
-          if (tierDecision.llmWrap) {
+          if (tierDecision.llmWrap && !tierDecision.isMedical) {
             const wrapped = await inferLocal(
               `You are Herald. Report ONLY the following confirmed data in one warm sentence. Do NOT add medical explanations, drug descriptions, or any information not in the data. Do NOT refuse. Just say what's there.\nData: "${tierDecision.tier1Response}"\nUser asked: "${text}"`,
               60
@@ -2378,7 +2378,7 @@ export default function ChatScreen() {
       // Tier 1 read response — calendar, medical, profile
       if (tierDecision.tier1Response) {
         let finalResponse = tierDecision.tier1Response;
-        if (tierDecision.llmWrap) {
+        if (tierDecision.llmWrap && !tierDecision.isMedical) {
           const wrapped = await inferLocal(
             `You are Herald. Report ONLY the following confirmed data in one warm sentence. Do NOT add medical explanations, drug descriptions, or any information not in the data. Do NOT refuse. Just say what's there.\nData: "${tierDecision.tier1Response}"\nUser asked: "${text}"`,
             60
