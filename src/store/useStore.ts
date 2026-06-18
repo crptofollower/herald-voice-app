@@ -28,6 +28,30 @@ export type LocalLLMStatus =
   | 'error';
 
 const STORE_SCHEMA_VERSION = 5;
+const DEVICE_ANCHOR_KEY = "herald-device-anchor-v1";
+
+async function resolveAnchorUserId(fallbackUserId: string | undefined): Promise<string> {
+  try {
+    const existing = await AsyncStorage.getItem(DEVICE_ANCHOR_KEY);
+    if (existing && existing.trim() !== '') {
+      return existing;
+    }
+  } catch (e) {
+    console.warn('[useStore] Failed to read device anchor', e);
+  }
+  // No anchor on disk. If we have a usable fallback (e.g. an upgrading
+  // user's existing state.userId), adopt it as the anchor going forward.
+  // Only mint a brand new id if there is truly nothing to recover.
+  const resolvedId = (fallbackUserId && fallbackUserId.trim() !== '')
+    ? fallbackUserId
+    : Crypto.randomUUID();
+  try {
+    await AsyncStorage.setItem(DEVICE_ANCHOR_KEY, resolvedId);
+  } catch (e) {
+    console.warn('[useStore] Failed to write device anchor', e);
+  }
+  return resolvedId;
+}
 
 // ─── Slices ───────────────────────────────────────────────────────────────────
 
@@ -207,16 +231,34 @@ export const useStore = create<Store>()(
       storage: createJSONStorage(() => AsyncStorage),
 onRehydrateStorage: () => (state) => {
         if (!state) {
-          useStore.setState({ _hasHydrated: true });
+          console.warn('[useStore] Rehydration returned no state — resolving anchor');
+          resolveAnchorUserId(undefined).then((resolvedId) => {
+            console.warn('[useStore] Resolved userId after empty rehydrate:', resolvedId);
+            useStore.setState({ userId: resolvedId, _hasHydrated: true });
+          });
           return;
         }
         if (state._schemaVersion !== STORE_SCHEMA_VERSION) {
           console.warn(`[useStore] Schema migration: ${state._schemaVersion} → ${STORE_SCHEMA_VERSION}`);
           const { userId, name, aiName, persona } = state;
-          state.hardReset();
-          useStore.setState({ userId, name, aiName, persona });
+          resolveAnchorUserId(userId).then((resolvedId) => {
+            state.hardReset();
+            useStore.setState({ userId: resolvedId, name, aiName, persona, _hasHydrated: true });
+          });
+          return;
         }
-        state.setHasHydrated(true);
+
+        // Normal hydrate, schema matches. Backfill the anchor in case this
+        // device has never written one before (upgrade path), but never
+        // overwrite an anchor that already holds a DIFFERENT id silently --
+        // just confirm/create.
+        resolveAnchorUserId(state.userId).then((resolvedId) => {
+          if (resolvedId !== state.userId) {
+            console.warn('[useStore] Anchor disagreed with hydrated userId — anchor wins:', resolvedId, 'vs', state.userId);
+            useStore.setState({ userId: resolvedId });
+          }
+          state.setHasHydrated(true);
+        });
       },
 
       // Persist what survives restarts. aiName added so chosen name persists.
