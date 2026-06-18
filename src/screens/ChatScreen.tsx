@@ -771,12 +771,6 @@ export default function ChatScreen() {
           }
           return true;
         }
-        case 'reminder': {
-          replyAndReset(
-            `Got it — I'll remind you about ${intent.body}${intent.time ? ` at ${intent.time}` : ''}.`,
-          );
-          return true;
-        }
         case 'insurance_capture': {
           const { type, insType, carrier, agent, phone } = intent as {
             type: 'insurance_capture'; insType: string; carrier: string;
