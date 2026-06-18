@@ -1227,10 +1227,13 @@ export default function ChatScreen() {
       // Fall through to normal routing
     }
 
-    // LLM-first capture — the on-device classifier is the single routing authority
-    // for captures. Runs on every input when ready; classifyQuery regex is the
-    // fallback floor (fires when the LLM returns null or isn't loaded).
-    if (llmStatus === 'ready') {
+    // Deterministic-first routing: the regex/SQL classifier runs FIRST and always wins.
+    // Tier-1 reads and actions are handled by the dispatch below. The on-device LLM only
+    // attempts a capture when deterministic routing found nothing actionable (tier 3 gap).
+    const tierDecision = await classifyQuery(text);
+
+    // LLM capture — fallback classifier for the ambiguous tier-3 gap ONLY.
+    if (llmStatus === 'ready' && tierDecision.tier === 3) {
       try {
         const llmCapture = await classifyWithLLM(text, getCtx(), {
           contacts: getKnownContactNames(),
@@ -1252,8 +1255,6 @@ export default function ChatScreen() {
         // LLM failed — fall through to regex classifyQuery
       }
     }
-
-    const tierDecision = await classifyQuery(text);
 
     // ── Offline check -- skip network, answer from device or give warm message ──
     const networkState = await Network.getNetworkStateAsync();
@@ -1598,8 +1599,10 @@ export default function ChatScreen() {
           return;
         }
 
-        // Tier 1.5: classify intent with on-device LLM (JSON only — never prose)
-        if (llmStatus === 'ready') {
+        // Tier 1.5: on-device LLM capture — ONLY for the tier-3 gap (deterministic-first).
+        // A tier-1 read/action must never be re-captured here (e.g. "who is my wife" is a
+        // family READ, not a family_capture). Matches the online gate.
+        if (llmStatus === 'ready' && tierDecision.tier === 3) {
           try {
             const contacts = getKnownContactNames();
             const lists = getKnownListNames();
