@@ -817,7 +817,13 @@ export default function ChatScreen() {
           const { relation, name: famName, location } = intent as {
             type: 'family_capture'; relation: string; name: string; location?: string;
           };
-          if (!relation || !famName) return false;
+          // Never fabricate a family fact. If the LLM misclassified a question
+          // ("who is my wife") as a capture, famName comes back as a poison value
+          // like 'unknown' — reject it and fall through to the deterministic read.
+          const BAD_NAME = /^(unknown|none|null|n\/a|n\.a\.|someone|somebody)$/i;
+          if (!relation || !famName || BAD_NAME.test(famName.trim()) || BAD_NAME.test(relation.trim())) {
+            return false;
+          }
           addMessage({ id: generateId('msg'), role: 'user', content: originalText, timestamp: Date.now() });
           try {
             const { writeFact } = await import('../db/factDB');
