@@ -38,6 +38,7 @@ import {
   Linking,
   AppState,
   AppStateStatus,
+  Alert,
 } from "react-native";
 import * as Calendar from "expo-calendar";
 import * as Network from "expo-network";
@@ -2823,6 +2824,23 @@ export default function ChatScreen() {
             />
           )}
 
+          {/* TEMP DEBUG -- remove before any build ships to Mickey */}
+          {__DEV__ && (
+            <TouchableOpacity
+              style={styles.debugAnchorBtn}
+              onPress={async () => {
+                console.log('[DEBUG-ANCHOR-TEST] Before clear, userId:', useStore.getState().userId);
+                await AsyncStorage.removeItem('herald-store-v5');
+                Alert.alert(
+                  'Debug: store cleared',
+                  'herald-store-v5 was removed (herald-device-anchor-v1 untouched). Force-close and reopen the app to test anchor recovery.',
+                );
+              }}
+            >
+              <Text style={styles.debugAnchorBtnText}>DEBUG: clear store v5</Text>
+            </TouchableOpacity>
+          )}
+
           <View
             style={[
               styles.inputBar,
@@ -3062,4 +3080,18 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   typingText: { fontSize: 15, fontStyle: "italic" },
+  debugAnchorBtn: {
+    marginHorizontal: 12,
+    marginBottom: 4,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+    backgroundColor: "rgba(255,60,60,0.35)",
+    alignItems: "center",
+  },
+  debugAnchorBtnText: {
+    color: "#FFAAAA",
+    fontSize: 11,
+    fontWeight: "600",
+  },
 });
