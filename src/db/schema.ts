@@ -33,7 +33,7 @@
 
 import * as SQLite from "expo-sqlite";
 
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 export const DB_NAME = "herald_device.db";
 
 // ─── Open database ────────────────────────────────────────────────────────────
@@ -451,6 +451,7 @@ const MIGRATIONS: Record<number, (db: SQLite.SQLiteDatabase) => void> = {
         list_id    TEXT NOT NULL,
         body       TEXT NOT NULL,
         checked    INTEGER DEFAULT 0,
+        removed_at TEXT,
         created_at TEXT NOT NULL,
         FOREIGN KEY (list_id) REFERENCES lists(id)
       );
@@ -633,5 +634,15 @@ const MIGRATIONS: Record<number, (db: SQLite.SQLiteDatabase) => void> = {
     // Activate all existing rows so nothing disappears after migration
     db.execSync("UPDATE insurance_policies SET is_active = 1 WHERE is_active IS NULL;");
     console.log("Herald schema V11: insurance_policies.is_active added");
+  },
+
+  // ── v12: list_items.removed_at (soft-delete audit track) ─────────────────────
+  12: (db) => {
+    try {
+      db.execSync("ALTER TABLE list_items ADD COLUMN removed_at TEXT;");
+    } catch {
+      // column already exists (re-run safety) — ignore
+    }
+    console.log("Herald schema V12: list_items.removed_at added");
   },
 };

@@ -1043,8 +1043,8 @@ export default function ChatScreen() {
           const { getDB } = await import('../db/schema');
           const db = getDB();
           db.runSync(
-            `UPDATE list_items SET checked = 1 WHERE id = ?;`,
-            [pending.id]
+            `UPDATE list_items SET checked = 1, removed_at = ? WHERE id = ?;`,
+            [new Date().toISOString(), pending.id]
           );
           const reply = `Done — crossed off '${pending.body}'.`;
           addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });

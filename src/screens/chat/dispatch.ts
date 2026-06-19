@@ -564,7 +564,10 @@ export async function dispatchAction(
             if (matches.length === 0) {
               reply = `I don't see ${item} on your ${listName} list.`;
             } else if (matches.length === 1) {
-              db.runSync(`UPDATE list_items SET checked = 1 WHERE id = ?;`, [matches[0].id]);
+              db.runSync(
+                `UPDATE list_items SET checked = 1, removed_at = ? WHERE id = ?;`,
+                [new Date().toISOString(), matches[0].id],
+              );
               const remaining = db.getAllSync<{ body: string }>(
                 `SELECT li.body FROM list_items li JOIN lists l ON l.id = li.list_id
                  WHERE l.name = ? AND li.checked = 0 ORDER BY li.created_at ASC;`,
@@ -615,8 +618,8 @@ export async function dispatchAction(
                 speak(reply);
               } else {
                 db.runSync(
-                  `UPDATE list_items SET checked = 1 WHERE list_id = ? AND checked = 0;`,
-                  [list.id],
+                  `UPDATE list_items SET checked = 1, removed_at = ? WHERE list_id = ? AND checked = 0;`,
+                  [new Date().toISOString(), list.id],
                 );
                 const reply = `Cleared your ${listName} list.`;
                 addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
