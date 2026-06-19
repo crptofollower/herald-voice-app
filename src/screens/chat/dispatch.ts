@@ -394,7 +394,7 @@ export async function dispatchAction(
             // SQLite succeeded — now schedule notification
             await Notifications.scheduleNotificationAsync({
               content: { title: 'Herald', body: actionIntent.body, sound: true },
-              trigger: { type: 'date', date: trigger },
+              trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: trigger },
             });
 
             // One-time Samsung battery optimization prompt
