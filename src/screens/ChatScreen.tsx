@@ -1689,7 +1689,23 @@ export default function ChatScreen() {
         // Residual scan — catch a second intent in the same utterance (compound speech)
         const residual = await scanResidualIntent(text, tierDecision.actionIntent.type);
         if (residual?.actionIntent) {
-          await dispatchAction(residual.actionIntent, text, buildDispatchDeps());
+          // Layer A floor: isolate the residual commit. One clause failing must
+          // never sink the other clause's ACK or the send. On failure, stay
+          // honest — never silent (Spine §4: ACK must match commit state).
+          try {
+            await dispatchAction(residual.actionIntent, text, buildDispatchDeps());
+          } catch (e) {
+            console.warn('[handleSend] residual dispatch failed', e);
+            const recoverReply =
+              "I got the first part — say that last bit once more and I'll get it too?";
+            addMessage({
+              id: generateId('msg'),
+              role: 'assistant',
+              content: recoverReply,
+              timestamp: Date.now(),
+            });
+            speak(recoverReply);
+          }
         }
         sendingRef.current = false;
         setInputText('');
