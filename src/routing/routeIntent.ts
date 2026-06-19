@@ -8,12 +8,12 @@ import type { TierDecision, LocalContext } from './tierRouter';
 type ActionIntent = NonNullable<TierDecision['actionIntent']>;
 
 export type RouteDecision =
-  | { kind: 'device_read'; tier: 1; response: string; llmWrap?: boolean }
-  | { kind: 'device_action'; tier: 1; actionIntent: ActionIntent }
-  | { kind: 'capture'; intent: IntentRecord }
-  | { kind: 'memory_probe'; tier: 2; context: LocalContext }
-  | { kind: 'backend'; tier: 3 }
-  | { kind: 'needs_clarification'; guess?: string };
+  | { kind: 'device_read'; tier: 1; response: string; llmWrap?: boolean; isMedical?: boolean; reason: string }
+  | { kind: 'device_action'; tier: 1; actionIntent: ActionIntent; reason: string }
+  | { kind: 'capture'; intent: IntentRecord; reason: string }
+  | { kind: 'memory_probe'; tier: 2; context: LocalContext; reason: string }
+  | { kind: 'backend'; tier: 3; reason: string }
+  | { kind: 'needs_clarification'; guess?: string; reason: string };
 
 export async function routeIntent(
   text: string,
@@ -31,6 +31,8 @@ export async function routeIntent(
       tier: 1,
       response: decision.tier1Response,
       llmWrap: decision.llmWrap,
+      isMedical: decision.isMedical,
+      reason: decision.reason,
     };
   }
 
@@ -39,6 +41,7 @@ export async function routeIntent(
       kind: 'device_action',
       tier: 1,
       actionIntent: decision.actionIntent,
+      reason: decision.reason,
     };
   }
 
@@ -47,15 +50,16 @@ export async function routeIntent(
       kind: 'memory_probe',
       tier: 2,
       context: decision.localContext ?? { intent: 'memory_probe' },
+      reason: decision.reason,
     };
   }
 
   if (deps.llmReady && deps.classifyLLM) {
     const llmResult = await deps.classifyLLM(text);
     if (llmResult) {
-      return { kind: 'capture', intent: llmResult };
+      return { kind: 'capture', intent: llmResult, reason: 'llm:capture' };
     }
   }
 
-  return { kind: 'backend', tier: 3 };
+  return { kind: 'backend', tier: 3, reason: decision.reason };
 }
