@@ -891,6 +891,69 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   return { tier: 3, reason: "default" };
 }
 
+export async function scanResidualIntent(
+  text: string,
+  primaryType: string,
+): Promise<TierDecision | null> {
+  const msg = normalizeInput(text);
+
+  // Medical capture — only if primary wasn't medical
+  if (primaryType !== 'medical_capture' && primaryType !== 'medical_remove') {
+    const medEvent = detectMedicalEvent(msg);
+    if (medEvent && medEvent.tense === 'past') {
+      return {
+        tier: 1,
+        actionIntent: { type: 'medical_capture', event: medEvent },
+        reason: 'residual:medical_capture',
+      };
+    }
+  }
+
+  // Contextual list add — only if primary wasn't list_add
+  if (primaryType !== 'list_add') {
+    if (
+      LIST_ADD_CONTEXTUAL_SIGNALS.some((p) => p.test(msg)) &&
+      !LIST_ADD_SIGNALS.some((p) => p.test(msg)) &&
+      !/\bdon'?t\s+forget\s+to\b/i.test(msg)
+    ) {
+      const m =
+        msg.match(/\b(?:running\s+(?:low|out)\s+on?|out\s+of|almost\s+out\s+of)\s+(.+)/i) ??
+        msg.match(/\b(?:need\s+to\s+(?:pick\s+up|get|buy)|gotta\s+get)\s+(.+)/i) ??
+        msg.match(/\bdon'?t\s+forget\s+(?:the\s+)?(.+)/i);
+      const item = (m?.[1] ?? '').trim();
+      if (item) {
+        return {
+          tier: 1,
+          actionIntent: { type: 'list_add', items: [item], listName: 'grocery' },
+          reason: 'residual:list_add:contextual',
+        };
+      }
+    }
+  }
+
+  // Todo add — only if primary wasn't todo_add
+  if (primaryType !== 'todo_add') {
+    if (
+      TODO_ADD_SIGNALS.some((p) => p.test(msg)) &&
+      !TODO_DATE_SIGNALS.test(msg) &&
+      !detectMedicalEvent(msg)
+    ) {
+      const body = msg
+        .replace(/^(I need to|I have to|I gotta|I've got to|don't let me forget|I should|I must)\s*/i, '')
+        .trim();
+      if (body.length > 2) {
+        return {
+          tier: 1,
+          actionIntent: { type: 'todo_add', body },
+          reason: 'residual:todo_add',
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
 // ─── buildTier2Payload ────────────────────────────────────────────────────────
 
 export function buildTier2Payload(context: LocalContext): string {

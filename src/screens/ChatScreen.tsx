@@ -72,7 +72,7 @@ import { useLocalLLM } from '../hooks/useLocalLLM';
 import { classifyWithLLM, phraseWithLLM } from '../hooks/llmLayers';
 import { answerFromDevice } from '../utils/localAnswers';
 import { writeTurnObservation } from '../utils/personaContext';
-import { classifyQuery } from "../routing/tierRouter";
+import { classifyQuery, scanResidualIntent } from "../routing/tierRouter";
 import type { TierDecision } from "../routing/tierRouter";
 import { routeIntent } from "../routing/routeIntent";
 import type { RouteDecision } from "../routing/routeIntent";
@@ -1686,6 +1686,11 @@ export default function ChatScreen() {
       // Device action intent — alarm or SMS, no network needed
       if (tierDecision.actionIntent) {
         await dispatchAction(tierDecision.actionIntent, text, buildDispatchDeps());
+        // Residual scan — catch a second intent in the same utterance (compound speech)
+        const residual = await scanResidualIntent(text, tierDecision.actionIntent.type);
+        if (residual?.actionIntent) {
+          await dispatchAction(residual.actionIntent, text, buildDispatchDeps());
+        }
         sendingRef.current = false;
         setInputText('');
         return;
