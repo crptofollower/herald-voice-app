@@ -5,7 +5,7 @@
 import type { IntentRecord } from '../hooks/llmLayers';
 import type { TierDecision, LocalContext } from './tierRouter';
 
-type ActionIntent = NonNullable<Extract<TierDecision, { tier: 1 }>['actionIntent']>;
+type ActionIntent = NonNullable<TierDecision['actionIntent']>;
 
 export type RouteDecision =
   | { kind: 'device_read'; tier: 1; response: string; llmWrap?: boolean }
