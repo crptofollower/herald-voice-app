@@ -511,16 +511,7 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     return { tier: 1, actionIntent: { type: 'note_read' }, reason: 'action:note_read' };
   }
 
-  // Device: todo complete — fuzzy match against open items, confirm before write
-  if (TODO_COMPLETE_SIGNALS.some((p) => p.test(msg))) {
-    return {
-      tier: 1,
-      actionIntent: { type: 'todo_complete', raw: msg },
-      reason: 'action:todo_complete',
-    };
-  }
-
-  // Device: list remove — after todo_complete so "I got X" doesn't become todo_complete
+  // Device: list remove — before todo_complete so "I got X" doesn't become todo_complete
   if (LIST_REMOVE_SIGNALS.some((p) => p.test(msg))) {
     const m =
       msg.match(
@@ -544,6 +535,15 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
         reason: 'action:list_remove',
       };
     }
+  }
+
+  // Device: todo complete — fuzzy match against open items, confirm before write
+  if (TODO_COMPLETE_SIGNALS.some((p) => p.test(msg))) {
+    return {
+      tier: 1,
+      actionIntent: { type: 'todo_complete', raw: msg },
+      reason: 'action:todo_complete',
+    };
   }
 
   // Device: todo read
