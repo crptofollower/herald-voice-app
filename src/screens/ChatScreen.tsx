@@ -73,6 +73,9 @@ import { classifyWithLLM, phraseWithLLM } from '../hooks/llmLayers';
 import { answerFromDevice } from '../utils/localAnswers';
 import { writeTurnObservation } from '../utils/personaContext';
 import { classifyQuery } from "../routing/tierRouter";
+import type { TierDecision } from "../routing/tierRouter";
+import { routeIntent } from "../routing/routeIntent";
+import type { RouteDecision } from "../routing/routeIntent";
 import { dispatchRead, dispatchAction } from './chat/dispatch';
 import type { DispatchDeps } from './chat/dispatch';
 import { handleTier1, buildTier2DeviceContext, buildAmbientDeviceContext, writeProfileFromOnboarding } from "../routing/tier1Responses";
@@ -180,6 +183,35 @@ function extractFact(userMsg: string, aiReply: string, category: string): string
   const first = aiReply.split(/[.!?]/)[0]?.trim();
   if (first && first.length >= 15 && first.length <= 100) return first;
   return null;
+}
+
+function routeDecisionToTier(decision: RouteDecision): TierDecision {
+  switch (decision.kind) {
+    case 'device_read':
+      return {
+        tier: 1,
+        tier1Response: decision.response,
+        llmWrap: decision.llmWrap,
+        isMedical: decision.isMedical,
+        reason: decision.reason,
+      };
+    case 'device_action':
+      return {
+        tier: 1,
+        actionIntent: decision.actionIntent,
+        reason: decision.reason,
+      };
+    case 'memory_probe':
+      return {
+        tier: 2,
+        localContext: decision.context,
+        reason: decision.reason,
+      };
+    case 'capture':
+    case 'backend':
+    case 'needs_clarification':
+      return { tier: 3, reason: decision.reason };
+  }
 }
 
 export default function ChatScreen() {
@@ -1230,7 +1262,12 @@ export default function ChatScreen() {
     // Deterministic-first routing: the regex/SQL classifier runs FIRST and always wins.
     // Tier-1 reads and actions are handled by the dispatch below. The on-device LLM only
     // attempts a capture when deterministic routing found nothing actionable (tier 3 gap).
-    const tierDecision = await classifyQuery(text);
+    const routeDecision = await routeIntent(text, {
+      classifyQuery,
+      classifyLLM: null,
+      llmReady: false,
+    });
+    const tierDecision = routeDecisionToTier(routeDecision);
 
     // LLM capture — fallback classifier for the ambiguous tier-3 gap ONLY.
     if (llmStatus === 'ready' && tierDecision.tier === 3) {
