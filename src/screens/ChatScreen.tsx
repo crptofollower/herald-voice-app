@@ -1377,13 +1377,31 @@ export default function ChatScreen() {
           .trim();
         const NON_CONTACT_WORDS = /^(this|that|it|here|there|the|a|an|my|our|your)$/i;
         if (whoRaw.length >= 2 && addressRaw.length >= 5 && !NON_CONTACT_WORDS.test(whoRaw)) {
+          const { capturePerson } = await import('../db/capturePerson');
           const existing = findContactByRelationship(whoRaw) ?? findContactByName(whoRaw);
-          const contactId = existing
-            ? writeContact({ name: existing.name, relationship: existing.relationship, address: addressRaw, importance: existing.importance })
-            : writeContact({ name: whoRaw, address: addressRaw, importance: 6 });
-          const ackReply = contactId
-            ? `Got it — I'll remember that for next time you need directions.`
-            : `I'm not sure I caught that — can you say the address again?`;
+          // No-junk-contact guard: if whoRaw is a bare relationship word and no
+          // contact resolves to it yet, don't invent a phantom named "daughter"
+          // (the directions read at ~2298 resolves by relationship — a phantom
+          // would hijack it). Ask once instead. Full disambiguation + pending-
+          // attach is the association layer (parked, Spine §6).
+          const RELATIONSHIP_WORDS = /^(mother|mom|father|dad|daughter|son|wife|husband|sister|brother|aunt|uncle|cousin|grandma|grandpa|grandmother|grandfather|doctor|doc|dentist|neighbor|friend|boss|sister-in-law|brother-in-law|mother-in-law|father-in-law)$/i;
+          if (!existing && RELATIONSHIP_WORDS.test(whoRaw)) {
+            const askReply = `I want to get this right — which of your contacts is your ${whoRaw}? Tell me their name and I'll remember the address for them.`;
+            addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+            addMessage({ id: generateId('msg'), role: 'assistant', content: askReply, timestamp: Date.now() });
+            speak(askReply);
+            sendingRef.current = false;
+            setInputText('');
+            return;
+          }
+          // Address is reachability — pass no relationship so capturePerson writes
+          // contacts (the projection) without re-authoring an identity fact.
+          capturePerson({
+            name: existing?.name ?? whoRaw,
+            address: addressRaw,
+            importance: existing?.importance ?? 6,
+          });
+          const ackReply = `Got it — I'll remember that for next time you need directions.`;
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
           addMessage({ id: generateId('msg'), role: 'assistant', content: ackReply, timestamp: Date.now() });
           speak(ackReply);
