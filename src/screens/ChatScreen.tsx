@@ -842,7 +842,7 @@ export default function ChatScreen() {
           const { captureHouseholdInsurance: _unused, writeServiceProvider } = await import('../utils/householdCapture');
           void _unused;
           writeServiceProvider(category, name, svcPhone);
-          replyAndReset(`Got it — ${name} is your ${category}${svcPhone ? ', number saved' : ''}.`);
+          replyAndReset(`Got it — ${name} is your ${category}${svcPhone ? ', and I've got their number' : ''}.`);
           return true;
         }
         case 'family_capture': {
@@ -889,7 +889,7 @@ export default function ChatScreen() {
             value: raw,
             guessedName,
           };
-          replyAndReset(`Want me to save ${guessedName} as a medication?`);
+          replyAndReset(`Want me to remember ${guessedName} as a medication?`);
           return true;
         }
         case 'todo_add': {
@@ -979,7 +979,7 @@ export default function ChatScreen() {
           }
           reply = "Got it — I've got that.";
         } catch {
-          reply = "I couldn't save that just now — want to try again?";
+          reply = "I couldn't hold onto that just now — want to try again?";
         }
         clearClarification(pending.id);
         addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
@@ -1021,7 +1021,7 @@ export default function ChatScreen() {
           addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
           speak(reply);
         } catch {
-          const reply = `Something went wrong saving that. Try again.`;
+          const reply = `Something went wrong holding onto that. Try again.`;
           addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
           speak(reply);
         }
@@ -1079,7 +1079,7 @@ export default function ChatScreen() {
         pendingMedConfirmRef.current = null;
         addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
         try { writeMedicalFact(pendingMed.category, pendingMed.value); } catch {}
-        const reply = `Got it — saved ${pendingMed.guessedName} to your medications.`;
+        const reply = `Got it — I'll remember ${pendingMed.guessedName} with your medications.`;
         addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
         speak(reply);
         sendingRef.current = false;
@@ -1151,11 +1151,11 @@ export default function ChatScreen() {
             } else {
               writeContact({ name: pending.name, relationship: pending.name, phone: reCheck.normalized, importance: 7 });
             }
-            const reply = `Perfect — saved ${pending.name}'s number as ${reCheck.spoken}.`;
+            const reply = `Perfect — I've got ${pending.name}'s number as ${reCheck.spoken}.`;
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
           } catch {
-            const reply = `I had trouble saving that — let's try once more. What's ${pending.name}'s number?`;
+            const reply = `I had trouble holding onto that — let's try once more. What's ${pending.name}'s number?`;
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
           }
@@ -1182,11 +1182,11 @@ export default function ChatScreen() {
             writeContact({ name: pending.name, relationship: pending.name, phone, importance: 7 });
           }
           await Linking.openURL(`tel:${phone}`);
-          const reply = `Got it — saved and calling ${pending.name} now.`;
+          const reply = `Got it — calling ${pending.name} now.`;
           addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
           speak(reply);
         } catch {
-          const reply = `Saved the number but couldn't open the dialer. Try calling ${pending.name} manually.`;
+          const reply = `I've got the number, but couldn't open the dialer. Try calling ${pending.name} manually.`;
           addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
           speak(reply);
         }
@@ -1211,11 +1211,11 @@ export default function ChatScreen() {
             writeContact({ name: pending.name, address, importance: 6 });
           }
           await handleMapsAction(address);
-          const reply = `Got it — saved and opening directions to ${pending.name}.`;
+          const reply = `Got it — opening directions to ${pending.name}.`;
           addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
           speak(reply);
         } catch {
-          const reply = `Saved the address. Try asking for directions again.`;
+          const reply = `Got the address. Try asking for directions again.`;
           addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
           speak(reply);
         }
@@ -1240,12 +1240,12 @@ export default function ChatScreen() {
             : `sms:${phone}`;
           await Linking.openURL(smsUrl);
           const reply = pending.body
-            ? `Got it — saved ${pending.name}'s number and opening a message with your note ready.`
-            : `Got it — saved ${pending.name}'s number and opening a message.`;
+            ? `Got it — opening a message to ${pending.name} with your note ready.`
+            : `Got it — opening a message to ${pending.name}.`;
           addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
           speak(reply);
         } catch {
-          const reply = `Saved the number. Try texting ${pending.name} again.`;
+          const reply = `Got the number. Try texting ${pending.name} again.`;
           addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
           speak(reply);
         }
@@ -1403,7 +1403,7 @@ export default function ChatScreen() {
         addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
         const { captureHouseholdInsurance } = await import('../utils/householdCapture');
         captureHouseholdInsurance(pending.type, pending.carrier);
-        const reply = `Got it — ${pending.carrier} for your ${pending.type} insurance, saved.`;
+        const reply = `Got it — ${pending.carrier} for your ${pending.type} insurance.`;
         addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
         speak(reply);
         sendingRef.current = false;
@@ -1475,7 +1475,7 @@ export default function ChatScreen() {
             ? `Got it — if you ever need help, I'll reach ${ecName} at that number.`
             : `Got it — ${ecName} is your emergency contact. Tell me their number when you get a chance.`;
         } catch {
-          ecAckReply = `Something went wrong saving that. Try again.`;
+          ecAckReply = `Something went wrong holding onto that. Try again.`;
         }
         const ackReply = ecAckReply;
         addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
@@ -1500,7 +1500,7 @@ export default function ChatScreen() {
           if (medCategory === 'medication' && !isMedicationCorroborated(text)) {
             pendingMedConfirmRef.current = { category: medCategory, value: text, guessedName: guessMedicationName(text) };
             addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-            const reply = `Want me to save ${guessMedicationName(text)} as a medication?`;
+            const reply = `Want me to remember ${guessMedicationName(text)} as a medication?`;
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
             sendingRef.current = false;
@@ -2058,7 +2058,7 @@ export default function ChatScreen() {
               addMessage({
                 id: generateId("msg"),
                 role: "assistant",
-                content: `I couldn't find a number for ${rawVal}. The dialer is open — or tell me their number and I'll save it.`,
+                content: `I couldn't find a number for ${rawVal}. The dialer is open — or tell me their number and I'll remember it.`,
                 timestamp: Date.now(),
               });
             }
