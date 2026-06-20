@@ -19,7 +19,6 @@ import { useCallback } from "react";
 import { getDB } from "../db/schema";
 import { setProfileField, getProfile } from "../db/profileDB";
 import {
-  writeMedication,
   writeMedicalRecord,
   getActiveMedications,
   getMedicalRecords,
@@ -67,10 +66,6 @@ export interface LocalMedical {
   created_at: string;
 }
 
-function parseDrugName(s: string): string {
-  const m = s.match(/(?:take|taking|on|prescribed|using)\s+([A-Za-z][\w-]*)/i);
-  return (m?.[1] ?? s.split(/[\s,:]/).filter(Boolean)[0] ?? s).replace(/[.,;:!?]+$/, "");
-}
 
 // ─── Profile helpers ──────────────────────────────────────────────────────────
 
@@ -142,17 +137,16 @@ export function saveLocalPreference(category: string, value: string) {
 export function saveLocalMedical(type: string, summary: string, detail?: string, date?: string) {
   try {
     if (type === "medication") {
-      writeMedication({
-        name: parseDrugName(summary),
-        notes: detail || summary,
-        is_active: 1,
-      });
-    } else {
-      writeMedicalRecord({
-        notes: [summary, detail].filter(Boolean).join(" — "),
-        visit_date: date || undefined,
-      });
+      // Medications are NEVER written here. The meds table has exactly one
+      // writer — confirmMedicationCapture, behind the confirm gate (Spine §3/§4).
+      // This generic helper has no confirm turn, so it must refuse.
+      console.warn("[Herald] saveLocalMedical: medication writes are not allowed via this path — route through the confirm-gated capture.");
+      return;
     }
+    writeMedicalRecord({
+      notes: [summary, detail].filter(Boolean).join(" — "),
+      visit_date: date || undefined,
+    });
   } catch (e) {
     console.warn("[Herald] saveLocalMedical failed:", e);
   }
