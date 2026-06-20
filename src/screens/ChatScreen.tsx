@@ -858,11 +858,8 @@ export default function ChatScreen() {
           }
           addMessage({ id: generateId('msg'), role: 'user', content: originalText, timestamp: Date.now() });
           try {
-            const { writeFact } = await import('../db/factDB');
-            const factStr = location
-              ? `${famName} is my ${relation}, lives in ${location}`
-              : `${famName} is my ${relation}`;
-            writeFact(factStr, 'family', { confidence: 'stated', contextType: 'active' });
+            const { capturePerson } = await import('../db/capturePerson');
+            capturePerson({ name: famName, relationship: relation, location });
             const reply = location
               ? `Got it — I'll remember ${famName} is your ${relation} in ${location}.`
               : `Got it — I'll remember ${famName} is your ${relation}.`;
