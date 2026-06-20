@@ -2,15 +2,10 @@
 import * as SQLite from "expo-sqlite";
 import { getDB } from "./schema";
 import { setProfileField, getProfileField } from "./profileDB";
-import { writeMedication, writeMedicalRecord } from "./medicalDB";
+import { writeMedicalRecord } from "./medicalDB";
 import { writeFact } from "./factDB";
 
 const FLAG = "legacy_import_done";
-
-function parseDrugName(s: string): string {
-  const m = s.match(/(?:take|taking|on|prescribed|using)\s+([A-Za-z][\w-]*)/i);
-  return (m?.[1] ?? s.split(/[\s,:]/).filter(Boolean)[0] ?? s).replace(/[.,;:!?]+$/, "");
-}
 
 export async function importLegacyDatabases(): Promise<void> {
   // run-once guard, stored in the canonical DB
@@ -34,14 +29,15 @@ export async function importLegacyDatabases(): Promise<void> {
       for (const m of local.getAllSync<{ type: string; summary: string; detail: string; date: string }>(
         "SELECT type, summary, detail, date FROM local_medical WHERE active = 1"
       )) {
-        if (m.type === "medication") {
-          writeMedication({ name: parseDrugName(m.summary), notes: m.detail || m.summary, is_active: 1 });
-        } else {
-          writeMedicalRecord({
-            notes: [m.summary, m.detail].filter(Boolean).join(" — "),
-            visit_date: m.date || undefined,
-          });
-        }
+        // Legacy entries import VERBATIM as medical records — never as structured
+        // medications. The legacy store has no clean drug-name field; manufacturing
+        // one would assert a structured value Herald never captured (Spine §3).
+        // The meds table has exactly one writer: confirmMedicationCapture.
+        // A later confirm-sweep can offer to structure these from the user's own words.
+        writeMedicalRecord({
+          notes: [m.summary, m.detail].filter(Boolean).join(" — "),
+          visit_date: m.date || undefined,
+        });
       }
     } catch {}
 
