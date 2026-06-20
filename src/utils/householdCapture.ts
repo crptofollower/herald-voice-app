@@ -7,6 +7,7 @@
 import { getDB } from '../db/schema';
 import { generateId } from './id';
 import { normalizePhone } from './phone';
+import { SERVICE_SYNONYMS } from './householdRead';
 
 export type HouseholdCaptureType = 'service_provider' | 'insurance' | 'legal_document';
 
@@ -41,6 +42,31 @@ const SERVICE_CATEGORIES = new Set([
   'accountant', 'lawyer', 'attorney', 'financial advisor', 'insurance agent',
 ]);
 
+// ─── Service provider removal patterns ────────────────────────────────────────
+// "remove my plumber", "delete my electrician", "I don't have a plumber anymore",
+// "I no longer use my landscaper". Checked BEFORE the add patterns so a removal
+// sentence is never mis-read as a new service-provider statement.
+const SERVICE_REMOVE_PATTERNS = [
+  /\b(?:remove|delete|clear)\s+(?:my|our)\s+([\w\s\-']+?)[.!?]?$/i,
+  /\bi\s+(?:don'?t|do not)\s+have\s+(?:a|an|my|our)?\s*([\w\s\-']+?)\s+anymore[.!?]?$/i,
+  /\bi\s+(?:no longer|don'?t)\s+use\s+(?:my|our)\s+([\w\s\-']+?)[.!?]?$/i,
+];
+
+// Resolves what the user said to the stored category values, reusing the same
+// synonym map householdRead.ts already uses for reads — one source of truth,
+// so "remove my AC guy" clears the same rows "who's my AC guy" would find.
+function resolveSpokenCategory(spoken: string): string[] | null {
+  const lower = spoken.trim().toLowerCase();
+  if (SERVICE_SYNONYMS[lower]) return SERVICE_SYNONYMS[lower];
+  if (SERVICE_CATEGORIES.has(lower)) return [lower];
+  const spokenKeys = Object.keys(SERVICE_SYNONYMS).sort((a, b) => b.length - a.length);
+  for (const key of spokenKeys) {
+    const re = new RegExp(`\\b${key.replace(/[/]/g, '\\$&')}\\b`, 'i');
+    if (re.test(lower)) return SERVICE_SYNONYMS[key];
+  }
+  return null;
+}
+
 // ─── Insurance patterns ───────────────────────────────────────────────────────
 // "my home insurance is State Farm, agent is Karen, 800-555-0100"
 // "my car insurance carrier is Allstate"
@@ -58,6 +84,41 @@ const LEGAL_PATTERNS = [
   /\bmy (will|power of attorney|living will|trust|healthcare proxy|advance directive|deed)\s+is\s+(?:with\s+|at\s+|in\s+)?([\w\s\-',]+?)[.!?]?$/i,
 ];
 
+// ─── Carrier name normalization (STT mishearing correction) ──────────────────
+// Deterministic alias table for known major carriers STT commonly mis-hears.
+// Lookup only — NEVER invents a carrier not on this list; unmatched input
+// passes through unchanged. This runs BEFORE the existing confirm gate, so
+// the user always hears the corrected name read back and can say no.
+// Extend this list as real mishearings surface in use — it will never be complete.
+const CARRIER_ALIASES: Record<string, string> = {
+  'all state': 'Allstate', 'allstate': 'Allstate',
+  'state farm': 'State Farm', 'statefarm': 'State Farm',
+  'geico': 'GEICO', 'gyco': 'GEICO', 'gecko': 'GEICO',
+  'progressive': 'Progressive',
+  'liberty mutual': 'Liberty Mutual', 'liberty mutal': 'Liberty Mutual',
+  'farmers': 'Farmers', 'farmers insurance': 'Farmers',
+  'nationwide': 'Nationwide',
+  'usaa': 'USAA', 'u.s.a.a': 'USAA',
+  'travelers': 'Travelers',
+  'american family': 'American Family', 'amfam': 'American Family', 'am fam': 'American Family',
+  'erie': 'Erie', 'erie insurance': 'Erie',
+  'metlife': 'MetLife', 'met life': 'MetLife',
+  'safeco': 'Safeco', 'safe co': 'Safeco',
+  'auto owners': 'Auto-Owners', 'auto-owners': 'Auto-Owners',
+  'chubb': 'Chubb',
+  'hartford': 'The Hartford', 'the hartford': 'The Hartford',
+  'mutual of omaha': 'Mutual of Omaha',
+  'blue cross': 'Blue Cross Blue Shield', 'blue cross blue shield': 'Blue Cross Blue Shield', 'blue shield': 'Blue Cross Blue Shield',
+  'aetna': 'Aetna', 'cigna': 'Cigna', 'humana': 'Humana',
+  'united healthcare': 'UnitedHealthcare', 'united health care': 'UnitedHealthcare', 'unitedhealthcare': 'UnitedHealthcare',
+  'kaiser': 'Kaiser Permanente', 'kaiser permanente': 'Kaiser Permanente',
+};
+
+function normalizeCarrier(raw: string): string {
+  const key = raw.trim().toLowerCase().replace(/\s+/g, ' ');
+  return CARRIER_ALIASES[key] ?? raw.trim();
+}
+
 // ─── writeServiceProvider ─────────────────────────────────────────────────────
 export function writeServiceProvider(category: string, name: string, phone?: string): string {
   const db = getDB();
@@ -73,6 +134,27 @@ export function writeServiceProvider(category: string, name: string, phone?: str
     return id;
   } catch {
     return '';
+  }
+}
+
+// ─── removeServiceProvider ─────────────────────────────────────────────────────
+// Soft-delete only — stamps removed_at, never a hard DELETE (CLAUDE.md).
+// Clears EVERY active row in the matched category set, not just the newest,
+// since writeServiceProvider can leave duplicate rows behind (fresh id each
+// write) — clearing only the top row would let a stale duplicate resurface.
+export function removeServiceProvider(categories: string[]): number {
+  const db = getDB();
+  const now = new Date().toISOString();
+  const placeholders = categories.map(() => '?').join(',');
+  try {
+    const result = db.runSync(
+      `UPDATE service_providers SET removed_at = ?
+       WHERE category IN (${placeholders}) AND removed_at IS NULL;`,
+      [now, ...categories]
+    );
+    return result?.changes ?? 0;
+  } catch {
+    return 0;
   }
 }
 
@@ -141,6 +223,30 @@ export function captureHousehold(text: string): HouseholdCaptureResult | Househo
   const REPLACE_GUARD = /\b(remove|replace|switch|change|update)\b.{1,60}\b(replace|with|to)\b/i;
   if (REPLACE_GUARD.test(text)) return { type: 'needs_llm', reason: 'supersession' };
 
+  // ── Service provider removal — checked before ADD patterns ─────────────────
+  for (const pattern of SERVICE_REMOVE_PATTERNS) {
+    const m = text.match(pattern);
+    if (m) {
+      const spoken = m[1]?.trim().toLowerCase() ?? '';
+      const categories = resolveSpokenCategory(spoken);
+      if (categories) {
+        const changed = removeServiceProvider(categories);
+        if (changed > 0) {
+          return {
+            type: 'service_provider',
+            captured: true,
+            ack: `Got it — I'll stop keeping a ${spoken} for you.`,
+          };
+        }
+        return {
+          type: 'service_provider',
+          captured: false,
+          ack: `I don't have a ${spoken} saved to remove.`,
+        };
+      }
+    }
+  }
+
   // ── Legal documents (check first — most specific patterns) ─────────────────
   for (const pattern of LEGAL_PATTERNS) {
     const m = text.match(pattern);
@@ -163,7 +269,8 @@ export function captureHousehold(text: string): HouseholdCaptureResult | Househo
     const m = text.match(pattern);
     if (m) {
       const insType = m[1]?.trim().toLowerCase() ?? '';
-      const carrier = (m[2]?.trim() ?? '').replace(/^with\s+/i, '').split(/\s+and\s+/i)[0].trim();
+      const carrierRaw = (m[2]?.trim() ?? '').replace(/^with\s+/i, '').split(/\s+and\s+/i)[0].trim();
+      const carrier = normalizeCarrier(carrierRaw);
       const agent = m[3]?.trim();
       const phoneCheck = m[4] ? normalizePhone(m[4]) : null;
       const phone = phoneCheck?.valid ? phoneCheck.normalized : undefined;

@@ -33,7 +33,7 @@ export interface HouseholdReadIntent {
 // Left side = how the user lazily talks. Right side = exact lowercased strings
 // householdCapture.ts writes into service_providers.category.
 // Each spoken key may expand to several stored categories (e.g. "ac" → hvac+ac+...).
-const SERVICE_SYNONYMS: Record<string, string[]> = {
+export const SERVICE_SYNONYMS: Record<string, string[]> = {
   // lawn / yard — user treats all outdoor work as one bucket:
   // grass, sprinklers, irrigation, flower beds, trees all map to lawn/landscaper.
   grass: ['lawn', 'landscaper'],
@@ -220,7 +220,7 @@ export function answerHouseholdRead(intent: HouseholdReadIntent): string {
       const placeholders = intent.categories.map(() => '?').join(',');
       const rows = db.getAllSync<{ name: string; phone: string | null; category: string }>(
         `SELECT name, phone, category FROM service_providers
-         WHERE category IN (${placeholders})
+         WHERE category IN (${placeholders}) AND removed_at IS NULL
          ORDER BY updated_at DESC;`,
         intent.categories
       );
