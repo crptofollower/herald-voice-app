@@ -1328,26 +1328,28 @@ export default function ChatScreen() {
     if (captureName && capturePhone && capturePhone.length >= 7) {
       const phoneCheck = normalizePhone(capturePhone);
       try {
-        const { findContactByRelationship, findContactByName, writeContact: writeContactFn } = await import('../db/contactsDB');
+        const { findContactByRelationship, findContactByName } = await import('../db/contactsDB');
+        const { capturePerson } = await import('../db/capturePerson');
         const existing = findContactByRelationship(captureName) || findContactByName(captureName);
         localFactsWritten = true;
 
         if (phoneCheck.valid) {
           // Clean 10-digit number — store the normalized form.
-          if (existing) {
-            writeContactFn({ name: existing.name, relationship: existing.relationship ?? captureRelationship ?? captureName, phone: phoneCheck.normalized, importance: existing.importance });
-          } else {
-            writeContactFn({ name: captureName, relationship: captureRelationship ?? captureName, phone: phoneCheck.normalized, importance: 7 });
-          }
+          capturePerson({
+            name: existing?.name ?? captureName,
+            relationship: existing?.relationship ?? captureRelationship ?? undefined,
+            phone: phoneCheck.normalized,
+            importance: existing?.importance,
+          });
         } else {
           // Misheard digit count — do NOT store the bad number. Save the person,
           // read back what was heard, and ask for the number again. The pending
           // state lets the next reply (even bare digits) attach to this contact.
-          if (existing) {
-            writeContactFn({ name: existing.name, relationship: existing.relationship ?? captureRelationship ?? captureName, importance: existing.importance });
-          } else {
-            writeContactFn({ name: captureName, relationship: captureRelationship ?? captureName, importance: 7 });
-          }
+          capturePerson({
+            name: existing?.name ?? captureName,
+            relationship: existing?.relationship ?? captureRelationship ?? undefined,
+            importance: existing?.importance,
+          });
           pendingContactCollectRef.current = { action: 'confirm_phone', name: captureName };
           const issueWord = phoneCheck.issue === 'long' ? 'a couple of digits too many' : 'a bit short';
           const ask = `I heard ${captureName}'s number as ${phoneCheck.spoken}, but that looks like ${issueWord}. Can you say it again for me?`;
