@@ -116,7 +116,7 @@ const INSURANCE_SYNONYMS: Record<string, string[]> = {
   renters: ['renters', 'renter'],
 };
 
-const LEGAL_TYPES = [
+export const LEGAL_TYPES = [
   'will', 'power of attorney', 'living will', 'trust',
   'healthcare proxy', 'advance directive', 'deed',
 ];
@@ -284,7 +284,8 @@ export function answerHouseholdRead(intent: HouseholdReadIntent): string {
 
     if (intent.type === 'legal_document') {
       const rows = db.getAllSync<{ location: string; type: string }>(
-        `SELECT location, type FROM legal_documents WHERE type = ? ORDER BY updated_at DESC;`,
+        `SELECT location, type FROM legal_documents
+         WHERE type = ? AND removed_at IS NULL ORDER BY updated_at DESC;`,
         [intent.categories[0]]
       );
       if (rows.length === 0) {
