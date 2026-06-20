@@ -13,12 +13,14 @@ export function capturePerson(p: {
   relationship?: string;
   phone?: string;
   address?: string;
+  location?: string;
   importance?: number;
 }): void {
   const name = p.name?.trim();
   if (!name || name.length < 2 || BAD_NAME.test(name)) return;
 
   const relationship = p.relationship?.trim() || undefined;
+  const location = p.location?.trim() || undefined;
 
   // Reachability projection — contacts (upserts by name).
   writeContact({
@@ -32,9 +34,10 @@ export function capturePerson(p: {
   // Identity — facts is authoritative for WHO. Only when a real relationship
   // is known; a bare name+number is reachability only, not identity.
   if (relationship && !BAD_NAME.test(relationship)) {
-    writeFact(`${name} is my ${relationship}`, 'relationships', {
-      confidence: 'stated',
-      contextType: 'active',
-    });
+    writeFact(
+      `${name} is my ${relationship}${location ? `, lives in ${location}` : ''}`,
+      'relationships',
+      { confidence: 'stated', contextType: 'active' },
+    );
   }
 }
