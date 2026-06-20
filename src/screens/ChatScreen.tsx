@@ -1925,11 +1925,13 @@ export default function ChatScreen() {
             ]);
 
             if (MEDICAL_CATEGORIES.has(fact.category)) {
-              writeMedicalFact(
-                fact.category === 'medication' || fact.category === 'medications'
-                  ? 'medication' : 'medical',
-                fact.value
-              );
+              // Never auto-write a medication from backend fact-extraction — meds
+              // are correction-prone and must be confirmed (Spine §4, Jun-20).
+              // Mirror only non-medication medical notes here; medications flow
+              // through the confirm-gated capture paths.
+              if (fact.category !== 'medication' && fact.category !== 'medications') {
+                writeMedicalFact('medical', fact.value);
+              }
             }
           }
         },
