@@ -1142,12 +1142,11 @@ export default function ChatScreen() {
         if (reCheck?.valid) {
           pendingContactCollectRef.current = null;
           try {
+            const { capturePerson } = await import('../db/capturePerson');
             const existing = findContactByRelationship(pending.name) ?? findContactByName(pending.name);
-            if (existing) {
-              writeContact({ name: existing.name, relationship: existing.relationship ?? pending.name, phone: reCheck.normalized, importance: existing.importance });
-            } else {
-              writeContact({ name: pending.name, relationship: pending.name, phone: reCheck.normalized, importance: 7 });
-            }
+            // Reachability only — no relationship passed (avoids fabricating
+            // "name is my name"; COALESCE keeps any real relationship). [Spine §4a]
+            capturePerson({ name: existing?.name ?? pending.name, phone: reCheck.normalized, importance: existing?.importance ?? 7 });
             const reply = `Perfect — I've got ${pending.name}'s number as ${reCheck.spoken}.`;
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
@@ -1172,12 +1171,10 @@ export default function ChatScreen() {
         addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
         pendingContactCollectRef.current = null;
         try {
+          const { capturePerson } = await import('../db/capturePerson');
           const existing = findContactByRelationship(pending.name) ?? findContactByName(pending.name);
-          if (existing) {
-            writeContact({ name: existing.name, relationship: existing.relationship ?? pending.name, phone, importance: existing.importance });
-          } else {
-            writeContact({ name: pending.name, relationship: pending.name, phone, importance: 7 });
-          }
+          // Reachability only — no relationship passed. [Spine §4a]
+          capturePerson({ name: existing?.name ?? pending.name, phone, importance: existing?.importance ?? 7 });
           await Linking.openURL(`tel:${phone}`);
           const reply = `Got it — calling ${pending.name} now.`;
           addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
@@ -1201,12 +1198,10 @@ export default function ChatScreen() {
         addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
         pendingContactCollectRef.current = null;
         try {
+          const { capturePerson } = await import('../db/capturePerson');
           const existing = findContactByRelationship(pending.name) ?? findContactByName(pending.name);
-          if (existing) {
-            writeContact({ name: existing.name, relationship: existing.relationship ?? pending.name, address, importance: existing.importance });
-          } else {
-            writeContact({ name: pending.name, address, importance: 6 });
-          }
+          // Reachability only — no relationship passed. [Spine §4a]
+          capturePerson({ name: existing?.name ?? pending.name, address, importance: existing?.importance ?? 6 });
           await handleMapsAction(address);
           const reply = `Got it — opening directions to ${pending.name}.`;
           addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
@@ -1226,12 +1221,10 @@ export default function ChatScreen() {
         addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
         pendingContactCollectRef.current = null;
         try {
+          const { capturePerson } = await import('../db/capturePerson');
           const existing = findContactByRelationship(pending.name) ?? findContactByName(pending.name);
-          if (existing) {
-            writeContact({ name: existing.name, relationship: existing.relationship ?? pending.name, phone, importance: existing.importance });
-          } else {
-            writeContact({ name: pending.name, relationship: pending.name, phone, importance: 7 });
-          }
+          // Reachability only — no relationship passed. [Spine §4a]
+          capturePerson({ name: existing?.name ?? pending.name, phone, importance: existing?.importance ?? 7 });
           const smsUrl = pending.body
             ? `sms:${phone}?body=${encodeURIComponent(pending.body)}`
             : `sms:${phone}`;
