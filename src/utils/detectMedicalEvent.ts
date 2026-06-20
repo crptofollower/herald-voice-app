@@ -50,7 +50,10 @@ function extractSpecialty(text: string): string | undefined {
   return text.match(SPECIALTY)?.[1];
 }
 
-const DRUG_TRIGGER = /\b(?:take|taking|i'm on|prescribed|started)\b/i;
+// Merged trigger set — covers both this file's original phrasing and the
+// separate set medicalDB.ts's guessMedicationName used to use on its own
+// before this consolidation. One trigger list, shared by both extractors.
+const DRUG_TRIGGER = /\b(?:take|taking|i'm on|i am on|am on|is on|on|prescribed|started|using)\b/i;
 
 // Words that can sit between the trigger verb and the real drug name in real
 // speech ("started TAKING MY BLOOD PRESSURE medication") but are never
@@ -71,7 +74,7 @@ const DRUG_FILLER_WORDS = new Set([
   'blood', 'pressure', 'sugar', 'heart', 'thyroid', 'cholesterol', 'pain',
 ]);
 
-function extractDrugName(text: string): string | undefined {
+export function extractDrugName(text: string): string | undefined {
   const triggerMatch = text.match(DRUG_TRIGGER);
   if (!triggerMatch) return undefined;
 
@@ -89,6 +92,16 @@ function extractDrugName(text: string): string | undefined {
     return token;
   }
   return undefined;
+}
+
+// Matches a dosage mention anywhere in the sentence: "500mg", "10 mg",
+// "2 units", "50 micrograms". Independent of DRUG_TRIGGER — dosage can
+// appear before or after the drug name ("10mg of lisinopril" / "lisinopril 10mg").
+const MED_DOSAGE_PATTERN = /\b(\d+\s*(?:mg|mcg|ml|units?|milligrams?|micrograms?))\b/i;
+
+export function extractDosage(text: string): string | undefined {
+  const m = text.match(MED_DOSAGE_PATTERN);
+  return m?.[1]?.replace(/\s+/g, '') || undefined;
 }
 
 function extractAdvice(text: string): string | undefined {

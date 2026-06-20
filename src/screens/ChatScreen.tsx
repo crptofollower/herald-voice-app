@@ -96,7 +96,8 @@ import {
   getEmergencyContact,
   setEmergencyContact,
 } from "../db/contactsDB";
-import { writeMedicalFact, writeMedicalRecord, writeMedication, writeMedicalContact, guessMedicationName, deactivateMedicationByName, clearAllMedications, getActiveMedications } from "../db/medicalDB";
+import { writeMedicalFact, writeMedicalRecord, writeMedication, writeMedicalContact, guessMedicationName, confirmMedicationCapture, deactivateMedicationByName, clearAllMedications, getActiveMedications } from "../db/medicalDB";
+import { extractDosage } from "../utils/detectMedicalEvent";
 import { drainPendingWrites, getPendingCount, queueWrite } from "../db/pendingWritesDB";
 import { _registerContactExtractor, writeFacts, extractFactsLocally, getFactCount, isMedicalCaptureIntent, isMedicationCorroborated, medicalCategoryFromText } from "../db/factDB";
 import { getActiveTopics, extractTopicsFromMessage, recordTopicMention } from "../db/topicDB";
@@ -281,7 +282,7 @@ export default function ChatScreen() {
   // Pending contact collection — when Herald asks "what's their number/address?"
   // the next user message resolves this and executes the original intent.
   const pendingContactCollectRef = useRef<{ action: 'call' | 'navigate' | 'text' | 'confirm_phone'; name: string; body?: string } | null>(null);
-  const pendingMedConfirmRef = useRef<{ category: 'medication' | 'medical' | 'visit'; value: string; guessedName: string } | null>(null);
+  const pendingMedConfirmRef = useRef<{ category: 'medication' | 'medical' | 'visit'; value: string; guessedName: string; guessedDosage?: string } | null>(null);
   const pendingMedClearRef = useRef<{ count: number } | null>(null);
   const pendingInsuranceRef = useRef<{ type: string; carrier: string; ack: string } | null>(null);
 
@@ -881,12 +882,18 @@ export default function ChatScreen() {
           };
           const guessedName = drug ?? guessMedicationName(raw);
           if (!guessedName || guessedName.length < 2) return false;
+          const guessedDosage = extractDosage(raw);
           pendingMedConfirmRef.current = {
             category: 'medication',
             value: raw,
             guessedName,
+            guessedDosage,
           };
-          replyAndReset(`Want me to remember ${guessedName} as a medication?`);
+          replyAndReset(
+            guessedDosage
+              ? `Want me to remember ${guessedName}, ${guessedDosage}, as a medication?`
+              : `Want me to remember ${guessedName} as a medication?`
+          );
           return true;
         }
         case 'todo_add': {
@@ -1075,8 +1082,18 @@ export default function ChatScreen() {
       if (YES.test(text.trim())) {
         pendingMedConfirmRef.current = null;
         addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-        try { writeMedicalFact(pendingMed.category, pendingMed.value); } catch {}
-        const reply = `Got it — I'll remember ${pendingMed.guessedName} with your medications.`;
+        try {
+          if (pendingMed.category === 'medication') {
+            // Write EXACTLY what was confirmed — never re-derive from raw
+            // text at commit time (verbatim rule, Spine §3).
+            confirmMedicationCapture(pendingMed.guessedName, pendingMed.guessedDosage, pendingMed.value);
+          } else {
+            writeMedicalFact(pendingMed.category, pendingMed.value);
+          }
+        } catch {}
+        const reply = pendingMed.guessedDosage
+          ? `Got it — I'll remember ${pendingMed.guessedName}, ${pendingMed.guessedDosage}, with your medications.`
+          : `Got it — I'll remember ${pendingMed.guessedName} with your medications.`;
         addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
         speak(reply);
         sendingRef.current = false;
@@ -1507,10 +1524,21 @@ export default function ChatScreen() {
       } catch {}
       if (!localFactsWritten && isMedicalCaptureIntent(text) && userId) {
           const medCategory = medicalCategoryFromText(text);
-          if (medCategory === 'medication' && !isMedicationCorroborated(text)) {
-            pendingMedConfirmRef.current = { category: medCategory, value: text, guessedName: guessMedicationName(text) };
+          if (medCategory === 'medication') {
+            // Always confirm before writing a medication name — corroboration
+            // (a dosage, a pill word) only changes how confident the ack
+            // SOUNDS, never whether we ask. Free-text name-guessing is
+            // inherently low-confidence regardless of corroboration signal.
+            // [Spine 4 — medical values are correction-prone, confirm always]
+            const guessedName = guessMedicationName(text);
+            const guessedDosage = extractDosage(text);
+            pendingMedConfirmRef.current = { category: medCategory, value: text, guessedName, guessedDosage };
             addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-            const reply = `Want me to remember ${guessMedicationName(text)} as a medication?`;
+            const reply = isMedicationCorroborated(text)
+              ? (guessedDosage
+                  ? `Got it — ${guessedName}, ${guessedDosage}. Sound right?`
+                  : `Got it — ${guessedName}. Sound right?`)
+              : `Want me to remember ${guessedName} as a medication?`;
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
             sendingRef.current = false;

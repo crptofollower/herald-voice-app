@@ -581,12 +581,14 @@ export function extractFactsLocally(userMessage: string): void {
         importanceScore: importance,
         contextType: 'active',
       });
-      // Mirror medication/medical facts into medicalDB (Bug 5 — use raw message for drug parse)
-      if (category === 'medical' || (category === 'medications' && isMedicationCorroborated(userMessage))) {
-        writeMedicalFact(
-          category === 'medications' ? 'medication' : 'medical',
-          userMessage
-        );
+      // Mirror MEDICAL VISIT notes into medicalDB directly — doctor-visit text
+      // carries no name-guessing risk the way a drug name does. Medication
+      // names are NEVER written from this background pattern-match pass —
+      // they go exclusively through the confirm gate in ChatScreen.tsx
+      // (pendingMedConfirmRef), so there is exactly one writer for the
+      // medications table. [Spine 4a — closes the corroboration-bypass gap]
+      if (category === 'medical') {
+        writeMedicalFact('medical', userMessage);
       }
     } catch {
       // Silent — never block the message send

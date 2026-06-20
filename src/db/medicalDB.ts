@@ -13,6 +13,7 @@
 // facts flow: Railway extraction → SSE done payload → this file.
 
 import { getDB } from "./schema";
+import { extractDrugName, extractDosage } from "../utils/detectMedicalEvent";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -209,11 +210,41 @@ export function getMedicalContacts(): MedicalContact[] {
  * no side effects.
  */
 export function guessMedicationName(value: string): string {
-  const drugMatch = value.match(
-    /\b(?:i\s+|i'm\s+|i am\s+)?(?:take|taking|am\s+on|is\s+on|on|prescribed|using)\s+([A-Za-z][\w-]*)/i
+  // Delegates to the shared, filler-word-aware extractor (detectMedicalEvent.ts)
+  // instead of this file's own separate, unfiltered regex — one extraction
+  // algorithm, not two drifting implementations of the same job.
+  const extracted = extractDrugName(value);
+  if (extracted) return extracted;
+  // Preserve the old fallback contract: this function always returns a
+  // non-empty-ish string (some callers template-literal it without a null
+  // check), even when extraction finds nothing real to skip to.
+  return (value.split(/[\s,]/)[0]?.trim() ?? value).replace(/[.,;:!?]+$/, "");
+}
+
+// ─── confirmMedicationCapture ──────────────────────────────────────────────────
+// The ONLY writer for a user-CONFIRMED medication. Called after the user has
+// already said yes to a specific name/dosage shown back to them — writes
+// EXACTLY those confirmed values, never re-derives from raw text at write
+// time, so what was shown is what gets stored. Dedupes against an existing
+// active medication with the same name (same behavior writeMedicalFact had).
+export function confirmMedicationCapture(
+  name: string,
+  dosage?: string,
+  rawValue?: string
+): string {
+  const db = getDB();
+  const trimmedName = name.trim();
+  const existing = db.getFirstSync<{ id: string }>(
+    "SELECT id FROM medications WHERE LOWER(name) = ? AND is_active = 1 LIMIT 1;",
+    [trimmedName.toLowerCase()]
   );
-  return (drugMatch?.[1] ?? value.split(/[\s,]/)[0]?.trim() ?? value)
-    .replace(/[.,;:!?]+$/, "");
+  if (existing) return existing.id;
+  return writeMedication({
+    name: trimmedName,
+    dosage,
+    notes: rawValue,
+    is_active: 1,
+  });
 }
 
 export function writeMedicalFact(
