@@ -7,7 +7,7 @@
 import { getDB } from '../db/schema';
 import { generateId } from './id';
 import { normalizePhone } from './phone';
-import { SERVICE_SYNONYMS } from './householdRead';
+import { SERVICE_SYNONYMS, LEGAL_TYPES } from './householdRead';
 
 export type HouseholdCaptureType = 'service_provider' | 'insurance' | 'legal_document';
 
@@ -158,6 +158,26 @@ export function removeServiceProvider(categories: string[]): number {
   }
 }
 
+// ─── removeLegalDocument ───────────────────────────────────────────────────────
+// Soft-delete only — same shape as removeServiceProvider. Clears EVERY active
+// row of this type, not just the newest (writeLegalDocument leaves a fresh id
+// each write, so duplicates by type are possible — write-side dedup is a
+// separate banked item, not part of this change).
+export function removeLegalDocument(docType: string): number {
+  const db = getDB();
+  const now = new Date().toISOString();
+  try {
+    const result = db.runSync(
+      `UPDATE legal_documents SET removed_at = ?
+       WHERE type = ? AND removed_at IS NULL;`,
+      [now, docType.trim().toLowerCase()]
+    );
+    return result?.changes ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
 // ─── writeInsurancePolicy ─────────────────────────────────────────────────────
 function writeInsurancePolicy(type: string, carrier: string, agentName?: string, agentPhone?: string): string {
   const db = getDB();
@@ -222,6 +242,34 @@ export function captureHousehold(text: string): HouseholdCaptureResult | Househo
   // captureHousehold can't handle supersession, so let it fall through to classifyWithLLM.
   const REPLACE_GUARD = /\b(remove|replace|switch|change|update)\b.{1,60}\b(replace|with|to)\b/i;
   if (REPLACE_GUARD.test(text)) return { type: 'needs_llm', reason: 'supersession' };
+
+  // ── Legal document removal — checked BEFORE service removal. Matches an
+  // explicit LEGAL_TYPES word only (never a generic captured phrase), so it
+  // can't mis-fire, and it must run first so "remove my power of attorney"
+  // doesn't get caught by the SERVICE_SYNONYMS "attorney" → lawyer/attorney entry.
+  const LEGAL_REMOVE_PATTERNS = [
+    new RegExp(`\\b(?:remove|delete|clear)\\s+(?:my|our)\\s+(${LEGAL_TYPES.join('|')})\\b`, 'i'),
+    new RegExp(`\\bi\\s+(?:don'?t|do not)\\s+have\\s+(?:a|an|my|our)?\\s*(${LEGAL_TYPES.join('|')})\\s+anymore\\b`, 'i'),
+  ];
+  for (const pattern of LEGAL_REMOVE_PATTERNS) {
+    const m = text.match(pattern);
+    if (m) {
+      const docType = m[1].trim().toLowerCase();
+      const changed = removeLegalDocument(docType);
+      if (changed > 0) {
+        return {
+          type: 'legal_document',
+          captured: true,
+          ack: `Got it — I'll stop keeping your ${docType} location.`,
+        };
+      }
+      return {
+        type: 'legal_document',
+        captured: false,
+        ack: `I don't have a ${docType} saved to remove.`,
+      };
+    }
+  }
 
   // ── Service provider removal — checked before ADD patterns ─────────────────
   for (const pattern of SERVICE_REMOVE_PATTERNS) {
