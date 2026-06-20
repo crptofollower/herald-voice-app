@@ -50,15 +50,45 @@ function extractSpecialty(text: string): string | undefined {
   return text.match(SPECIALTY)?.[1];
 }
 
+const DRUG_TRIGGER = /\b(?:take|taking|i'm on|prescribed|started)\b/i;
+
+// Words that can sit between the trigger verb and the real drug name in real
+// speech ("started TAKING MY BLOOD PRESSURE medication") but are never
+// themselves a drug name. Skipped, never captured. Generic body/condition
+// nouns are included deliberately — "blood pressure medication" names no
+// drug; better to ask than to write "blood" into the medications table.
+// Extend this list as real mis-captures surface — it will never be complete,
+// and that's fine: a missed capture is recoverable, a wrong one is not.
+const DRUG_FILLER_WORDS = new Set([
+  'a', 'an', 'the', 'my', 'your', 'some', 'it', 'that', 'this', 'one', 'of', 'with', 'for',
+  'daily', 'twice', 'once', 'new', 'old', 'low', 'high', 'small', 'big',
+  'morning', 'evening', 'night', 'nightly',
+  'take', 'taking', 'on', 'prescribed', 'started', 'me', 'called', 'named',
+  'something', 'anything', 'stuff',
+  'medication', 'medications', 'meds', 'med', 'pill', 'pills',
+  'tablet', 'tablets', 'capsule', 'capsules', 'prescription', 'prescriptions',
+  'medicine', 'medicines', 'dose', 'dosage',
+  'blood', 'pressure', 'sugar', 'heart', 'thyroid', 'cholesterol', 'pain',
+]);
+
 function extractDrugName(text: string): string | undefined {
-  const m = text.match(
-    /\b(?:take|taking|i'm on|prescribed|started)\s+([A-Z][\w-]*|[a-z]{3,}[\w-]*)/i
-  );
-  const candidate = m?.[1];
-  if (!candidate) return undefined;
-  const stop = /^(a|an|the|my|your|some|it|that|this|one|daily|twice|once)$/i;
-  if (stop.test(candidate)) return undefined;
-  return candidate.replace(/[.,;:!?]+$/, "");
+  const triggerMatch = text.match(DRUG_TRIGGER);
+  if (!triggerMatch) return undefined;
+
+  // Bounded lookahead — walk up to 6 tokens past the trigger, skip fillers,
+  // stop at the first real candidate. Nothing real in that span → undefined.
+  const afterTrigger = text.slice(triggerMatch.index! + triggerMatch[0].length);
+  const tokens = afterTrigger.split(/\s+/).filter(Boolean).slice(0, 6);
+
+  for (const rawToken of tokens) {
+    const token = rawToken.replace(/[.,;:!?]+$/, "");
+    if (!token) continue;
+    if (DRUG_FILLER_WORDS.has(token.toLowerCase())) continue;
+    if (/^\d+$/.test(token)) continue; // bare number — dosage handled separately
+    if (token.length < 3 && !/^[A-Z]/.test(token)) continue; // short lowercase noise
+    return token;
+  }
+  return undefined;
 }
 
 function extractAdvice(text: string): string | undefined {
