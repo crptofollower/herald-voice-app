@@ -842,7 +842,7 @@ export default function ChatScreen() {
           const { captureHouseholdInsurance: _unused, writeServiceProvider } = await import('../utils/householdCapture');
           void _unused;
           writeServiceProvider(category, name, svcPhone);
-          replyAndReset(`Got it — ${name} is your ${category}${svcPhone ? ', and I've got their number' : ''}.`);
+          replyAndReset(`Got it — ${name} is your ${category}${svcPhone ? ', got their number too' : ''}.`);
           return true;
         }
         case 'family_capture': {
