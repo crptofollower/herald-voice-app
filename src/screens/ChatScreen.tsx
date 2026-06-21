@@ -1078,18 +1078,36 @@ export default function ChatScreen() {
       if (YES.test(text.trim())) {
         pendingMedConfirmRef.current = null;
         addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+        let result: { id: string; action: 'created' | 'superseded'; previousId?: string } | null = null;
         try {
           if (pendingMed.category === 'medication') {
             // Write EXACTLY what was confirmed — never re-derive from raw
             // text at commit time (verbatim rule, Spine §3).
-            confirmMedicationCapture(pendingMed.guessedName, pendingMed.guessedDosage, pendingMed.value);
+            result = confirmMedicationCapture(pendingMed.guessedName, pendingMed.guessedDosage, pendingMed.value);
           } else {
             writeMedicalFact(pendingMed.category, pendingMed.value);
           }
-        } catch {}
-        const reply = pendingMed.guessedDosage
-          ? `Got it — I'll remember ${pendingMed.guessedName}, ${pendingMed.guessedDosage}, with your medications.`
-          : `Got it — I'll remember ${pendingMed.guessedName} with your medications.`;
+        } catch (err) {
+          console.error('[Herald] medication confirm write failed:', err);
+        }
+        let reply: string;
+        if (pendingMed.category === 'medication') {
+          if (result?.action === 'superseded') {
+            reply = pendingMed.guessedDosage
+              ? `Got it — updated your ${pendingMed.guessedName} to ${pendingMed.guessedDosage}.`
+              : `Got it — updated your ${pendingMed.guessedName}.`;
+          } else if (result?.action === 'created') {
+            reply = pendingMed.guessedDosage
+              ? `Got it — I'll remember ${pendingMed.guessedName}, ${pendingMed.guessedDosage}, with your medications.`
+              : `Got it — I'll remember ${pendingMed.guessedName} with your medications.`;
+          } else {
+            reply = `I'm having trouble holding onto that one — let's try again in a moment.`;
+          }
+        } else {
+          reply = pendingMed.guessedDosage
+            ? `Got it — I'll remember ${pendingMed.guessedName}, ${pendingMed.guessedDosage}, with your medications.`
+            : `Got it — I'll remember ${pendingMed.guessedName} with your medications.`;
+        }
         addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
         speak(reply);
         sendingRef.current = false;

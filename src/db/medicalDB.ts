@@ -231,20 +231,34 @@ export function confirmMedicationCapture(
   name: string,
   dosage?: string,
   rawValue?: string
-): string {
+): { id: string; action: 'created' | 'superseded'; previousId?: string } {
   const db = getDB();
   const trimmedName = name.trim();
   const existing = db.getFirstSync<{ id: string }>(
     "SELECT id FROM medications WHERE LOWER(name) = ? AND is_active = 1 LIMIT 1;",
     [trimmedName.toLowerCase()]
   );
-  if (existing) return existing.id;
-  return writeMedication({
+  if (existing) {
+    const now = new Date().toISOString();
+    db.runSync(
+      "UPDATE medications SET is_active = 0, removed_at = ? WHERE id = ?;",
+      [now, existing.id]
+    );
+    const newId = writeMedication({
+      name: trimmedName,
+      dosage,
+      notes: rawValue,
+      is_active: 1,
+    });
+    return { id: newId, action: 'superseded', previousId: existing.id };
+  }
+  const newId = writeMedication({
     name: trimmedName,
     dosage,
     notes: rawValue,
     is_active: 1,
   });
+  return { id: newId, action: 'created' };
 }
 
 export function writeMedicalFact(
