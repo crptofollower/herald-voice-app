@@ -48,6 +48,21 @@ export async function initDB(): Promise<void> {
         // Non-critical
       }
 
+      // One-time contacts backfill: structured "relation: name" relationship facts →
+      // contacts, so the facts-fallback reader in tierRouter can later be retired without
+      // any relationship going invisible. Runs after migrations (needs schema v15) and
+      // after legacy import (legacy relationships present first). Self-guarded by a
+      // local_profile flag + idempotent via writeContact upsert — safe on every launch.
+      try {
+        const { backfillContactsFromFacts } = await import("./backfillContacts");
+        const r = backfillContactsFromFacts();
+        if (!r.already) {
+          console.log(`[Herald] contacts backfill: ${r.written} written, ${r.skipped} skipped`);
+        }
+      } catch (e) {
+        console.warn("[Herald] contacts backfill skipped:", e);
+      }
+
       _initialized = true;
       _initPromise = null;
     } catch (e) {
