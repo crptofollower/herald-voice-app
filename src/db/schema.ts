@@ -33,7 +33,7 @@
 
 import * as SQLite from "expo-sqlite";
 
-export const SCHEMA_VERSION = 14;
+export const SCHEMA_VERSION = 15;
 export const DB_NAME = "herald_device.db";
 
 // ─── Open database ────────────────────────────────────────────────────────────
@@ -664,5 +664,15 @@ const MIGRATIONS: Record<number, (db: SQLite.SQLiteDatabase) => void> = {
       // column already exists (re-run safety) — ignore
     }
     console.log("Herald schema V14: legal_documents.removed_at added");
+  },
+
+  // ── v15: contacts.removed_at (soft-delete — completes the §4a contacts drawer) ──
+  15: (db) => {
+    try {
+      db.execSync("ALTER TABLE contacts ADD COLUMN removed_at TEXT;");
+    } catch {
+      // column already exists (re-run safety) — ignore
+    }
+    console.log("Herald schema V15: contacts.removed_at added");
   },
 };
