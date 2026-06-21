@@ -317,8 +317,9 @@ export function getMedicalSummary(): string {
     }
 
     return parts.length > 0 ? parts.join(" ") : empty;
-  } catch {
-    return empty;
+  } catch (err) {
+    console.error("[Herald] getMedicalSummary read failed:", err);
+    return "I'm having trouble pulling up your medical information right now — let's try that again in a moment.";
   }
 }
 
