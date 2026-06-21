@@ -285,6 +285,7 @@ export default function ChatScreen() {
   const pendingMedConfirmRef = useRef<{ category: 'medication' | 'medical' | 'visit'; value: string; guessedName: string; guessedDosage?: string } | null>(null);
   const pendingMedClearRef = useRef<{ count: number } | null>(null);
   const pendingInsuranceRef = useRef<{ type: string; carrier: string; ack: string } | null>(null);
+  const pendingFamilyRef = useRef<{ name: string; relationship: string; location?: string } | null>(null);
 
   // ── Scroll snap prevention ────────────────────────────────────────────────
   // Only auto-scroll to bottom when user is already near the bottom.
@@ -850,27 +851,22 @@ export default function ChatScreen() {
           const { relation, name: famName, location } = intent as {
             type: 'family_capture'; relation: string; name: string; location?: string;
           };
-          // Never fabricate a family fact. If the LLM misclassified a question
-          // ("who is my wife") as a capture, famName comes back as a poison value
-          // like 'unknown' — reject it and fall through to the deterministic read.
+          // Never fabricate a family fact. If the LLM misclassified a question as a
+          // capture, famName comes back as a poison value — reject and fall through.
           const BAD_NAME = /^(unknown|none|null|n\/a|n\.a\.|someone|somebody)$/i;
           if (!relation || !famName || BAD_NAME.test(famName.trim()) || BAD_NAME.test(relation.trim())) {
             return false;
           }
           addMessage({ id: generateId('msg'), role: 'user', content: originalText, timestamp: Date.now() });
-          try {
-            const { capturePerson } = await import('../db/capturePerson');
-            capturePerson({ name: famName, relationship: relation, location });
-            const reply = location
-              ? `Got it — I'll remember ${famName} is your ${relation} in ${location}.`
-              : `Got it — I'll remember ${famName} is your ${relation}.`;
-            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-            speak(reply);
-          } catch {
-            const reply = `I had trouble holding onto that — can you say it once more?`;
-            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-            speak(reply);
-          }
+          // Identity is correction-prone (STT) and action-bearing — a wrong name later
+          // resolves "text my daughter" to the wrong number. Confirm BEFORE write, mirroring
+          // the insurance gate. Pending != saved; the ACK claims no memory yet. [Spine 4,5]
+          pendingFamilyRef.current = { name: famName, relationship: relation, location };
+          const reply = location
+            ? `${famName}, your ${relation}, in ${location} — that right?`
+            : `${famName}, your ${relation} — that right?`;
+          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+          speak(reply);
           sendingRef.current = false;
           return true;
         }
@@ -1420,6 +1416,36 @@ export default function ChatScreen() {
           return;
         }
       }
+    }
+
+    // ── Pending family confirm ──
+    if (pendingFamilyRef.current) {
+      const pending = pendingFamilyRef.current;
+      if (YES.test(text.trim())) {
+        pendingFamilyRef.current = null;
+        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+        const { capturePerson } = await import('../db/capturePerson');
+        capturePerson({ name: pending.name, relationship: pending.relationship, location: pending.location });
+        const reply = pending.location
+          ? `Got it — I'll remember ${pending.name} is your ${pending.relationship} in ${pending.location}.`
+          : `Got it — I'll remember ${pending.name} is your ${pending.relationship}.`;
+        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+        speak(reply);
+        sendingRef.current = false;
+        setInputText('');
+        return;
+      }
+      if (NO.test(text.trim())) {
+        pendingFamilyRef.current = null;
+        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+        const reply = `No problem — what's the correct name?`;
+        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+        speak(reply);
+        sendingRef.current = false;
+        setInputText('');
+        return;
+      }
+      pendingFamilyRef.current = null;
     }
 
     // ── Pending insurance confirm ──
