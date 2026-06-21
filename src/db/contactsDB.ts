@@ -49,7 +49,7 @@ export function writeContact(
 
   try {
     const existing = db.getFirstSync<{ id: string }>(
-      "SELECT id FROM contacts WHERE LOWER(name) = ? LIMIT 1;",
+      "SELECT id FROM contacts WHERE LOWER(name) = ? AND removed_at IS NULL LIMIT 1;",
       [contact.name.trim().toLowerCase()]
     );
 
@@ -124,7 +124,7 @@ export function findContactByRelationship(relationship: string): Contact | null 
   try {
     return db.getFirstSync<Contact>(
       `SELECT * FROM contacts
-       WHERE LOWER(relationship) = ?
+       WHERE LOWER(relationship) = ? AND removed_at IS NULL
        ORDER BY importance DESC
        LIMIT 1;`,
       [relationship.toLowerCase().trim()]
@@ -144,7 +144,7 @@ export function findContactByName(name: string): Contact | null {
   try {
     return db.getFirstSync<Contact>(
       `SELECT * FROM contacts
-       WHERE LOWER(name) LIKE ?
+       WHERE LOWER(name) LIKE ? AND removed_at IS NULL
        ORDER BY importance DESC
        LIMIT 1;`,
       [`%${name.toLowerCase().trim()}%`]
@@ -164,7 +164,7 @@ export function getImportantContacts(minImportance = 7): Contact[] {
   try {
     return db.getAllSync<Contact>(
       `SELECT * FROM contacts
-       WHERE importance >= ?
+       WHERE importance >= ? AND removed_at IS NULL
        ORDER BY importance DESC, name ASC;`,
       [minImportance]
     );
@@ -179,7 +179,7 @@ export function getAllContacts(): Contact[] {
   const db = getDB();
   try {
     return db.getAllSync<Contact>(
-      "SELECT * FROM contacts ORDER BY importance DESC, name ASC;"
+      "SELECT * FROM contacts WHERE removed_at IS NULL ORDER BY importance DESC, name ASC;"
     );
   } catch {
     return [];
@@ -261,13 +261,62 @@ export function importContacts(contacts: Partial<Contact>[]): void {
   }
 }
 
+// ─── removeContact ─────────────────────────────────────────────────────────────
+// Soft-delete by id — stamps removed_at, never a hard delete.
+export function removeContact(id: string): number {
+  const db = getDB();
+  const now = new Date().toISOString();
+  try {
+    const result = db.runSync(
+      "UPDATE contacts SET removed_at = ?, updated_at = ? WHERE id = ? AND removed_at IS NULL;",
+      [now, now, id]
+    );
+    return result?.changes ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+// ─── removeContactByName ───────────────────────────────────────────────────────
+// Soft-delete every live row matching a name (case-insensitive). For voice
+// correction and backfill undo. Clears ALL matches so a duplicate can't resurface.
+export function removeContactByName(name: string): number {
+  const db = getDB();
+  const now = new Date().toISOString();
+  try {
+    const result = db.runSync(
+      "UPDATE contacts SET removed_at = ?, updated_at = ? WHERE LOWER(name) = ? AND removed_at IS NULL;",
+      [now, now, name.trim().toLowerCase()]
+    );
+    return result?.changes ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+// ─── clearContacts ─────────────────────────────────────────────────────────────
+// Soft-delete ALL live contacts (the §4a clear op). Never a hard delete.
+export function clearContacts(): number {
+  const db = getDB();
+  const now = new Date().toISOString();
+  try {
+    const result = db.runSync(
+      "UPDATE contacts SET removed_at = ?, updated_at = ? WHERE removed_at IS NULL;",
+      [now, now]
+    );
+    return result?.changes ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
 // ─── getEmergencyContact ──────────────────────────────────────────────────
 // Returns the contact flagged as emergency, or null if none set.
 export function getEmergencyContact(): Contact | null {
   const db = getDB();
   try {
     return db.getFirstSync<Contact>(
-      "SELECT * FROM contacts WHERE is_emergency = 1 LIMIT 1;"
+      "SELECT * FROM contacts WHERE is_emergency = 1 AND removed_at IS NULL LIMIT 1;"
     ) ?? null;
   } catch {
     return null;
