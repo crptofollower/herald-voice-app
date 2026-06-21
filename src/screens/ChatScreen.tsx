@@ -665,7 +665,7 @@ export default function ChatScreen() {
     try {
       const db = getDB();
       const rows = db.getAllSync<{ name: string }>(
-        `SELECT DISTINCT name FROM contacts LIMIT 20`,
+        `SELECT DISTINCT name FROM contacts WHERE removed_at IS NULL LIMIT 20`,
       );
       return rows.map((r) => r.name.split(' ')[0]);
     } catch {
