@@ -38,7 +38,7 @@ const LIST_CONTEXT =
 const DR_NAME = /Dr\.?\s+(\w+)/i;
 const SPECIALTY =
   /my (cardiologist|doctor|physician|specialist|therapist|dentist|neurologist|oncologist|psychiatrist)/i;
-const DOSAGE = /(\d+\s*mg|\d+\s*mcg|\d+\s*ml)/i;
+const DOSAGE = /(\d+(?:\.\d+)?\s*mg|\d+(?:\.\d+)?\s*mcg|\d+(?:\.\d+)?\s*ml)/i;
 
 function extractDoctorName(text: string): string | undefined {
   const dr = text.match(DR_NAME);
@@ -97,7 +97,7 @@ export function extractDrugName(text: string): string | undefined {
 // Matches a dosage mention anywhere in the sentence: "500mg", "10 mg",
 // "2 units", "50 micrograms". Independent of DRUG_TRIGGER — dosage can
 // appear before or after the drug name ("10mg of lisinopril" / "lisinopril 10mg").
-const MED_DOSAGE_PATTERN = /\b(\d+\s*(?:mg|mcg|ml|units?|milligrams?|micrograms?))\b/i;
+const MED_DOSAGE_PATTERN = /\b(\d+(?:\.\d+)?\s*(?:mg|mcg|ml|units?|milligrams?|micrograms?))\b/i;
 
 export function extractDosage(text: string): string | undefined {
   const m = text.match(MED_DOSAGE_PATTERN);
