@@ -3,9 +3,7 @@ import {
   initialize,
   requestPermission,
   readRecords,
-  type StepsRecord,
-  type ActiveCaloriesBurnedRecord,
-  type HeartRateRecord,
+  type RecordResult,
   type SleepSessionRecord,
 } from 'react-native-health-connect';
 
@@ -98,17 +96,17 @@ export function useHealthConnect() {
       ]);
 
       // Fix #6 -- typed records replace any
-      const steps = (stepsResult.records as StepsRecord[]).reduce(
+      const steps = (stepsResult.records as RecordResult<'Steps'>[]).reduce(
         (sum, r) => sum + (r.count ?? 0),
         0
       );
 
-      const calories = (calResult.records as ActiveCaloriesBurnedRecord[]).reduce(
+      const calories = (calResult.records as RecordResult<'ActiveCaloriesBurned'>[]).reduce(
         (sum, r) => sum + (r.energy?.inKilocalories ?? 0),
         0
       );
 
-      const hrSamples = (hrResult.records as HeartRateRecord[]).flatMap(
+      const hrSamples = (hrResult.records as RecordResult<'HeartRate'>[]).flatMap(
         (r) => r.samples ?? []
       );
       // Fix #7 -- null when no HR data instead of misleading 0
