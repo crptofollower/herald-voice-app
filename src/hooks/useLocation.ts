@@ -108,10 +108,15 @@ export function useLocation(): LocationResult {
       // Reading it too early caches the city against a UUID that won't persist.
       if (!useStore.persist.hasHydrated()) {
         await new Promise<void>((resolve) => {
-          const unsub = useStore.subscribe(
-            (state) => state._hasHydrated,
-            (hydrated) => { if (hydrated) { unsub(); resolve(); } }
-          );
+          const unsub = useStore.persist.onFinishHydration(() => {
+            unsub();
+            resolve();
+          });
+          // race guard: hydration may complete between the check and subscribe
+          if (useStore.persist.hasHydrated()) {
+            unsub();
+            resolve();
+          }
         });
       }
       // 1. Load cached result immediately if fresh, then refresh GPS in background
