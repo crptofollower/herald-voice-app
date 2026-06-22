@@ -726,7 +726,10 @@ export default function ChatScreen() {
             : rawIntent.item?.trim()
               ? rawIntent.item.trim().split(/\s*,\s*|\s+and\s+/i).map((s: string) => s.trim()).filter(Boolean)
               : [];
-          if (itemList.length === 0) return false;
+          if (itemList.length === 0) {
+            sendingRef.current = false;
+            return false;
+          }
           let list = db.getFirstSync<{ id: string }>(`SELECT id FROM lists WHERE name = ?;`, [listName]);
           if (!list) {
             const listId = `list_${Date.now()}`;
@@ -840,7 +843,10 @@ export default function ChatScreen() {
           const { category, name, phone: svcPhone } = intent as {
             type: 'service_capture'; category: string; name: string; phone?: string;
           };
-          if (!category || !name || name.length < 2) return false;
+          if (!category || !name || name.length < 2) {
+            sendingRef.current = false;
+            return false;
+          }
           const { captureHouseholdInsurance: _unused, writeServiceProvider } = await import('../utils/householdCapture');
           void _unused;
           const spId = writeServiceProvider(category, name, svcPhone);
@@ -859,6 +865,7 @@ export default function ChatScreen() {
           // capture, famName comes back as a poison value — reject and fall through.
           const BAD_NAME = /^(unknown|none|null|n\/a|n\.a\.|someone|somebody)$/i;
           if (!relation || !famName || BAD_NAME.test(famName.trim()) || BAD_NAME.test(relation.trim())) {
+            sendingRef.current = false;
             return false;
           }
           addMessage({ id: generateId('msg'), role: 'user', content: originalText, timestamp: Date.now() });
@@ -881,7 +888,10 @@ export default function ChatScreen() {
             type: 'medical_capture'; drug?: string; raw: string;
           };
           const guessedName = drug ?? guessMedicationName(raw);
-          if (!guessedName || guessedName.length < 2) return false;
+          if (!guessedName || guessedName.length < 2) {
+            sendingRef.current = false;
+            return false;
+          }
           const guessedDosage = extractDosage(raw);
           pendingMedConfirmRef.current = {
             category: 'medication',
@@ -898,7 +908,10 @@ export default function ChatScreen() {
         }
         case 'todo_add': {
           const { body } = intent as { type: 'todo_add'; body: string };
-          if (!body || body.length < 2) return false;
+          if (!body || body.length < 2) {
+            sendingRef.current = false;
+            return false;
+          }
           let todoList = db.getFirstSync<{ id: string }>(`SELECT id FROM lists WHERE name = ?;`, ['todos']);
           if (!todoList) {
             const listId = `list_todos_${Date.now()}`;
