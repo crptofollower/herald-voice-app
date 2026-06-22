@@ -843,7 +843,11 @@ export default function ChatScreen() {
           if (!category || !name || name.length < 2) return false;
           const { captureHouseholdInsurance: _unused, writeServiceProvider } = await import('../utils/householdCapture');
           void _unused;
-          writeServiceProvider(category, name, svcPhone);
+          const spId = writeServiceProvider(category, name, svcPhone);
+          if (!spId) {
+            replyAndReset(`Hmm — I couldn't hold onto that just now. Mind telling me once more?`);
+            return true;
+          }
           replyAndReset(`Got it — ${name} is your ${category}${svcPhone ? ', got their number too' : ''}.`);
           return true;
         }
@@ -1473,8 +1477,10 @@ export default function ChatScreen() {
         pendingInsuranceRef.current = null;
         addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
         const { captureHouseholdInsurance } = await import('../utils/householdCapture');
-        captureHouseholdInsurance(pending.type, pending.carrier);
-        const reply = `Got it — ${pending.carrier} for your ${pending.type} insurance.`;
+        const insId = captureHouseholdInsurance(pending.type, pending.carrier);
+        const reply = insId
+          ? `Got it — ${pending.carrier} for your ${pending.type} insurance.`
+          : `Hmm — I couldn't hold onto that just now. Mind telling me once more?`;
         addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
         speak(reply);
         sendingRef.current = false;
