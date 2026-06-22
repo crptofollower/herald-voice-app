@@ -175,6 +175,7 @@ export async function phraseWithLLM(
 User asked: "${question.replace(/"/g, '\\"')}"
 CONFIRMED DATA (these facts are authoritative — repeat them exactly, do not add or omit anything):
 ${data.replace(/"/g, '\\"')}
+Do not add location claims, relationship history, or any detail not present in the CONFIRMED DATA above.
 Reply in ONE warm spoken sentence as a friend who remembers. Under 25 words. No lists, no bullets.`;
 
   try {
