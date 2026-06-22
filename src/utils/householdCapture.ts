@@ -124,12 +124,21 @@ export function writeServiceProvider(category: string, name: string, phone?: str
   const db = getDB();
   const now = new Date().toISOString();
   const id = generateId('sp');
+  const cat = category.trim().toLowerCase();
   try {
+    // Retire any existing active provider in this category before inserting, so a
+    // changed provider supersedes rather than accumulating duplicate active rows.
+    // Mirrors writeInsurancePolicy's retire-by-type. [SPINE §4a one-writer, §6 current≠historical]
+    db.runSync(
+      `UPDATE service_providers SET removed_at = ?
+         WHERE category = ? AND removed_at IS NULL;`,
+      [now, cat]
+    );
     db.runSync(
       `INSERT OR REPLACE INTO service_providers
          (id, name, phone, category, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?);`,
-      [id, name.trim(), phone ?? null, category.trim().toLowerCase(), now, now]
+      [id, name.trim(), phone ?? null, cat, now, now]
     );
     return id;
   } catch {
