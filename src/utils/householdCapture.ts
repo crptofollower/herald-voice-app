@@ -311,7 +311,14 @@ export function captureHousehold(text: string): HouseholdCaptureResult | Househo
       const docType = m[1].trim().toLowerCase();
       const location = m[2]?.trim() ?? '';
       if (location.length >= 2) {
-        writeLegalDocument(docType, location);
+        const legId = writeLegalDocument(docType, location);
+        if (!legId) {
+          return {
+            type: 'legal_document',
+            captured: false,
+            ack: `Hmm — I couldn't hold onto that just now. Mind telling me once more?`,
+          };
+        }
         return {
           type: 'legal_document',
           captured: true,
@@ -355,12 +362,19 @@ export function captureHousehold(text: string): HouseholdCaptureResult | Househo
       const phone = phoneCheck?.valid ? phoneCheck.normalized : undefined;
       const phoneSuspect = !!phoneCheck && !phoneCheck.valid && phoneCheck.issue !== 'empty';
       if (SERVICE_CATEGORIES.has(category) && name.length >= 2) {
-        writeServiceProvider(category, name, phone);
+        const spId = writeServiceProvider(category, name, phone);
+        if (!spId) {
+          return {
+            type: 'service_provider',
+            captured: false,
+            ack: `Hmm — I couldn't hold onto that just now. Mind telling me once more?`,
+          };
+        }
         return {
           type: 'service_provider',
           captured: true,
           ack: phone
-            ? `Got it — ${name} is your ${category}, number saved as ${phoneCheck!.spoken}.`
+            ? `Got it — ${name} is your ${category}, and their number is ${phoneCheck!.spoken}.`
             : phoneSuspect
               ? `Got it — ${name} is your ${category}. That number didn't sound complete, though — say "${name}'s number is ..." and I'll add it.`
               : `Got it — ${name} is your ${category}.`,
