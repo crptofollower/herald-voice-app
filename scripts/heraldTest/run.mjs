@@ -16,6 +16,7 @@
 import { classifyQuery } from "./src/routing/tierRouter.ts";
 import { normalizePhone } from "./src/utils/phone.ts";
 import { normalizeInput } from "./src/utils/normalizeInput.ts";
+import { extractDosage } from "../../src/utils/detectMedicalEvent.ts";
 
 function kindOf(d) {
   if (d.actionIntent) return d.actionIntent.type;
@@ -174,11 +175,18 @@ const NORMALIZE_TESTS = [
   ["norm clean passthru",   "what's my name",                   "what's my name"],
 ];
 
+const DOSAGE_TESTS = [
+  ["dosage decimal",      "I take Lisinopril 12.5mg",  "12.5mg"],
+  ["dosage whole",        "I take metformin 500mg",     "500mg"],
+  ["dosage with space",   "lisinopril 10 mg",           "10mg"],
+  ["dosage decimal mcg",  "I take 2.5 mcg",             "2.5mcg"],
+];
+
 const RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", BOLD = "\x1b[1m", DIM = "\x1b[2m";
 let passed = 0;
 const failures = [];
-const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length;
-const EXPECTED_TOTAL = 91; // guard against silent suite shrinkage; bump deliberately when you add/remove tests
+const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length;
+const EXPECTED_TOTAL = 95; // guard against silent suite shrinkage; bump deliberately when you add/remove tests
 
 console.log(`\n${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  HERALD ROUTER + PHONE TEST SUITE — ${TOTAL} tests${RESET}`);
@@ -236,6 +244,24 @@ for (const [label, raw, expected] of NORMALIZE_TESTS) {
   } else {
     failures.push({ label, phrase: raw, expected: JSON.stringify(expected), got: JSON.stringify(got) });
     console.log(`${RED}❌ FAIL${RESET}  ${label}\n      ${DIM}${JSON.stringify(raw)}${RESET}\n      ${RED}→ got ${JSON.stringify(got)}, expected ${JSON.stringify(expected)}${RESET}\n`);
+  }
+}
+
+for (const [label, input, expected] of DOSAGE_TESTS) {
+  let got;
+  try { got = extractDosage(input); }
+  catch (e) {
+    failures.push({ label, phrase: input, expected, got: `THREW: ${e.message}` });
+    console.log(`${RED}❌ FAIL${RESET}  ${label}\n      ${DIM}${JSON.stringify(input)}${RESET}\n      ${RED}→ THREW: ${e.message}${RESET}\n`);
+    continue;
+  }
+  const ok = got === expected;
+  if (ok) {
+    passed++;
+    console.log(`${GREEN}✅ PASS${RESET}  ${label}\n      ${DIM}${JSON.stringify(input)} → ${JSON.stringify(got)}${RESET}\n`);
+  } else {
+    failures.push({ label, phrase: input, expected: JSON.stringify(expected), got: JSON.stringify(got) });
+    console.log(`${RED}❌ FAIL${RESET}  ${label}\n      ${DIM}${JSON.stringify(input)}${RESET}\n      ${RED}→ got ${JSON.stringify(got)}, expected ${JSON.stringify(expected)}${RESET}\n`);
   }
 }
 
