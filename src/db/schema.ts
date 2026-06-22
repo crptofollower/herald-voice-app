@@ -33,7 +33,7 @@
 
 import * as SQLite from "expo-sqlite";
 
-export const SCHEMA_VERSION = 15;
+export const SCHEMA_VERSION = 16;
 export const DB_NAME = "herald_device.db";
 
 // ─── Open database ────────────────────────────────────────────────────────────
@@ -674,5 +674,27 @@ const MIGRATIONS: Record<number, (db: SQLite.SQLiteDatabase) => void> = {
       // column already exists (re-run safety) — ignore
     }
     console.log("Herald schema V15: contacts.removed_at added");
+  },
+
+  // ── v16: service_providers duplicate active rows — one-time data repair ─────
+  16: (db) => {
+    db.execSync(`
+      UPDATE service_providers
+      SET removed_at = datetime('now')
+      WHERE removed_at IS NULL
+        AND id NOT IN (
+          SELECT id FROM service_providers
+          WHERE removed_at IS NULL
+          GROUP BY category
+          HAVING id = (
+            SELECT id FROM service_providers sp2
+            WHERE sp2.category = service_providers.category
+              AND sp2.removed_at IS NULL
+            ORDER BY sp2.updated_at DESC
+            LIMIT 1
+          )
+        );
+    `);
+    console.log("Herald schema V16: service_providers duplicate active rows retired");
   },
 };
