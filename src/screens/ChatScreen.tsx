@@ -588,16 +588,11 @@ export default function ChatScreen() {
               timestamp: Date.now() + 1,
             });
             beacon('greeting_weather_rendered');
-            if (greetingLabel) {
-              saveDeviceProfile("confirmed_city", greetingLabel);
-              // Mirror to local_profile SQLite — makes Tier 1 profile queries work
-              setProfileField("city", greetingLabel);
-            }
           }
         })
         .catch(() => {});
     },
-    [userId, addMessage, setMessages, saveDeviceProfile]
+    [userId, addMessage, setMessages]
   );
 
   // ── Greeting on first open ────────────────────────────────────────────────
