@@ -222,11 +222,12 @@ export function guessMedicationName(value: string): string {
 }
 
 // ─── confirmMedicationCapture ──────────────────────────────────────────────────
-// The ONLY writer for a user-CONFIRMED medication. Called after the user has
-// already said yes to a specific name/dosage shown back to them — writes
-// EXACTLY those confirmed values, never re-derives from raw text at write
-// time, so what was shown is what gets stored. Dedupes against an existing
-// active medication with the same name (same behavior writeMedicalFact had).
+// The single supersede-aware writer for medications (SPINE §4a one-writer).
+// Primary caller: the confirm gate, after the user said yes to a name/dosage
+// shown back to them — writes EXACTLY those values, never re-deriving from raw
+// text at write time. Also called by writeMedicalFact's SSE fact path (no
+// confirm gate there). On an existing active row of the same name it SUPERSEDES
+// (retire old, insert new); otherwise it creates.
 export function confirmMedicationCapture(
   name: string,
   dosage?: string,
@@ -268,15 +269,14 @@ export function writeMedicalFact(
   if (!value?.trim()) return;
 
   if (category === "medication") {
-    const db = getDB();
+    // Route through the single supersede-aware writer (SPINE §4a one-writer).
+    // Was: dedupe-then-no-op on an existing active row, which silently dropped
+    // dose updates arriving on the SSE fact path. Now supersedes like the
+    // confirm path. NOTE: this path has no confirm gate, so a casual mention
+    // carries its dose when one is present to avoid replacing a richer row.
     const nameGuess = guessMedicationName(value);
-    const existing = db.getFirstSync<{ id: string }>(
-      "SELECT id FROM medications WHERE LOWER(name) = ? AND is_active = 1 LIMIT 1;",
-      [nameGuess.toLowerCase()]
-    );
-    if (!existing) {
-      writeMedication({ name: nameGuess, notes: value, is_active: 1 });
-    }
+    const dosageGuess = extractDosage(value);
+    confirmMedicationCapture(nameGuess, dosageGuess, value);
     return;
   }
 
