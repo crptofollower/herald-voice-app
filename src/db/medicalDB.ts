@@ -118,7 +118,7 @@ export function writeMedication(
 export function getActiveMedications(): Medication[] {
   const db = getDB();
   return db.getAllSync<Medication>(
-    "SELECT * FROM medications WHERE is_active = 1 ORDER BY created_at DESC;"
+    "SELECT * FROM medications WHERE is_active = 1 AND removed_at IS NULL ORDER BY created_at DESC;"
   );
 }
 
