@@ -420,7 +420,7 @@ export default function ChatScreen() {
             drainPendingWrites(async (write) => {
               const payload = JSON.parse(write.payload);
               if (write.type === 'calendar') {
-                await handleCalendarAction(payload.value, payload.context ?? '');
+                await handleCalendarAction(payload.value);
               }
             }).catch(() => {});
           }).catch(() => {});
@@ -514,7 +514,7 @@ export default function ChatScreen() {
           drainPendingWrites(async (write) => {
             const payload = JSON.parse(write.payload);
             if (write.type === 'calendar') {
-              await handleCalendarAction(payload.value, payload.context ?? '');
+              await handleCalendarAction(payload.value);
             }
             // SMS drain: open native messages — non-blocking best effort
             if (write.type === 'sms') {
@@ -1882,7 +1882,7 @@ export default function ChatScreen() {
       ];
       _bridgePhrase = _default[Math.floor(Math.random() * _default.length)];
     }
-    speak(_bridgePhrase, { rate: 0.95 });
+    speak(_bridgePhrase);
 
     setShowProactive(false);
     setIsWaiting(true);
