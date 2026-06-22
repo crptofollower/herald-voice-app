@@ -301,7 +301,6 @@ export function getMedicalSummary(): string {
   try {
     const meds = getActiveMedications();
     const contacts = getMedicalContacts();
-    const records = getMedicalRecords().slice(0, 3); // most recent 3
 
     const parts: string[] = [];
 
@@ -324,10 +323,6 @@ export function getMedicalSummary(): string {
     if (contacts.length > 0) {
       const primary = contacts.find((c) => c.is_primary) ?? contacts[0];
       parts.push(`Your primary doctor is ${primary.name}${primary.specialty ? `, ${primary.specialty}` : ""}.`);
-    }
-
-    if (records.length > 0 && records[0].doctor_name) {
-      parts.push(`Your most recent visit was with ${records[0].doctor_name}${records[0].visit_date ? ` on ${records[0].visit_date}` : ""}.`);
     }
 
     return parts.length > 0 ? parts.join(" ") : empty;
