@@ -40,7 +40,7 @@ export function useProactiveQueue() {
 
       // Backend returns { messages: [...] } — not { items: [...] }.
       // Guard against null/undefined to prevent phantom box.
-      const raw = result?.messages ?? result?.items ?? [];
+      const raw = result?.items ?? [];
       if (!Array.isArray(raw) || raw.length === 0) return;
 
       // Ensure every item has a read field — backend items don't include it.
