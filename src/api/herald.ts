@@ -56,9 +56,7 @@ export interface AskResponse {
   memory_updated?: boolean;
   action?: {
     type: string;
-    url?: string;
-    label?: string;
-    data?: unknown;
+    value: string;
   };
 }
 
