@@ -132,6 +132,8 @@ SERVICE CAPTURE — plumbers, electricians, mechanics, contractors:
 "my pest control guy is Ray, 469-555-0114" → {"type":"service_capture","category":"pest control","name":"Ray","phone":"469-555-0114"}
 "my exterminator is Ray" → {"type":"service_capture","category":"pest control","name":"Ray"}
 "my mechanic is Steve" → {"type":"service_capture","category":"mechanic","name":"Steve"}
+"my plumber is 469-555-0103" → {"type":"service_capture","category":"plumber","name":"","phone":"469-555-0103"}
+"electrician number is 214-555-0199" → {"type":"service_capture","category":"electrician","name":"","phone":"214-555-0199"}
 
 FAMILY CAPTURE — relationships and family members:
 {"type":"family_capture","relation":"father-in-law","name":"David","location":"Little Elm Texas"}
