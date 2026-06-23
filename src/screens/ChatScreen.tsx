@@ -1104,12 +1104,13 @@ export default function ChatScreen() {
     if (pendingServiceCaptureRef.current) {
       const { category, phone } = pendingServiceCaptureRef.current;
       const providedName = text.trim();
+      const nameToWrite = providedName.trim().split(/\s+/)[0];
       const PLACEHOLDER_NAMES = new Set(['unknown','unnamed','none','n/a',
         'someone','somebody','that','this','it','he','she','they','him','her','them']);
       const isRealName = (v: string) => v && v.trim().length >= 2 &&
         !PLACEHOLDER_NAMES.has(v.trim().toLowerCase());
       addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-      if (!isRealName(providedName)) {
+      if (!isRealName(nameToWrite)) {
         pendingServiceCaptureRef.current = null;
         const reply = `No problem — just let me know when you want to add your ${category}.`;
         addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
@@ -1120,7 +1121,7 @@ export default function ChatScreen() {
       }
       pendingServiceCaptureRef.current = null;
       const { writeServiceProvider } = await import('../utils/householdCapture');
-      const spId = writeServiceProvider(category, providedName, phone);
+      const spId = writeServiceProvider(category, nameToWrite, phone);
       if (!spId) {
         const reply = `Hmm — couldn't hold onto that. Try once more?`;
         addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
@@ -1130,7 +1131,7 @@ export default function ChatScreen() {
         return;
       }
       const numberPart = ` — you can reach them at ${phone}`;
-      const reply = `Got it — ${providedName} is your ${category}${numberPart}.`;
+      const reply = `Got it — ${nameToWrite} is your ${category}${numberPart}.`;
       addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
       speak(reply);
       sendingRef.current = false;
