@@ -286,6 +286,7 @@ export default function ChatScreen() {
   const pendingMedClearRef = useRef<{ count: number } | null>(null);
   const pendingInsuranceRef = useRef<{ type: string; carrier: string; ack: string } | null>(null);
   const pendingFamilyRef = useRef<{ name: string; relationship: string; location?: string } | null>(null);
+  const pendingServiceCaptureRef = useRef<{ category: string; phone: string } | null>(null);
 
   // ── Scroll snap prevention ────────────────────────────────────────────────
   // Only auto-scroll to bottom when user is already near the bottom.
@@ -846,6 +847,11 @@ export default function ChatScreen() {
 
           if (!category?.trim() || !isRealName(name)) {
             sendingRef.current = false;
+            if (category?.trim() && svcPhone?.trim() && !isRealName(name)) {
+              pendingServiceCaptureRef.current = { category: category.trim(), phone: svcPhone.trim() };
+              replyAndReset(`Who's your ${category} at ${svcPhone}?`);
+              return true;
+            }
             replyAndReset(`I didn't catch the name — who's your ${category || 'service provider'}?`);
             return true;
           }
@@ -1092,6 +1098,44 @@ export default function ChatScreen() {
       }
       // Not a yes/no — clear pending and fall through to normal routing
       pendingTodoCompleteRef.current = null;
+    }
+
+    // ── Pending service capture (category + phone known, name missing) ──
+    if (pendingServiceCaptureRef.current) {
+      const { category, phone } = pendingServiceCaptureRef.current;
+      const providedName = text.trim();
+      const PLACEHOLDER_NAMES = new Set(['unknown','unnamed','none','n/a',
+        'someone','somebody','that','this','it','he','she','they','him','her','them']);
+      const isRealName = (v: string) => v && v.trim().length >= 2 &&
+        !PLACEHOLDER_NAMES.has(v.trim().toLowerCase());
+      addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+      if (!isRealName(providedName)) {
+        pendingServiceCaptureRef.current = null;
+        const reply = `No problem — just let me know when you want to add your ${category}.`;
+        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+        speak(reply);
+        sendingRef.current = false;
+        setInputText('');
+        return;
+      }
+      pendingServiceCaptureRef.current = null;
+      const { writeServiceProvider } = await import('../utils/householdCapture');
+      const spId = writeServiceProvider(category, providedName, phone);
+      if (!spId) {
+        const reply = `Hmm — couldn't hold onto that. Try once more?`;
+        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+        speak(reply);
+        sendingRef.current = false;
+        setInputText('');
+        return;
+      }
+      const numberPart = ` — you can reach them at ${phone}`;
+      const reply = `Got it — ${providedName} is your ${category}${numberPart}.`;
+      addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+      speak(reply);
+      sendingRef.current = false;
+      setInputText('');
+      return;
     }
 
     // ── Pending medication confirm (Build A — Option B) ──
