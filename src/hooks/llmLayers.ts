@@ -37,6 +37,35 @@ function extractJsonObject(raw: string): string | null {
   return m?.[0] ?? null;
 }
 
+// Names that are placeholders, pronouns, or STT noise — not real captures.
+// Mirrors the name.length>=2 floor in householdCapture.ts (one rule, two gates).
+const PLACEHOLDER_NAMES = new Set([
+  'unknown', 'unnamed', 'none', 'n/a', 'someone', 'somebody',
+  'that', 'this', 'it', 'he', 'she', 'they', 'him', 'her', 'them',
+]);
+
+function isRealName(v: unknown): v is string {
+  if (typeof v !== 'string') return false;
+  const t = v.trim();
+  return t.length >= 2 && !PLACEHOLDER_NAMES.has(t.toLowerCase());
+}
+
+// Guard: a capture is only complete when all required slots have real values.
+// Incomplete proposals return null → caller treats as pass → asks instead of inventing.
+function isCaptureComplete(rec: IntentRecord): boolean {
+  switch (rec.type) {
+    case 'service_capture':   return isRealName(rec.name) && !!rec.category?.trim();
+    case 'family_capture':    return isRealName(rec.name) && !!rec.relation?.trim();
+    case 'medical_capture':   return !!rec.drug?.trim();
+    case 'list_add':          return Array.isArray(rec.items) && rec.items.some(i => !!i?.trim());
+    case 'list_remove':       return !!rec.item?.trim();
+    case 'insurance_capture': return !!rec.carrier?.trim() && !!rec.insType?.trim();
+    case 'todo_add':          return !!rec.body?.trim();
+    case 'todo_complete':     return !!rec.hint?.trim();
+    default:                  return true;
+  }
+}
+
 // ─── Layer 1 — Classifier ─────────────────────────────────────────────────────
 
 export async function classifyWithLLM(
@@ -144,6 +173,7 @@ User: "${trimmed.replace(/"/g, '\\"')}"`;
     if (!jsonStr) return null;
     const parsed = JSON.parse(jsonStr) as IntentRecord;
     if (parsed.type === 'pass') return null;
+    if (!isCaptureComplete(parsed)) return null;
     return parsed;
   } catch {
     return null;
