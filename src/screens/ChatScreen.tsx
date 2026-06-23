@@ -1387,6 +1387,13 @@ export default function ChatScreen() {
     const isTier1Read = tierDecision.tier === 1 && !!tierDecision.tier1Response;
 
     // Phone capture runs unconditionally — dual-intent sentences need both phone + medical
+    const SERVICE_CATEGORY_WORDS = new Set([
+      'plumber','electrician','hvac','ac','air conditioning','heating',
+      'roofer','handyman','contractor','painter','landscaper','lawn',
+      'pest control','exterminator','cleaner','housekeeper','pool',
+      'mechanic','vet','veterinarian','accountant','lawyer','attorney',
+      'financial advisor','insurance agent'
+    ]);
     const phoneCapture1 = text.match(
       /\bmy ([\w]+(?:\s+[\w]+)?)'?s?\s+(?:number|phone|cell|mobile)\s+(?:is\s+)?([\d\s\-\(\)\+\.]{7,})/i
     );
@@ -1411,6 +1418,11 @@ export default function ChatScreen() {
     } else if (phoneCapture1) {
       captureName = phoneCapture1[1].trim().toLowerCase();
       capturePhone = phoneCapture1[2].replace(/\D/g, '');
+    }
+
+    if (captureName && SERVICE_CATEGORY_WORDS.has(captureName.trim().toLowerCase())) {
+      captureName = null;
+      capturePhone = null;
     }
 
     if (captureName && capturePhone && capturePhone.length >= 7) {
