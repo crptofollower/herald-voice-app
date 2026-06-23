@@ -227,11 +227,16 @@ export function answerHouseholdRead(intent: HouseholdReadIntent): string {
       if (rows.length === 0) {
         return `I don't have a ${intent.spoken} saved yet. Tell me who and I'll remember.`;
       }
-      const r = rows[0];
-      if (r.phone) {
-        return `Your ${intent.spoken} is ${r.name} — ${formatPhone(r.phone)}.`;
+      const r = rows.find((row) => row.name?.trim());
+      if (!r) {
+        return `I don't have a ${intent.spoken} saved yet. Tell me who and I'll remember.`;
       }
-      return `Your ${intent.spoken} is ${r.name}. I don't have a number for them yet — tell me and I'll remember.`;
+      const name = r.name.trim();
+      const phone = r.phone?.trim();
+      if (phone) {
+        return `Your ${intent.spoken} is ${name} — you can reach them at ${formatPhone(phone)}.`;
+      }
+      return `Your ${intent.spoken} is ${name}.`;
     }
 
     if (intent.type === 'insurance') {
@@ -263,21 +268,34 @@ export function answerHouseholdRead(intent: HouseholdReadIntent): string {
 
       // Typeless with multiple policies → list them all by type.
       if (intent.categories.length === 0 && rows.length > 1) {
-        const parts = rows.map((r) =>
-          r.type ? `${r.carrier} for ${r.type}` : r.carrier
-        );
+        const parts = rows
+          .filter((row) => row.carrier?.trim())
+          .map((row) => {
+            const carrier = row.carrier.trim();
+            return row.type ? `${carrier} for ${row.type}` : carrier;
+          });
+        if (parts.length === 0) {
+          return `I don't have your insurance saved yet. Tell me the carrier and I'll remember.`;
+        }
         return `You have ${joinNaturally(parts)}.`;
       }
 
-      const r = rows[0];
+      const r = rows.find((row) => row.carrier?.trim());
+      if (!r) {
+        const what = intent.categories.length > 0 ? `${intent.spoken} insurance` : 'insurance';
+        return `I don't have your ${what} saved yet. Tell me the carrier and I'll remember.`;
+      }
+      const carrier = r.carrier.trim();
       // Use the stored type as the label when the question was typeless.
       const label = intent.categories.length > 0 ? intent.spoken : (r.type || '');
-      const lead = label ? `Your ${label} insurance is ${r.carrier}` : `Your insurance is with ${r.carrier}`;
-      if (r.agent_name && r.agent_phone) {
-        return `${lead}. Your agent is ${r.agent_name} — ${formatPhone(r.agent_phone)}.`;
+      const lead = label ? `Your ${label} insurance is ${carrier}` : `Your insurance is with ${carrier}`;
+      const agentName = r.agent_name?.trim();
+      const agentPhone = r.agent_phone?.trim();
+      if (agentName && agentPhone) {
+        return `${lead}. Your agent is ${agentName} — ${formatPhone(agentPhone)}.`;
       }
-      if (r.agent_name) {
-        return `${lead}, and your agent is ${r.agent_name}.`;
+      if (agentName) {
+        return `${lead}, and your agent is ${agentName}.`;
       }
       return `${lead}.`;
     }
@@ -291,7 +309,11 @@ export function answerHouseholdRead(intent: HouseholdReadIntent): string {
       if (rows.length === 0) {
         return `I don't have your ${intent.spoken} saved yet. Tell me where it is and I'll remember.`;
       }
-      return `Your ${intent.spoken} is with ${rows[0].location}.`;
+      const row = rows.find((r) => r.location?.trim());
+      if (!row) {
+        return `I don't have your ${intent.spoken} saved yet. Tell me where it is and I'll remember.`;
+      }
+      return `Your ${intent.spoken} is with ${row.location.trim()}.`;
     }
   } catch {
     return `I couldn't pull that up right now. Try again in a moment.`;
