@@ -723,7 +723,8 @@ export default function ChatScreen() {
               : [];
           if (itemList.length === 0) {
             sendingRef.current = false;
-            return false;
+            replyAndReset(`What did you want to add to your ${listName} list?`);
+            return true;
           }
           let list = db.getFirstSync<{ id: string }>(`SELECT id FROM lists WHERE name = ?;`, [listName]);
           if (!list) {
@@ -838,41 +839,49 @@ export default function ChatScreen() {
           const { category, name, phone: svcPhone } = intent as {
             type: 'service_capture'; category: string; name: string; phone?: string;
           };
-          if (!category || !name || name.length < 2) {
+
+          // Use isRealName-style guard (name must be real, not placeholder)
+          const PLACEHOLDER_NAMES = new Set(['unknown','unnamed','none','n/a','someone','somebody','that','this','it','he','she','they','him','her','them']);
+          const isRealName = (v: string) => v && v.trim().length >= 2 && !PLACEHOLDER_NAMES.has(v.trim().toLowerCase());
+
+          if (!category?.trim() || !isRealName(name)) {
             sendingRef.current = false;
-            return false;
+            replyAndReset(`I didn't catch the name — who's your ${category || 'service provider'}?`);
+            return true;
           }
-          const { captureHouseholdInsurance: _unused, writeServiceProvider } = await import('../utils/householdCapture');
-          void _unused;
+
+          const { writeServiceProvider } = await import('../utils/householdCapture');
           const spId = writeServiceProvider(category, name, svcPhone);
           if (!spId) {
             replyAndReset(`Hmm — I couldn't hold onto that just now. Mind telling me once more?`);
             return true;
           }
-          replyAndReset(`Got it — ${name} is your ${category}${svcPhone ? ', got their number too' : ''}.`);
+
+          const numberPart = svcPhone ? ` — you can reach them at ${svcPhone}` : '';
+          replyAndReset(`Got it — ${name} is your ${category}${numberPart}.`);
           return true;
         }
         case 'family_capture': {
           const { relation, name: famName, location } = intent as {
             type: 'family_capture'; relation: string; name: string; location?: string;
           };
-          // Never fabricate a family fact. If the LLM misclassified a question as a
-          // capture, famName comes back as a poison value — reject and fall through.
-          const BAD_NAME = /^(unknown|none|null|n\/a|n\.a\.|someone|somebody)$/i;
-          if (!relation || !famName || BAD_NAME.test(famName.trim()) || BAD_NAME.test(relation.trim())) {
+
+          const PLACEHOLDER_NAMES = new Set(['unknown','unnamed','none','n/a','someone','somebody','that','this','it','he','she','they','him','her','them']);
+          const isRealName = (v: string) => v && v.trim().length >= 2 && !PLACEHOLDER_NAMES.has(v.trim().toLowerCase());
+
+          if (!relation?.trim() || !isRealName(famName)) {
             sendingRef.current = false;
-            return false;
+            replyAndReset(`I didn't catch the name — who is your ${relation || 'family member'}?`);
+            return true;
           }
-          addMessage({ id: generateId('msg'), role: 'user', content: originalText, timestamp: Date.now() });
-          // Identity is correction-prone (STT) and action-bearing — a wrong name later
-          // resolves "text my daughter" to the wrong number. Confirm BEFORE write, mirroring
-          // the insurance gate. Pending != saved; the ACK claims no memory yet. [Spine 4,5]
+
           pendingFamilyRef.current = { name: famName, relationship: relation, location };
           const reply = location
             ? `${famName}, your ${relation}, in ${location} — that right?`
             : `${famName}, your ${relation} — that right?`;
-          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-          speak(reply);
+
+          setPendingAction({ type: 'family', value: reply });
+          setActionStatus('confirming');
           sendingRef.current = false;
           return true;
         }
@@ -885,7 +894,8 @@ export default function ChatScreen() {
           const guessedName = drug ?? guessMedicationName(raw);
           if (!guessedName || guessedName.length < 2) {
             sendingRef.current = false;
-            return false;
+            replyAndReset("Which medication did you want me to note?");
+            return true;
           }
           const guessedDosage = extractDosage(raw);
           pendingMedConfirmRef.current = {
@@ -935,7 +945,7 @@ export default function ChatScreen() {
       replyAndReset(`Sorry, I couldn't do that right now.`);
       return false;
     }
-  }, [addMessage, speak, setInputText]);
+  }, [addMessage, speak, setInputText, setPendingAction, setActionStatus]);
 
   // ── Send ──────────────────────────────────────────────────────────────────
 
@@ -1590,6 +1600,15 @@ export default function ChatScreen() {
             // [Spine 4 — medical values are correction-prone, confirm always]
             const guessedName = guessMedicationName(text);
             const guessedDosage = extractDosage(text);
+            if (!guessedName || guessedName.length < 2) {
+              addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+              const reply = "Which medication did you want me to note?";
+              addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+              speak(reply);
+              sendingRef.current = false;
+              setInputText('');
+              return;
+            }
             pendingMedConfirmRef.current = { category: medCategory, value: text, guessedName, guessedDosage };
             addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
             const reply = isMedicationCorroborated(text)
