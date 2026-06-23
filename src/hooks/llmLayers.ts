@@ -54,7 +54,14 @@ function isRealName(v: unknown): v is string {
 // Incomplete proposals return null → caller treats as pass → asks instead of inventing.
 function isCaptureComplete(rec: IntentRecord): boolean {
   switch (rec.type) {
-    case 'service_capture':   return isRealName(rec.name) && !!rec.category?.trim();
+    case 'service_capture': {
+      const hasCategory = !!rec.category?.trim();
+      const hasPhone = !!rec.phone?.trim();
+      if (isRealName(rec.name) && hasCategory) return true;
+      // Partial but actionable — ChatScreen asks for missing name; don't drop to backend.
+      if (hasCategory || hasPhone) return true;
+      return false;
+    }
     case 'family_capture':    return isRealName(rec.name) && !!rec.relation?.trim();
     case 'medical_capture':   return !!rec.drug?.trim();
     case 'list_add':          return Array.isArray(rec.items) && rec.items.some(i => !!i?.trim());
