@@ -1294,6 +1294,20 @@ export default function ChatScreen() {
           name: undefined,
         });
         if (llmCaptures.length > 0) {
+          if (allConverted(llmCaptures)) {
+            const results: import('../routing/routeIntent').CommitResult[] = [];
+            for (const intent of llmCaptures) {
+              const writer = DOMAIN_WRITERS[intent.type];
+              if (writer) results.push(await writer.add(intent, text));
+            }
+            const ack = composeAck(results);
+            addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+            addMessage({ id: generateId('msg'), role: 'assistant', content: ack, timestamp: Date.now() });
+            speak(ack);
+            sendingRef.current = false;
+            setInputText('');
+            return;
+          }
           const handled = await dispatchLocalIntent(
             llmCaptures[0] as Record<string, string | undefined>,
             text,
