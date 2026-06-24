@@ -542,15 +542,6 @@ export async function dispatchAction(
               ? `Your ${listName} list is empty.`
               : `On your ${listName} list: ${unique.map(i => i.body).join(', ')}.`;
             let reply = deterministicReply;
-            if (unique.length > 0 && llmStatus === 'ready') {
-              const ctx = getCtx();
-              const phrased = await phraseWithLLM(ctx, {
-                userQuestion: text,
-                confirmedData: deterministicReply,
-                isMedical: false,
-              });
-              if (phrased) reply = phrased;
-            }
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
           } catch {
