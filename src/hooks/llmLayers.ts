@@ -79,10 +79,10 @@ export async function classifyWithLLM(
   userText: string,
   ctx: LlamaContext | null,
   hints: { contacts: string[]; lists: string[]; name?: string },
-): Promise<IntentRecord | null> {
-  if (!ctx) return null;
+): Promise<IntentRecord[]> {
+  if (!ctx) return [];
   const trimmed = userText.trim();
-  if (!trimmed) return null;
+  if (!trimmed) return [];
 
   const prompt = `You are Herald's on-device intent classifier.
 Respond with ONE JSON object only. No prose. No markdown. No explanation.
@@ -183,15 +183,15 @@ User: "${trimmed.replace(/"/g, '\\"')}"`;
     ]);
 
     const raw = result?.text?.trim();
-    if (!raw) return null;
+    if (!raw) return [];
     const jsonStr = extractJsonObject(raw);
-    if (!jsonStr) return null;
+    if (!jsonStr) return [];
     const parsed = JSON.parse(jsonStr) as IntentRecord;
-    if (parsed.type === 'pass') return null;
-    if (!isCaptureComplete(parsed)) return null;
-    return parsed;
+    if (parsed.type === 'pass') return [];
+    if (!isCaptureComplete(parsed)) return [];
+    return [parsed];
   } catch {
-    return null;
+    return [];
   }
 }
 

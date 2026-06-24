@@ -4,13 +4,14 @@
 
 import type { IntentRecord } from '../hooks/llmLayers';
 import type { TierDecision, LocalContext } from './tierRouter';
+import { writeServiceProvider } from '../utils/householdCapture';
 
 type ActionIntent = NonNullable<TierDecision['actionIntent']>;
 
 export type RouteDecision =
   | { kind: 'device_read'; tier: 1; response: string; llmWrap?: boolean; isMedical?: boolean; reason: string }
   | { kind: 'device_action'; tier: 1; actionIntent: ActionIntent; reason: string }
-  | { kind: 'capture'; intent: IntentRecord; reason: string }
+  | { kind: 'capture'; intents: IntentRecord[]; source: 'deterministic' | 'llm'; reason: string }
   | { kind: 'memory_probe'; tier: 2; context: LocalContext; reason: string }
   | { kind: 'backend'; tier: 3; reason: string }
   | { kind: 'needs_clarification'; guess?: string; reason: string }
@@ -33,7 +34,41 @@ export interface DomainWriter {
 }
 
 // Registry: empty now. One domain added per conversion commit.
-export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {};
+export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
+  service_capture: {
+    async add(intent: IntentRecord, rawPhrase: string): Promise<CommitResult> {
+      if (intent.type !== 'service_capture') {
+        return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
+      }
+      const { category, name, phone } = intent;
+      const PLACEHOLDER_NAMES = new Set(['unknown','unnamed','none','n/a','someone',
+        'somebody','that','this','it','he','she','they','him','her','them']);
+      const isRealName = (v: string) => typeof v === 'string' && v.trim().length >= 2
+        && !PLACEHOLDER_NAMES.has(v.trim().toLowerCase());
+      if (!category?.trim()) {
+        return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
+      }
+      if (!isRealName(name)) {
+        const prompt = phone
+          ? `Who's your ${category} at ${phone}?`
+          : `I didn't catch the name — who's your ${category}?`;
+        return { status: 'pending', prompt, pendingKey: 'pendingServiceCapture' };
+      }
+      const spId = writeServiceProvider(category, name, phone);
+      if (!spId) {
+        return { status: 'failed', ack: "Hmm — I couldn't hold onto that just now. Mind telling me once more?" };
+      }
+      const numberPart = phone ? ` — you can reach them at ${phone}` : '';
+      return { status: 'committed', ack: `Got it — ${name} is your ${category}${numberPart}.` };
+    },
+    async remove(item: string): Promise<CommitResult> {
+      return { status: 'noop', ack: `Noted.` };
+    },
+    async clear(): Promise<CommitResult> {
+      return { status: 'noop', ack: `Noted.` };
+    },
+  },
+};
 
 // allConverted: returns true when every intent in a capture decision has a
 // registered writer. Gates the new dispatch path; false = legacy path runs.
@@ -63,7 +98,7 @@ export async function routeIntent(
   text: string,
   deps: {
     classifyQuery: (msg: string) => Promise<TierDecision>;
-    classifyLLM: ((text: string) => Promise<IntentRecord | null>) | null;
+    classifyLLM: ((text: string) => Promise<IntentRecord[]>) | null;
     llmReady: boolean;
   },
 ): Promise<RouteDecision> {
@@ -100,8 +135,8 @@ export async function routeIntent(
 
   if (deps.llmReady && deps.classifyLLM) {
     const llmResult = await deps.classifyLLM(text);
-    if (llmResult) {
-      return { kind: 'capture', intent: llmResult, reason: 'llm:capture' };
+    if (llmResult.length > 0) {
+      return { kind: 'capture', intents: llmResult, source: 'llm', reason: 'llm:capture' };
     }
   }
 

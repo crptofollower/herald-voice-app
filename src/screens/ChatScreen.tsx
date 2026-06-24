@@ -838,37 +838,6 @@ export default function ChatScreen() {
           replyAndReset(ack);
           return true;
         }
-        case 'service_capture': {
-          const { category, name, phone: svcPhone } = intent as {
-            type: 'service_capture'; category: string; name: string; phone?: string;
-          };
-
-          // Use isRealName-style guard (name must be real, not placeholder)
-          const PLACEHOLDER_NAMES = new Set(['unknown','unnamed','none','n/a','someone','somebody','that','this','it','he','she','they','him','her','them']);
-          const isRealName = (v: string) => v && v.trim().length >= 2 && !PLACEHOLDER_NAMES.has(v.trim().toLowerCase());
-
-          if (!category?.trim() || !isRealName(name)) {
-            sendingRef.current = false;
-            if (category?.trim() && svcPhone?.trim() && !isRealName(name)) {
-              pendingServiceCaptureRef.current = { category: category.trim(), phone: svcPhone.trim() };
-              replyAndReset(`Who's your ${category} at ${svcPhone}?`);
-              return true;
-            }
-            replyAndReset(`I didn't catch the name — who's your ${category || 'service provider'}?`);
-            return true;
-          }
-
-          const { writeServiceProvider } = await import('../utils/householdCapture');
-          const spId = writeServiceProvider(category, name, svcPhone);
-          if (!spId) {
-            replyAndReset(`Hmm — I couldn't hold onto that just now. Mind telling me once more?`);
-            return true;
-          }
-
-          const numberPart = svcPhone ? ` — you can reach them at ${svcPhone}` : '';
-          replyAndReset(`Got it — ${name} is your ${category}${numberPart}.`);
-          return true;
-        }
         case 'family_capture': {
           const { relation, name: famName, location } = intent as {
             type: 'family_capture'; relation: string; name: string; location?: string;
@@ -1354,22 +1323,26 @@ export default function ChatScreen() {
     // attempts a capture when deterministic routing found nothing actionable (tier 3 gap).
     const routeDecision = await routeIntent(text, {
       classifyQuery,
-      classifyLLM: null,
-      llmReady: false,
+      classifyLLM: async (t: string) => classifyWithLLM(t, getCtx(), {
+        contacts: getKnownContactNames(),
+        lists: getKnownListNames(),
+        name: undefined,
+      }),
+      llmReady: llmStatus === 'ready',
     });
     const tierDecision = routeDecisionToTier(routeDecision);
 
     // LLM capture — fallback classifier for the ambiguous tier-3 gap ONLY.
     if (llmStatus === 'ready' && tierDecision.tier === 3) {
       try {
-        const llmCapture = await classifyWithLLM(text, getCtx(), {
+        const llmCaptures = await classifyWithLLM(text, getCtx(), {
           contacts: getKnownContactNames(),
           lists: getKnownListNames(),
           name: undefined,
         });
-        if (llmCapture) {
+        if (llmCaptures.length > 0) {
           const handled = await dispatchLocalIntent(
-            llmCapture as Record<string, string | undefined>,
+            llmCaptures[0] as Record<string, string | undefined>,
             text,
           );
           if (handled) {
@@ -1817,15 +1790,15 @@ export default function ChatScreen() {
           try {
             const contacts = getKnownContactNames();
             const lists = getKnownListNames();
-            const result = await classifyWithLLM(text, getCtx(), {
+            const results = await classifyWithLLM(text, getCtx(), {
               contacts,
               lists,
               name: undefined,
             });
-            if (result) {
+            if (results.length > 0) {
               addMessage({ id: generateId('msg'), role: 'user',
                 content: text, timestamp: Date.now() });
-              await dispatchLocalIntent(result as Record<string, string | undefined>, text);
+              await dispatchLocalIntent(results[0] as Record<string, string | undefined>, text);
               return;
             }
           } catch {
