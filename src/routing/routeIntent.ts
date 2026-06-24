@@ -24,7 +24,8 @@ export type RouteDecision =
 
 export type CommitResult =
   | { status: 'committed'; ack: string }
-  | { status: 'pending';   prompt: string; pendingKey: string }
+  | { status: 'pending';   prompt: string; pendingKey: string;
+      resume: (userText: string) => Promise<CommitResult> }
   | { status: 'noop';      ack: string }
   | { status: 'failed';    ack: string };
 
@@ -49,18 +50,42 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       if (!category?.trim()) {
         return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
       }
+      const commit = (nm: string): CommitResult => {
+        const spId = writeServiceProvider(category, nm, phone);
+        if (!spId) {
+          return { status: 'failed', ack: "Hmm — I couldn't hold onto that just now. Mind telling me once more?" };
+        }
+        const numberPart = phone ? ` — you can reach them at ${phone}` : '';
+        return { status: 'committed', ack: `Got it — ${nm} is your ${category}${numberPart}.` };
+      };
+
+      const extractName = (raw: string): string | null => {
+        let t = raw.trim().replace(/[.!?]+$/, '');
+        t = t.replace(/^(it'?s|that'?s|his name is|her name is|the name is|he'?s|she'?s|call (?:him|her)|name'?s)\s+/i, '');
+        const first = t.split(/\s+/)[0];
+        if (!first) return null;
+        const STOP = new Set(['what','whats',"what's",'who','when','where','why','how',
+          'never','no','nope','nah','cancel','stop','nothing','none','actually','um','uh','the','a','an']);
+        if (STOP.has(first.toLowerCase())) return null;
+        if (/[?\d]/.test(first)) return null;
+        if (!/^[a-z][a-z'\-]+$/i.test(first)) return null;
+        return first;
+      };
+
       if (!isRealName(name)) {
         const prompt = phone
           ? `Who's your ${category} at ${phone}?`
           : `I didn't catch the name — who's your ${category}?`;
-        return { status: 'pending', prompt, pendingKey: 'pendingServiceCapture' };
+        return {
+          status: 'pending', prompt, pendingKey: 'service_capture',
+          resume: async (userText: string): Promise<CommitResult> => {
+            const nm = extractName(userText);
+            if (!nm) return { status: 'noop', ack: '' }; // non-answer → caller re-routes, no write
+            return commit(nm);
+          },
+        };
       }
-      const spId = writeServiceProvider(category, name, phone);
-      if (!spId) {
-        return { status: 'failed', ack: "Hmm — I couldn't hold onto that just now. Mind telling me once more?" };
-      }
-      const numberPart = phone ? ` — you can reach them at ${phone}` : '';
-      return { status: 'committed', ack: `Got it — ${name} is your ${category}${numberPart}.` };
+      return commit(name);
     },
     async remove(item: string): Promise<CommitResult> {
       return { status: 'noop', ack: `Noted.` };
