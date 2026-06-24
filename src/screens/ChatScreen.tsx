@@ -76,6 +76,7 @@ import { classifyQuery, scanResidualIntent } from "../routing/tierRouter";
 import type { TierDecision } from "../routing/tierRouter";
 import { routeIntent } from "../routing/routeIntent";
 import type { RouteDecision } from "../routing/routeIntent";
+import { DOMAIN_WRITERS, allConverted, composeAck } from '../routing/routeIntent';
 import { dispatchRead, dispatchAction } from './chat/dispatch';
 import type { DispatchDeps } from './chat/dispatch';
 import { handleTier1, buildTier2DeviceContext, buildAmbientDeviceContext, writeProfileFromOnboarding } from "../routing/tier1Responses";
@@ -1331,6 +1332,39 @@ export default function ChatScreen() {
       llmReady: llmStatus === 'ready',
     });
     const tierDecision = routeDecisionToTier(routeDecision);
+
+    // ── Routing authority dispatch (Commit 3) ────────────────────────────────
+    // If routeIntent returned a capture decision AND every intent type has a
+    // registered domain writer, dispatch through the authority and return.
+    // Legacy islands handle everything else (passthrough or unconverted domains).
+    if (
+      routeDecision.kind === 'capture' &&
+      allConverted(routeDecision.intents)
+    ) {
+      const results: import('../routing/routeIntent').CommitResult[] = [];
+      for (const intent of routeDecision.intents) {
+        const writer = DOMAIN_WRITERS[intent.type];
+        if (writer) {
+          results.push(await writer.add(intent, text));
+        }
+      }
+      const ack = composeAck(results);
+      const hasPending = results.some(r => r.status === 'pending');
+      addMessage({ id: generateId('msg'), role: 'assistant',
+        content: ack, timestamp: Date.now() });
+      speak(ack);
+      if (!hasPending) {
+        sendingRef.current = false;
+        setInputText('');
+        return;
+      }
+      // If pending: fall through so the pending ref handler fires next turn.
+      // sendingRef stays true — the pending prompt is the reply.
+      sendingRef.current = false;
+      setInputText('');
+      return;
+    }
+    // ─────────────────────────────────────────────────────────────────────────
 
     // LLM capture — fallback classifier for the ambiguous tier-3 gap ONLY.
     if (llmStatus === 'ready' && tierDecision.tier === 3) {
