@@ -361,24 +361,10 @@ export function captureHousehold(text: string): HouseholdCaptureResult | Househo
       const phoneCheck = m[3] ? normalizePhone(m[3]) : null;
       const phone = phoneCheck?.valid ? phoneCheck.normalized : undefined;
       const phoneSuspect = !!phoneCheck && !phoneCheck.valid && phoneCheck.issue !== 'empty';
+      // Service-provider CAPTURE is owned by the routing authority (service_capture.add),
+      // not this island. Fall through so the authority is the single writer. [Spine §4a]
       if (SERVICE_CATEGORIES.has(category) && name.length >= 2) {
-        const spId = writeServiceProvider(category, name, phone);
-        if (!spId) {
-          return {
-            type: 'service_provider',
-            captured: false,
-            ack: `Hmm — I couldn't hold onto that just now. Mind telling me once more?`,
-          };
-        }
-        return {
-          type: 'service_provider',
-          captured: true,
-          ack: phone
-            ? `Got it — ${name} is your ${category}, and their number is ${phoneCheck!.spoken}.`
-            : phoneSuspect
-              ? `Got it — ${name} is your ${category}. That number didn't sound complete, though — say "${name}'s number is ..." and I'll add it.`
-              : `Got it — ${name} is your ${category}.`,
-        };
+        return null;
       }
     }
   }
