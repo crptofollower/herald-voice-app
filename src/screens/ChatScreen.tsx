@@ -848,32 +848,6 @@ export default function ChatScreen() {
           );
           return true;
         }
-        case 'todo_add': {
-          const { body } = intent as { type: 'todo_add'; body: string };
-          if (!body || body.length < 2) {
-            sendingRef.current = false;
-            return false;
-          }
-          let todoList = db.getFirstSync<{ id: string }>(`SELECT id FROM lists WHERE name = ?;`, ['todos']);
-          if (!todoList) {
-            const listId = `list_todos_${Date.now()}`;
-            db.runSync(`INSERT INTO lists (id, name, created_at) VALUES (?, ?, ?);`, [listId, 'todos', new Date().toISOString()]);
-            todoList = { id: listId };
-          }
-          db.runSync(
-            `INSERT INTO list_items (id, list_id, body, checked, created_at) VALUES (?, ?, ?, 0, ?);`,
-            [`todo_${Date.now()}`, todoList.id, body, new Date().toISOString()],
-          );
-          const openCount = db.getFirstSync<{ n: number }>(
-            `SELECT COUNT(*) as n FROM list_items li JOIN lists l ON l.id = li.list_id WHERE l.name = 'todos' AND li.checked = 0;`,
-          )?.n ?? 1;
-          replyAndReset(
-            openCount === 1
-              ? `Got it — '${body}' is on your list.`
-              : `Got it — '${body}' added. You've got ${openCount} open to-dos.`,
-          );
-          return true;
-        }
         default:
           replyAndReset(`I couldn't quite get that — try a different way.`);
           return true;

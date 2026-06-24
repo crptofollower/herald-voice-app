@@ -118,6 +118,49 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       return { status: 'noop', ack: 'Noted.' };
     },
   },
+  todo_add: {
+    async add(intent: IntentRecord, rawPhrase: string): Promise<CommitResult> {
+      if (intent.type !== 'todo_add') {
+        return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
+      }
+      const body = intent.body?.trim();
+      if (!body || body.length < 2) {
+        return { status: 'failed', ack: "What did you want me to remember to do?" };
+      }
+      const db = getDB();
+      let todoList = db.getFirstSync<{ id: string }>(`SELECT id FROM lists WHERE name = ?`, ['todos']);
+      if (!todoList) {
+        const listId = `list_todos_${Date.now()}`;
+        db.runSync(`INSERT INTO lists (id, name, created_at) VALUES (?, ?, ?)`, [listId, 'todos', new Date().toISOString()]);
+        todoList = { id: listId };
+      }
+      const exists = db.getFirstSync<{ id: string }>(
+        `SELECT li.id FROM list_items li JOIN lists l ON l.id = li.list_id
+         WHERE l.name = 'todos' AND lower(li.body) = lower(?) AND li.checked = 0`,
+        [body],
+      );
+      if (exists) {
+        return { status: 'noop', ack: `That's already on your to-do list.` };
+      }
+      db.runSync(
+        `INSERT INTO list_items (id, list_id, body, checked, created_at) VALUES (?, ?, ?, 0, ?)`,
+        [`todo_${Date.now()}`, todoList.id, body, new Date().toISOString()],
+      );
+      const openCount = db.getFirstSync<{ n: number }>(
+        `SELECT COUNT(*) as n FROM list_items li JOIN lists l ON l.id = li.list_id WHERE l.name = 'todos' AND li.checked = 0`,
+      )?.n ?? 1;
+      const ack = openCount === 1
+        ? `Got it — '${body}' is on your to-do list.`
+        : `Got it — '${body}' added. You've got ${openCount} open to-dos.`;
+      return { status: 'committed', ack };
+    },
+    async remove(item: string): Promise<CommitResult> {
+      return { status: 'noop', ack: 'Noted.' };
+    },
+    async clear(): Promise<CommitResult> {
+      return { status: 'noop', ack: 'Noted.' };
+    },
+  },
 };
 
 // allConverted: returns true when every intent in a capture decision has a
