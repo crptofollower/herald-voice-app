@@ -96,6 +96,8 @@ LIST ADD — ALWAYS split items into separate array entries, never one string:
 "pick up milk oh and also get some apples and sourdough bread" → {"type":"list_add","items":["milk","apples","sourdough bread"],"listName":"grocery"}
 "put call dentist on my to-do list" → {"type":"list_add","items":["call dentist"],"listName":"todo"}
 "add pay bills and call mom to my to-do list" → {"type":"list_add","items":["pay bills","call mom"],"listName":"todo"}
+"add call my dentist to my to-do list" → {"type":"list_add","items":["call my dentist"],"listName":"todo"}
+"add the dentist to my to-do list" → {"type":"list_add","items":["the dentist"],"listName":"todo"}
 
 LIST REMOVE — single item removal:
 {"type":"list_remove","item":"milk","listName":"grocery"}
@@ -160,7 +162,7 @@ CRITICAL RULES:
 - Drug names and dosages: copy VERBATIM from speech, never guess or correct spelling
 - "remove X replace with Y" for insurance = insurance_capture with new carrier Y, never list_remove
 - "got X" or "picked up X" = list_remove
-- "I need to add X to my grocery list" = list_add NOT todo_add — if user says "list" it's list_add
+- If user says "add X to my list" or "put X on my list" = ALWAYS list_add, never service_capture or todo_add — even if X sounds like a provider (dentist, plumber, doctor)
 - todo_add only when no list name mentioned: "remind me to call dentist", "add pay bills to my to-do"
 - Known contacts: ${hints.contacts.slice(0, 15).join(', ') || 'none'}
 - Known lists: ${hints.lists.join(', ') || 'grocery, todo'}
