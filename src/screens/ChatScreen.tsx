@@ -77,6 +77,7 @@ import type { TierDecision } from "../routing/tierRouter";
 import { routeIntent } from "../routing/routeIntent";
 import type { RouteDecision } from "../routing/routeIntent";
 import { DOMAIN_WRITERS, allConverted, composeAck } from '../routing/routeIntent';
+import type { IntentRecord } from '../hooks/llmLayers';
 import { dispatchRead, dispatchAction } from './chat/dispatch';
 import type { DispatchDeps } from './chat/dispatch';
 import { handleTier1, buildTier2DeviceContext, buildAmbientDeviceContext, writeProfileFromOnboarding } from "../routing/tier1Responses";
@@ -289,7 +290,10 @@ export default function ChatScreen() {
   const pendingMedClearRef = useRef<{ count: number } | null>(null);
   const pendingInsuranceRef = useRef<{ type: string; carrier: string; ack: string } | null>(null);
   const pendingFamilyRef = useRef<{ name: string; relationship: string; location?: string } | null>(null);
-  const pendingServiceCaptureRef = useRef<{ category: string; phone: string } | null>(null);
+  const pendingResumeRef = useRef<{
+    pendingKey: string;
+    resume: (t: string) => Promise<import('../routing/routeIntent').CommitResult>;
+  } | null>(null);
 
   // ── Scroll snap prevention ────────────────────────────────────────────────
   // Only auto-scroll to bottom when user is already near the bottom.
@@ -965,43 +969,26 @@ export default function ChatScreen() {
       pendingTodoCompleteRef.current = null;
     }
 
-    // ── Pending service capture (category + phone known, name missing) ──
-    if (pendingServiceCaptureRef.current) {
-      const { category, phone } = pendingServiceCaptureRef.current;
-      const providedName = text.trim();
-      const nameToWrite = providedName.trim().split(/\s+/)[0];
-      const PLACEHOLDER_NAMES = new Set(['unknown','unnamed','none','n/a',
-        'someone','somebody','that','this','it','he','she','they','him','her','them']);
-      const isRealName = (v: string) => v && v.trim().length >= 2 &&
-        !PLACEHOLDER_NAMES.has(v.trim().toLowerCase());
-      addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-      if (!isRealName(nameToWrite)) {
-        pendingServiceCaptureRef.current = null;
-        const reply = `No problem — just let me know when you want to add your ${category}.`;
-        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-        speak(reply);
+    // ── Pending continuation — user is answering a question a writer asked ──
+    if (pendingResumeRef.current) {
+      const { resume } = pendingResumeRef.current;
+      pendingResumeRef.current = null;
+      const result = await resume(text);
+      if (result.status === 'noop' && !result.ack) {
+        // Not an answer to the pending question — let it route normally below.
+        // (Do not echo here; the normal path adds its own user bubble.)
+      } else {
+        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+        const ack = composeAck([result]);
+        addMessage({ id: generateId('msg'), role: 'assistant', content: ack, timestamp: Date.now() });
+        speak(ack);
+        if (result.status === 'pending') {
+          pendingResumeRef.current = { pendingKey: result.pendingKey, resume: result.resume };
+        }
         sendingRef.current = false;
         setInputText('');
         return;
       }
-      pendingServiceCaptureRef.current = null;
-      const { writeServiceProvider } = await import('../utils/householdCapture');
-      const spId = writeServiceProvider(category, nameToWrite, phone);
-      if (!spId) {
-        const reply = `Hmm — couldn't hold onto that. Try once more?`;
-        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-        speak(reply);
-        sendingRef.current = false;
-        setInputText('');
-        return;
-      }
-      const numberPart = ` — you can reach them at ${phone}`;
-      const reply = `Got it — ${nameToWrite} is your ${category}${numberPart}.`;
-      addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-      speak(reply);
-      sendingRef.current = false;
-      setInputText('');
-      return;
     }
 
     // ── Pending medication confirm (Build A — Option B) ──
@@ -1226,6 +1213,32 @@ export default function ChatScreen() {
     });
     const tierDecision = routeDecisionToTier(routeDecision);
 
+    // Runs converted intents through their domain writers, speaks the verified
+    // ACK, clears the send lock. Single dispatch site for all three paths.
+    const applyConvertedIntents = async (
+      convIntents: IntentRecord[],
+      rawText: string,
+      opts?: { echoUser?: boolean },
+    ): Promise<void> => {
+      const results: import('../routing/routeIntent').CommitResult[] = [];
+      for (const intent of convIntents) {
+        const writer = DOMAIN_WRITERS[intent.type];
+        if (writer) results.push(await writer.add(intent, rawText));
+      }
+      const ack = composeAck(results);
+      if (opts?.echoUser) {
+        addMessage({ id: generateId('msg'), role: 'user', content: rawText, timestamp: Date.now() });
+      }
+      addMessage({ id: generateId('msg'), role: 'assistant', content: ack, timestamp: Date.now() });
+      speak(ack);
+      const pending = results.find(r => r.status === 'pending');
+      if (pending && pending.status === 'pending') {
+        pendingResumeRef.current = { pendingKey: pending.pendingKey, resume: pending.resume };
+      }
+      sendingRef.current = false;
+      setInputText('');
+    };
+
     // ── Routing authority dispatch (Commit 3) ────────────────────────────────
     // If routeIntent returned a capture decision AND every intent type has a
     // registered domain writer, dispatch through the authority and return.
@@ -1234,27 +1247,7 @@ export default function ChatScreen() {
       routeDecision.kind === 'capture' &&
       allConverted(routeDecision.intents)
     ) {
-      const results: import('../routing/routeIntent').CommitResult[] = [];
-      for (const intent of routeDecision.intents) {
-        const writer = DOMAIN_WRITERS[intent.type];
-        if (writer) {
-          results.push(await writer.add(intent, text));
-        }
-      }
-      const ack = composeAck(results);
-      const hasPending = results.some(r => r.status === 'pending');
-      addMessage({ id: generateId('msg'), role: 'assistant',
-        content: ack, timestamp: Date.now() });
-      speak(ack);
-      if (!hasPending) {
-        sendingRef.current = false;
-        setInputText('');
-        return;
-      }
-      // If pending: fall through so the pending ref handler fires next turn.
-      // sendingRef stays true — the pending prompt is the reply.
-      sendingRef.current = false;
-      setInputText('');
+      await applyConvertedIntents(routeDecision.intents, text);
       return;
     }
     // ─────────────────────────────────────────────────────────────────────────
@@ -1269,17 +1262,7 @@ export default function ChatScreen() {
         });
         if (llmCaptures.length > 0) {
           if (allConverted(llmCaptures)) {
-            const results: import('../routing/routeIntent').CommitResult[] = [];
-            for (const intent of llmCaptures) {
-              const writer = DOMAIN_WRITERS[intent.type];
-              if (writer) results.push(await writer.add(intent, text));
-            }
-            const ack = composeAck(results);
-            addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-            addMessage({ id: generateId('msg'), role: 'assistant', content: ack, timestamp: Date.now() });
-            speak(ack);
-            sendingRef.current = false;
-            setInputText('');
+            await applyConvertedIntents(llmCaptures, text, { echoUser: true });
             return;
           }
           const handled = await dispatchLocalIntent(
@@ -1738,17 +1721,7 @@ export default function ChatScreen() {
             });
             if (results.length > 0) {
               if (allConverted(results)) {
-                const commitResults: import('../routing/routeIntent').CommitResult[] = [];
-                for (const intent of results) {
-                  const writer = DOMAIN_WRITERS[intent.type];
-                  if (writer) commitResults.push(await writer.add(intent, text));
-                }
-                const ack = composeAck(commitResults);
-                addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-                addMessage({ id: generateId('msg'), role: 'assistant', content: ack, timestamp: Date.now() });
-                speak(ack);
-                sendingRef.current = false;
-                setInputText('');
+                await applyConvertedIntents(results, text, { echoUser: true });
                 return;
               }
               addMessage({ id: generateId('msg'), role: 'user',
