@@ -1737,6 +1737,20 @@ export default function ChatScreen() {
               name: undefined,
             });
             if (results.length > 0) {
+              if (allConverted(results)) {
+                const commitResults: import('../routing/routeIntent').CommitResult[] = [];
+                for (const intent of results) {
+                  const writer = DOMAIN_WRITERS[intent.type];
+                  if (writer) commitResults.push(await writer.add(intent, text));
+                }
+                const ack = composeAck(commitResults);
+                addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+                addMessage({ id: generateId('msg'), role: 'assistant', content: ack, timestamp: Date.now() });
+                speak(ack);
+                sendingRef.current = false;
+                setInputText('');
+                return;
+              }
               addMessage({ id: generateId('msg'), role: 'user',
                 content: text, timestamp: Date.now() });
               await dispatchLocalIntent(results[0] as Record<string, string | undefined>, text);
