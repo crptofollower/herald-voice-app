@@ -5,6 +5,7 @@
 import type { IntentRecord } from '../hooks/llmLayers';
 import type { TierDecision, LocalContext } from './tierRouter';
 import { writeServiceProvider } from '../utils/householdCapture';
+import { getDB } from '../db/schema';
 
 type ActionIntent = NonNullable<TierDecision['actionIntent']>;
 
@@ -66,6 +67,55 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
     },
     async clear(): Promise<CommitResult> {
       return { status: 'noop', ack: `Noted.` };
+    },
+  },
+  list_add: {
+    async add(intent: IntentRecord, rawPhrase: string): Promise<CommitResult> {
+      if (intent.type !== 'list_add') {
+        return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
+      }
+      const rawListName = intent.listName ?? 'grocery';
+      const listName = rawListName === 'todo' ? 'todos' : rawListName;
+      const itemList = (intent.items ?? []).filter(i => i?.trim().length > 0);
+      if (itemList.length === 0) {
+        return { status: 'failed', ack: `What did you want to add to your ${listName} list?` };
+      }
+      const db = getDB();
+      let list = db.getFirstSync<{ id: string }>(`SELECT id FROM lists WHERE name = ?`, [listName]);
+      if (!list) {
+        const listId = `list_${Date.now()}`;
+        db.runSync(`INSERT INTO lists (id, name, created_at) VALUES (?, ?, ?)`, [listId, listName, new Date().toISOString()]);
+        list = { id: listId };
+      }
+      const now = new Date().toISOString();
+      let addedCount = 0;
+      for (const item of itemList) {
+        const exists = db.getFirstSync<{ id: string }>(
+          `SELECT li.id FROM list_items li JOIN lists l ON l.id = li.list_id
+           WHERE l.name = ? AND lower(li.body) = lower(?) AND li.checked = 0`,
+          [listName, item],
+        );
+        if (!exists) {
+          db.runSync(
+            `INSERT INTO list_items (id, list_id, body, checked, created_at) VALUES (?, ?, ?, 0, ?)`,
+            [`item_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, list.id, item, now],
+          );
+          addedCount++;
+        }
+      }
+      if (addedCount === 0) {
+        return { status: 'noop', ack: `${itemList.length === 1 ? `${itemList[0]} was` : 'Those were'} already on your ${listName} list.` };
+      }
+      if (addedCount === 1) {
+        return { status: 'committed', ack: `Got it — ${itemList[0]} is on your ${listName} list.` };
+      }
+      return { status: 'committed', ack: `Got it — added ${addedCount} items to your ${listName} list.` };
+    },
+    async remove(item: string): Promise<CommitResult> {
+      return { status: 'noop', ack: 'Noted.' };
+    },
+    async clear(): Promise<CommitResult> {
+      return { status: 'noop', ack: 'Noted.' };
     },
   },
 };

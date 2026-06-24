@@ -717,47 +717,6 @@ export default function ChatScreen() {
           }
           return true;
         }
-        case 'list_add': {
-          const listName = ((intent.listName ?? 'grocery') as string).toString();
-          const rawIntent = intent as unknown as { items?: string[]; item?: string };
-          const itemList: string[] = Array.isArray(rawIntent.items) && rawIntent.items.length > 0
-            ? rawIntent.items.filter((i: string) => i?.trim().length > 0)
-            : rawIntent.item?.trim()
-              ? rawIntent.item.trim().split(/\s*,\s*|\s+and\s+/i).map((s: string) => s.trim()).filter(Boolean)
-              : [];
-          if (itemList.length === 0) {
-            sendingRef.current = false;
-            replyAndReset(`What did you want to add to your ${listName} list?`);
-            return true;
-          }
-          let list = db.getFirstSync<{ id: string }>(`SELECT id FROM lists WHERE name = ?;`, [listName]);
-          if (!list) {
-            const listId = `list_${Date.now()}`;
-            db.runSync(`INSERT INTO lists (id, name, created_at) VALUES (?, ?, ?);`, [listId, listName, new Date().toISOString()]);
-            list = { id: listId };
-          }
-          const now = new Date().toISOString();
-          for (const item of itemList) {
-            const exists = db.getFirstSync<{ id: string }>(
-              `SELECT li.id FROM list_items li JOIN lists l ON l.id = li.list_id
-               WHERE l.name = ? AND lower(li.body) = lower(?) AND li.checked = 0;`,
-              [listName, item]
-            );
-            if (!exists) {
-              db.runSync(
-                `INSERT INTO list_items (id, list_id, body, checked, created_at) VALUES (?, ?, ?, 0, ?);`,
-                [`item_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, list.id, item, now],
-              );
-            }
-          }
-          const itemNames = itemList.join(', ');
-          replyAndReset(
-            itemList.length === 1
-              ? `Got it — ${itemList[0]} is on your ${listName} list.`
-              : `Got it — added ${itemList.length} items to your ${listName} list: ${itemNames}.`
-          );
-          return true;
-        }
         case 'call': {
           const contactName = intent.contact ?? '';
           const resolved = await resolveContactPhoneRef.current?.(contactName);
@@ -989,46 +948,6 @@ export default function ChatScreen() {
         return;
       }
       clearClarification(pending.id);
-    }
-
-    // ── Multi-intent: "add X to my list and note Y" — split and handle both ──
-    const multiListNote = text.match(
-      /\badd (.+?) to (?:my |the )?(?:\w+ )?list\b.+?\b(?:note|jot|remember|write down)\b(.+)/i
-    ) ?? text.match(
-      /\b(?:note|jot|remember|write down)\b(.+?)\band\b.+?\badd (.+?) to (?:my |the )?(?:\w+ )?list/i
-    );
-    if (multiListNote) {
-      const listItem = (multiListNote[1] ?? multiListNote[2])?.trim();
-      const noteBody = (multiListNote[2] ?? multiListNote[1])?.trim();
-      if (listItem && noteBody) {
-        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-        try {
-          const { getDB } = await import('../db/schema');
-          const db = getDB();
-          // Write list item
-          let list = db.getFirstSync<{ id: string }>(`SELECT id FROM lists WHERE name = ?;`, ['grocery']);
-          if (!list) {
-            const listId = `list_${Date.now()}`;
-            db.runSync(`INSERT INTO lists (id, name, created_at) VALUES (?, ?, ?);`, [listId, 'grocery', new Date().toISOString()]);
-            list = { id: listId };
-          }
-          db.runSync(`INSERT INTO list_items (id, list_id, body, checked, created_at) VALUES (?, ?, ?, 0, ?);`,
-            [`item_${Date.now()}`, list.id, listItem, new Date().toISOString()]);
-          // Write note
-          db.runSync(`INSERT INTO notes (id, body, created_at, updated_at) VALUES (?, ?, ?, ?);`,
-            [`note_${Date.now()}`, noteBody, new Date().toISOString(), new Date().toISOString()]);
-          const reply = `Got it — added ${listItem} to your list and noted: ${noteBody}.`;
-          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-          speak(reply);
-        } catch {
-          const reply = `Something went wrong holding onto that. Try again.`;
-          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-          speak(reply);
-        }
-        sendingRef.current = false;
-        setInputText('');
-        return;
-      }
     }
 
     // Pending todo completion confirm — check before routing
