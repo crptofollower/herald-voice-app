@@ -274,6 +274,68 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       return { status: 'noop', ack: 'Noted.' };
     },
   },
+  family_capture: {
+    async add(intent: IntentRecord, rawPhrase: string): Promise<CommitResult> {
+      if (intent.type !== 'family_capture') {
+        return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
+      }
+      const PLACEHOLDER_NAMES = new Set(['unknown','unnamed','none','n/a','someone',
+        'somebody','that','this','it','he','she','they','him','her','them']);
+      const isRealName = (v: unknown): v is string => {
+        if (typeof v !== 'string') return false;
+        const t = v.trim();
+        return t.length >= 2 && !PLACEHOLDER_NAMES.has(t.toLowerCase());
+      };
+      const famName = intent.name?.trim();
+      const relation = intent.relation?.trim();
+      const location = intent.location?.trim() || undefined;
+      if (!relation) {
+        return { status: 'failed', ack: "I didn't catch the relationship — who are they to you?" };
+      }
+      if (!isRealName(famName)) {
+        return { status: 'failed', ack: `I didn't catch the name — who is your ${relation}?` };
+      }
+      const confirmPrompt = location
+        ? `${famName}, your ${relation}, in ${location} — that right?`
+        : `${famName}, your ${relation} — that right?`;
+      return {
+        status: 'pending',
+        prompt: confirmPrompt,
+        pendingKey: 'family_capture',
+        resume: async (userText: string): Promise<CommitResult> => {
+          const YES = /^(yes|yeah|yep|yup|correct|right|that'?s right|sure|ok|okay|sounds good|affirmative|confirmed|confirm|y)\b/i;
+          const NO = /^(no|nope|nah|wrong|incorrect|that'?s wrong|not right|cancel|nevermind|never mind)\b/i;
+          if (NO.test(userText.trim())) {
+            return { status: 'noop', ack: `No problem — what's the correct name?` };
+          }
+          if (!YES.test(userText.trim())) {
+            return { status: 'noop', ack: '' };
+          }
+          try {
+            const { capturePerson } = await import('../db/capturePerson');
+            const { findContactByName } = await import('../db/contactsDB');
+            capturePerson({ name: famName, relationship: relation, location });
+            const saved = findContactByName(famName);
+            if (!saved) {
+              return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
+            }
+            const ack = location
+              ? `Got it — I'll remember ${famName} is your ${relation} in ${location}.`
+              : `Got it — I'll remember ${famName} is your ${relation}.`;
+            return { status: 'committed', ack };
+          } catch {
+            return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
+          }
+        },
+      };
+    },
+    async remove(item: string): Promise<CommitResult> {
+      return { status: 'noop', ack: 'Noted.' };
+    },
+    async clear(): Promise<CommitResult> {
+      return { status: 'noop', ack: 'Noted.' };
+    },
+  },
 };
 
 // allConverted: returns true when every intent in a capture decision has a

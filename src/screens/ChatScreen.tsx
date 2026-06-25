@@ -802,30 +802,6 @@ export default function ChatScreen() {
           replyAndReset(ack);
           return true;
         }
-        case 'family_capture': {
-          const { relation, name: famName, location } = intent as {
-            type: 'family_capture'; relation: string; name: string; location?: string;
-          };
-
-          const PLACEHOLDER_NAMES = new Set(['unknown','unnamed','none','n/a','someone','somebody','that','this','it','he','she','they','him','her','them']);
-          const isRealName = (v: string) => v && v.trim().length >= 2 && !PLACEHOLDER_NAMES.has(v.trim().toLowerCase());
-
-          if (!relation?.trim() || !isRealName(famName)) {
-            sendingRef.current = false;
-            replyAndReset(`I didn't catch the name — who is your ${relation || 'family member'}?`);
-            return true;
-          }
-
-          pendingFamilyRef.current = { name: famName, relationship: relation, location };
-          const reply = location
-            ? `${famName}, your ${relation}, in ${location} — that right?`
-            : `${famName}, your ${relation} — that right?`;
-
-          setPendingAction({ type: 'family', value: reply });
-          setActionStatus('confirming');
-          sendingRef.current = false;
-          return true;
-        }
         case 'medical_capture': {
           // Medical capture from LLM — route through existing confirm gate
           // Never write directly from LLM — goes through pendingMedConfirmRef
@@ -1284,36 +1260,6 @@ export default function ChatScreen() {
     const networkState = await Network.getNetworkStateAsync();
     let localFactsWritten = false;
     const isTier1Read = tierDecision.tier === 1 && !!tierDecision.tier1Response;
-
-    // ── Pending family confirm ──
-    if (pendingFamilyRef.current) {
-      const pending = pendingFamilyRef.current;
-      if (YES.test(text.trim())) {
-        pendingFamilyRef.current = null;
-        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-        const { capturePerson } = await import('../db/capturePerson');
-        capturePerson({ name: pending.name, relationship: pending.relationship, location: pending.location });
-        const reply = pending.location
-          ? `Got it — I'll remember ${pending.name} is your ${pending.relationship} in ${pending.location}.`
-          : `Got it — I'll remember ${pending.name} is your ${pending.relationship}.`;
-        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-        speak(reply);
-        sendingRef.current = false;
-        setInputText('');
-        return;
-      }
-      if (NO.test(text.trim())) {
-        pendingFamilyRef.current = null;
-        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-        const reply = `No problem — what's the correct name?`;
-        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-        speak(reply);
-        sendingRef.current = false;
-        setInputText('');
-        return;
-      }
-      pendingFamilyRef.current = null;
-    }
 
     // ── Pending insurance confirm ──
     if (pendingInsuranceRef.current) {
