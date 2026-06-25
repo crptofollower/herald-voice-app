@@ -136,6 +136,15 @@ export function writeServiceProvider(category: string, name: string, phone?: str
     // Retire any existing active provider in this category before inserting, so a
     // changed provider supersedes rather than accumulating duplicate active rows.
     // Mirrors writeInsurancePolicy's retire-by-type. [SPINE §4a one-writer, §6 current≠historical]
+    // Validate phone before write — never store an unvalidated string (Spine §3).
+    // normalizePhone is already imported. Invalid phone → null (silently dropped).
+    // Defense-in-depth: the capture path's phoneSuspect guard catches bad numbers
+    // before reaching here; this protects future direct callers.
+    let validPhone: string | null = null;
+    if (phone) {
+      const check = normalizePhone(phone);
+      validPhone = check.valid ? check.normalized : null;
+    }
     db.runSync(
       `UPDATE service_providers SET removed_at = ?
          WHERE category = ? AND removed_at IS NULL;`,
@@ -145,7 +154,7 @@ export function writeServiceProvider(category: string, name: string, phone?: str
       `INSERT OR REPLACE INTO service_providers
          (id, name, phone, category, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?);`,
-      [id, name.trim(), phone ?? null, cat, now, now]
+      [id, name.trim(), validPhone, cat, now, now]
     );
     return id;
   } catch {
