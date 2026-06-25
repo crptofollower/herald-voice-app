@@ -57,6 +57,10 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
           'my','our','his','her','their','your','its',
           'the','a','an','this','that','these','those',
           'never','no','nope','nah','cancel','stop','ok','okay',
+          // Imperative action verbs — never a valid service-provider name.
+          // Last-line-of-defence: blocks "Delete"/"Remove" leaking in as names
+          // if the LLM classifies a removal utterance as service_capture.
+          'delete','remove','clear','erase','update','change',
         ]);
         if (STOP_WORDS.has(first)) return false;
         return true;
