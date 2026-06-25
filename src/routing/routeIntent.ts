@@ -45,8 +45,22 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       const { category, name, phone } = intent;
       const PLACEHOLDER_NAMES = new Set(['unknown','unnamed','none','n/a','someone',
         'somebody','that','this','it','he','she','they','him','her','them']);
-      const isRealName = (v: string) => typeof v === 'string' && v.trim().length >= 2
-        && !PLACEHOLDER_NAMES.has(v.trim().toLowerCase());
+      const isRealName = (v: string): boolean => {
+        if (typeof v !== 'string') return false;
+        const t = v.trim();
+        if (t.length < 2) return false;
+        if (PLACEHOLDER_NAMES.has(t.toLowerCase())) return false;
+        if (/^\d[\d\s\-\(\)\+\.]*$/.test(t)) return false; // digit-only
+        const first = t.split(/\s+/)[0].toLowerCase();
+        const STOP_WORDS = new Set([
+          'what','whats',"what's",'who','when','where','why','how',
+          'my','our','his','her','their','your','its',
+          'the','a','an','this','that','these','those',
+          'never','no','nope','nah','cancel','stop','ok','okay',
+        ]);
+        if (STOP_WORDS.has(first)) return false;
+        return true;
+      };
       if (!category?.trim()) {
         return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
       }
@@ -61,14 +75,18 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
 
       const extractName = (raw: string): string | null => {
         let t = raw.trim().replace(/[.!?]+$/, '');
-        t = t.replace(/^(it'?s|that'?s|his name is|her name is|the name is|he'?s|she'?s|call (?:him|her)|name'?s)\s+/i, '');
+        // Strip common lead-ins so "It's Joe" → "Joe", "His name is Joe" → "Joe"
+        t = t.replace(/^(it'?s|that'?s|his name is|her name is|the name is|he'?s|she'?s|call (?:him|her)|name'?s|the (?:guy|person) is)\s+/i, '');
+        // If what remains looks like a NEW capture command, abort — do not treat
+        // "My roofer is 552-03303" as a name when pending electrician.
+        if (/^(my|our)\s+\w/i.test(t)) return null;
         const first = t.split(/\s+/)[0];
         if (!first) return null;
-        const STOP = new Set(['what','whats',"what's",'who','when','where','why','how',
-          'never','no','nope','nah','cancel','stop','nothing','none','actually','um','uh','the','a','an']);
-        if (STOP.has(first.toLowerCase())) return null;
-        if (/[?\d]/.test(first)) return null;
-        if (!/^[a-z][a-z'\-]+$/i.test(first)) return null;
+        // Reuse the hardened isRealName check on the extracted first word
+        if (!isRealName(first)) return null;
+        // Must look like a name: starts alpha, only alpha/apostrophe/hyphen,
+        // max 2 words (handles "Mary Beth"), not all-caps abbreviation
+        if (!/^[A-Za-z][a-zA-Z'\-]+$/.test(first)) return null;
         return first;
       };
 
