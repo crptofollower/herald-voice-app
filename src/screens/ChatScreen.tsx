@@ -1481,12 +1481,22 @@ export default function ChatScreen() {
 
     if (householdResult && householdResult.type !== 'needs_llm' && 'captured' in householdResult) {
       if (householdResult.pendingConfirm) {
+        // Insurance: no write yet — set pending confirm, read back for user to verify.
         pendingInsuranceRef.current = {
           type: householdResult.pendingConfirm.type,
           carrier: householdResult.pendingConfirm.carrier,
           ack: householdResult.ack,
         };
+        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+        addMessage({ id: generateId('msg'), role: 'assistant', content: householdResult.ack, timestamp: Date.now() });
+        speak(householdResult.ack);
+        sendingRef.current = false;
+        setInputText('');
+        return;
       }
+      // Legal document add/remove: ack is already set by householdCapture to reflect
+      // the actual commit result (captured:true = wrote/removed, captured:false = gap).
+      // Speak exactly what was returned — never invent a success ack for a failed write.
       addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
       addMessage({ id: generateId('msg'), role: 'assistant', content: householdResult.ack, timestamp: Date.now() });
       speak(householdResult.ack);
