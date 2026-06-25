@@ -199,4 +199,6 @@ export async function runMedicalContractTests() {
   return { passed, failed: failures.length, total, failures };
 }
 
-runMedicalContractTests().catch(console.error);
+if (process.argv[1]?.endsWith('medicalContract.test.mjs')) {
+  runMedicalContractTests().catch(console.error);
+}

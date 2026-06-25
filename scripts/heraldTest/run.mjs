@@ -112,6 +112,8 @@ const TESTS = [
   ["med remove not add",       "stop taking metformin",                     1, "medical_remove"],
   ["med clear",                "clear my medications",                      1, "medical_clear"],
   ["insurance read not update","who's my insurance with",                   1, "household_read"],
+  ["household remove delete",   "delete my plumber",                        1, "household_remove"],
+  ["household remove no more",  "i don't have a plumber anymore",           1, "household_remove"],
   ["med capture statement",    "I'm taking chocolate milk",                 1, "medical_capture"],
   ["med capture dosage",       "I take metformin 500mg",                    1, "medical_capture"],
 
@@ -186,7 +188,7 @@ const RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", BOLD = "\x1b[1m",
 let passed = 0;
 const failures = [];
 const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length;
-const EXPECTED_TOTAL = 95; // guard against silent suite shrinkage; bump deliberately when you add/remove tests
+const EXPECTED_TOTAL = 97; // guard against silent suite shrinkage; bump deliberately when you add/remove tests
 
 console.log(`\n${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  HERALD ROUTER + PHONE TEST SUITE — ${TOTAL} tests${RESET}`);
@@ -265,6 +267,13 @@ for (const [label, input, expected] of DOSAGE_TESTS) {
   }
 }
 
+// ─── Contract suites — wired here so one command gates everything ───────────
+const { runHouseholdContractTests } = await import('./householdContract.test.mjs');
+const { runMedicalContractTests }   = await import('./medicalContract.test.mjs');
+const hResult = await runHouseholdContractTests();
+const mResult = await runMedicalContractTests();
+const contractFailed = hResult.failed + mResult.failed;
+
 console.log(`${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  RESULTS: ${GREEN}${passed} passed${RESET}${BOLD} / ${failures.length > 0 ? RED : GREEN}${failures.length} failed${RESET}${BOLD} / ${TOTAL} total${RESET}`);
 console.log(`${BOLD}═══════════════════════════════════════════════════${RESET}\n`);
@@ -275,10 +284,15 @@ if (TOTAL !== EXPECTED_TOTAL) {
   process.exit(1);
 }
 
-if (failures.length) {
-  console.log(`${RED}${BOLD}FAILURES — fix these before building:${RESET}\n`);
-  for (const f of failures) {
-    console.log(`  ${RED}✗ ${f.label}${RESET}\n    phrase:   "${f.phrase}"\n    expected: ${f.expected}\n    got:      ${f.got}\n`);
+if (failures.length || contractFailed) {
+  if (failures.length) {
+    console.log(`${RED}${BOLD}FAILURES — fix these before building:${RESET}\n`);
+    for (const f of failures) {
+      console.log(`  ${RED}✗ ${f.label}${RESET}\n    phrase:   "${f.phrase}"\n    expected: ${f.expected}\n    got:      ${f.got}\n`);
+    }
+  }
+  if (contractFailed) {
+    console.log(`${RED}  ${contractFailed} contract test(s) failed — see output above${RESET}\n`);
   }
   console.log(`${RED}${BOLD}❌ DO NOT BUILD — fix failing tests first${RESET}\n`);
   process.exit(1);
