@@ -23,6 +23,13 @@ export type HouseholdNeedsLLM = {
   reason: 'supersession' | 'ambiguous';
 };
 
+export type HouseholdNeedsName = {
+  type: 'needs_name';
+  category: string;
+  phone: string;
+  ack: string;
+};
+
 // ─── Service provider patterns ────────────────────────────────────────────────
 // "my plumber is Joe, his number is 555-1234"
 // "my electrician's name is Mike, 972-555-0100"
@@ -239,7 +246,7 @@ export function captureHouseholdInsurance(type: string, carrier: string): string
 // Returns null if no household pattern matched (caller falls through normally).
 // Returns HouseholdCaptureResult if matched — caller returns early with ack.
 
-export function captureHousehold(text: string): HouseholdCaptureResult | HouseholdNeedsLLM | null {
+export function captureHousehold(text: string): HouseholdCaptureResult | HouseholdNeedsLLM | HouseholdNeedsName | null {
 
   // Guard: never capture from list/calendar/profile read questions.
   // These look like statements but are actually read intents — "tell me my grocery list"
@@ -361,6 +368,28 @@ export function captureHousehold(text: string): HouseholdCaptureResult | Househo
       const phoneCheck = m[3] ? normalizePhone(m[3]) : null;
       const phone = phoneCheck?.valid ? phoneCheck.normalized : undefined;
       const phoneSuspect = !!phoneCheck && !phoneCheck.valid && phoneCheck.issue !== 'empty';
+      // If we have a phone but no real name, don't write a nameless row.
+      // Ask for the name instead — the caller will set a pendingResumeRef.
+      const PLACEHOLDER_NAMES = new Set([
+        'unknown','unnamed','none','n/a','someone','somebody',
+        'that','this','it','he','she','they','him','her','them',
+      ]);
+      const nameIsReal = (n: string | null | undefined): boolean => {
+        if (!n) return false;
+        const t = n.trim();
+        return t.length >= 2 && !PLACEHOLDER_NAMES.has(t.toLowerCase());
+      };
+
+      if (!nameIsReal(name) && phone) {
+        // Phone present, name missing — return a needs_name signal.
+        // ChatScreen will ask "Who's your [category] at [phone]?" and resume.
+        return {
+          type: 'needs_name',
+          category,          // the service role (plumber, hvac, etc.)
+          phone,             // the phone number that was captured
+          ack: `Who's your ${category} at ${phone}?`,
+        };
+      }
       // Service-provider CAPTURE is owned by the routing authority (service_capture.add),
       // not this island. Fall through so the authority is the single writer. [Spine §4a]
       if (SERVICE_CATEGORIES.has(category) && name.length >= 2) {
