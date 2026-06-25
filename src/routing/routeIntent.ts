@@ -6,6 +6,8 @@ import type { IntentRecord } from '../hooks/llmLayers';
 import type { TierDecision, LocalContext } from './tierRouter';
 import { writeServiceProvider } from '../utils/householdCapture';
 import { getDB } from '../db/schema';
+import { capturePerson } from '../db/capturePerson';
+import { findContactByName } from '../db/contactsDB';
 
 type ActionIntent = NonNullable<TierDecision['actionIntent']>;
 
@@ -200,6 +202,70 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
         ? `Got it — '${body}' is on your to-do list.`
         : `Got it — '${body}' added. You've got ${openCount} open to-dos.`;
       return { status: 'committed', ack };
+    },
+    async remove(item: string): Promise<CommitResult> {
+      return { status: 'noop', ack: 'Noted.' };
+    },
+    async clear(): Promise<CommitResult> {
+      return { status: 'noop', ack: 'Noted.' };
+    },
+  },
+  phone_capture: {
+    async add(intent: IntentRecord, rawPhrase: string): Promise<CommitResult> {
+      if (intent.type !== 'phone_capture') {
+        return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
+      }
+      const name = intent.name?.trim();
+      const phone = intent.phone?.trim();
+      const relationship = intent.relationship?.trim() || undefined;
+      if (!name || name.length < 2) {
+        return { status: 'failed', ack: "I didn't catch the name — who's number is that?" };
+      }
+      if (!phone || phone.length < 7) {
+        return { status: 'failed', ack: "I didn't catch the number — can you say it again?" };
+      }
+      try {
+        capturePerson({ name, phone, relationship });
+        const saved = findContactByName(name);
+        if (!saved) {
+          return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
+        }
+        const relPart = relationship ? `, your ${relationship},` : '';
+        return { status: 'committed', ack: `Got it — ${name}${relPart} at ${phone}.` };
+      } catch {
+        return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
+      }
+    },
+    async remove(item: string): Promise<CommitResult> {
+      return { status: 'noop', ack: 'Noted.' };
+    },
+    async clear(): Promise<CommitResult> {
+      return { status: 'noop', ack: 'Noted.' };
+    },
+  },
+  address_capture: {
+    async add(intent: IntentRecord, rawPhrase: string): Promise<CommitResult> {
+      if (intent.type !== 'address_capture') {
+        return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
+      }
+      const name = intent.name?.trim();
+      const address = intent.address?.trim();
+      if (!name || name.length < 2) {
+        return { status: 'failed', ack: "I didn't catch the name — whose address is that?" };
+      }
+      if (!address || address.length < 5) {
+        return { status: 'failed', ack: "I didn't catch the address — can you say it again?" };
+      }
+      try {
+        capturePerson({ name, address });
+        const saved = findContactByName(name);
+        if (!saved) {
+          return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
+        }
+        return { status: 'committed', ack: `Got it — I'll remember that for next time you need directions.` };
+      } catch {
+        return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
+      }
     },
     async remove(item: string): Promise<CommitResult> {
       return { status: 'noop', ack: 'Noted.' };

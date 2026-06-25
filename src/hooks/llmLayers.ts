@@ -25,6 +25,8 @@ export type IntentRecord =
   | { type: 'medical_capture'; drug?: string; dosage?: string; frequency?: string; raw: string }
   | { type: 'service_capture'; category: string; name: string; phone?: string }
   | { type: 'family_capture'; relation: string; name: string; location?: string; phone?: string }
+  | { type: 'phone_capture'; name: string; phone: string; relationship?: string }
+  | { type: 'address_capture'; name: string; address: string }
   | { type: 'todo_add'; body: string }
   | { type: 'todo_complete'; hint: string }
   | { type: 'pass' };
@@ -69,6 +71,10 @@ function isCaptureComplete(rec: IntentRecord): boolean {
     case 'insurance_capture': return !!rec.carrier?.trim() && !!rec.insType?.trim();
     case 'todo_add':          return !!rec.body?.trim();
     case 'todo_complete':     return !!rec.hint?.trim();
+    case 'phone_capture':
+      return !!(rec.name?.trim() && rec.phone?.trim());
+    case 'address_capture':
+      return !!(rec.name?.trim() && rec.address?.trim());
     default:                  return true;
   }
 }
