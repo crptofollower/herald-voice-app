@@ -246,17 +246,7 @@ export async function dispatchAction(
         }
         if (actionIntent.type === 'household_read') {
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-          const deterministicReply = answerHouseholdRead(actionIntent.intent);
-          let reply = deterministicReply;
-          if (llmStatus === 'ready' && !deterministicReply.startsWith("I don't have")) {
-            const ctx = getCtx();
-            const phrased = await phraseWithLLM(ctx, {
-              userQuestion: text,
-              confirmedData: deterministicReply,
-              isMedical: false,
-            });
-            if (phrased) reply = phrased;
-          }
+          const reply = answerHouseholdRead(actionIntent.intent);
           addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
           speak(reply);
           return;

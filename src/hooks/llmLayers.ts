@@ -123,19 +123,19 @@ MEDICAL CAPTURE — medications only, never diagnoses:
 "stop taking metformin" → {"type":"list_remove","item":"metformin","listName":"medications"}
 
 SERVICE CAPTURE — plumbers, electricians, mechanics, contractors:
-{"type":"service_capture","category":"plumber","name":"Joe","phone":"555-0191"}
-"my plumber is Joe his number is 555-0191" → {"type":"service_capture","category":"plumber","name":"Joe","phone":"555-0191"}
-"our electrician Mike his phone number is 555-0192" → {"type":"service_capture","category":"electrician","name":"Mike","phone":"555-0192"}
+{"type":"service_capture","category":"plumber","name":"Joe","phone":"555-0100"}
+"my plumber is Joe his number is 555-0100" → {"type":"service_capture","category":"plumber","name":"Joe","phone":"555-0100"}
+"our electrician Mike his phone number is 555-0101" → {"type":"service_capture","category":"electrician","name":"Mike","phone":"555-0101"}
 "the guy who fixes our AC is Bob" → {"type":"service_capture","category":"hvac","name":"Bob"}
-"my HVAC guy is Ed, 555-0193" → {"type":"service_capture","category":"hvac","name":"Ed","phone":"555-0193"}
+"my HVAC guy is Ed, 555-0102" → {"type":"service_capture","category":"hvac","name":"Ed","phone":"555-0102"}
 "my air conditioning guy is Ed" → {"type":"service_capture","category":"hvac","name":"Ed"}
 "my heating and cooling person is Ed" → {"type":"service_capture","category":"hvac","name":"Ed"}
 "my furnace guy is Ed" → {"type":"service_capture","category":"hvac","name":"Ed"}
-"my pest control guy is Ray, 555-0194" → {"type":"service_capture","category":"pest control","name":"Ray","phone":"555-0194"}
+"my pest control guy is Ray, 555-0103" → {"type":"service_capture","category":"pest control","name":"Ray","phone":"555-0103"}
 "my exterminator is Ray" → {"type":"service_capture","category":"pest control","name":"Ray"}
 "my mechanic is Steve" → {"type":"service_capture","category":"mechanic","name":"Steve"}
-"my plumber is 555-0195" → {"type":"service_capture","category":"plumber","name":"","phone":"555-0195"}
-"electrician number is 555-0196" → {"type":"service_capture","category":"electrician","name":"","phone":"555-0196"}
+"my plumber number is 555-0104" → {"type":"service_capture","category":"plumber","name":"","phone":"555-0104"}
+"electrician number is 555-0105" → {"type":"service_capture","category":"electrician","name":"","phone":"555-0105"}
 
 FAMILY CAPTURE — relationships and family members:
 {"type":"family_capture","relation":"father-in-law","name":"David","location":"Little Elm Texas"}
