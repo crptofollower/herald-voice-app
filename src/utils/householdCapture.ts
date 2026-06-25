@@ -368,6 +368,14 @@ export function captureHousehold(text: string): HouseholdCaptureResult | Househo
       const phoneCheck = m[3] ? normalizePhone(m[3]) : null;
       const phone = phoneCheck?.valid ? phoneCheck.normalized : undefined;
       const phoneSuspect = !!phoneCheck && !phoneCheck.valid && phoneCheck.issue !== 'empty';
+      if (phoneSuspect) {
+        return {
+          type: 'needs_name',
+          category,
+          phone: '',
+          ack: `I didn't catch that number clearly — can you say it again?`,
+        };
+      }
       // If we have a phone but no real name, don't write a nameless row.
       // Ask for the name instead — the caller will set a pendingResumeRef.
       const PLACEHOLDER_NAMES = new Set([
