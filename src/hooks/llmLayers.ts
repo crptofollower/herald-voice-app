@@ -27,6 +27,7 @@ export type IntentRecord =
   | { type: 'family_capture'; relation: string; name: string; location?: string; phone?: string }
   | { type: 'phone_capture'; name: string; phone: string; relationship?: string }
   | { type: 'address_capture'; name: string; address: string }
+  | { type: 'emergency_contact'; name: string; phone?: string }
   | { type: 'todo_add'; body: string }
   | { type: 'todo_complete'; hint: string }
   | { type: 'pass' };
@@ -75,6 +76,8 @@ function isCaptureComplete(rec: IntentRecord): boolean {
       return !!(rec.name?.trim() && rec.phone?.trim());
     case 'address_capture':
       return !!(rec.name?.trim() && rec.address?.trim());
+    case 'emergency_contact':
+      return !!(rec.name?.trim());
     default:                  return true;
   }
 }

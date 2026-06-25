@@ -1322,35 +1322,6 @@ export default function ChatScreen() {
       return;
     }
 
-    // Emergency contact capture — runs before extractFactsLocally
-    const EMERGENCY_CONTACT_PATTERNS = [
-      /\bmy emergency contact is\s+([\w\s\-']+?)(?:\s+(?:and\s+)?(?:their|his|her)\s+(?:number|phone)\s+is\s+([\d\s\-\(\)\+\.]{7,}))?[.!?]?$/i,
-      /\bset\s+([\w\s\-']+?)\s+as\s+(?:my\s+)?emergency contact(?:\s+(?:their|his|her)?\s*(?:number|phone)\s+is\s+([\d\s\-\(\)\+\.]{7,}))?[.!?]?$/i,
-    ];
-    for (const pattern of EMERGENCY_CONTACT_PATTERNS) {
-      const m = text.match(pattern);
-      if (m) {
-        const ecName = m[1].trim();
-        const ecPhone = m[2]?.replace(/\D/g, '') ?? undefined;
-        let ecAckReply: string;
-        try {
-          setEmergencyContact(ecName, ecPhone);
-          ecAckReply = ecPhone
-            ? `Got it — if you ever need help, I'll reach ${ecName} at that number.`
-            : `Got it — ${ecName} is your emergency contact. Tell me their number when you get a chance.`;
-        } catch {
-          ecAckReply = `Something went wrong holding onto that. Try again.`;
-        }
-        const ackReply = ecAckReply;
-        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-        addMessage({ id: generateId('msg'), role: 'assistant', content: ackReply, timestamp: Date.now() });
-        speak(ackReply);
-        sendingRef.current = false;
-        setInputText('');
-        return;
-      }
-    }
-
     if (!tierDecision.actionIntent && !isTier1Read) {
       // Extract facts locally — skip calendar/medical/profile reads (Bug 1)
       try {

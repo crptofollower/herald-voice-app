@@ -8,6 +8,7 @@ import { writeServiceProvider } from '../utils/householdCapture';
 import { getDB } from '../db/schema';
 import { capturePerson } from '../db/capturePerson';
 import { findContactByName } from '../db/contactsDB';
+import { setEmergencyContact, getEmergencyContact } from '../db/contactsDB';
 
 type ActionIntent = NonNullable<TierDecision['actionIntent']>;
 
@@ -328,6 +329,37 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
           }
         },
       };
+    },
+    async remove(item: string): Promise<CommitResult> {
+      return { status: 'noop', ack: 'Noted.' };
+    },
+    async clear(): Promise<CommitResult> {
+      return { status: 'noop', ack: 'Noted.' };
+    },
+  },
+  emergency_contact: {
+    async add(intent: IntentRecord, rawPhrase: string): Promise<CommitResult> {
+      if (intent.type !== 'emergency_contact') {
+        return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
+      }
+      const name = intent.name?.trim();
+      const phone = intent.phone?.trim() || undefined;
+      if (!name || name.length < 2) {
+        return { status: 'failed', ack: "I didn't catch the name — who's your emergency contact?" };
+      }
+      try {
+        setEmergencyContact(name, phone);
+        const saved = getEmergencyContact();
+        if (!saved) {
+          return { status: 'failed', ack: "Something went wrong holding onto that. Try again." };
+        }
+        const ack = phone
+          ? `Got it — if you ever need help, I'll reach ${name} at that number.`
+          : `Got it — ${name} is your emergency contact. Tell me their number when you get a chance.`;
+        return { status: 'committed', ack };
+      } catch {
+        return { status: 'failed', ack: "Something went wrong holding onto that. Try again." };
+      }
     },
     async remove(item: string): Promise<CommitResult> {
       return { status: 'noop', ack: 'Noted.' };
