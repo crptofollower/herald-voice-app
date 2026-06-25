@@ -1493,7 +1493,37 @@ export default function ChatScreen() {
       // If it handled it, we already returned. If not, continue normal fallthrough.
     }
 
-    if (householdResult && householdResult.type !== 'needs_llm') {
+    // No name captured — ask for it and set up a resume to collect the name.
+    if (householdResult && householdResult.type === 'needs_name') {
+      const { category, phone, ack } = householdResult;
+      addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+      addMessage({ id: generateId('msg'), role: 'assistant', content: ack, timestamp: Date.now() });
+      speak(ack);
+      pendingResumeRef.current = {
+        pendingKey: `needs_name_${category}`,
+        resume: async (nameText: string) => {
+          const nameClean = nameText.trim();
+          if (nameClean.length < 2) {
+            const retry = `I didn't catch that — what's the name?`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: retry, timestamp: Date.now() });
+            speak(retry);
+            return { status: 'noop' as const, ack: '' };
+          }
+          // Now we have both name and phone — write the row.
+          const { writeServiceProvider } = await import('../utils/householdCapture');
+          writeServiceProvider(category, nameClean, phone);
+          const doneAck = `Got it — ${nameClean} is your ${category}, ${phone}.`;
+          addMessage({ id: generateId('msg'), role: 'assistant', content: doneAck, timestamp: Date.now() });
+          speak(doneAck);
+          return { status: 'committed' as const, ack: doneAck };
+        },
+      };
+      sendingRef.current = false;
+      setInputText('');
+      return;
+    }
+
+    if (householdResult && householdResult.type !== 'needs_llm' && 'captured' in householdResult) {
       if (householdResult.pendingConfirm) {
         pendingInsuranceRef.current = {
           type: householdResult.pendingConfirm.type,
