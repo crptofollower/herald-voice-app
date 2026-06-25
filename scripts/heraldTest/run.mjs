@@ -17,6 +17,7 @@ import { classifyQuery } from "./src/routing/tierRouter.ts";
 import { normalizePhone } from "./src/utils/phone.ts";
 import { normalizeInput } from "./src/utils/normalizeInput.ts";
 import { extractDosage } from "../../src/utils/detectMedicalEvent.ts";
+import { runDispatchContractTests } from './dispatchContract.test.mjs';
 
 function kindOf(d) {
   if (d.actionIntent) return d.actionIntent.type;
@@ -272,10 +273,13 @@ const { runHouseholdContractTests } = await import('./householdContract.test.mjs
 const { runMedicalContractTests }   = await import('./medicalContract.test.mjs');
 const hResult = await runHouseholdContractTests();
 const mResult = await runMedicalContractTests();
-const contractFailed = hResult.failed + mResult.failed;
+const dResult = await runDispatchContractTests();
+const contractPassed = hResult.passed + mResult.passed + dResult.passed;
+const contractFailed = hResult.failed + mResult.failed + dResult.failed;
+const contractTotal = hResult.total + mResult.total + dResult.total;
 
 console.log(`${BOLD}═══════════════════════════════════════════════════${RESET}`);
-console.log(`${BOLD}  RESULTS: ${GREEN}${passed} passed${RESET}${BOLD} / ${failures.length > 0 ? RED : GREEN}${failures.length} failed${RESET}${BOLD} / ${TOTAL} total${RESET}`);
+console.log(`${BOLD}  RESULTS: ${GREEN}${passed + contractPassed} passed${RESET}${BOLD} / ${failures.length + contractFailed > 0 ? RED : GREEN}${failures.length + contractFailed} failed${RESET}${BOLD} / ${TOTAL + contractTotal} total${RESET}`);
 console.log(`${BOLD}═══════════════════════════════════════════════════${RESET}\n`);
 
 if (TOTAL !== EXPECTED_TOTAL) {
