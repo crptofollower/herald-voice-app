@@ -417,3 +417,25 @@ export function captureHousehold(text: string): HouseholdCaptureResult | Househo
 
   return null;
 }
+
+// ─── detectServiceRemove ───────────────────────────────────────────────────────
+// Deterministic service-provider remove detector. Called by tierRouter so
+// removal utterances ("delete my plumber", "remove my electrician") are
+// classified as tier-1 device_actions BEFORE the LLM classifier sees them.
+// Reuses SERVICE_REMOVE_PATTERNS + resolveSpokenCategory — one algorithm,
+// one source of truth for detection. Legal removes are NOT handled here;
+// they stay in captureHousehold's own branch.
+// Returns null if the text is not a service-provider removal utterance.
+export function detectServiceRemove(
+  text: string,
+): { categories: string[]; spoken: string } | null {
+  for (const pattern of SERVICE_REMOVE_PATTERNS) {
+    const m = text.match(pattern);
+    if (m) {
+      const spoken = m[1]?.trim().toLowerCase() ?? '';
+      const categories = resolveSpokenCategory(spoken);
+      if (categories) return { categories, spoken };
+    }
+  }
+  return null;
+}

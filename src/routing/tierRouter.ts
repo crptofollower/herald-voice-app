@@ -12,6 +12,7 @@ import { getMedicalSummary } from "../db/medicalDB";
 import { detectMedicalEvent } from "../utils/detectMedicalEvent";
 import type { MedicalEvent } from "../utils/detectMedicalEvent";
 import { detectHouseholdRead, type HouseholdReadIntent } from "../utils/householdRead";
+import { detectServiceRemove } from "../utils/householdCapture";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -46,6 +47,7 @@ export interface TierDecision {
     | { type: 'medical_remove'; name: string }
     | { type: 'medical_clear' }
     | { type: 'household_read'; intent: HouseholdReadIntent }
+    | { type: 'household_remove'; categories: string[]; spoken: string }
     | { type: 'photo_open' }
     | { type: 'app_open'; appName: string }
     | { type: 'profile_update'; field: string; value: string };
@@ -600,6 +602,22 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
         return { tier: 1, actionIntent: { type: 'calendar_write', value }, reason: 'action:calendar_write' };
       }
     }
+  }
+
+  // Device: household remove — "delete/remove my plumber", zero network.
+  // Runs BEFORE household_read so removal utterances never reach the LLM
+  // classifier (which would misread "delete" as a provider name).
+  const serviceRemove = detectServiceRemove(msg);
+  if (serviceRemove) {
+    return {
+      tier: 1,
+      actionIntent: {
+        type: 'household_remove',
+        categories: serviceRemove.categories,
+        spoken: serviceRemove.spoken,
+      },
+      reason: 'action:household_remove',
+    };
   }
 
   // Device: household read-back — "who's my plumber", zero network

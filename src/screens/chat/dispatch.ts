@@ -244,6 +244,17 @@ export async function dispatchAction(
           speak(reply);
           return;
         }
+        if (actionIntent.type === 'household_remove') {
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          const { removeServiceProvider } = await import('../../utils/householdCapture');
+          const changed = removeServiceProvider(actionIntent.categories);
+          const reply = changed > 0
+            ? `Got it — I'll stop keeping a ${actionIntent.spoken} for you.`
+            : `I don't have a ${actionIntent.spoken} saved to remove.`;
+          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+          speak(reply);
+          return;
+        }
         if (actionIntent.type === 'household_read') {
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
           const reply = answerHouseholdRead(actionIntent.intent);
