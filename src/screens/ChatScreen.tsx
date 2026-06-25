@@ -1476,52 +1476,8 @@ export default function ChatScreen() {
 
     // Household capture — runs before extractFactsLocally
     // Same order rule as phone/address/emergency capture — never move below extractFactsLocally
+    // captureHousehold: insurance + legal document captures (unconverted domains)
     const householdResult = captureHousehold(text);
-
-    // LLM required — deterministic path can't handle this phrasing
-    if (householdResult && householdResult.type === 'needs_llm') {
-      if (llmStatus !== 'ready') {
-        const notReadyMsg = "Give me just a moment — I'm still waking up. Say that again in a sec.";
-        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-        addMessage({ id: generateId('msg'), role: 'assistant', content: notReadyMsg, timestamp: Date.now() });
-        speak(notReadyMsg);
-        sendingRef.current = false;
-        setInputText('');
-        return;
-      }
-      // LLM is ready — fall through to LLM-first block which already ran above.
-      // If it handled it, we already returned. If not, continue normal fallthrough.
-    }
-
-    // No name captured — ask for it and set up a resume to collect the name.
-    if (householdResult && householdResult.type === 'needs_name') {
-      const { category, phone, ack } = householdResult;
-      addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-      addMessage({ id: generateId('msg'), role: 'assistant', content: ack, timestamp: Date.now() });
-      speak(ack);
-      pendingResumeRef.current = {
-        pendingKey: `needs_name_${category}`,
-        resume: async (nameText: string) => {
-          const nameClean = nameText.trim();
-          if (nameClean.length < 2) {
-            const retry = `I didn't catch that — what's the name?`;
-            addMessage({ id: generateId('msg'), role: 'assistant', content: retry, timestamp: Date.now() });
-            speak(retry);
-            return { status: 'noop' as const, ack: '' };
-          }
-          // Now we have both name and phone — write the row.
-          const { writeServiceProvider } = await import('../utils/householdCapture');
-          writeServiceProvider(category, nameClean, phone);
-          const doneAck = `Got it — ${nameClean} is your ${category}, ${phone}.`;
-          addMessage({ id: generateId('msg'), role: 'assistant', content: doneAck, timestamp: Date.now() });
-          speak(doneAck);
-          return { status: 'committed' as const, ack: doneAck };
-        },
-      };
-      sendingRef.current = false;
-      setInputText('');
-      return;
-    }
 
     if (householdResult && householdResult.type !== 'needs_llm' && 'captured' in householdResult) {
       if (householdResult.pendingConfirm) {
