@@ -331,7 +331,10 @@ export async function dispatchAction(
         // Call — resolve contact on device, fire tel: intent
         if (actionIntent.type === 'call') {
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-          const contactName = actionIntent.contact;
+          const rawContact = actionIntent.contact ?? '';
+          const contactName = rawContact
+            .replace(/\s+(?:at|on|using|with|via)\b.*/i, '')
+            .trim();
           const resolved = await resolveContactPhone(contactName);
           if (resolved?.phone) {
             await Linking.openURL(`tel:${resolved.phone.replace(/\D/g, '')}`);

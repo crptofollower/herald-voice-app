@@ -722,7 +722,10 @@ export default function ChatScreen() {
           return true;
         }
         case 'call': {
-          const contactName = intent.contact ?? '';
+          const rawContact = intent.contact ?? '';
+          const contactName = rawContact
+            .replace(/\s+(?:at|on|using|with|via)\b.*/i, '')
+            .trim();
           const resolved = await resolveContactPhoneRef.current?.(contactName);
           if (resolved?.phone) {
             await Linking.openURL(`tel:${resolved.phone.replace(/\D/g, '')}`);
