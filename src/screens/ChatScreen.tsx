@@ -1175,6 +1175,43 @@ export default function ChatScreen() {
       // Fall through to normal routing
     }
 
+    // ── Pending insurance confirm ──
+    if (pendingInsuranceRef.current) {
+      const pending = pendingInsuranceRef.current;
+      if (YES.test(text.trim())) {
+        pendingInsuranceRef.current = null;
+        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+        const { captureHouseholdInsurance } = await import('../utils/householdCapture');
+        const insId = captureHouseholdInsurance(pending.type, pending.carrier);
+        const reply = insId
+          ? `Got it — ${pending.carrier} for your ${pending.type} insurance.`
+          : `Hmm — I couldn't hold onto that just now. Mind telling me once more?`;
+        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+        speak(reply);
+        sendingRef.current = false;
+        setInputText('');
+        return;
+      }
+      if (NO.test(text.trim())) {
+        pendingInsuranceRef.current = null;
+        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+        const reply = `No problem — what's the correct carrier?`;
+        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+        speak(reply);
+        sendingRef.current = false;
+        setInputText('');
+        return;
+      }
+      pendingInsuranceRef.current = null;
+      addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+      const reply = `No problem — what's the correct carrier?`;
+      addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+      speak(reply);
+      sendingRef.current = false;
+      setInputText('');
+      return;
+    }
+
     // Deterministic-first routing: the regex/SQL classifier runs FIRST and always wins.
     // Tier-1 reads and actions are handled by the dispatch below. The on-device LLM only
     // attempts a capture when deterministic routing found nothing actionable (tier 3 gap).
@@ -1264,36 +1301,6 @@ export default function ChatScreen() {
     const networkState = await Network.getNetworkStateAsync();
     let localFactsWritten = false;
     const isTier1Read = tierDecision.tier === 1 && !!tierDecision.tier1Response;
-
-    // ── Pending insurance confirm ──
-    if (pendingInsuranceRef.current) {
-      const pending = pendingInsuranceRef.current;
-      if (YES.test(text.trim())) {
-        pendingInsuranceRef.current = null;
-        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-        const { captureHouseholdInsurance } = await import('../utils/householdCapture');
-        const insId = captureHouseholdInsurance(pending.type, pending.carrier);
-        const reply = insId
-          ? `Got it — ${pending.carrier} for your ${pending.type} insurance.`
-          : `Hmm — I couldn't hold onto that just now. Mind telling me once more?`;
-        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-        speak(reply);
-        sendingRef.current = false;
-        setInputText('');
-        return;
-      }
-      if (NO.test(text.trim())) {
-        pendingInsuranceRef.current = null;
-        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-        const reply = `No problem — what's the correct carrier?`;
-        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-        speak(reply);
-        sendingRef.current = false;
-        setInputText('');
-        return;
-      }
-      pendingInsuranceRef.current = null;
-    }
 
     // Household capture — runs before extractFactsLocally
     // Same order rule as phone/address/emergency capture — never move below extractFactsLocally
