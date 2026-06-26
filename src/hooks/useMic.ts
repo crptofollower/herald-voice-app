@@ -14,7 +14,7 @@ export function useMic(onTranscript: (text: string) => void) {
   useSpeechRecognitionEvent('result', (event) => {
     if (event.isFinal) {
       const text = event.results[0]?.transcript?.trim();
-      if (!text) { setIsRecording(false); return; }
+      if (!text) return; // noise segment — keep the mic hot, don't end the turn
 
       bufferRef.current = bufferRef.current
         ? bufferRef.current + ' ' + text
@@ -29,10 +29,16 @@ export function useMic(onTranscript: (text: string) => void) {
         const final = bufferRef.current.trim();
         bufferRef.current = '';
         bufferTimerRef.current = null;
+        // Turn over: close the mic BEFORE handoff so Herald's spoken reply
+        // isn't captured as the next utterance (continuous-mode feedback loop).
+        try { ExpoSpeechRecognitionModule.stop(); } catch {}
+        if (maxTimer.current) { clearTimeout(maxTimer.current); maxTimer.current = null; }
+        setIsRecording(false);
         if (final) onTranscript(final);
       }, delay);
 
-      setIsRecording(false);
+      // NOTE: do NOT setIsRecording(false) here — between pause segments the
+      // user is still mid-utterance; the mic stays hot until the window closes.
     }
   });
 
@@ -58,6 +64,9 @@ export function useMic(onTranscript: (text: string) => void) {
     if (bufferRef.current.trim()) {
       const final = bufferRef.current.trim();
       bufferRef.current = '';
+      if (maxTimer.current) { clearTimeout(maxTimer.current); maxTimer.current = null; }
+      try { ExpoSpeechRecognitionModule.stop(); } catch (e) { console.error('[useMic] stop failed:', e); }
+      setIsRecording(false);
       onTranscript(final);
       return;
     }
@@ -82,7 +91,7 @@ export function useMic(onTranscript: (text: string) => void) {
       ExpoSpeechRecognitionModule.start({
         lang: 'en-US',
         interimResults: false,
-        continuous: false,
+        continuous: true,
         requiresOnDeviceRecognition: true,
       });
       setIsRecording(true);
