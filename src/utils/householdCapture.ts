@@ -447,6 +447,44 @@ export function detectServiceCapture(text: string): IntentRecord[] {
   return [];
 }
 
+// Pure detector for contact phone captures — not service providers.
+// No DB write, no ACK. Reuses normalizePhone + the same name guard as captureHousehold.
+export function detectPhoneCapture(text: string, _contacts?: string[]): IntentRecord[] {
+  const SERVICE_ROLE_GUARD =
+    /\b(my|our)\s+(plumber|electrician|hvac|mechanic|roofer|handyman|contractor|painter|landscaper|cleaner|vet|dentist|doctor|pool)\b/i;
+  if (SERVICE_ROLE_GUARD.test(text)) return [];
+
+  for (const pattern of SERVICE_PATTERNS) {
+    if (pattern.test(text)) return [];
+  }
+
+  const PLACEHOLDER_NAMES = new Set([
+    'unknown', 'unnamed', 'none', 'n/a', 'someone', 'somebody',
+    'that', 'this', 'it', 'he', 'she', 'they', 'him', 'her', 'them',
+  ]);
+  const isRealName = (n: string | null | undefined): boolean => {
+    if (!n) return false;
+    const t = n.trim();
+    return t.length >= 2 && !PLACEHOLDER_NAMES.has(t.toLowerCase());
+  };
+
+  const PHONE_CAPTURE_PATTERNS = [
+    /\b([\w]+)'s\s+(?:number|phone|cell|mobile)\s+is\s+([\d\s\-\(\)\+\.]{7,})/i,
+    /\bcall\s+([\w\s\-']+?)\s+at\s+([\d\s\-\(\)\+\.]{7,})/i,
+    /\bmy\s+(?:\w+\s+)([\w\-']+)\s+([\d\s\-\(\)\+\.]{7,})/i,
+  ];
+
+  for (const pattern of PHONE_CAPTURE_PATTERNS) {
+    const m = text.match(pattern);
+    if (!m) continue;
+    const name = m[1]?.trim() ?? '';
+    const phoneCheck = normalizePhone(m[2] ?? '');
+    if (!isRealName(name) || !phoneCheck.valid) continue;
+    return [{ type: 'phone_capture', name, phone: phoneCheck.normalized }];
+  }
+  return [];
+}
+
 // ─── detectServiceRemove ───────────────────────────────────────────────────────
 // Deterministic service-provider remove detector. Called by tierRouter so
 // removal utterances ("delete my plumber", "remove my electrician") are
