@@ -482,41 +482,6 @@ export async function dispatchAction(
           return;
         }
 
-        // List add — write to device SQLite, zero network
-        if (actionIntent.type === 'list_add') {
-          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-          try {
-            const { getDB } = await import('../../db/schema');
-            const db = getDB();
-            const { items, listName } = actionIntent;
-            let list = db.getFirstSync<{ id: string }>(`SELECT id FROM lists WHERE name = ?;`, [listName]);
-            if (!list) {
-              const listId = `list_${Date.now()}`;
-              db.runSync(`INSERT INTO lists (id, name, created_at) VALUES (?, ?, ?);`, [listId, listName, new Date().toISOString()]);
-              list = { id: listId };
-            }
-            for (const item of items) {
-              db.runSync(
-                `INSERT INTO list_items (id, list_id, body, checked, created_at) VALUES (?, ?, ?, 0, ?);`,
-                [`item_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, list.id, item, new Date().toISOString()]
-              );
-            }
-            const preview = items.length <= 3
-              ? items.join(', ')
-              : `${items.slice(0, 2).join(', ')} and ${items.length - 2} more`;
-            const reply = items.length === 1
-              ? `Added ${items[0]} to your ${listName} list.`
-              : `Added ${items.length} items to your ${listName} list: ${preview}. Sound right?`;
-            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-            speak(reply);
-          } catch {
-            const reply = `Something went wrong adding that. Try again.`;
-            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-            speak(reply);
-          }
-          return;
-        }
-
         // List read — read from device SQLite, zero network
         if (actionIntent.type === 'list_read') {
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
@@ -667,37 +632,6 @@ export async function dispatchAction(
             speak(reply);
           } catch {
             const reply = `Something went wrong updating that. Try again.`;
-            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-            speak(reply);
-          }
-          return;
-        }
-
-        if (actionIntent.type === 'todo_add') {
-          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-          try {
-            const { getDB } = await import('../../db/schema');
-            const db = getDB();
-            let todoList = db.getFirstSync<{ id: string }>(`SELECT id FROM lists WHERE name = ?;`, ['todos']);
-            if (!todoList) {
-              const listId = `list_todos_${Date.now()}`;
-              db.runSync(`INSERT INTO lists (id, name, created_at) VALUES (?, ?, ?);`, [listId, 'todos', new Date().toISOString()]);
-              todoList = { id: listId };
-            }
-            db.runSync(
-              `INSERT INTO list_items (id, list_id, body, checked, created_at) VALUES (?, ?, ?, 0, ?);`,
-              [`todo_${Date.now()}`, todoList.id, actionIntent.body, new Date().toISOString()]
-            );
-            const openCount = db.getFirstSync<{ n: number }>(
-              `SELECT COUNT(*) as n FROM list_items li JOIN lists l ON l.id = li.list_id WHERE l.name = 'todos' AND li.checked = 0;`
-            )?.n ?? 1;
-            const reply = openCount === 1
-              ? `Got it — '${actionIntent.body}' is on your list.`
-              : `Got it — '${actionIntent.body}' added. You've got ${openCount} open to-dos.`;
-            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-            speak(reply);
-          } catch {
-            const reply = `Couldn't save that. Try again.`;
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
           }

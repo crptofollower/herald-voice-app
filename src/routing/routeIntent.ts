@@ -432,12 +432,15 @@ export async function routeIntent(
   }
 
   if (decision.tier === 1 && decision.actionIntent) {
-    return {
-      kind: 'device_action',
-      tier: 1,
-      actionIntent: decision.actionIntent,
-      reason: decision.reason,
-    };
+    const actionType = decision.actionIntent.type;
+    if (actionType !== 'list_add' && actionType !== 'todo_add') {
+      return {
+        kind: 'device_action',
+        tier: 1,
+        actionIntent: decision.actionIntent,
+        reason: decision.reason,
+      };
+    }
   }
 
   if (decision.tier === 2) {
@@ -458,6 +461,18 @@ export async function routeIntent(
     if (intents.length > 0) {
       return { kind: 'capture', intents, source: 'deterministic', reason: 'deterministic:capture' };
     }
+  }
+
+  if (
+    decision.actionIntent?.type === 'list_add' ||
+    decision.actionIntent?.type === 'todo_add'
+  ) {
+    return {
+      kind: 'capture',
+      intents: [decision.actionIntent],
+      source: 'deterministic',
+      reason: 'tier1:list_todo_intercept',
+    };
   }
 
   if (deps.llmReady && deps.classifyLLM) {
