@@ -87,7 +87,10 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
         if (!spId) {
           return { status: 'failed', ack: "Hmm — I couldn't hold onto that just now. Mind telling me once more?" };
         }
-        const numberPart = phone ? ` — you can reach them at ${phone}` : '';
+        const phoneForAck = phone && /^\d{10}$/.test(phone)
+          ? `${phone.slice(0, 3)}-${phone.slice(3, 6)}-${phone.slice(6, 10)}`
+          : phone;
+        const numberPart = phoneForAck ? ` — you can reach them at ${phoneForAck}` : '';
         return { status: 'committed', ack: `Got it — ${nm} is your ${category}${numberPart}.` };
       };
 
