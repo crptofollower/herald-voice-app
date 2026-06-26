@@ -8,6 +8,7 @@ import { getDB } from '../db/schema';
 import { generateId } from './id';
 import { normalizePhone } from './phone';
 import { SERVICE_SYNONYMS, LEGAL_TYPES } from './householdRead';
+import type { IntentRecord } from '../hooks/llmLayers';
 
 export type HouseholdCaptureType = 'service_provider' | 'insurance' | 'legal_document';
 
@@ -416,6 +417,34 @@ export function captureHousehold(text: string): HouseholdCaptureResult | Househo
   }
 
   return null;
+}
+
+// Pure detector for the routing authority's deterministic capture floor (spec §2.3 step 3).
+// No DB write, no ACK — emits IntentRecord[] only. The DOMAIN_WRITERS.service_capture
+// writer owns the commit + the missing-name pending flow. Reuses the SAME patterns/
+// synonym resolver the reads and removes use (one source of truth, §4a). Emits the
+// CANONICAL category head so the stored value aligns with read/remove resolution.
+export function detectServiceCapture(text: string): IntentRecord[] {
+  // Same guards captureHousehold applies: never fire on a read question or a
+  // supersession ("remove X replace with Y" → LLM's job, defer).
+  const READ_GUARD = /\b(what('s| is| are)|tell (me )?my|show (me )?my|read (me )?my|what do i have|do i have|who('s| is)|where('s| is))\b/i;
+  if (READ_GUARD.test(text)) return [];
+  const REPLACE_GUARD = /\b(remove|replace|switch|change|update)\b.{1,60}\b(replace|with|to)\b/i;
+  if (REPLACE_GUARD.test(text)) return [];
+
+  for (const pattern of SERVICE_PATTERNS) {
+    const m = text.match(pattern);
+    if (!m) continue;
+    const spoken = m[1]?.trim().toLowerCase() ?? '';
+    const resolved = resolveSpokenCategory(spoken);
+    if (!resolved || resolved.length === 0) continue; // not a service category → defer (LLM/backend)
+    const category = resolved[0];                      // canonical head — aligns writes with reads
+    const name = m[2]?.trim() ?? '';                   // '' is fine — writer asks for the name
+    const phoneCheck = m[3] ? normalizePhone(m[3]) : null;
+    const phone = phoneCheck?.valid ? phoneCheck.normalized : undefined;
+    return [{ type: 'service_capture', category, name, phone }];
+  }
+  return [];
 }
 
 // ─── detectServiceRemove ───────────────────────────────────────────────────────

@@ -4,7 +4,7 @@
 
 import type { IntentRecord } from '../hooks/llmLayers';
 import type { TierDecision, LocalContext } from './tierRouter';
-import { writeServiceProvider } from '../utils/householdCapture';
+import { writeServiceProvider, detectServiceCapture } from '../utils/householdCapture';
 import { getDB } from '../db/schema';
 import { capturePerson } from '../db/capturePerson';
 import { findContactByName } from '../db/contactsDB';
@@ -37,6 +37,17 @@ export interface DomainWriter {
   remove(item: string): Promise<CommitResult>;
   clear(): Promise<CommitResult>;
 }
+
+export type CaptureContext = { contacts: string[]; lists: string[]; name?: string };
+export type DeterministicCapturer = (text: string, ctx: CaptureContext) => IntentRecord[];
+
+// Deterministic capture floor (tier-2). First non-empty result wins — capturers are
+// NEVER merged (merging is the parallel-island bug). The on-device LLM (tier-3) is
+// reached only when every capturer here returns []. One entry today; phone/list/todo
+// follow, one per gated commit.
+const DETERMINISTIC_CAPTURERS: DeterministicCapturer[] = [
+  (text) => detectServiceCapture(text),
+];
 
 // Registry: empty now. One domain added per conversion commit.
 export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
@@ -400,6 +411,7 @@ export async function routeIntent(
     classifyQuery: (msg: string) => Promise<TierDecision>;
     classifyLLM: ((text: string) => Promise<IntentRecord[]>) | null;
     llmReady: boolean;
+    captureContext?: CaptureContext;
   },
 ): Promise<RouteDecision> {
   const decision = await deps.classifyQuery(text);
@@ -431,6 +443,17 @@ export async function routeIntent(
       context: decision.localContext ?? { intent: 'memory_probe' },
       reason: decision.reason,
     };
+  }
+
+  // Tier-2 deterministic capture floor (spec §2.3 step 3). Reached only at tier 3
+  // (tier-1/tier-2 already returned above), so the invariant holds: no LLM capture
+  // is ever selected when a deterministic result exists.
+  const capCtx: CaptureContext = deps.captureContext ?? { contacts: [], lists: [] };
+  for (const capture of DETERMINISTIC_CAPTURERS) {
+    const intents = capture(text, capCtx);
+    if (intents.length > 0) {
+      return { kind: 'capture', intents, source: 'deterministic', reason: 'deterministic:capture' };
+    }
   }
 
   if (deps.llmReady && deps.classifyLLM) {
