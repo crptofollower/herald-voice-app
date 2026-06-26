@@ -469,7 +469,8 @@ export function detectPhoneCapture(text: string, _contacts?: string[]): IntentRe
   };
 
   const PHONE_CAPTURE_PATTERNS = [
-    /\b([\w]+)'s\s+(?:number|phone|cell|mobile)\s+is\s+([\d\s\-\(\)\+\.]{7,})/i,
+    /\b([\w]+)'s\s+(?:(?:phone|cell|mobile)\s+)?numbers?\s+(?:is\s+)?([\d\s\-\(\)\+\.]{7,})/i,
+    /\b([\w]+)'s\s+(?:phone|cell|mobile)\s+(?:is\s+)?([\d\s\-\(\)\+\.]{7,})/i,
     /\bcall\s+([\w\s\-']+?)\s+at\s+([\d\s\-\(\)\+\.]{7,})/i,
     /\bmy\s+(?:\w+\s+)([\w\-']+)\s+([\d\s\-\(\)\+\.]{7,})/i,
   ];
