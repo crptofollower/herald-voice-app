@@ -1186,6 +1186,10 @@ export default function ChatScreen() {
         name: undefined,
       }),
       llmReady: llmStatus === 'ready',
+      captureContext: {
+        contacts: getKnownContactNames(),
+        lists: getKnownListNames(),
+      },
     });
     const tierDecision = routeDecisionToTier(routeDecision);
 

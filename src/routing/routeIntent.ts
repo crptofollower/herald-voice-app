@@ -4,7 +4,7 @@
 
 import type { IntentRecord } from '../hooks/llmLayers';
 import type { TierDecision, LocalContext } from './tierRouter';
-import { writeServiceProvider, detectServiceCapture } from '../utils/householdCapture';
+import { writeServiceProvider, detectServiceCapture, detectPhoneCapture } from '../utils/householdCapture';
 import { getDB } from '../db/schema';
 import { capturePerson } from '../db/capturePerson';
 import { findContactByName } from '../db/contactsDB';
@@ -47,6 +47,7 @@ export type DeterministicCapturer = (text: string, ctx: CaptureContext) => Inten
 // follow, one per gated commit.
 const DETERMINISTIC_CAPTURERS: DeterministicCapturer[] = [
   (text) => detectServiceCapture(text),
+  (text, ctx) => detectPhoneCapture(text, ctx.contacts),
 ];
 
 // Registry: empty now. One domain added per conversion commit.
