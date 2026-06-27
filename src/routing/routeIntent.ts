@@ -386,6 +386,70 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       return { status: 'noop', ack: 'Noted.' };
     },
   },
+  medical_capture: {
+    async add(intent: IntentRecord, rawPhrase: string): Promise<CommitResult> {
+      if (intent.type !== 'medical_capture') {
+        return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
+      }
+      const raw = intent.raw ?? rawPhrase;
+      const { guessMedicationName } = await import('../db/medicalDB');
+      const name = intent.drug?.trim() || guessMedicationName(raw);
+      const dosage = intent.dosage?.trim() || undefined;
+      if (!name || name.trim().length < 2) {
+        return { status: 'failed', ack: 'What medication is that?' };
+      }
+      const { isMedicationCorroborated } = await import('../db/factDB');
+      const confirmPrompt = isMedicationCorroborated(raw)
+        ? (dosage ? `Got it — ${name}, ${dosage}. Sound right?` : `Got it — ${name}. Sound right?`)
+        : `Want me to remember ${name} as a medication?`;
+      return {
+        status: 'pending',
+        prompt: confirmPrompt,
+        pendingKey: 'medical_capture',
+        resume: async (userText: string): Promise<CommitResult> => {
+          const YES = /^(yes|yeah|yep|yup|correct|right|that'?s right|sure|ok|okay|sounds good|y)\b/i;
+          const NO  = /^(no|nope|nah|wrong|not right|cancel|nevermind|never mind)\b/i;
+          if (NO.test(userText.trim())) return { status: 'noop', ack: `No problem — I won't add that.` };
+          if (!YES.test(userText.trim())) return { status: 'noop', ack: '' };
+          try {
+            const { confirmMedicationCapture, getActiveMedications } = await import('../db/medicalDB');
+            const result = confirmMedicationCapture(name, dosage, raw);
+            const verified = getActiveMedications().some(m => m.id === result.id);
+            if (!verified) {
+              return { status: 'failed', ack: "I'm having trouble holding onto that — say it once more?" };
+            }
+            if (result.action === 'superseded') {
+              return { status: 'committed',
+                ack: dosage ? `Got it — updated your ${name} to ${dosage}.` : `Got it — updated your ${name}.` };
+            }
+            return { status: 'committed',
+              ack: dosage ? `Got it — I'll remember ${name}, ${dosage}, with your medications.`
+                          : `Got it — I'll remember ${name} with your medications.` };
+          } catch {
+            return { status: 'failed', ack: "I'm having trouble holding onto that — say it once more?" };
+          }
+        },
+      };
+    },
+    async remove(item: string): Promise<CommitResult> {
+      try {
+        const { deactivateMedicationByName } = await import('../db/medicalDB');
+        const changes = deactivateMedicationByName(item);
+        return changes > 0
+          ? { status: 'committed', ack: `Got it — took ${item} off your current medications.` }
+          : { status: 'noop', ack: `I don't have ${item} in your current medications.` };
+      } catch { return { status: 'failed', ack: "I couldn't do that right now — try again." }; }
+    },
+    async clear(): Promise<CommitResult> {
+      try {
+        const { clearAllMedications } = await import('../db/medicalDB');
+        const changes = clearAllMedications();
+        return changes > 0
+          ? { status: 'committed', ack: `Done — cleared ${changes} ${changes === 1 ? 'medication' : 'medications'}.` }
+          : { status: 'noop', ack: `There were no active medications to clear.` };
+      } catch { return { status: 'failed', ack: "I couldn't do that right now — try again." }; }
+    },
+  },
 };
 
 // allConverted: returns true when every intent in a capture decision has a
@@ -436,7 +500,10 @@ export async function routeIntent(
 
   if (decision.tier === 1 && decision.actionIntent) {
     const actionType = decision.actionIntent.type;
-    if (actionType !== 'list_add' && actionType !== 'todo_add') {
+    const isMedicationCapture =
+      actionType === 'medical_capture' &&
+      decision.actionIntent.event?.type === 'medication';
+    if (actionType !== 'list_add' && actionType !== 'todo_add' && !isMedicationCapture) {
       return {
         kind: 'device_action',
         tier: 1,
@@ -475,6 +542,20 @@ export async function routeIntent(
       intents: [decision.actionIntent],
       source: 'deterministic',
       reason: 'tier1:list_todo_intercept',
+    };
+  }
+
+  if (
+    decision.tier === 1 &&
+    decision.actionIntent?.type === 'medical_capture' &&
+    decision.actionIntent.event?.type === 'medication'
+  ) {
+    const ev = decision.actionIntent.event;
+    return {
+      kind: 'capture',
+      intents: [{ type: 'medical_capture', drug: ev.drug_name, dosage: ev.dosage, raw: ev.raw }],
+      source: 'deterministic',
+      reason: 'tier1:medication_intercept',
     };
   }
 
