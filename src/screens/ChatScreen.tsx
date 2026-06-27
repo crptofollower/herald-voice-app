@@ -2213,7 +2213,7 @@ export default function ChatScreen() {
   // Returns null if not found — caller handles graceful fallback.
 
   const resolveContactPhone = async (nameOrRelation: string): Promise<{ phone: string; name: string; contactId?: string } | null> => {
-    const clean = nameOrRelation.trim().toLowerCase();
+    const clean = nameOrRelation.trim().toLowerCase().replace(/^(?:my|the|a)\s+/, '');
 
     // Pass 1: Herald contacts table
     const byRelation = findContactByRelationship(clean);
