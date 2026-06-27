@@ -1619,8 +1619,12 @@ export default function ChatScreen() {
             speak(recoverReply);
           }
         }
-        sendingRef.current = false;
-        setInputText('');
+        // Do not unlock sendingRef if a confirm_call is pending —
+        // the confirm handler owns the gate until the user answers.
+        if (!pendingContactCollectRef.current) {
+          sendingRef.current = false;
+          setInputText('');
+        }
         return;
       }
       // Tier 1 read response — calendar, medical, profile
