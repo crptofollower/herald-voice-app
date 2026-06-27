@@ -1,6 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.85 -- afternoon_checkin: unwrap learned_facts dicts before spoken interpolation
+# v8.86 -- afternoon_checkin: unwrap learned_facts dicts before spoken interpolation
 # v8.84 -- /diag breadcrumb + crash endpoints (Mickey Motorola crash forensics)
 # v8.83 -- wttr.in: confirmed_city before lat/lng so city names resolve correctly
 # v8.82 -- wttr.in: lat/lng when available; no hardcoded city fallback if location unknown
@@ -3725,6 +3725,9 @@ ACTION TAG RULES:
   NEVER invent or guess past events.
 - CALENDAR tag is ONLY for creating NEW events the user explicitly asks to add.
   NEVER use CALENDAR for reading, checking, or looking up existing events.
+  NEVER use CALENDAR for grocery lists, shopping lists, to-do items, or any list operation.
+  NEVER use CALENDAR when the user confirms adding items to a list (e.g. "yes", "go ahead").
+  List operations are handled by the app — no CALENDAR tag, ever.
   If the user asks what they have scheduled, answer from memory -- no tag.
   WRONG: user asks "what do I have this week?" -> CALENDAR: [check full week]
   RIGHT: user asks "put my dentist on Tuesday at 2pm" -> CALENDAR: Dentist|2026-05-19|14:00"""
@@ -7233,7 +7236,7 @@ def startup():
     print(f"[HERALD API] WeatherAPI:    {'YES (backup)' if WEATHER_KEY else 'not set'}")
     print(f"[HERALD API] Database:      {DB_FILE}")
     print(f"[HERALD API] Owner code:    {'SET' if OWNER_CODE else 'NOT SET'}")
-    print(f"[HERALD API] v8.85: afternoon_checkin unwraps learned_facts dict before spoken text")
+    print(f"[HERALD API] v8.86: afternoon_checkin unwraps learned_facts dict before spoken text")
     print(f"[HERALD API] FIX v8.8: GPS city caching -- confirmed_city in profile, 20mi tolerance")
     print(f"[HERALD API] FIX v8.8: Memory rules -- no 'I remember', no raw GPS coords spoken")
     print(f"[HERALD API] FIX v8.8: Seed question for new users -- makes first session feel alive")
