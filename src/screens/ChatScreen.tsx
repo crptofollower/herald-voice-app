@@ -731,8 +731,11 @@ export default function ChatScreen() {
             await Linking.openURL(`tel:${resolved.phone.replace(/\D/g, '')}`);
             replyAndReset(`Calling ${resolved.name}.`);
           } else if (resolved?.phone && resolved.source === 'device') {
-            replyAndReset(`I found ${resolved.name} in your contacts — want me to call them?`);
+            addMessage({ id: generateId('msg'), role: 'assistant', content: `I found ${resolved.name} in your contacts — want me to call them?`, timestamp: Date.now() });
             pendingContactCollectRef.current = { action: 'confirm_call', name: resolved.name, phone: resolved.phone };
+            speak(`I found ${resolved.name} in your contacts — want me to call them?`);
+            setInputText('');
+            // sendingRef stays true — pending confirm keeps the gate locked
           } else {
             replyAndReset(`I don't have a number for ${contactName}. What's their number?`);
             pendingContactCollectRef.current = { action: 'call', name: contactName };
