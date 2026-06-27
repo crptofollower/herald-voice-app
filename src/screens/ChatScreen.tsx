@@ -737,7 +737,7 @@ export default function ChatScreen() {
             setInputText('');
             // sendingRef stays true — pending confirm keeps the gate locked
           } else {
-            replyAndReset(`I don't have a number for ${contactName}. What's their number?`);
+            replyAndReset(`I don't have ${contactName} in my contacts yet — or there may be a few people with that name. Can you be more specific, or tell me their number?`);
             pendingContactCollectRef.current = { action: 'call', name: contactName };
           }
           return true;
@@ -2295,17 +2295,22 @@ export default function ChatScreen() {
       if (!data?.length) return null;
 
       // Find best match — prioritize exact name match, then partial
-      const exactMatch = data.find(c =>
+      const exactMatches = data.filter(c =>
         c.name?.toLowerCase() === clean ||
         c.firstName?.toLowerCase() === clean ||
         c.lastName?.toLowerCase() === clean
       );
-      const partialMatch = data.find(c =>
+      const partialMatches = data.filter(c =>
         c.name?.toLowerCase().includes(clean) ||
         c.firstName?.toLowerCase().includes(clean)
       );
 
-      const match = exactMatch ?? partialMatch;
+      const candidates = exactMatches.length > 0 ? exactMatches : partialMatches;
+
+      // Multiple matches — can't pick one safely, return null so caller asks
+      if (candidates.length > 1) return null;
+
+      const match = candidates[0];
       if (match?.phoneNumbers?.[0]?.number) {
         const phone = match.phoneNumbers[0].number.replace(/\D/g, '');
         const name = match.name ?? nameOrRelation;
