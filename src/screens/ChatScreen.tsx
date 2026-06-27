@@ -245,7 +245,7 @@ export default function ChatScreen() {
   const { status: llmStatus, activeModel, getCtx, inferLocal } = useLocalLLM();
   void activeModel;
 
-  type ResolveContactFn = (nameOrRelation: string) => Promise<{ phone: string; name: string; contactId?: string } | null>;
+  type ResolveContactFn = (nameOrRelation: string) => Promise<{ phone: string; name: string; contactId?: string; source: 'herald' | 'device' } | null>;
   const resolveContactPhoneRef = useRef<ResolveContactFn | null>(null);
   const handleLaunchActionRef = useRef<((appName: string) => Promise<void>) | null>(null);
 
@@ -285,7 +285,7 @@ export default function ChatScreen() {
   const pendingTodoCompleteRef = useRef<{ id: string; body: string } | null>(null);
   // Pending contact collection — when Herald asks "what's their number/address?"
   // the next user message resolves this and executes the original intent.
-  const pendingContactCollectRef = useRef<{ action: 'call' | 'navigate' | 'text' | 'confirm_phone'; name: string; body?: string } | null>(null);
+  const pendingContactCollectRef = useRef<{ action: 'call' | 'navigate' | 'text' | 'confirm_phone' | 'confirm_call'; name: string; body?: string; phone?: string } | null>(null);
   const pendingMedConfirmRef = useRef<{ category: 'medication' | 'medical' | 'visit'; value: string; guessedName: string; guessedDosage?: string } | null>(null);
   const pendingMedClearRef = useRef<{ count: number } | null>(null);
   const pendingInsuranceRef = useRef<{ type: string; carrier: string; ack: string } | null>(null);
@@ -727,9 +727,12 @@ export default function ChatScreen() {
             .replace(/\s+(?:at|on|using|with|via)\b.*/i, '')
             .trim();
           const resolved = await resolveContactPhoneRef.current?.(contactName);
-          if (resolved?.phone) {
+          if (resolved?.phone && resolved.source === 'herald') {
             await Linking.openURL(`tel:${resolved.phone.replace(/\D/g, '')}`);
             replyAndReset(`Calling ${resolved.name}.`);
+          } else if (resolved?.phone && resolved.source === 'device') {
+            replyAndReset(`I found ${resolved.name} in your contacts — want me to call them?`);
+            pendingContactCollectRef.current = { action: 'confirm_call', name: resolved.name, phone: resolved.phone };
           } else {
             replyAndReset(`I don't have a number for ${contactName}. What's their number?`);
             pendingContactCollectRef.current = { action: 'call', name: contactName };
@@ -1087,6 +1090,39 @@ export default function ChatScreen() {
         } else {
           const heard = reCheck ? reCheck.spoken : text.trim();
           const reply = `I still didn't catch a full 10-digit number — I heard ${heard}. Can you say ${pending.name}'s number again, slowly?`;
+          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+          speak(reply);
+        }
+        sendingRef.current = false;
+        setInputText('');
+        return;
+      }
+
+      // Confirm device-contact call — user answering "yes/no" to "Found X in contacts"
+      if (pending.action === 'confirm_call') {
+        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+        const isYes = /^\s*(yes|yeah|yep|sure|ok|okay|go ahead|call them|do it)\b/i.test(text.trim());
+        const isNo = /^\s*(no|nope|cancel|never mind|nevermind|don't|dont|stop)\b/i.test(text.trim());
+        if (isYes) {
+          pendingContactCollectRef.current = null;
+          try {
+            writeContact({ name: pending.name, phone: pending.phone!, importance: 5 });
+            await Linking.openURL(`tel:${pending.phone!.replace(/\D/g, '')}`);
+            const reply = `Calling ${pending.name}.`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          } catch {
+            const reply = `I couldn't open the dialer — try calling ${pending.name} manually.`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+          }
+        } else if (isNo) {
+          pendingContactCollectRef.current = null;
+          const reply = `No problem — who were you trying to reach?`;
+          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+          speak(reply);
+        } else {
+          const reply = `Just to confirm — do you want me to call ${pending.name}?`;
           addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
           speak(reply);
         }
@@ -1918,7 +1954,7 @@ export default function ChatScreen() {
           } else {
             // Resolve name/relationship to phone number
             const resolved = await resolveContactPhone(rawVal);
-            if (resolved?.phone) {
+            if (resolved?.phone && resolved.source === 'herald') {
               updateLastContact(resolved.contactId ?? '');
               await Linking.openURL(`tel:${resolved.phone}`);
               addMessage({
@@ -1927,6 +1963,15 @@ export default function ChatScreen() {
                 content: `Calling ${resolved.name} now.`,
                 timestamp: Date.now(),
               });
+            } else if (resolved?.phone && resolved.source === 'device') {
+              pendingContactCollectRef.current = { action: 'confirm_call', name: resolved.name, phone: resolved.phone };
+              addMessage({
+                id: generateId("msg"),
+                role: "assistant",
+                content: `I found ${resolved.name} in your contacts — want me to call them?`,
+                timestamp: Date.now(),
+              });
+              speak(`I found ${resolved.name} in your contacts — want me to call them?`);
             } else {
               // Can't resolve — open dialer so user can dial manually
               await Linking.openURL(`tel:`);
@@ -2212,17 +2257,17 @@ export default function ChatScreen() {
   // Pass 2: OS device contacts via expo-contacts — broader coverage
   // Returns null if not found — caller handles graceful fallback.
 
-  const resolveContactPhone = async (nameOrRelation: string): Promise<{ phone: string; name: string; contactId?: string } | null> => {
+  const resolveContactPhone = async (nameOrRelation: string): Promise<{ phone: string; name: string; contactId?: string; source: 'herald' | 'device' } | null> => {
     const clean = nameOrRelation.trim().toLowerCase().replace(/^(?:my|the|a)\s+/, '');
 
     // Pass 1: Herald contacts table
     const byRelation = findContactByRelationship(clean);
     if (byRelation?.phone) {
-      return { phone: byRelation.phone, name: byRelation.name, contactId: byRelation.id };
+      return { phone: byRelation.phone, name: byRelation.name, contactId: byRelation.id, source: 'herald' as const };
     }
     const byName = findContactByName(clean);
     if (byName?.phone) {
-      return { phone: byName.phone, name: byName.name, contactId: byName.id };
+      return { phone: byName.phone, name: byName.name, contactId: byName.id, source: 'herald' as const };
     }
 
     // Pass 2: OS device contacts
@@ -2252,9 +2297,7 @@ export default function ChatScreen() {
       if (match?.phoneNumbers?.[0]?.number) {
         const phone = match.phoneNumbers[0].number.replace(/\D/g, '');
         const name = match.name ?? nameOrRelation;
-        // Write to Herald contacts for next time
-        writeContact({ name, phone, importance: 5 });
-        return { phone, name };
+        return { phone, name, source: 'device' as const };
       }
     } catch (e) {
       console.warn('[resolveContactPhone] expo-contacts failed:', e);

@@ -24,7 +24,7 @@ import { isMedicationCorroborated } from '../../db/factDB';
 // Pending-confirmation refs the dispatch handlers set so the NEXT user turn can
 // resolve them (collect a phone number, confirm a medication, etc.).
 export interface DispatchPendingRefs {
-  pendingContactCollectRef: MutableRefObject<{ action: 'call' | 'navigate' | 'text' | 'confirm_phone'; name: string; body?: string } | null>;
+  pendingContactCollectRef: MutableRefObject<{ action: 'call' | 'navigate' | 'text' | 'confirm_phone' | 'confirm_call'; name: string; body?: string; phone?: string } | null>;
   pendingMedConfirmRef: MutableRefObject<{ category: 'medication' | 'medical' | 'visit'; value: string; guessedName: string; guessedDosage?: string } | null>;
   pendingMedClearRef: MutableRefObject<{ count: number } | null>;
   pendingTodoCompleteRef: MutableRefObject<{ id: string; body: string } | null>;
@@ -336,11 +336,16 @@ export async function dispatchAction(
             .replace(/\s+(?:at|on|using|with|via)\b.*/i, '')
             .trim();
           const resolved = await resolveContactPhone(contactName);
-          if (resolved?.phone) {
+          if (resolved?.phone && resolved.source === 'herald') {
             await Linking.openURL(`tel:${resolved.phone.replace(/\D/g, '')}`);
             const reply = `Calling ${resolved.name}.`;
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
+          } else if (resolved?.phone && resolved.source === 'device') {
+            const reply = `I found ${resolved.name} in your contacts — want me to call them?`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+            pendingContactCollectRef.current = { action: 'confirm_call', name: resolved.name, phone: resolved.phone };
           } else {
             // No number — ask to collect it, then call immediately after
             const reply = `I don't have a number for ${contactName}. What's their number?`;
