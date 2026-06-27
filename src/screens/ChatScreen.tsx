@@ -852,7 +852,12 @@ export default function ChatScreen() {
   const sendMessage = useCallback(async (text: string) => {
     const now = Date.now();
     if (now - lastSentRef.current < 1000) return;
-    if (sendingRef.current) return;
+    // Allow confirm_call responses through even while sendingRef is locked.
+    // S22d holds sendingRef true while a device-contact confirm is pending —
+    // without this bypass the user's yes/no answer is silently dropped.
+    const hasConfirmCallPending =
+      pendingContactCollectRef.current?.action === 'confirm_call';
+    if (sendingRef.current && !hasConfirmCallPending) return;
     if (!text) return;
 
     // ── Input front door ─────────────────────────────────────────────────────
