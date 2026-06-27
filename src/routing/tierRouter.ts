@@ -213,6 +213,9 @@ const DIRECTIONS_SIGNALS = [
 const CALL_NUMBER_STATEMENT = /(?:number|phone|cell|mobile)\s+(?:is\s+)?[\d\s\-\(\)\+\.]{7,}/i;
 /** Possessive contact-info statement ("Hunter's phone number is...", "Mike's cell ...") — a statement of fact, never a call command. */
 const POSSESSIVE_CONTACT_STATEMENT = /\b\w+'s\s+(?:phone|cell|mobile|number)/i;
+/** Read-query prefix — utterances beginning with these words are reads, never call commands.
+ *  Robust to STT omitting apostrophes (Samsung on-device engine). */
+const READ_QUERY_PREFIX = /^\s*(what|who|where|when|do you|can you tell|have you|is there|how|which|tell me|do i)\b/i;
 
 const REMINDER_SIGNALS = [
   /\bremind me\b/i,
@@ -490,7 +493,7 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
 
   // Device: call — resolves contact on device, fires tel: intent
   const TODO_ADD_PREFIX = /^(I need to|I have to|I gotta|I've got to|don't let me forget|I should|I must)\s+/i;
-  if (CALL_SIGNALS.some((p) => p.test(msg)) && !REMINDER_SIGNALS.some((p) => p.test(msg)) && !CALL_NUMBER_STATEMENT.test(msg) && !POSSESSIVE_CONTACT_STATEMENT.test(msg) && !TODO_ADD_PREFIX.test(msg)) {
+  if (CALL_SIGNALS.some((p) => p.test(msg)) && !REMINDER_SIGNALS.some((p) => p.test(msg)) && !CALL_NUMBER_STATEMENT.test(msg) && !POSSESSIVE_CONTACT_STATEMENT.test(msg) && !TODO_ADD_PREFIX.test(msg) && !READ_QUERY_PREFIX.test(msg)) {
     const CALL_EXCLUDE = /^(me|you|back|again|later|now|soon|ahead|us|them|it|that)$/i;
     const contactMatch =
       msg.match(/\b(?:call|phone|dial|ring)\s+((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+)?\w+(?:\s+\w+)?)/i) ??
