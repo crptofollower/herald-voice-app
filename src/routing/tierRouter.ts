@@ -252,6 +252,7 @@ const LIST_ADD_SIGNALS = [
   /\badd (.+) to (my |the )?(grocery |shopping |to.?do |)\blist\b/i,
   /\bput (.+) on (my |the )?(grocery |shopping |to.?do |)\blist\b/i,
   /\badd to (my |the )?(grocery |shopping |to.?do )?\blist\b (.+)/i,
+  /\bcan you add (.+?) to (my |the )?(grocery |shopping |to.?do |)?\blist\b/i,
 ];
 
 const LIST_READ_SIGNALS = [
