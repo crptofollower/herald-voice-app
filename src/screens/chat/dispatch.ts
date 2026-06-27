@@ -41,7 +41,7 @@ export interface DispatchDeps extends DispatchPendingRefs {
   getCtx: () => LlamaContext | null;
   inferLocal: (prompt: string, maxTokens: number) => Promise<string | null>;
   phraseWithLLM: typeof phraseWithLLM;
-  resolveContactPhone: (nameOrRelation: string) => Promise<{ phone: string; name: string; contactId?: string } | null>;
+  resolveContactPhone: (nameOrRelation: string) => Promise<{ phone: string; name: string; contactId?: string; source: 'herald' | 'device' } | null>;
   handleCalendarAction: (value: string) => Promise<void>;
   handleMapsAction: (query: string) => Promise<void>;
   launchAndroidTimer: (seconds: number) => Promise<boolean>;
@@ -182,26 +182,6 @@ export async function dispatchAction(
           // signal only changes how confident the question SOUNDS — never whether
           // we ask. Free-text drug-name guessing is correction-prone (Spine §4,
           // Jun-20 decision: no corroboration exception).
-          if (medEvent.type === 'medication') {
-            const guessedName = medEvent.drug_name ?? guessMedicationName(medEvent.raw);
-            addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-            if (!guessedName || guessedName.trim().length < 2) {
-              const ask = 'What medication is that?';
-              addMessage({ id: generateId('msg'), role: 'assistant', content: ask, timestamp: Date.now() });
-              speak(ask);
-              return;
-            }
-            const guessedDosage = medEvent.dosage ?? undefined;
-            pendingMedConfirmRef.current = { category: 'medication', value: medEvent.raw, guessedName, guessedDosage };
-            const reply = isMedicationCorroborated(medEvent.raw)
-              ? (guessedDosage
-                  ? `Got it — ${guessedName}, ${guessedDosage}. Sound right?`
-                  : `Got it — ${guessedName}. Sound right?`)
-              : `Want me to remember ${guessedName} as a medication?`;
-            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-            speak(reply);
-            return;
-          }
           const { captureMedicalEvent } = await import('../../utils/captureMedicalEvent');
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
           try {
