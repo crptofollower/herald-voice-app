@@ -247,7 +247,10 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
           return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
         }
         const relPart = relationship ? `, your ${relationship},` : '';
-        return { status: 'committed', ack: `Got it — ${name}${relPart} at ${phone}.` };
+        const formattedPhone = phone && /^\d{10}$/.test(phone.replace(/\D/g,''))
+          ? `(${phone.replace(/\D/g,'').slice(0,3)}) ${phone.replace(/\D/g,'').slice(3,6)}-${phone.replace(/\D/g,'').slice(6)}`
+          : phone;
+        return { status: 'committed', ack: `Got it — ${name}${relPart} at ${formattedPhone}.` };
       } catch {
         return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
       }
