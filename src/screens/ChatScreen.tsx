@@ -811,32 +811,6 @@ export default function ChatScreen() {
           replyAndReset(ack);
           return true;
         }
-        case 'medical_capture': {
-          // Medical capture from LLM — route through existing confirm gate
-          // Never write directly from LLM — goes through pendingMedConfirmRef
-          const { drug, raw } = intent as {
-            type: 'medical_capture'; drug?: string; raw: string;
-          };
-          const guessedName = drug ?? guessMedicationName(raw);
-          if (!guessedName || guessedName.length < 2) {
-            sendingRef.current = false;
-            replyAndReset("Which medication did you want me to note?");
-            return true;
-          }
-          const guessedDosage = extractDosage(raw);
-          pendingMedConfirmRef.current = {
-            category: 'medication',
-            value: raw,
-            guessedName,
-            guessedDosage,
-          };
-          replyAndReset(
-            guessedDosage
-              ? `Want me to remember ${guessedName}, ${guessedDosage}, as a medication?`
-              : `Want me to remember ${guessedName} as a medication?`
-          );
-          return true;
-        }
         default:
           replyAndReset(`I couldn't quite get that — try a different way.`);
           return true;
@@ -1391,13 +1365,7 @@ export default function ChatScreen() {
       if (!localFactsWritten && isMedicalCaptureIntent(text) && userId) {
           const medCategory = medicalCategoryFromText(text);
           if (medCategory === 'medication') {
-            // Always confirm before writing a medication name — corroboration
-            // (a dosage, a pill word) only changes how confident the ack
-            // SOUNDS, never whether we ask. Free-text name-guessing is
-            // inherently low-confidence regardless of corroboration signal.
-            // [Spine 4 — medical values are correction-prone, confirm always]
             const guessedName = guessMedicationName(text);
-            const guessedDosage = extractDosage(text);
             if (!guessedName || guessedName.length < 2) {
               addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
               const reply = "Which medication did you want me to note?";
@@ -1407,17 +1375,11 @@ export default function ChatScreen() {
               setInputText('');
               return;
             }
-            pendingMedConfirmRef.current = { category: medCategory, value: text, guessedName, guessedDosage };
-            addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-            const reply = isMedicationCorroborated(text)
-              ? (guessedDosage
-                  ? `Got it — ${guessedName}, ${guessedDosage}. Sound right?`
-                  : `Got it — ${guessedName}. Sound right?`)
-              : `Want me to remember ${guessedName} as a medication?`;
-            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-            speak(reply);
-            sendingRef.current = false;
-            setInputText('');
+            await applyConvertedIntents(
+              [{ type: 'medical_capture', drug: guessedName, dosage: extractDosage(text), raw: text }],
+              text,
+              { echoUser: true },
+            );
             return;
           }
           try {
