@@ -885,6 +885,35 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     }
   }
 
+  // Tier 1: contact phone lookup by name — "what's Linda's number", "Linda's phone number"
+  // Device-first, offline. Extracts the name from possessive phrasing, calls findContactByName.
+  // Never fabricates — honest miss if not found.
+  if (POSSESSIVE_CONTACT_STATEMENT.test(msg)) {
+    const nameMatch = msg.match(/\b(\w+)'s\s+(?:phone|cell|mobile|number)/i);
+    const lookupName = nameMatch?.[1]?.trim() ?? '';
+    if (lookupName.length >= 2) {
+      try {
+        const { findContactByName } = await import('../db/contactsDB');
+        const contact = findContactByName(lookupName);
+        if (contact?.phone) {
+          const formatted = /^\d{10}$/.test(contact.phone.replace(/\D/g, ''))
+            ? `(${contact.phone.replace(/\D/g,'').slice(0,3)}) ${contact.phone.replace(/\D/g,'').slice(3,6)}-${contact.phone.replace(/\D/g,'').slice(6)}`
+            : contact.phone;
+          return {
+            tier: 1,
+            tier1Response: `${contact.name}'s number is ${formatted}.`,
+            reason: 'contact:phone_lookup',
+          };
+        }
+      } catch { /* contactsDB unavailable — fall through */ }
+      return {
+        tier: 1,
+        tier1Response: `I don't have a number for ${lookupName} yet. You can tell me anytime.`,
+        reason: 'contact:phone_lookup:miss',
+      };
+    }
+  }
+
   // Tier 1: profile
   if (TIER1_SIGNALS.profile.some((p) => p.test(msg))) {
     const response = getProfileSummary();
