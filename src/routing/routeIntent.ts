@@ -7,8 +7,7 @@ import type { TierDecision, LocalContext } from './tierRouter';
 import { writeServiceProvider, detectServiceCapture, detectPhoneCapture } from '../utils/householdCapture';
 import { getDB } from '../db/schema';
 import { capturePerson } from '../db/capturePerson';
-import { findContactByName } from '../db/contactsDB';
-import { setEmergencyContact, getEmergencyContact } from '../db/contactsDB';
+import { findContactByName, setEmergencyContact, getEmergencyContact } from '../db/contactsDB';
 
 type ActionIntent = NonNullable<TierDecision['actionIntent']>;
 
@@ -19,7 +18,6 @@ export type RouteDecision =
   | { kind: 'memory_probe'; tier: 2; context: LocalContext; reason: string }
   | { kind: 'backend'; tier: 3; reason: string }
   | { kind: 'needs_clarification'; guess?: string; reason: string }
-  | { kind: 'passthrough'; reason: string }; // TEMPORARY — deleted when all domains converted
 
 // ─── Routing authority scaffolding (Commit 1) ────────────────────────────────
 // CommitResult: the only gate for ACK strings. A string is never spoken for a
@@ -470,11 +468,6 @@ export function composeAck(results: CommitResult[]): string {
   if (pending) return pending.prompt;
   return results.map(r => r.status !== 'pending' ? r.ack : '').filter(Boolean).join(' ');
 }
-
-// passthrough: temporary variant added to RouteDecision during rollout.
-// Unconverted domains return this; legacy islands handle them as today.
-// Deleted in the final cleanup commit when DOMAIN_WRITERS is complete.
-// ─────────────────────────────────────────────────────────────────────────────
 
 export async function routeIntent(
   text: string,
