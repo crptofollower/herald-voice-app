@@ -99,9 +99,29 @@ export function extractDrugName(text: string): string | undefined {
 // appear before or after the drug name ("10mg of lisinopril" / "lisinopril 10mg").
 const MED_DOSAGE_PATTERN = /\b(\d+(?:\.\d+)?\s*(?:mg|mcg|ml|units?|milligrams?|micrograms?))\b/i;
 
+const SPOKEN_NUMBERS: Record<string, string> = {
+  one: '1', two: '2', three: '3', four: '4', five: '5',
+  six: '6', seven: '7', eight: '8', nine: '9', ten: '10',
+  eleven: '11', twelve: '12', fifteen: '15', twenty: '20',
+  'twenty-five': '25', thirty: '30', forty: '40', fifty: '50',
+  'seventy-five': '75', hundred: '100', 'one hundred': '100',
+  'two hundred': '200', 'two hundred fifty': '250',
+  'five hundred': '500',
+};
+
+const SPOKEN_DOSAGE_PATTERN = /\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty(?:-?five)?|thirty|forty|fifty|seventy-five|(?:one|two|five)\s+hundred(?:\s+(?:fifty|twenty-five))?)\s+(mg|mcg|ml|milligrams?|micrograms?|units?)\b/i;
+
 export function extractDosage(text: string): string | undefined {
-  const m = text.match(MED_DOSAGE_PATTERN);
-  return m?.[1]?.replace(/\s+/g, '') || undefined;
+  // Numeric form: "10 mg", "500mg", "2.5 ml"
+  const numeric = text.match(MED_DOSAGE_PATTERN);
+  if (numeric?.[1]) return numeric[1].replace(/\s+/g, '');
+  // Spoken form: "ten milligrams", "five hundred mg"
+  const spoken = text.match(SPOKEN_DOSAGE_PATTERN);
+  if (!spoken) return undefined;
+  const word = spoken[1].toLowerCase().trim();
+  const unit = spoken[2].toLowerCase();
+  const digit = SPOKEN_NUMBERS[word] ?? SPOKEN_NUMBERS[word.replace(/\s+/g,'-')] ?? word;
+  return `${digit}${unit}`;
 }
 
 function extractAdvice(text: string): string | undefined {
