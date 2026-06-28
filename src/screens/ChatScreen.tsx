@@ -625,7 +625,9 @@ export default function ChatScreen() {
     speak(localGreeting);
 
     // ── BACKGROUND LIVE ENHANCEMENT ──────────────────────────────────────────
-    upgradeLiveGreeting(lat ?? undefined, lng ?? undefined, locationLabel ?? undefined);
+    if (lat != null && lng != null) {
+      upgradeLiveGreeting(lat, lng, locationLabel ?? undefined);
+    }
   }, [userId, dbReady, available, lat, lng, locationLabel, displayMessages.length, getLocalGreeting, aiName, addMessage, speak, upgradeLiveGreeting]);
 
   // If GPS resolves within 3s of open, re-fetch greeting with real coords.
