@@ -1,6 +1,7 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
-# v8.86 -- afternoon_checkin: unwrap learned_facts dicts before spoken interpolation
+# v8.87 -- PHONE tag: name/relationship only — never raw digits
+# v8.87 -- afternoon_checkin: unwrap learned_facts dicts before spoken interpolation
 # v8.84 -- /diag breadcrumb + crash endpoints (Mickey Motorola crash forensics)
 # v8.83 -- wttr.in: confirmed_city before lat/lng so city names resolve correctly
 # v8.82 -- wttr.in: lat/lng when available; no hardcoded city fallback if location unknown
@@ -67,7 +68,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.85")
+app = FastAPI(title="Herald API", version="8.87")
 
 app.add_middleware(
     CORSMiddleware,
@@ -3672,12 +3673,13 @@ this question confidently and warmly? Yes. Then so do you. Always.
 
 ACTION TAGS -- append silently at end of response, one blank line after spoken text:
 - Local business or directions:    MAPS: [business name], [city and state]
-- Phone number to call:            PHONE: [contact name, relationship, or digits]
+- Phone number to call:            PHONE: [contact name or relationship ONLY — never raw digits]
   Herald will look up the number from contacts. Include name for people, digits for businesses.
-  CORRECT: PHONE: my daughter
+  CORRECT: PHONE: Greg
+  CORRECT: PHONE: my wife
   CORRECT: PHONE: Dr. Smith
-  CORRECT: PHONE: 2145550192
-  WRONG:   PHONE: [digits only when user said "call my doctor"]
+  WRONG:   PHONE: 8329522796  (never return raw digits — the app resolves names to numbers)
+  WRONG:   PHONE: Greg Casey, 8329522796
 - Play music/song/artist/genre:    MUSIC: [search query]
 - Play radio station:              RADIO: [station name]
 - Calendar event or reminder:      CALENDAR: [event title]|[YYYY-MM-DD]|[HH:MM or blank]
@@ -5005,7 +5007,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.85",
+        "status": "ok", "server": "herald-api", "version": "8.87",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "enabled -- every message",
@@ -6854,7 +6856,7 @@ async def user_export(user_id: str, request: Request, secret: str = ""):
     print(f"[HERALD] /user/export: exported all personal data for {user_id}")
     return {
         "ok": True,
-        "version": "8.85",
+        "version": "8.87",
         "user_id": user_id,
         "exported_at": datetime.now().isoformat(),
         "profile": profile,
@@ -7012,7 +7014,7 @@ async def admin_dashboard(secret: str = ""):
 
         return {
             "ok": True,
-            "version": "8.85",
+            "version": "8.87",
             "user_count": len(users),
             "users": sorted(users, key=lambda x: x["msg_count"], reverse=True),
             "waitlist_count": waitlist_count,
@@ -7236,7 +7238,7 @@ def startup():
     print(f"[HERALD API] WeatherAPI:    {'YES (backup)' if WEATHER_KEY else 'not set'}")
     print(f"[HERALD API] Database:      {DB_FILE}")
     print(f"[HERALD API] Owner code:    {'SET' if OWNER_CODE else 'NOT SET'}")
-    print(f"[HERALD API] v8.86: afternoon_checkin unwraps learned_facts dict before spoken text")
+    print(f"[HERALD API] v8.87: PHONE tag — name/relationship only, never raw digits")
     print(f"[HERALD API] FIX v8.8: GPS city caching -- confirmed_city in profile, 20mi tolerance")
     print(f"[HERALD API] FIX v8.8: Memory rules -- no 'I remember', no raw GPS coords spoken")
     print(f"[HERALD API] FIX v8.8: Seed question for new users -- makes first session feel alive")
