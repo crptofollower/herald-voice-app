@@ -38,7 +38,7 @@ const LIST_CONTEXT =
 const DR_NAME = /Dr\.?\s+(\w+)/i;
 const SPECIALTY =
   /my (cardiologist|doctor|physician|specialist|therapist|dentist|neurologist|oncologist|psychiatrist)/i;
-const DOSAGE = /(\d+(?:\.\d+)?\s*mg|\d+(?:\.\d+)?\s*mcg|\d+(?:\.\d+)?\s*ml)/i;
+const DOSAGE = /(\d+(?:\.\d+)?\s*(?:mg|mcg|ml|milligrams?|micrograms?)|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty(?:-?five)?|thirty|forty|fifty|seventy-five|(?:one|two|five)\s+hundred(?:\s+(?:fifty|twenty-five))?)\s+(?:mg|mcg|ml|milligrams?|micrograms?))/i;
 
 function extractDoctorName(text: string): string | undefined {
   const dr = text.match(DR_NAME);
