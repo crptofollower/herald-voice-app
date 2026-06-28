@@ -289,7 +289,6 @@ export default function ChatScreen() {
   const pendingMedConfirmRef = useRef<{ category: 'medication' | 'medical' | 'visit'; value: string; guessedName: string; guessedDosage?: string } | null>(null);
   const pendingMedClearRef = useRef<{ count: number } | null>(null);
   const pendingInsuranceRef = useRef<{ type: string; carrier: string; ack: string } | null>(null);
-  const pendingFamilyRef = useRef<{ name: string; relationship: string; location?: string } | null>(null);
   const pendingResumeRef = useRef<{
     pendingKey: string;
     resume: (t: string) => Promise<import('../routing/routeIntent').CommitResult>;
