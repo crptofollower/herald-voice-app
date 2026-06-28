@@ -53,7 +53,7 @@ function extractSpecialty(text: string): string | undefined {
 // Merged trigger set — covers both this file's original phrasing and the
 // separate set medicalDB.ts's guessMedicationName used to use on its own
 // before this consolidation. One trigger list, shared by both extractors.
-const DRUG_TRIGGER = /\b(?:take|taking|i'm on|i am on|am on|is on|on|prescribed|started|using)\b/i;
+const DRUG_TRIGGER = /\b(?:take|taking|i'm on|i am on|am on|is on|on|prescribed|started|using|use)\b/i;
 
 // Words that can sit between the trigger verb and the real drug name in real
 // speech ("started TAKING MY BLOOD PRESSURE medication") but are never
