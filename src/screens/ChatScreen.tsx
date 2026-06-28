@@ -210,8 +210,6 @@ function routeDecisionToTier(decision: RouteDecision): TierDecision {
         localContext: decision.context,
         reason: decision.reason,
       };
-    case 'passthrough':
-      return { tier: 3, reason: 'passthrough — unconverted domain' };
     case 'capture':
     case 'backend':
     case 'needs_clarification':
