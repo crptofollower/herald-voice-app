@@ -532,6 +532,7 @@ export function isCalendarReadIntent(text: string): boolean {
 export function isMedicalCaptureIntent(text: string): boolean {
   if (isCalendarReadIntent(text)) return false;
   if (/\b(grocery|shopping|to-?do|todo)\s+lists?\b|\b(off|from|on|to)\s+(my|the)\s+lists?\b|\bmy\s+lists?\b/i.test(text)) return false; // Build A: lists are never medical
+  if (/\b(hvac|plumber|plumbing|electrician|roofer|mechanic|lawn|landscap|pest|cleaner|maid|handyman|contractor|repairman|guy i use|guy is called|company is|service is|provider is)\b/i.test(text)) return false;
   return (
     /\b(i take|i'm on|i am on|prescribed|i use|i'm taking)\s+[\w\s]+/i.test(text) ||
     /\b(i (went|saw|visited|had))\s+(the\s+|my\s+)?(doctor|dentist|specialist|dr\.?|physician|therapist)\b/i.test(text) ||
