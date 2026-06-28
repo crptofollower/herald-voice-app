@@ -1251,7 +1251,7 @@ export default function ChatScreen() {
       routeDecision.kind === 'capture' &&
       allConverted(routeDecision.intents)
     ) {
-      await applyConvertedIntents(routeDecision.intents, text);
+      await applyConvertedIntents(routeDecision.intents, text, { echoUser: true });
       return;
     }
     // ─────────────────────────────────────────────────────────────────────────

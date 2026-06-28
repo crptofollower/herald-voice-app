@@ -40,7 +40,7 @@ export function useProactiveQueue() {
 
       // Backend returns { messages: [...] } — not { items: [...] }.
       // Guard against null/undefined to prevent phantom box.
-      const raw = result?.items ?? [];
+      const raw = result?.messages ?? [];
       if (!Array.isArray(raw) || raw.length === 0) return;
 
       // Ensure every item has a read field — backend items don't include it.
@@ -50,6 +50,7 @@ export function useProactiveQueue() {
       }));
 
       setProactiveItems(items);
+      useStore.getState().setLastPolled?.(now);
     } catch {
       // Non-critical — swallow network errors, retry on next tick.
     }

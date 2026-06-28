@@ -454,8 +454,13 @@ export function detectPhoneCapture(text: string, _contacts?: string[]): IntentRe
     /\b(my|our)\s+(plumber|electrician|hvac|mechanic|roofer|handyman|contractor|painter|landscaper|cleaner|vet|dentist|doctor|pool)\b/i;
   if (SERVICE_ROLE_GUARD.test(text)) return [];
 
-  for (const pattern of SERVICE_PATTERNS) {
-    if (pattern.test(text)) return [];
+  // Possessive name + phone keyword — always a contact capture, never a service provider.
+  // "My sister Linda's cell is 469-505-0213" must not be blocked by SERVICE_PATTERNS.
+  const POSSESSIVE_PHONE = /\b(?:my|our)\s+(?:\w+\s+)?([\w]+)'s\s+(?:phone|cell|mobile|number)/i;
+  if (!POSSESSIVE_PHONE.test(text)) {
+    for (const pattern of SERVICE_PATTERNS) {
+      if (pattern.test(text)) return [];
+    }
   }
 
   const PLACEHOLDER_NAMES = new Set([
