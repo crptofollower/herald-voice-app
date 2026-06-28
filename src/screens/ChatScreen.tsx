@@ -84,7 +84,6 @@ import { handleTier1, buildTier2DeviceContext, buildAmbientDeviceContext, writeP
 import { refreshCalendarCache } from "../db/calendarCacheDB";
 import { markCalendarWrite } from "../db/calendarState";
 import { initDB, isDBReady } from "../db/useDeviceDB";
-import { getPendingClarification, clearClarification } from "../db/clarificationDB";
 import { getDB } from "../db/schema";
 import { runMigration } from "../routing/migration";
 import { setProfileField, setProfileFields } from "../db/profileDB";
@@ -857,38 +856,6 @@ export default function ChatScreen() {
       try {
         await initDB();
       } catch {}
-    }
-
-    const pending = getPendingClarification();
-    if (pending) {
-      const looksLikeQuestion = /\b(am i|do i|do you|what|who|when|where|how|is there|are there|have you|can you)\b/i.test(text.trim());
-      const looksLikeNewIntent = /\b(remind me|set a|add|note that|what's on|show me|call|text)\b/i.test(text.trim());
-      if (!looksLikeQuestion && !looksLikeNewIntent) {
-        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-        let reply: string;
-        try {
-          const db = getDB();
-          if (pending.slot === 'doctor_name') {
-            db.runSync('UPDATE medical_records SET doctor_name = ? WHERE id = ?', [text.trim(), pending.record_id]);
-          } else if (pending.slot === 'dosage') {
-            const dosageMatch = text.match(/(\d+\s*(?:mg|mcg|ml|g|units?|tablets?|pills?|drops?|puffs?))/i);
-            const dosageValue = dosageMatch ? dosageMatch[1].trim() : text.trim();
-            db.runSync('UPDATE medications SET dosage = ? WHERE id = ?', [dosageValue, pending.record_id]);
-          } else if (pending.slot === 'drug_name') {
-            db.runSync('UPDATE medications SET name = ? WHERE id = ?', [text.trim(), pending.record_id]);
-          }
-          reply = "Got it — I've got that.";
-        } catch {
-          reply = "I couldn't hold onto that just now — want to try again?";
-        }
-        clearClarification(pending.id);
-        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-        speak(reply);
-        setInputText('');
-        sendingRef.current = false;
-        return;
-      }
-      clearClarification(pending.id);
     }
 
     // Pending todo completion confirm — check before routing
