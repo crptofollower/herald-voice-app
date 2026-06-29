@@ -73,9 +73,7 @@ import { classifyWithLLM, phraseWithLLM } from '../hooks/llmLayers';
 import { answerFromDevice } from '../utils/localAnswers';
 import { writeTurnObservation } from '../utils/personaContext';
 import { classifyQuery, scanResidualIntent } from "../routing/tierRouter";
-import type { TierDecision } from "../routing/tierRouter";
 import { routeIntent } from "../routing/routeIntent";
-import type { RouteDecision } from "../routing/routeIntent";
 import { DOMAIN_WRITERS, allConverted, composeAck } from '../routing/routeIntent';
 import type { IntentRecord } from '../hooks/llmLayers';
 import { dispatchRead, dispatchAction } from './chat/dispatch';
@@ -185,35 +183,6 @@ function extractFact(userMsg: string, aiReply: string, category: string): string
   const first = aiReply.split(/[.!?]/)[0]?.trim();
   if (first && first.length >= 15 && first.length <= 100) return first;
   return null;
-}
-
-function routeDecisionToTier(decision: RouteDecision): TierDecision {
-  switch (decision.kind) {
-    case 'device_read':
-      return {
-        tier: 1,
-        tier1Response: decision.response,
-        llmWrap: decision.llmWrap,
-        isMedical: decision.isMedical,
-        reason: decision.reason,
-      };
-    case 'device_action':
-      return {
-        tier: 1,
-        actionIntent: decision.actionIntent,
-        reason: decision.reason,
-      };
-    case 'memory_probe':
-      return {
-        tier: 2,
-        localContext: decision.context,
-        reason: decision.reason,
-      };
-    case 'capture':
-    case 'backend':
-    case 'needs_clarification':
-      return { tier: 3, reason: decision.reason };
-  }
 }
 
 export default function ChatScreen() {
@@ -1215,7 +1184,24 @@ export default function ChatScreen() {
         lists: getKnownListNames(),
       },
     });
-    const tierDecision = routeDecisionToTier(routeDecision);
+    // Read the routing decision's signals directly off the RouteDecision union.
+    // Replaces the flat TierDecision shadow + routeDecisionToTier (deleted).
+    const rdTier: 1 | 2 | 3 =
+      routeDecision.kind === 'device_read' || routeDecision.kind === 'device_action'
+        ? 1
+        : routeDecision.kind === 'memory_probe'
+        ? 2
+        : 3;
+    const rdActionIntent =
+      routeDecision.kind === 'device_action' ? routeDecision.actionIntent : undefined;
+    const rdTier1Response =
+      routeDecision.kind === 'device_read' ? routeDecision.response : undefined;
+    const rdLlmWrap =
+      routeDecision.kind === 'device_read' ? routeDecision.llmWrap : undefined;
+    const rdIsMedical =
+      routeDecision.kind === 'device_read' ? routeDecision.isMedical : undefined;
+    const rdLocalContext =
+      routeDecision.kind === 'memory_probe' ? routeDecision.context : undefined;
 
     // Runs converted intents through their domain writers, speaks the verified
     // ACK, clears the send lock. Single dispatch site for all three paths.
@@ -1257,7 +1243,7 @@ export default function ChatScreen() {
     // ─────────────────────────────────────────────────────────────────────────
 
     // LLM capture — fallback classifier for the ambiguous tier-3 gap ONLY.
-    if (llmStatus === 'ready' && tierDecision.tier === 3) {
+    if (llmStatus === 'ready' && rdTier === 3) {
       try {
         const llmCaptures = await classifyWithLLM(text, getCtx(), {
           contacts: getKnownContactNames(),
@@ -1287,7 +1273,7 @@ export default function ChatScreen() {
     // ── Offline check -- skip network, answer from device or give warm message ──
     const networkState = await Network.getNetworkStateAsync();
     let localFactsWritten = false;
-    const isTier1Read = tierDecision.tier === 1 && !!tierDecision.tier1Response;
+    const isTier1Read = rdTier === 1 && !!rdTier1Response;
 
     // Household capture — runs before extractFactsLocally
     // Same order rule as phone/address/emergency capture — never move below extractFactsLocally
@@ -1320,7 +1306,7 @@ export default function ChatScreen() {
       return;
     }
 
-    if (!tierDecision.actionIntent && !isTier1Read) {
+    if (!rdActionIntent && !isTier1Read) {
       // Extract facts locally — skip calendar/medical/profile reads (Bug 1)
       try {
         const beforeCount = getFactCount();
@@ -1403,10 +1389,10 @@ export default function ChatScreen() {
     }
 
     // Profile update — local SQLite, runs before offline gate
-    if (tierDecision.actionIntent?.type === 'profile_update') {
+    if (rdActionIntent?.type === 'profile_update') {
       addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
       try {
-        const { field, value } = tierDecision.actionIntent;
+        const { field, value } = rdActionIntent;
         const PROFILE_FIELD_MAP: Record<string, string> = {
           insurance: 'insurance_provider',
           doctor: 'primary_doctor',
@@ -1437,16 +1423,16 @@ export default function ChatScreen() {
       (networkState.isInternetReachable === false);
     if (isOffline) {
       // Tier 1 reads/actions pass through — they're device-local
-      if (tierDecision.tier === 1) {
-        if (tierDecision.actionIntent) {
+      if (rdTier === 1) {
+        if (rdActionIntent) {
           // Device-local action (household_read, medical_capture, alarm, etc.)
           // intentionally falls through to the Tier 1 action handler below — it
           // needs no network. Do NOT add a return here.
-        } else if (tierDecision.tier1Response) {
+        } else if (rdTier1Response) {
           await dispatchRead(
-            tierDecision.tier1Response,
-            tierDecision.llmWrap ?? false,
-            tierDecision.isMedical ?? false,
+            rdTier1Response,
+            rdLlmWrap ?? false,
+            rdIsMedical ?? false,
             text,
             buildDispatchDeps(),
           );
@@ -1455,7 +1441,7 @@ export default function ChatScreen() {
           return;
         }
       }
-      if (!tierDecision.actionIntent && localFactsWritten) {
+      if (!rdActionIntent && localFactsWritten) {
         const reply = "Got it — I'll remember that. You can ask me about it anytime.";
         addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
         addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
@@ -1464,7 +1450,7 @@ export default function ChatScreen() {
         setInputText('');
         return;
       }
-      if (!tierDecision.actionIntent) {
+      if (!rdActionIntent) {
         const localAnswer = answerFromDevice(text);
         if (localAnswer) {
           addMessage({ id: generateId('msg'), role: 'user',
@@ -1480,7 +1466,7 @@ export default function ChatScreen() {
         // Tier 1.5: on-device LLM capture — ONLY for the tier-3 gap (deterministic-first).
         // A tier-1 read/action must never be re-captured here (e.g. "who is my wife" is a
         // family READ, not a family_capture). Matches the online gate.
-        if (llmStatus === 'ready' && tierDecision.tier === 3) {
+        if (llmStatus === 'ready' && rdTier === 3) {
           try {
             const contacts = getKnownContactNames();
             const lists = getKnownListNames();
@@ -1527,12 +1513,12 @@ export default function ChatScreen() {
     // Tier 2: memory probe — attach structured local context to backend request.
     // Tier 3: default — existing network path unchanged.
 
-    if (tierDecision.tier === 1) {
+    if (rdTier === 1) {
       // Device action intent — alarm or SMS, no network needed
-      if (tierDecision.actionIntent) {
-        await dispatchAction(tierDecision.actionIntent, text, buildDispatchDeps());
+      if (rdActionIntent) {
+        await dispatchAction(rdActionIntent, text, buildDispatchDeps());
         // Residual scan — catch a second intent in the same utterance (compound speech)
-        const residual = await scanResidualIntent(text, tierDecision.actionIntent.type);
+        const residual = await scanResidualIntent(text, rdActionIntent.type);
         if (residual?.actionIntent) {
           // Layer A floor: isolate the residual commit. One clause failing must
           // never sink the other clause's ACK or the send. On failure, stay
@@ -1561,11 +1547,11 @@ export default function ChatScreen() {
         return;
       }
       // Tier 1 read response — calendar, medical, profile
-      if (tierDecision.tier1Response) {
+      if (rdTier1Response) {
         await dispatchRead(
-          tierDecision.tier1Response,
-          tierDecision.llmWrap ?? false,
-          tierDecision.isMedical ?? false,
+          rdTier1Response,
+          rdLlmWrap ?? false,
+          rdIsMedical ?? false,
           text,
           buildDispatchDeps(),
         );
@@ -1665,8 +1651,8 @@ export default function ChatScreen() {
         history: historySnapshot,
         local_time,
         local_date,
-        device_context: tierDecision.tier === 2 && tierDecision.localContext
-          ? buildTier2DeviceContext(tierDecision.localContext)
+        device_context: rdTier === 2 && rdLocalContext
+          ? buildTier2DeviceContext(rdLocalContext)
           : buildAmbientDeviceContext(getContextBlock() || undefined),
         persona: personaKey,
         lat: lat ?? undefined,
