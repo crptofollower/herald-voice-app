@@ -48,11 +48,15 @@ export function useMic(onTranscript: (text: string) => void) {
     }
     setIsRecording(false);
     if (maxTimer.current) { clearTimeout(maxTimer.current); maxTimer.current = null; }
+    if (bufferTimerRef.current) { clearTimeout(bufferTimerRef.current); bufferTimerRef.current = null; }
+    bufferRef.current = '';
   });
 
   useSpeechRecognitionEvent('end', () => {
     setIsRecording(false);
     if (maxTimer.current) { clearTimeout(maxTimer.current); maxTimer.current = null; }
+    if (bufferTimerRef.current) { clearTimeout(bufferTimerRef.current); bufferTimerRef.current = null; }
+    bufferRef.current = '';
   });
 
   // ── stopRecording memoized — onTranscript is its only external dep ─────────
