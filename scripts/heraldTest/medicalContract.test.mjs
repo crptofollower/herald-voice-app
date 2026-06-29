@@ -190,35 +190,50 @@ export async function runMedicalContractTests() {
     v => typeof v === 'string' && v.toLowerCase().includes("don't have"),
     "includes \"don't have\"");
 
-  // ── M14: extractFactsLocally never writes 'medications' to the ambient facts table
+  // ── M14: extractFactsLocally must NOT write ambient medications fact for "I am on X"
+  // Pattern 503 was deleted in b0aa3ec2 — this pins that deletion permanently.
   {
     const { extractFactsLocally } = await import('./src/db/factDB.ts');
     const db14 = new Database(':memory:');
-    db14.exec(`CREATE TABLE IF NOT EXISTS facts (
-      id TEXT PRIMARY KEY, fact TEXT, category TEXT, confidence REAL,
-      source_date TEXT, use_count INTEGER DEFAULT 0, context_type TEXT,
+    db14.exec(`
+    CREATE TABLE IF NOT EXISTS facts (
+      id TEXT PRIMARY KEY, category TEXT, value TEXT, confidence REAL,
+      source_msg TEXT, created_at TEXT, expires_at TEXT,
       valid_until TEXT, importance_score REAL, last_used TEXT
-    ); CREATE TABLE IF NOT EXISTS observations (
+    );
+    CREATE TABLE IF NOT EXISTS observations (
       id TEXT PRIMARY KEY, observation TEXT, category TEXT,
       confidence REAL, source_msg TEXT, created_at TEXT
     );`);
     setDB(makeShim(db14));
     extractFactsLocally('I am on Eliquis');
-    const rows14 = db14.prepare("SELECT count(*) as n FROM facts WHERE category = 'medications'").get();
-    assert('M14 extractFactsLocally: no ambient medications fact for "I am on X"', rows14.n, (v) => v === 0, 0);
+    const rows14 = db14.prepare(
+      "SELECT count(*) as n FROM facts WHERE category = 'medications'"
+    ).get();
+    assert(
+      'M14 extractFactsLocally: no ambient medications fact for "I am on X"',
+      rows14.n, (v) => v === 0, 0
+    );
   }
 
   // ── M15: isMedicalCaptureIntent catches the uncontracted form
   {
     const { isMedicalCaptureIntent } = await import('./src/db/factDB.ts');
-    assert('M15 isMedicalCaptureIntent: "I am on Eliquis" returns true', isMedicalCaptureIntent('I am on Eliquis'), (v) => v === true, true);
+    assert(
+      'M15 isMedicalCaptureIntent: "I am on Eliquis" returns true',
+      isMedicalCaptureIntent('I am on Eliquis'),
+      (v) => v === true, true
+    );
   }
 
   // ── M16: detectMedicalEvent still catches the contracted form upstream
   {
     const { detectMedicalEvent } = await import('./src/utils/detectMedicalEvent.ts');
     const ev16 = detectMedicalEvent("I'm on Eliquis");
-    assert('M16 detectMedicalEvent: "I\'m on Eliquis" returns medication event', ev16?.type, (v) => v === 'medication', 'medication');
+    assert(
+      "M16 detectMedicalEvent: \"I'm on Eliquis\" returns medication event",
+      ev16?.type, (v) => v === 'medication', 'medication'
+    );
   }
 
   const total = passed + failures.length;
