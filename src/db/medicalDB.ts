@@ -13,7 +13,7 @@
 // facts flow: Railway extraction → SSE done payload → this file.
 
 import { getDB } from "./schema";
-import { extractDrugName, extractDosage } from "../utils/detectMedicalEvent";
+import { extractDrugName } from "../utils/detectMedicalEvent";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -225,8 +225,8 @@ export function guessMedicationName(value: string): string {
 // The single supersede-aware writer for medications (SPINE §4a one-writer).
 // Primary caller: the confirm gate, after the user said yes to a name/dosage
 // shown back to them — writes EXACTLY those values, never re-deriving from raw
-// text at write time. Also called by writeMedicalFact's SSE fact path (no
-// confirm gate there). On an existing active row of the same name it SUPERSEDES
+// text at write time. Reached only through the confirm-gated routing authority
+// (DOMAIN_WRITERS.medical_capture). On an existing active row of the same name it SUPERSEDES
 // (retire old, insert new); otherwise it creates.
 export function confirmMedicationCapture(
   name: string,
@@ -263,32 +263,20 @@ export function confirmMedicationCapture(
 }
 
 export function writeMedicalFact(
-  category: "medication" | "medical" | "visit",
+  category: "medical" | "visit",
   value: string
 ): void {
   if (!value?.trim()) return;
 
-  if (category === "medication") {
-    // Route through the single supersede-aware writer (SPINE §4a one-writer).
-    // Was: dedupe-then-no-op on an existing active row, which silently dropped
-    // dose updates arriving on the SSE fact path. Now supersedes like the
-    // confirm path. NOTE: this path has no confirm gate, so a casual mention
-    // carries its dose when one is present to avoid replacing a richer row.
-    const nameGuess = guessMedicationName(value);
-    const dosageGuess = extractDosage(value);
-    confirmMedicationCapture(nameGuess, dosageGuess, value);
-    return;
-  }
-
-  if (category === "medical" || category === "visit") {
-    // Extract doctor name if present
-    const doctorMatch = value.match(/Dr\.?\s+(\w+)/i);
-    writeMedicalRecord({
-      doctor_name: doctorMatch ? `Dr. ${doctorMatch[1]}` : undefined,
-      notes: value,
-    });
-    return;
-  }
+  // Medications are never written here. They flow exclusively through the
+  // confirm-gated routing authority (DOMAIN_WRITERS.medical_capture →
+  // confirmMedicationCapture), the single verified medication writer (SPINE §4a).
+  // This only mirrors doctor-visit / general medical notes to medical_records.
+  const doctorMatch = value.match(/Dr\.?\s+(\w+)/i);
+  writeMedicalRecord({
+    doctor_name: doctorMatch ? `Dr. ${doctorMatch[1]}` : undefined,
+    notes: value,
+  });
 }
 
 // ─── getMedicalSummary ────────────────────────────────────────────────────────
