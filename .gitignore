@@ -18,6 +18,12 @@ scripts/**
 !scripts/heraldTest/offlineCapture.mjs
 !scripts/heraldTest/package.json
 !scripts/heraldTest/package-lock.json
+!scripts/heraldTest/tsconfig.json
+!scripts/heraldTest/_stubs/
+!scripts/heraldTest/_stubs/expo-sqlite.ts
+!scripts/heraldTest/medicalContract.test.ts
+!scripts/heraldTest/householdContract.test.ts
+!scripts/heraldTest/dispatchContract.test.ts
 # keep derived/installed files out — mirrors are copies of tracked src/, node_modules is installed
 scripts/heraldTest/node_modules/
 scripts/heraldTest/src/

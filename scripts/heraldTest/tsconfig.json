@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": "../..",
+    "paths": {
+      "expo-sqlite": ["./scripts/heraldTest/_stubs/expo-sqlite.ts"]
+    }
+  }
+}
