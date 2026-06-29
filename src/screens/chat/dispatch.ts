@@ -25,7 +25,6 @@ import { isMedicationCorroborated } from '../../db/factDB';
 // resolve them (collect a phone number, confirm a medication, etc.).
 export interface DispatchPendingRefs {
   pendingContactCollectRef: MutableRefObject<{ action: 'call' | 'navigate' | 'text' | 'confirm_phone' | 'confirm_call'; name: string; body?: string; phone?: string } | null>;
-  pendingMedConfirmRef: MutableRefObject<{ category: 'medication' | 'medical' | 'visit'; value: string; guessedName: string; guessedDosage?: string } | null>;
   pendingMedClearRef: MutableRefObject<{ count: number } | null>;
   pendingTodoCompleteRef: MutableRefObject<{ id: string; body: string } | null>;
 }
@@ -86,7 +85,7 @@ export async function dispatchAction(
   const {
     addMessage, speak, generateId, llmStatus, getCtx, phraseWithLLM,
     resolveContactPhone, handleCalendarAction, handleMapsAction, launchAndroidTimer,
-    handleLaunchActionRef, pendingContactCollectRef, pendingMedConfirmRef,
+    handleLaunchActionRef, pendingContactCollectRef,
     pendingMedClearRef, pendingTodoCompleteRef,
   } = deps;
 
@@ -190,7 +189,7 @@ export async function dispatchAction(
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
           } catch {
-            const reply = "I couldn't save that — could you try again?";
+            const reply = "I didn't quite catch that — could you tell me again?";
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
           }
