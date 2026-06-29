@@ -500,7 +500,9 @@ const LOCAL_PATTERNS: Array<{
 
   // Medical
   { pattern: /\bmy doctor is (Dr\.?\s*\w+(?:\s+\w+)?)/i,              category: 'medical',       extract: m => `doctor: ${m[1]}`,          importance: 95 },
-  { pattern: /\bi('m| am) (taking|on) (\w+(?:\s+\w+)?)\b/i,           category: 'medications',   extract: m => `medication: ${m[3]}`,      importance: 95 },
+  // medications are intentionally NOT an ambient local pattern: they are trust-critical
+  // Tier-1 facts and must flow only through the confirm-gated medical_capture writer into
+  // the medications table — never the ambient facts table (ARCHITECTURAL_SPINE §3/§4a).
   { pattern: /\bi('m| am) allergic to (\w+(?:\s+\w+)?)\b/i,           category: 'medical',       extract: m => `allergy: ${m[2]}`,         importance: 95 },
   { pattern: /\bdiagnosed with (\w+(?:\s+\w+)?)\b/i,                   category: 'medical',       extract: m => `condition: ${m[1]}`,       importance: 95 },
 
