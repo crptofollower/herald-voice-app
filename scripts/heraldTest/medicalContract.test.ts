@@ -13,14 +13,14 @@
 // Gate:    Must be green before Gate 3 / Heather onboard. Hard blocker.
 
 import Database from 'better-sqlite3';
-import { setDB } from './src/db/schema.ts';
+import { setDB } from '../../src/db/schema.ts';
 import {
   writeMedication,
   confirmMedicationCapture,
   getActiveMedications,
   getMedicalSummary,
   deactivateMedicationByName,
-} from './src/db/medicalDB.ts';
+} from '../../src/db/medicalDB.ts';
 
 const BOLD  = '\x1b[1m';
 const RED   = '\x1b[31m';
@@ -193,7 +193,7 @@ export async function runMedicalContractTests() {
   // ── M14: extractFactsLocally must NOT write ambient medications fact for "I am on X"
   // Pattern 503 was deleted in b0aa3ec2 — this pins that deletion permanently.
   {
-    const { extractFactsLocally } = await import('./src/db/factDB.ts');
+    const { extractFactsLocally } = await import('../../src/db/factDB.ts');
     const db14 = new Database(':memory:');
     db14.exec(`
     CREATE TABLE IF NOT EXISTS facts (
@@ -218,7 +218,7 @@ export async function runMedicalContractTests() {
 
   // ── M15: isMedicalCaptureIntent catches the uncontracted form
   {
-    const { isMedicalCaptureIntent } = await import('./src/db/factDB.ts');
+    const { isMedicalCaptureIntent } = await import('../../src/db/factDB.ts');
     assert(
       'M15 isMedicalCaptureIntent: "I am on Eliquis" returns true',
       isMedicalCaptureIntent('I am on Eliquis'),
@@ -228,7 +228,7 @@ export async function runMedicalContractTests() {
 
   // ── M16: detectMedicalEvent still catches the contracted form upstream
   {
-    const { detectMedicalEvent } = await import('./src/utils/detectMedicalEvent.ts');
+    const { detectMedicalEvent } = await import('../../src/utils/detectMedicalEvent.ts');
     const ev16 = detectMedicalEvent("I'm on Eliquis");
     assert(
       "M16 detectMedicalEvent: \"I'm on Eliquis\" returns medication event",

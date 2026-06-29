@@ -13,11 +13,22 @@
 //   cd scripts\heraldTest
 //   npx tsx run.mjs
 
-import { classifyQuery } from "./src/routing/tierRouter.ts";
-import { normalizePhone } from "./src/utils/phone.ts";
-import { normalizeInput } from "./src/utils/normalizeInput.ts";
+import { classifyQuery } from "../../src/routing/tierRouter.ts";
+import { normalizePhone } from "../../src/utils/phone.ts";
+import { normalizeInput } from "../../src/utils/normalizeInput.ts";
 import { extractDosage } from "../../src/utils/detectMedicalEvent.ts";
-import { runDispatchContractTests } from './dispatchContract.test.mjs';
+import { runDispatchContractTests } from './dispatchContract.test.ts';
+
+// Inject a minimal DB shim so calendar/profile/fact DB calls in tierRouter
+// don't throw during routing classification tests. Returns empty results —
+// tests check routing only, not DB content.
+import { setDB } from '../../src/db/schema.ts';
+setDB({
+  getAllSync: (_sql, _params) => [],
+  getFirstSync: (_sql, _params) => null,
+  runSync: (_sql, _params) => ({ changes: 0, lastInsertRowId: 0 }),
+  execSync: (_sql) => {},
+});
 
 function kindOf(d) {
   if (d.actionIntent) return d.actionIntent.type;
@@ -269,8 +280,8 @@ for (const [label, input, expected] of DOSAGE_TESTS) {
 }
 
 // ─── Contract suites — wired here so one command gates everything ───────────
-const { runHouseholdContractTests } = await import('./householdContract.test.mjs');
-const { runMedicalContractTests }   = await import('./medicalContract.test.mjs');
+const { runHouseholdContractTests } = await import('./householdContract.test.ts');
+const { runMedicalContractTests }   = await import('./medicalContract.test.ts');
 const hResult = await runHouseholdContractTests();
 const mResult = await runMedicalContractTests();
 const dResult = await runDispatchContractTests();

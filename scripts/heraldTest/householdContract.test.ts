@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
-import { setDB } from './src/db/schema.ts';
-import { writeServiceProvider, captureHousehold } from './src/utils/householdCapture.ts';
-import { answerHouseholdRead, detectHouseholdRead } from './src/utils/householdRead.ts';
+import { setDB } from '../../src/db/schema.ts';
+import { writeServiceProvider, captureHousehold } from '../../src/utils/householdCapture.ts';
+import { answerHouseholdRead, detectHouseholdRead } from '../../src/utils/householdRead.ts';
 
 const BOLD='\x1b[1m',RED='\x1b[31m',GREEN='\x1b[32m',DIM='\x1b[2m',RESET='\x1b[0m';
 const SCHEMA_SQL = `

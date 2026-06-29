@@ -14,8 +14,8 @@
 //   cd scripts\heraldTest
 //   npx tsx routeIntent.test.mjs
 
-import { classifyQuery } from "./src/routing/tierRouter.ts";
-import { routeIntent } from "./src/routing/routeIntent.ts";
+import { classifyQuery } from "../../src/routing/tierRouter.ts";
+import { routeIntent } from "../../src/routing/routeIntent.ts";
 
 const RESET = "\x1b[0m";
 const GREEN = "\x1b[32m";
