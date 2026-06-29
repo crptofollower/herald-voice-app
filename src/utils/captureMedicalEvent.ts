@@ -43,15 +43,23 @@ export function captureMedicalEvent(event: MedicalEvent): CaptureResult {
       followUpQuestion = "Got it. What's the dosage?";
     }
   } else {
+    // Spine §5: never write a confident-wrong row. A clean doctor name is HEARD
+    // (Dr. X), not guessed — write it. A specialty-only or nameless visit
+    // ("I saw my cardiologist") names no one — a specialty resolves to multiple
+    // people over time, so writing it as doctor_name poisons the §6 graph. Ask
+    // instead of inventing (Graceful Confusion); write NOTHING until we have a name.
+    if (!event.doctor_name) {
+      return {
+        recordId: '',
+        followUpSlot: 'doctor_name',
+        followUpQuestion: "Got it — who did you see?",
+      };
+    }
     recordId = writeMedicalRecord({
       doctor_name: event.doctor_name,
       notes: event.advice ? `${event.raw} — ${event.advice}` : event.raw,
       visit_date: new Date().toLocaleDateString('en-CA'),
     });
-    if (!event.doctor_name) {
-      followUpSlot = 'doctor_name';
-      followUpQuestion = "Got it. Do you know the doctor's name?";
-    }
   }
 
   if (followUpSlot) {

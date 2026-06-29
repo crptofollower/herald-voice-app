@@ -20,7 +20,9 @@ import {
   getActiveMedications,
   getMedicalSummary,
   deactivateMedicationByName,
+  getMedicalRecords,
 } from '../../src/db/medicalDB.ts';
+import { captureMedicalEvent } from '../../src/utils/captureMedicalEvent.ts';
 
 const BOLD  = '\x1b[1m';
 const RED   = '\x1b[31m';
@@ -64,6 +66,12 @@ const SCHEMA_SQL = `
     address TEXT,
     is_primary INTEGER DEFAULT 0,
     notes TEXT,
+    created_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS pending_clarifications (
+    id TEXT PRIMARY KEY,
+    record_id TEXT,
+    slot TEXT,
     created_at TEXT
   );
 `;
@@ -235,6 +243,37 @@ export async function runMedicalContractTests() {
       ev16?.type, (v) => v === 'medication', 'medication'
     );
   }
+
+  // ── M17: clean doctor name → exactly one visit record, doctor_name verbatim ─
+  // "I saw Dr. Sarver today" — a clean "Dr. X" name is HEARD, not guessed.
+  // Visit policy + Spine §5: write immediately, verbatim. This case SHOULD write.
+  freshDB();
+  captureMedicalEvent({
+    type: 'visit', tense: 'past', doctor_name: 'Dr. Sarver',
+    raw: 'I saw Dr. Sarver today',
+  });
+  const recs17 = getMedicalRecords();
+  assert('M17 clean-name visit writes exactly one record', recs17.length,
+    v => v === 1, '1');
+  assert('M17 doctor_name stored verbatim', recs17[0]?.doctor_name,
+    v => v === 'Dr. Sarver', '"Dr. Sarver"');
+
+  // ── M18: specialty-only (NO clean name) → ZERO records written ─────────────
+  // "I saw my cardiologist" has no "Dr. X". A specialty resolves to multiple
+  // people over time; writing it as doctor_name is a confident-wrong write (§5)
+  // that poisons the future association graph (§6). It MUST write NOTHING and ask.
+  // EXPECTED TO FAIL against current code (which writes unconditionally). Do NOT
+  // alter this test to make it pass — the fix (A2) changes the code to satisfy it.
+  freshDB();
+  const visit18 = captureMedicalEvent({
+    type: 'visit', tense: 'past', specialty: 'cardiologist',
+    raw: 'I saw my cardiologist',
+  });
+  const recs18 = getMedicalRecords();
+  assert('M18 specialty-only visit writes ZERO records', recs18.length,
+    v => v === 0, '0');
+  assert('M18 specialty-only visit asks who you saw', visit18.followUpQuestion,
+    v => typeof v === 'string' && /who/i.test(v), 'a "who did you see?" question');
 
   const total = passed + failures.length;
   console.log(
