@@ -2,7 +2,7 @@
 // Herald device SQLite — table definitions and migration runner.
 // Session L — Device-First Intelligence Layer
 //
-// SCHEMA VERSION: 9
+// SCHEMA VERSION: 16
 // v1: Initial schema — facts, profile, medical, calendar_cache (ISO strings), life_tracker
 // v2: calendar_cache rebuilt with Unix ms timestamps (timezone fix)
 // v3: Entity graph + importance scoring + temporal awareness (locked Session L spec)
@@ -15,6 +15,13 @@
 //     WAL mode enabled on getDB() open
 // v8: contacts.is_emergency flag (emergency safe word feature)
 // v9: local_topics table (device-side topic tracking for briefings)
+// v10: medications.removed_at (soft-delete audit track)
+// v11: insurance_policies.is_active (supersession support)
+// v12: list_items.removed_at
+// v13: service_providers.removed_at
+// v14: legal_documents.removed_at
+// v15: contacts.removed_at
+// v16: service_providers duplicate-active-row one-time repair
 //
 // RULE: NEVER modify a past migration. Always add at the next version number.
 //
@@ -41,6 +48,13 @@ export const DB_NAME = "herald_device.db";
 // if calendar refresh and fact write overlap.
 
 let _db: SQLite.SQLiteDatabase | null = null;
+
+// ─── Test-only injection seam (production never calls setDB) ───────────────────
+// Lets the contract harness inject an in-memory shim. Production is byte-identical:
+// with no setDB call, _db stays null until the first getDB() lazily opens the real DB.
+export function setDB(db: SQLite.SQLiteDatabase): void {
+  _db = db;
+}
 
 export function getDB(): SQLite.SQLiteDatabase {
   if (!_db) {
