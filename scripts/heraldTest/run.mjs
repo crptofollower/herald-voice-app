@@ -189,7 +189,7 @@ const RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", BOLD = "\x1b[1m",
 let passed = 0;
 const failures = [];
 const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length;
-const EXPECTED_TOTAL = 97; // guard against silent suite shrinkage; bump deliberately when you add/remove tests
+const EXPECTED_TOTAL = 148;
 
 console.log(`\n${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  HERALD ROUTER + PHONE TEST SUITE — ${TOTAL} tests${RESET}`);
@@ -282,7 +282,7 @@ console.log(`${BOLD}════════════════════
 console.log(`${BOLD}  RESULTS: ${GREEN}${passed + contractPassed} passed${RESET}${BOLD} / ${failures.length + contractFailed > 0 ? RED : GREEN}${failures.length + contractFailed} failed${RESET}${BOLD} / ${TOTAL + contractTotal} total${RESET}`);
 console.log(`${BOLD}═══════════════════════════════════════════════════${RESET}\n`);
 
-if (TOTAL !== EXPECTED_TOTAL) {
+if (TOTAL + contractTotal !== EXPECTED_TOTAL) {
   console.log(`${RED}${BOLD}❌ GATE COUNT MISMATCH — expected ${EXPECTED_TOTAL} tests, found ${TOTAL}.${RESET}`);
   console.log(`${RED}The suite changed size — tests may have been lost. DO NOT BUILD. If intentional, update EXPECTED_TOTAL.${RESET}\n`);
   process.exit(1);
