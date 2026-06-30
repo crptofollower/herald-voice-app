@@ -252,7 +252,6 @@ export default function ChatScreen() {
   // Pending contact collection — when Herald asks "what's their number/address?"
   // the next user message resolves this and executes the original intent.
   const pendingContactCollectRef = useRef<{ action: 'call' | 'navigate' | 'text' | 'confirm_phone' | 'confirm_call'; name: string; body?: string; phone?: string } | null>(null);
-  const pendingMedConfirmRef = useRef<{ category: 'medication' | 'medical' | 'visit'; value: string; guessedName: string; guessedDosage?: string } | null>(null);
   const pendingMedClearRef = useRef<{ count: number } | null>(null);
   const pendingInsuranceRef = useRef<{ type: string; carrier: string; ack: string } | null>(null);
   const pendingResumeRef = useRef<{
@@ -888,62 +887,6 @@ export default function ChatScreen() {
         setInputText('');
         return;
       }
-    }
-
-    // ── Pending medication confirm (Build A — Option B) ──
-    if (pendingMedConfirmRef.current) {
-      const pendingMed = pendingMedConfirmRef.current;
-      if (YES.test(text.trim())) {
-        pendingMedConfirmRef.current = null;
-        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-        let result: { id: string; action: 'created' | 'superseded'; previousId?: string } | null = null;
-        try {
-          if (pendingMed.category === 'medication') {
-            // Write EXACTLY what was confirmed — never re-derive from raw
-            // text at commit time (verbatim rule, Spine §3).
-            result = confirmMedicationCapture(pendingMed.guessedName, pendingMed.guessedDosage, pendingMed.value);
-          } else {
-            writeMedicalFact(pendingMed.category, pendingMed.value);
-          }
-        } catch (err) {
-          console.error('[Herald] medication confirm write failed:', err);
-        }
-        let reply: string;
-        if (pendingMed.category === 'medication') {
-          if (result?.action === 'superseded') {
-            reply = pendingMed.guessedDosage
-              ? `Got it — updated your ${pendingMed.guessedName} to ${pendingMed.guessedDosage}.`
-              : `Got it — updated your ${pendingMed.guessedName}.`;
-          } else if (result?.action === 'created') {
-            reply = pendingMed.guessedDosage
-              ? `Got it — I'll remember ${pendingMed.guessedName}, ${pendingMed.guessedDosage}, with your medications.`
-              : `Got it — I'll remember ${pendingMed.guessedName} with your medications.`;
-          } else {
-            reply = `I'm having trouble holding onto that one — let's try again in a moment.`;
-          }
-        } else {
-          reply = pendingMed.guessedDosage
-            ? `Got it — I'll remember ${pendingMed.guessedName}, ${pendingMed.guessedDosage}, with your medications.`
-            : `Got it — I'll remember ${pendingMed.guessedName} with your medications.`;
-        }
-        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-        speak(reply);
-        sendingRef.current = false;
-        setInputText('');
-        return;
-      }
-      if (NO.test(text.trim())) {
-        pendingMedConfirmRef.current = null;
-        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-        const reply = `No problem — I won't add that.`;
-        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-        speak(reply);
-        sendingRef.current = false;
-        setInputText('');
-        return;
-      }
-      // Not a yes/no — discard the pending confirm and fall through (fail toward not writing)
-      pendingMedConfirmRef.current = null;
     }
 
     // ── Pending medication CLEAR confirm (Build A — destructive, soft-delete) ──
@@ -2550,7 +2493,6 @@ export default function ChatScreen() {
     launchAndroidTimer,
     handleLaunchActionRef,
     pendingContactCollectRef,
-    pendingMedConfirmRef,
     pendingMedClearRef,
     pendingTodoCompleteRef,
   }), [addMessage, speak, llmStatus, getCtx, inferLocal]);
