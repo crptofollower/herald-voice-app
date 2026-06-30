@@ -175,26 +175,6 @@ export async function dispatchAction(
           await handleCalendarAction(actionIntent.value);
           return;
         }
-        if (actionIntent.type === 'medical_capture') {
-          const medEvent = actionIntent.event;
-          // MEDICATION: always confirm before writing. A dosage or corroboration
-          // signal only changes how confident the question SOUNDS — never whether
-          // we ask. Free-text drug-name guessing is correction-prone (Spine §4,
-          // Jun-20 decision: no corroboration exception).
-          const { captureMedicalEvent } = await import('../../utils/captureMedicalEvent');
-          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-          try {
-            const result = captureMedicalEvent(medEvent);
-            const reply = result.followUpQuestion ?? "Got it — I'll remember that.";
-            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-            speak(reply);
-          } catch {
-            const reply = "I didn't quite catch that — could you tell me again?";
-            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-            speak(reply);
-          }
-          return;
-        }
         if (actionIntent.type === 'medical_remove') {
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
           const removeName = actionIntent.name;

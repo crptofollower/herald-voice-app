@@ -1277,6 +1277,17 @@ export default function ChatScreen() {
             );
             return;
           }
+          if (medCategory === 'visit') {
+            // Visits tierRouter missed reach here. Route through the medical_visit
+            // writer so a nameless visit ASKS "who did you see?" (Spine §5) instead
+            // of writing a doctor-less row via writeMedicalFact. Heard "Dr. X" writes.
+            await applyConvertedIntents(
+              [{ type: 'medical_visit', raw: text }],
+              text,
+              { echoUser: true },
+            );
+            return;
+          }
           try {
             writeMedicalFact(medCategory, text);
             localFactsWritten = true;
