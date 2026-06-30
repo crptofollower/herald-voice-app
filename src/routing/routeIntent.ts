@@ -548,10 +548,11 @@ export async function routeIntent(
 
   if (decision.tier === 1 && decision.actionIntent) {
     const actionType = decision.actionIntent.type;
-    const isMedicationCapture =
-      actionType === 'medical_capture' &&
-      decision.actionIntent.event?.type === 'medication';
-    if (actionType !== 'list_add' && actionType !== 'todo_add' && !isMedicationCapture) {
+    // All medical_capture (medication, visit, advice) skips device_action and
+    // flows to the capture path → DOMAIN_WRITERS. Visits/advice were previously
+    // routed to dispatch's medical_capture branch; that island is retired (V4).
+    const isMedicalCapture = actionType === 'medical_capture';
+    if (actionType !== 'list_add' && actionType !== 'todo_add' && !isMedicalCapture) {
       return {
         kind: 'device_action',
         tier: 1,
@@ -596,14 +597,23 @@ export async function routeIntent(
   if (
     decision.tier === 1 &&
     decision.actionIntent?.type === 'medical_capture' &&
-    decision.actionIntent.event?.type === 'medication'
+    decision.actionIntent.event
   ) {
     const ev = decision.actionIntent.event;
+    if (ev.type === 'medication') {
+      return {
+        kind: 'capture',
+        intents: [{ type: 'medical_capture', drug: ev.drug_name, dosage: ev.dosage, raw: ev.raw }],
+        source: 'deterministic',
+        reason: 'tier1:medication_intercept',
+      };
+    }
+    // visit | advice → medical_visit (heard "Dr. X" writes; nameless asks who).
     return {
       kind: 'capture',
-      intents: [{ type: 'medical_capture', drug: ev.drug_name, dosage: ev.dosage, raw: ev.raw }],
+      intents: [{ type: 'medical_visit', doctor_name: ev.doctor_name, specialty: ev.specialty, advice: ev.advice, raw: ev.raw }],
       source: 'deterministic',
-      reason: 'tier1:medication_intercept',
+      reason: 'tier1:visit_intercept',
     };
   }
 
