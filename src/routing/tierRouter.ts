@@ -8,7 +8,7 @@ import { calendarWriteIsRecent } from "../db/calendarState";
 import { getFactsSummary } from "../db/factDB";
 import { normalizeInput } from "../utils/normalizeInput";
 import { getProfileSummary } from "../db/profileDB";
-import { getMedicalSummary } from "../db/medicalDB";
+import { getMedicalSummary, getMedicalRecords } from "../db/medicalDB";
 import { detectMedicalEvent } from "../utils/detectMedicalEvent";
 import type { MedicalEvent } from "../utils/detectMedicalEvent";
 import { detectHouseholdRead, type HouseholdReadIntent } from "../utils/householdRead";
@@ -118,6 +118,13 @@ const TIER1_SIGNALS = {
     /\bwhat (should i|do i) take\b/i,
     /\bmy (meds|medications|pills|prescriptions)\b/i,
     /\bdo i take (any )?(medication|meds|pills)\b/i,
+  ],
+  visit_read: [
+    /\bwho (did|have) i seen?\b/i,
+    /\bwho did i see\b/i,
+    /\bwho have i seen\b/i,
+    /\bwhich doctors? (did|have) i\b/i,
+    /\bwhat doctors? (did|have) i\b/i,
   ],
   profile: [
     /what('s| is) my name/i,
@@ -363,6 +370,30 @@ function calendarSpeech(
     return "I don't have your calendar loaded yet. Connect once with calendar access granted, then try again offline.";
   }
   return formatCachedEventsForSpeech(events, window);
+}
+
+// ─── Visit read authority (§4a one-reader for the medical_visit domain) ───────
+// Deterministic, offline, NEVER the LLM (Spine §3: medical reads never route
+// through phraseWithLLM). Reads the same rows DOMAIN_WRITERS.medical_visit writes.
+// NOTE: visit_date is stamped at CAPTURE time (writer uses today's date), so this
+// scopes "recently" by when the user TOLD Herald, not the true visit date. Honest
+// for the current write path; tighten when the writer captures real visit dates.
+// NOTE: no removed_at filter — medical_records gains soft-delete in the v17
+// migration; until then nothing can be removed, so there are no rows to exclude.
+function getVisitSummary(): string {
+  const records = getMedicalRecords().filter((r) => r.doctor_name && r.doctor_name.trim());
+  if (records.length === 0) {
+    return "I don't have anyone you've told me you've seen yet.";
+  }
+  const names: string[] = [];
+  for (const r of records) {
+    const name = r.doctor_name!.trim();
+    if (!names.includes(name)) names.push(name); // de-dupe, keep most-recent-first order
+  }
+  if (names.length === 1) return `You've seen ${names[0]}.`;
+  if (names.length === 2) return `You've seen ${names[0]} and ${names[1]}.`;
+  const last = names.pop();
+  return `You've seen ${names.join(', ')}, and ${last}.`;
 }
 
 export async function classifyQuery(message: string): Promise<TierDecision> {
@@ -780,6 +811,13 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     const events = await getTier1CalendarEvents("next week");
     const response = calendarSpeech("next week", events);
     return { tier: 1, tier1Response: response, reason: "calendar:next_week" };
+  }
+
+  // Tier 1: visit read — MUST precede calendar-week so "who did I see this week"
+  // resolves to visits, not an incidental "this week" calendar match (§4a one-reader).
+  if (TIER1_SIGNALS.visit_read.some((p) => p.test(msg))) {
+    const response = getVisitSummary();
+    return { tier: 1, tier1Response: response, isMedical: true, reason: "medical:visit_read" };
   }
 
   // Tier 1: calendar this week
