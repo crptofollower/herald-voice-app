@@ -2605,7 +2605,7 @@ export default function ChatScreen() {
                   { color: persona.colors.accent },
                 ]}
               >
-                Setting up voice brain...
+                Just getting ready — I'll be quicker in a moment.
               </Text>
             </View>
           )}
