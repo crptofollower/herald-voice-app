@@ -23,6 +23,7 @@ export type IntentRecord =
   | { type: 'list_remove'; item: string; listName: string }
   | { type: 'insurance_capture'; insType: string; carrier: string; agent?: string; phone?: string }
   | { type: 'medical_capture'; drug?: string; dosage?: string; frequency?: string; raw: string }
+  | { type: 'medical_visit'; doctor_name?: string; specialty?: string; advice?: string; raw: string }
   | { type: 'service_capture'; category: string; name: string; phone?: string }
   | { type: 'family_capture'; relation: string; name: string; location?: string; phone?: string }
   | { type: 'phone_capture'; name: string; phone: string; relationship?: string }
@@ -67,6 +68,7 @@ function isCaptureComplete(rec: IntentRecord): boolean {
     }
     case 'family_capture':    return isRealName(rec.name) && !!rec.relation?.trim();
     case 'medical_capture':   return !!rec.drug?.trim();
+    case 'medical_visit':     return !!(rec.doctor_name?.trim() || rec.specialty?.trim());
     case 'list_add':          return Array.isArray(rec.items) && rec.items.some(i => !!i?.trim());
     case 'list_remove':       return !!rec.item?.trim();
     case 'insurance_capture': return !!rec.carrier?.trim() && !!rec.insType?.trim();
@@ -131,6 +133,12 @@ MEDICAL CAPTURE — medications only, never diagnoses:
 "I started taking vitamin D 2000 IU every morning" → {"type":"medical_capture","drug":"vitamin D","dosage":"2000 IU","frequency":"every morning","raw":"I started taking vitamin D 2000 IU every morning"}
 "stop taking metformin" → {"type":"list_remove","item":"metformin","listName":"medications"}
 
+MEDICAL VISIT — doctor visits and appointments (never diagnoses, never medications):
+{"type":"medical_visit","doctor_name":"Dr. Reyes","raw":"I saw Dr. Reyes today"}
+"I saw Dr. Reyes today" → {"type":"medical_visit","doctor_name":"Dr. Reyes","raw":"I saw Dr. Reyes today"}
+"I saw my cardiologist" → {"type":"medical_visit","specialty":"cardiologist","raw":"I saw my cardiologist"}
+"my doctor told me to cut salt" → {"type":"medical_visit","specialty":"doctor","advice":"cut salt","raw":"my doctor told me to cut salt"}
+
 SERVICE CAPTURE — plumbers, electricians, mechanics, contractors:
 {"type":"service_capture","category":"plumber","name":"Joe","phone":"555-0100"}
 "my plumber is Joe his number is 555-0100" → {"type":"service_capture","category":"plumber","name":"Joe","phone":"555-0100"}
@@ -169,6 +177,7 @@ PASS — use when live data needed, unclear, or none of the above:
 CRITICAL RULES:
 - ALWAYS split list items into array — "apples oranges milk" = ["apples","oranges","milk"], NEVER one string
 - Drug names and dosages: copy VERBATIM from speech, never guess or correct spelling
+- A visit specialty (cardiologist, dentist, doctor) is NEVER a doctor_name — put it in the specialty field, never invent a "Dr." name
 - "remove X replace with Y" for insurance = insurance_capture with new carrier Y, never list_remove
 - "got X" or "picked up X" = list_remove
 - If user says "add X to my list" or "put X on my list" = ALWAYS list_add, never service_capture or todo_add — even if X sounds like a provider (dentist, plumber, doctor)
