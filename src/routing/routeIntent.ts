@@ -448,6 +448,61 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       } catch { return { status: 'failed', ack: "I couldn't do that right now — try again." }; }
     },
   },
+  medical_visit: {
+    async add(intent: IntentRecord, rawPhrase: string): Promise<CommitResult> {
+      if (intent.type !== 'medical_visit') {
+        return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
+      }
+      const { writeMedicalRecord } = await import('../db/medicalDB');
+      const { extractDoctorName } = await import('../utils/detectMedicalEvent');
+      const raw = intent.raw ?? rawPhrase;
+      const advice = intent.advice?.trim();
+      const visitDate = new Date().toLocaleDateString('en-CA');
+
+      const commitVisit = (doctorName: string): CommitResult => {
+        writeMedicalRecord({
+          doctor_name: doctorName,
+          notes: advice ? `${raw} — ${advice}` : raw,
+          visit_date: visitDate,
+        });
+        return { status: 'committed', ack: `Got it — I'll remember you saw ${doctorName}.` };
+      };
+
+      // A clean doctor name is HEARD (Dr. X), not guessed → write immediately
+      // (Spine §3/§5). No confirm gate — unlike a guessed drug name.
+      const heardName = intent.doctor_name?.trim();
+      if (heardName) return commitVisit(heardName);
+
+      // No clean name (specialty-only / nameless) → ask, write NOTHING (Spine §5,
+      // Graceful Confusion). Replaces the old writeClarification('', ...) empty-id bug.
+      return {
+        status: 'pending',
+        prompt: 'Got it — who did you see?',
+        pendingKey: 'medical_visit',
+        resume: async (userText: string): Promise<CommitResult> => {
+          let name = extractDoctorName(userText);
+          if (!name) {
+            const t = userText.trim().replace(/[.!?]+$/, '')
+              .replace(/^(it'?s|that'?s|i saw|i went to|his name is|her name is|the name is|it was)\s+/i, '');
+            const first = t.split(/\s+/).slice(0, 2).join(' ');
+            if (/^[A-Za-z][a-zA-Z'\-]+(?:\s+[A-Za-z][a-zA-Z'\-]+)?$/.test(first) && first.length >= 2) {
+              name = first;
+            }
+          }
+          if (!name) return { status: 'noop', ack: '' }; // not a name → caller re-routes
+          return commitVisit(name);
+        },
+      };
+    },
+    async remove(item: string): Promise<CommitResult> {
+      // medical_records has no removed_at yet (schema v16). Soft-delete lands with
+      // the v17 migration; until then a deliberate noop, never a hard delete.
+      return { status: 'noop', ack: 'Noted.' };
+    },
+    async clear(): Promise<CommitResult> {
+      return { status: 'noop', ack: 'Noted.' };
+    },
+  },
 };
 
 // allConverted: returns true when every intent in a capture decision has a

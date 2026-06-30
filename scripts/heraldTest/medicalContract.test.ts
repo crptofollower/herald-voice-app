@@ -14,6 +14,7 @@
 
 import Database from 'better-sqlite3';
 import { setDB } from '../../src/db/schema.ts';
+import { DOMAIN_WRITERS } from '../../src/routing/routeIntent.ts';
 import {
   writeMedication,
   confirmMedicationCapture,
@@ -22,7 +23,6 @@ import {
   deactivateMedicationByName,
   getMedicalRecords,
 } from '../../src/db/medicalDB.ts';
-import { captureMedicalEvent } from '../../src/utils/captureMedicalEvent.ts';
 
 const BOLD  = '\x1b[1m';
 const RED   = '\x1b[31m';
@@ -248,10 +248,11 @@ export async function runMedicalContractTests() {
   // "I saw Dr. Sarver today" — a clean "Dr. X" name is HEARD, not guessed.
   // Visit policy + Spine §5: write immediately, verbatim. This case SHOULD write.
   freshDB();
-  captureMedicalEvent({
-    type: 'visit', tense: 'past', doctor_name: 'Dr. Sarver',
+  await DOMAIN_WRITERS.medical_visit!.add({
+    type: 'medical_visit',
+    doctor_name: 'Dr. Sarver',
     raw: 'I saw Dr. Sarver today',
-  });
+  }, 'I saw Dr. Sarver today');
   const recs17 = getMedicalRecords();
   assert('M17 clean-name visit writes exactly one record', recs17.length,
     v => v === 1, '1');
@@ -262,18 +263,51 @@ export async function runMedicalContractTests() {
   // "I saw my cardiologist" has no "Dr. X". A specialty resolves to multiple
   // people over time; writing it as doctor_name is a confident-wrong write (§5)
   // that poisons the future association graph (§6). It MUST write NOTHING and ask.
-  // EXPECTED TO FAIL against current code (which writes unconditionally). Do NOT
-  // alter this test to make it pass — the fix (A2) changes the code to satisfy it.
   freshDB();
-  const visit18 = captureMedicalEvent({
-    type: 'visit', tense: 'past', specialty: 'cardiologist',
+  const visit18 = await DOMAIN_WRITERS.medical_visit!.add({
+    type: 'medical_visit',
+    specialty: 'cardiologist',
     raw: 'I saw my cardiologist',
-  });
+  }, 'I saw my cardiologist');
   const recs18 = getMedicalRecords();
   assert('M18 specialty-only visit writes ZERO records', recs18.length,
     v => v === 0, '0');
-  assert('M18 specialty-only visit asks who you saw', visit18.followUpQuestion,
+  assert('M18 specialty-only visit asks who you saw',
+    visit18.status === 'pending' ? visit18.prompt : '',
     v => typeof v === 'string' && /who/i.test(v), 'a "who did you see?" question');
+
+  // ── M19: pending resume with clean name → committed, one record ─────────────
+  freshDB();
+  const visit19 = await DOMAIN_WRITERS.medical_visit!.add({
+    type: 'medical_visit',
+    specialty: 'cardiologist',
+    raw: 'I saw my cardiologist',
+  }, 'I saw my cardiologist');
+  assert('M19 specialty-only returns pending', visit19.status,
+    v => v === 'pending', 'pending');
+  const resumed19 = await visit19.resume('Dr. Chen');
+  assert('M19 resume commits', resumed19.status,
+    v => v === 'committed', 'committed');
+  const recs19 = getMedicalRecords();
+  assert('M19 resume writes exactly one record', recs19.length,
+    v => v === 1, '1');
+  assert('M19 resumed doctor_name stored verbatim', recs19[0]?.doctor_name,
+    v => v === 'Dr. Chen', '"Dr. Chen"');
+
+  // ── M20: advice appended to notes verbatim ─────────────────────────────────
+  freshDB();
+  await DOMAIN_WRITERS.medical_visit!.add({
+    type: 'medical_visit',
+    doctor_name: 'Dr. Lee',
+    advice: 'cut salt',
+    raw: 'I saw Dr. Lee today',
+  }, 'I saw Dr. Lee today');
+  const recs20 = getMedicalRecords();
+  assert('M20 advice visit writes one record', recs20.length,
+    v => v === 1, '1');
+  assert('M20 notes include raw and advice verbatim', recs20[0]?.notes,
+    v => v === 'I saw Dr. Lee today — cut salt',
+    '"I saw Dr. Lee today — cut salt"');
 
   const total = passed + failures.length;
   console.log(
@@ -284,6 +318,6 @@ export async function runMedicalContractTests() {
   return { passed, failed: failures.length, total, failures };
 }
 
-if (process.argv[1]?.endsWith('medicalContract.test.mjs')) {
+if (process.argv[1]?.endsWith('medicalContract.test.ts')) {
   runMedicalContractTests().catch(console.error);
 }
