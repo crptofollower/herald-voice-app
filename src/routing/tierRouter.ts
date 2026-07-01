@@ -287,6 +287,17 @@ const TODO_ADD_SIGNALS = [
 // Dates that route to reminder/calendar instead of todo
 const TODO_DATE_SIGNALS = /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|this week|at \d|by \d|\d+am|\d+pm|tonight|morning|afternoon|evening)\b/i;
 
+// ── Acquisition-shape disambiguation (todo vs grocery) ──────────────────────
+// "I need to pick up X" is ambiguous between an errand (todo) and a grocery item;
+// syntax ALONE cannot separate "pick up rib eyes" from "pick up my dry cleaning".
+// The deterministic floor disambiguates ONLY when the utterance NAMES grocery
+// context — it never guesses which. Marker present → grocery (handled below).
+// Marker absent → left to the todo_add default unchanged.
+const ACQUISITION_SHAPE =
+  /\b(?:need\s+to|have\s+to|gotta|got\s+to)\s+(?:pick\s+up|get|buy|grab)\b/i;
+const GROCERY_CONTEXT_MARKER =
+  /\b(?:grocery|groceries|grocery\s+store|supermarket|shopping\s+list)\b/i;
+
 const TODO_READ_SIGNALS = [
   /\bwhat('s| is) on my (to.?do|todo) list\b/i,
   /\bshow (me )?my (to.?do|todo)s?\b/i,
@@ -588,6 +599,37 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   // Device: todo read
   if (TODO_READ_SIGNALS.some((p) => p.test(msg))) {
     return { tier: 1, actionIntent: { type: 'todo_read' }, reason: 'action:todo_read' };
+  }
+
+  // Device: grocery acquisition — "I need to pick up X from the grocery store".
+  // Runs BEFORE todo_add so an utterance that NAMES grocery context resolves to a
+  // grocery add instead of being swallowed as a todo. Fires ONLY when BOTH the
+  // acquisition shape AND an explicit grocery marker are present. No marker → this
+  // block does nothing and the utterance falls through to todo_add unchanged.
+  if (
+    ACQUISITION_SHAPE.test(msg) &&
+    GROCERY_CONTEXT_MARKER.test(msg) &&
+    !detectMedicalEvent(msg)
+  ) {
+    const m = msg.match(
+      /\b(?:need\s+to|have\s+to|gotta|got\s+to)\s+(?:pick\s+up|get|buy|grab)\s+(.+)/i,
+    );
+    let raw = (m?.[1] ?? '').trim();
+    raw = raw
+      .replace(/\s+(?:from|at)\s+(?:the\s+)?(?:grocery\s+store|grocery|groceries|supermarket|store|market|shopping)\b.*$/i, '')
+      .replace(/\s+(?:today|tonight|tomorrow|this\s+(?:morning|afternoon|evening|week)|next\s+week|at\s+\d.*|by\s+\d.*|\d+\s*(?:am|pm))\b.*$/i, '')
+      .trim();
+    const items = raw
+      .split(/\s*,\s*|\s+and\s+/i)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    if (items.length > 0) {
+      return {
+        tier: 1,
+        actionIntent: { type: 'list_add', items, listName: 'grocery' },
+        reason: 'action:list_add:acquisition_grocery',
+      };
+    }
   }
 
   // Device: todo add — trigger phrases WITHOUT a resolvable date (date = reminder, not todo)
