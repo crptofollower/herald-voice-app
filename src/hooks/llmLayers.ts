@@ -1,20 +1,13 @@
 // src/hooks/llmLayers.ts
-// Two-layer on-device LLM architecture for Herald.
+// On-device intent classification for Herald.
 //
 // Layer 1 — classifyWithLLM: messy speech → structured IntentRecord JSON
 //   Temperature 0.1, n_predict 80, 5s timeout.
 //   Falls back to null on any failure — caller uses tierRouter regex as fallback.
 //
-// Layer 2 — phraseWithLLM: SQL result + persona context → natural sentence
-//   Temperature 0.7, n_predict 100, 8s timeout.
-//   Falls back to null — caller uses deterministic string.
-//   NEVER used for medical reads (medical stays deterministic SQL template only).
-//
 // MedicalEvent import kept minimal — type only, no runtime dependency.
 
 import type { LlamaContext } from 'llama.rn';
-import { buildPersonaContext } from '../utils/personaContext';
-import { getDB } from '../db/schema';
 
 // ─── Intent types ─────────────────────────────────────────────────────────────
 
@@ -213,53 +206,5 @@ User: "${trimmed.replace(/"/g, '\\"')}"`;
     return [parsed];
   } catch {
     return [];
-  }
-}
-
-// ─── Layer 2 — Voice wrapper ──────────────────────────────────────────────────
-
-export async function phraseWithLLM(
-  ctx: LlamaContext | null,
-  args: {
-    userQuestion: string;
-    confirmedData: string;
-    isMedical?: boolean;
-  },
-): Promise<string | null> {
-  if (!ctx) return null;
-  const data = args.confirmedData.trim();
-  const question = args.userQuestion.trim();
-  if (!data || !question) return null;
-
-  // HARD RULE: never use LLM voice wrapper for medical reads.
-  // Medical stays deterministic SQL template only.
-  if (args.isMedical) return null;
-
-  const personaBlock = buildPersonaContext(getDB());
-
-  const prompt = `${personaBlock}
-User asked: "${question.replace(/"/g, '\\"')}"
-CONFIRMED DATA (these facts are authoritative — repeat them exactly, do not add or omit anything):
-${data.replace(/"/g, '\\"')}
-Do not add location claims, relationship history, or any detail not present in the CONFIRMED DATA above.
-Reply in ONE warm spoken sentence as a friend who remembers. Under 25 words. No lists, no bullets.`;
-
-  try {
-    const result = await Promise.race([
-      ctx.completion({
-        messages: [{ role: 'user', content: prompt }],
-        n_predict: 100,
-        temperature: 0.7,
-        stop: ['\n\n', '<|end|>', '<|eot_id|>'],
-      }),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('phrase timeout')), PHRASE_TIMEOUT_MS),
-      ),
-    ]);
-
-    const text = result?.text?.trim();
-    return text && text.length > 0 ? text : null;
-  } catch {
-    return null;
   }
 }

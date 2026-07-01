@@ -69,7 +69,7 @@ import { useMic } from "../hooks/useMic";
 import { useRaiseToWake } from "../hooks/useRaiseToWake";
 import { useDeviceMemory } from "../hooks/useDeviceMemory";
 import { useLocalLLM } from '../hooks/useLocalLLM';
-import { classifyWithLLM, phraseWithLLM } from '../hooks/llmLayers';
+import { classifyWithLLM } from '../hooks/llmLayers';
 import { answerFromDevice } from '../utils/localAnswers';
 import { writeTurnObservation } from '../utils/personaContext';
 import { classifyQuery, scanResidualIntent } from "../routing/tierRouter";
@@ -2507,7 +2507,6 @@ export default function ChatScreen() {
     llmStatus,
     getCtx,
     inferLocal,
-    phraseWithLLM,
     resolveContactPhone,
     handleCalendarAction,
     handleMapsAction,

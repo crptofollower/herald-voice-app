@@ -12,7 +12,6 @@ import type { MutableRefObject } from 'react';
 import type { LlamaContext } from 'llama.rn';
 import type { Message } from '../../api/herald';
 import type { TierDecision } from '../../routing/tierRouter';
-import { phraseWithLLM } from '../../hooks/llmLayers';
 import * as IntentLauncher from 'expo-intent-launcher';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getDB } from '../../db/schema';
@@ -38,7 +37,6 @@ export interface DispatchDeps extends DispatchPendingRefs {
   llmStatus: string;
   getCtx: () => LlamaContext | null;
   inferLocal: (prompt: string, maxTokens: number) => Promise<string | null>;
-  phraseWithLLM: typeof phraseWithLLM;
   resolveContactPhone: (nameOrRelation: string) => Promise<{ phone: string; name: string; contactId?: string; source: 'herald' | 'device' } | null>;
   handleCalendarAction: (value: string) => Promise<void>;
   handleMapsAction: (query: string) => Promise<void>;
@@ -84,7 +82,7 @@ export async function dispatchAction(
   deps: DispatchDeps,
 ): Promise<void> {
   const {
-    addMessage, speak, generateId, llmStatus, getCtx, phraseWithLLM,
+    addMessage, speak, generateId, llmStatus, getCtx,
     resolveContactPhone, handleCalendarAction, handleMapsAction, launchAndroidTimer,
     handleLaunchActionRef, pendingContactCollectRef,
     pendingMedClearRef, pendingTodoCompleteRef, platformOS, openURL,

@@ -385,7 +385,7 @@ function calendarSpeech(
 
 // ─── Visit read authority (§4a one-reader for the medical_visit domain) ───────
 // Deterministic, offline, NEVER the LLM (Spine §3: medical reads never route
-// through phraseWithLLM). Reads the same rows DOMAIN_WRITERS.medical_visit writes.
+// through generative phrasing). Reads the same rows DOMAIN_WRITERS.medical_visit writes.
 // NOTE: visit_date is stamped at CAPTURE time (writer uses today's date), so this
 // scopes "recently" by when the user TOLD Herald, not the true visit date. Honest
 // for the current write path; tighten when the writer captures real visit dates.

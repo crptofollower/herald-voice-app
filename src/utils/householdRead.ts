@@ -228,7 +228,7 @@ export function answerHouseholdRead(intent: HouseholdReadIntent): string {
         return `I don't have a ${intent.spoken} saved yet. Tell me who and I'll remember.`;
       }
       const r = rows.find((row) => row.name?.trim());
-      // Never pass a null/empty name to phraseWithLLM — it will invent "unknown".
+      // Never pass a null/empty name to a phrasing layer — a nameless row invents "unknown".
       // A nameless row is a phantom; give an honest "I don't know" instead.
       if (!r || !r.name || r.name.trim().length < 2) {
         return `I don't have a ${intent.spoken} saved yet.`;
