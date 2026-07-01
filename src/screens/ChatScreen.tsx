@@ -1135,6 +1135,7 @@ export default function ChatScreen() {
         : routeDecision.kind === 'memory_probe'
         ? 2
         : 3;
+    console.log('[S39-DIAG] route', { text, llmStatus, routeKind: routeDecision.kind, rdTier });
     const rdActionIntent =
       routeDecision.kind === 'device_action' ? routeDecision.actionIntent : undefined;
     const rdTier1Response =
@@ -1193,6 +1194,7 @@ export default function ChatScreen() {
           lists: getKnownListNames(),
           name: undefined,
         });
+        console.log('[S39-DIAG] online-gate result', { text, count: llmCaptures.length, types: llmCaptures.map(c => c.type) });
         if (llmCaptures.length > 0) {
           if (allConverted(llmCaptures)) {
             await applyConvertedIntents(llmCaptures, text, { echoUser: true });
@@ -1429,6 +1431,7 @@ export default function ChatScreen() {
               lists,
               name: undefined,
             });
+            console.log('[S39-DIAG] offline-gate result', { text, count: results.length, types: results.map(c => c.type) });
             if (results.length > 0) {
               if (allConverted(results)) {
                 await applyConvertedIntents(results, text, { echoUser: true });
