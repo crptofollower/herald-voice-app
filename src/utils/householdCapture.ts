@@ -391,6 +391,7 @@ export function captureHousehold(text: string): HouseholdCaptureResult | Househo
       const PLACEHOLDER_NAMES = new Set([
         'unknown','unnamed','none','n/a','someone','somebody',
         'that','this','it','he','she','they','him','her','them',
+        'guy','gal','lady','person','man','woman','dude','fellow','girl','folks',
       ]);
       const nameIsReal = (n: string | null | undefined): boolean => {
         if (!n) return false;

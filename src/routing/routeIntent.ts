@@ -57,7 +57,8 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       }
       const { category, name, phone } = intent;
       const PLACEHOLDER_NAMES = new Set(['unknown','unnamed','none','n/a','someone',
-        'somebody','that','this','it','he','she','they','him','her','them']);
+        'somebody','that','this','it','he','she','they','him','her','them',
+        'guy','gal','lady','person','man','woman','dude','fellow','girl','folks']);
       const isRealName = (v: string): boolean => {
         if (typeof v !== 'string') return false;
         const t = v.trim();
