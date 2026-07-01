@@ -13,7 +13,6 @@ import type { LlamaContext } from 'llama.rn';
 import type { Message } from '../../api/herald';
 import type { TierDecision } from '../../routing/tierRouter';
 import { phraseWithLLM } from '../../hooks/llmLayers';
-import { Platform, Linking } from 'react-native';
 import * as IntentLauncher from 'expo-intent-launcher';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getDB } from '../../db/schema';
@@ -45,6 +44,8 @@ export interface DispatchDeps extends DispatchPendingRefs {
   handleMapsAction: (query: string) => Promise<void>;
   launchAndroidTimer: (seconds: number) => Promise<boolean>;
   handleLaunchActionRef: MutableRefObject<((appName: string) => Promise<void>) | null>;
+  platformOS: string;
+  openURL: (url: string) => Promise<void>;
 }
 
 // Tier-1 READ dispatch (calendar/medical/family/profile). Filled in Stage 1.3.
@@ -86,7 +87,7 @@ export async function dispatchAction(
     addMessage, speak, generateId, llmStatus, getCtx, phraseWithLLM,
     resolveContactPhone, handleCalendarAction, handleMapsAction, launchAndroidTimer,
     handleLaunchActionRef, pendingContactCollectRef,
-    pendingMedClearRef, pendingTodoCompleteRef,
+    pendingMedClearRef, pendingTodoCompleteRef, platformOS, openURL,
   } = deps;
 
   // === arms copied from ChatScreen.tsx below ===
@@ -95,7 +96,7 @@ export async function dispatchAction(
           const [h, m] = time.split(':');
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
           let alarmOpened = false;
-          if (Platform.OS === 'android') {
+          if (platformOS === 'android') {
             try {
               await IntentLauncher.startActivityAsync('android.intent.action.SET_ALARM', {
                 extra: {
@@ -136,7 +137,7 @@ export async function dispatchAction(
           const hours = Math.floor(minutes / 60);
           const mins = minutes % 60;
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-          const timerOpened = Platform.OS === 'android'
+          const timerOpened = platformOS === 'android'
             ? await launchAndroidTimer(minutes * 60)
             : false;
           const label = minutes >= 60
@@ -156,7 +157,7 @@ export async function dispatchAction(
           const resolvedSms = await resolveContactPhone(contact);
           if (resolvedSms?.phone) {
             const smsUrl = `sms:${resolvedSms.phone.replace(/\D/g, '')}${message ? `?body=${encodeURIComponent(message)}` : ''}`;
-            await Linking.openURL(smsUrl);
+            await openURL(smsUrl);
             const reply = message
               ? `Opening a message to ${resolvedSms.name} with your note ready.`
               : `Opening a message to ${resolvedSms.name}.`;
@@ -224,7 +225,7 @@ export async function dispatchAction(
         if (actionIntent.type === 'photo_open') {
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
           let opened = false;
-          if (Platform.OS === 'android') {
+          if (platformOS === 'android') {
             const photoIntents = [
               'intent:#Intent;action=android.intent.action.VIEW;type=image/*;package=com.google.android.apps.photos;end',
               'intent:#Intent;action=android.intent.action.VIEW;type=image/*;package=com.sec.android.gallery3d;end',
@@ -232,7 +233,7 @@ export async function dispatchAction(
             ];
             for (const uri of photoIntents) {
               try {
-                await Linking.openURL(uri);
+                await openURL(uri);
                 opened = true;
                 break;
               } catch { /* try next */ }
@@ -296,7 +297,7 @@ export async function dispatchAction(
             .trim();
           const resolved = await resolveContactPhone(contactName);
           if (resolved?.phone && resolved.source === 'herald') {
-            await Linking.openURL(`tel:${resolved.phone.replace(/\D/g, '')}`);
+            await openURL(`tel:${resolved.phone.replace(/\D/g, '')}`);
             const reply = `Calling ${resolved.name}.`;
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);

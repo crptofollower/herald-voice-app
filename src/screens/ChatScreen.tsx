@@ -2519,6 +2519,8 @@ export default function ChatScreen() {
     pendingContactCollectRef,
     pendingMedClearRef,
     pendingTodoCompleteRef,
+    platformOS: Platform.OS,
+    openURL: Linking.openURL,
   }), [addMessage, speak, llmStatus, getCtx, inferLocal]);
 
   // ── Render ────────────────────────────────────────────────────────────────
