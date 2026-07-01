@@ -105,6 +105,7 @@ LIST ADD — ALWAYS split items into separate array entries, never one string:
 "I need apples oranges and milk" → {"type":"list_add","items":["apples","oranges","milk"],"listName":"grocery"}
 "add eggs bread and butter to my grocery list" → {"type":"list_add","items":["eggs","bread","butter"],"listName":"grocery"}
 "pick up milk oh and also get some apples and sourdough bread" → {"type":"list_add","items":["milk","apples","sourdough bread"],"listName":"grocery"}
+"I need to pick up rib eyes I need to pick up apples some oranges and some cleaning supplies" → {"type":"list_add","items":["rib eyes","apples","oranges","cleaning supplies"],"listName":"grocery"}
 "put call dentist on my to-do list" → {"type":"list_add","items":["call dentist"],"listName":"todo"}
 "add pay bills and call mom to my to-do list" → {"type":"list_add","items":["pay bills","call mom"],"listName":"todo"}
 "add call my dentist to my to-do list" → {"type":"list_add","items":["call my dentist"],"listName":"todo"}
@@ -193,7 +194,7 @@ User: "${trimmed.replace(/"/g, '\\"')}"`;
     const result = await Promise.race([
       ctx.completion({
         messages: [{ role: 'user', content: prompt }],
-        n_predict: 80,
+        n_predict: 120,
         temperature: 0.1,
         stop: ['\n\n', '<|end|>', '<|eot_id|>'],
       }),
