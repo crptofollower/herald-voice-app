@@ -1713,7 +1713,17 @@ export default function ChatScreen() {
             batchTimerRef.current = null;
           }
           tokenBatchRef.current = '';
-          setError(err.message);
+          const isAbort = err.name === 'AbortError' || /abort/i.test(err.message || '');
+          const friendly = isAbort
+            ? "That took longer than expected — try asking me again."
+            : "I had trouble reaching out just now — mind trying that again?";
+          addMessage({
+            id: generateId("msg"),
+            role: "assistant",
+            content: friendly,
+            timestamp: Date.now(),
+          });
+          setError(null);
           resetStreamState();
         },
       }
