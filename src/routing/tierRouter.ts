@@ -294,7 +294,7 @@ const TODO_DATE_SIGNALS = /\b(today|tomorrow|monday|tuesday|wednesday|thursday|f
 // context — it never guesses which. Marker present → grocery (handled below).
 // Marker absent → left to the todo_add default unchanged.
 const ACQUISITION_SHAPE =
-  /\b(?:need\s+to|have\s+to|gotta|got\s+to|going\s+to|gonna|want\s+to|wanna)\s+(?:go\s+to\s+(?:the\s+)?(?:store|shop|market)\s+(?:and\s+)?)?(?:pick(?:\s+\w+)?\s+up|get|buy|grab)\b/i;
+  /\b(?:need\s+to|have\s+to|gotta|got\s+to|going\s+to|gonna|want\s+to|wanna)\s+(?:go\s+to\s+(?:the\s+)?(?:grocery\s+store|supermarket|grocery|store|shop|market)\s+(?:and\s+)?)?(?:pick(?:\s+\w+)?\s+up|get|buy|grab)\b/i;
 const GROCERY_CONTEXT_MARKER =
   /\b(?:grocery|groceries|grocery\s+store|supermarket|shopping\s+list)\b/i;
 
@@ -612,7 +612,7 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     !detectMedicalEvent(msg)
   ) {
     const m = msg.match(
-      /\b(?:need\s+to|have\s+to|gotta|got\s+to)\s+(?:pick\s+up|get|buy|grab)\s+(.+)/i,
+      /\b(?:need\s+to|have\s+to|gotta|got\s+to|going\s+to|gonna|want\s+to|wanna)\s+(?:go\s+to\s+(?:the\s+)?(?:grocery\s+store|supermarket|grocery|store|shop|market)\s+(?:and\s+)?)?(?:pick(?:\s+\w+)?\s+up|get|buy|grab)\s+(.+)/i,
     );
     let raw = (m?.[1] ?? '').trim();
     raw = raw
