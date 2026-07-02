@@ -2,7 +2,7 @@
 // Herald device SQLite — table definitions and migration runner.
 // Session L — Device-First Intelligence Layer
 //
-// SCHEMA VERSION: 16
+// SCHEMA VERSION: 17
 // v1: Initial schema — facts, profile, medical, calendar_cache (ISO strings), life_tracker
 // v2: calendar_cache rebuilt with Unix ms timestamps (timezone fix)
 // v3: Entity graph + importance scoring + temporal awareness (locked Session L spec)
@@ -22,6 +22,7 @@
 // v14: legal_documents.removed_at
 // v15: contacts.removed_at
 // v16: service_providers duplicate-active-row one-time repair
+// v17: contacts.location (family-member location — person-as-entity attribute)
 //
 // RULE: NEVER modify a past migration. Always add at the next version number.
 //
@@ -40,7 +41,7 @@
 
 import * as SQLite from "expo-sqlite";
 
-export const SCHEMA_VERSION = 16;
+export const SCHEMA_VERSION = 17;
 export const DB_NAME = "herald_device.db";
 
 // ─── Open database ────────────────────────────────────────────────────────────
@@ -710,5 +711,15 @@ const MIGRATIONS: Record<number, (db: SQLite.SQLiteDatabase) => void> = {
         );
     `);
     console.log("Herald schema V16: service_providers duplicate active rows retired");
+  },
+
+  // ── v17: contacts.location (family-member location — §4a contacts drawer) ──
+  17: (db) => {
+    try {
+      db.execSync("ALTER TABLE contacts ADD COLUMN location TEXT;");
+    } catch {
+      // column already exists (re-run safety) — ignore
+    }
+    console.log("Herald schema V17: contacts.location added");
   },
 };
