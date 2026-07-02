@@ -33,6 +33,7 @@ setDB({
 function kindOf(d) {
   if (d.actionIntent) return d.actionIntent.type;
   if (d.tier === 2) return "memory_probe";
+  if (d.reason?.includes("recall")) return "recall";
   if (d.reason?.includes("family")) return "family";
   if (d.reason?.includes("calendar")) return "calendar";
   if (d.reason?.includes("medical")) return "medical";
@@ -129,6 +130,15 @@ const TESTS = [
   ["med capture statement",    "I'm taking chocolate milk",                 1, "medical_capture"],
   ["med capture dosage",       "I take metformin 500mg",                    1, "medical_capture"],
 
+  // ── Rung 4: temporal recall (grocery-only v1) ──
+  // recall fires on temporal-marker + speech-verb, EXCEPT when an uncovered
+  // domain is named (guard bails to that domain's real reader). list_read still
+  // wins first by ordering, so a marker on a list phrase reads the list.
+  ["recall fires today",       "what did i mention earlier today",       1, "recall"],
+  ["recall brought up",        "what did i bring up this morning",       1, "recall"],
+  ["recall guard->medical",    "did i mention my medications earlier",   1, "medical"],
+  ["list_read beats recall",   "what's on my grocery list today",        1, "list_read"],
+
   // Profile — standard
   ["profile name",         "what's my name",                                 1, "profile"],
   ["profile do you know",  "do you know my name",                            1, "profile"],
@@ -200,7 +210,7 @@ const RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", BOLD = "\x1b[1m",
 let passed = 0;
 const failures = [];
 const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length;
-const EXPECTED_TOTAL = 158;
+const EXPECTED_TOTAL = 162;
 
 console.log(`\n${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  HERALD ROUTER + PHONE TEST SUITE — ${TOTAL} tests${RESET}`);
