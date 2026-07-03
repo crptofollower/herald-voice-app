@@ -32,6 +32,15 @@ const FAMILY_RELATIONS = [
 ];
 const REL = FAMILY_RELATIONS.map(r => r.replace(/-/g, '\\-')).join('|');
 
+// Filler / hesitation words that can sit between the connector ("is" / "name is")
+// and the real name in ordinary speech: "my wife's name is ALSO Shannon",
+// "my son is JUST David". Skipped inline in the name patterns below so the real
+// name is captured, never the filler. Closed set — mirrors detectMedicalEvent's
+// DRUG_FILLER_WORDS lookahead. Defers (never mis-captures) when nothing real
+// follows; PLACEHOLDER_NAMES is the backstop for that case.
+const NAME_FILLER = 'also|actually|really|just|now|uh|um|named';
+const SKIP = `(?:(?:${NAME_FILLER})\\s+)*`;
+
 // Read-guard: never fire on a question (defense-in-depth; the live read branch
 // catches these upstream). Mirrors detectServiceCapture's guard.
 const READ_GUARD =
@@ -42,6 +51,7 @@ const PLACEHOLDER_NAMES = new Set([
   'unknown', 'unnamed', 'none', 'n/a', 'someone', 'somebody',
   'that', 'this', 'it', 'he', 'she', 'they', 'him', 'her', 'them',
   'lives', 'live', 'is', 'in', 'name', 'named', 'and',
+  'also', 'actually', 'really', 'just', 'now', 'uh', 'um',
 ]);
 function isRealName(v: string | undefined | null): v is string {
   if (!v) return false;
@@ -65,10 +75,10 @@ export function detectFamilyCapture(text: string): IntentRecord[] {
 
   // Single-member patterns — most specific first. Name is one token.
   const patterns: Array<{ re: RegExp; rel: number; name: number }> = [
-    { re: new RegExp(`\\bmy\\s+(${REL})'?s\\s+name\\s+is\\s+([A-Za-z][A-Za-z'\\-]+)`, 'i'), rel: 1, name: 2 },
-    { re: new RegExp(`\\bmy\\s+(${REL})\\s+is\\s+([A-Za-z][A-Za-z'\\-]+)`, 'i'), rel: 1, name: 2 },
+    { re: new RegExp(`\\bmy\\s+(${REL})'?s\\s+name\\s+is\\s+${SKIP}([A-Za-z][A-Za-z'\\-]+)`, 'i'), rel: 1, name: 2 },
+    { re: new RegExp(`\\bmy\\s+(${REL})\\s+is\\s+${SKIP}([A-Za-z][A-Za-z'\\-]+)`, 'i'), rel: 1, name: 2 },
     { re: new RegExp(`\\bmy\\s+(${REL})\\s+([A-Za-z][A-Za-z'\\-]+)\\s+(?:lives?|is|works|moved|stays?)\\b`, 'i'), rel: 1, name: 2 },
-    { re: new RegExp(`\\bmy\\s+(${REL})\\b[^.?]*\\bname\\s+is\\s+([A-Za-z][A-Za-z'\\-]+)`, 'i'), rel: 1, name: 2 },
+    { re: new RegExp(`\\bmy\\s+(${REL})\\b[^.?]*\\bname\\s+is\\s+${SKIP}([A-Za-z][A-Za-z'\\-]+)`, 'i'), rel: 1, name: 2 },
     { re: new RegExp(`\\bmy\\s+(${REL})\\s+([A-Za-z][A-Za-z'\\-]+)\\s*[.!?]?$`, 'i'), rel: 1, name: 2 },
   ];
 

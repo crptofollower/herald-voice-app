@@ -148,6 +148,10 @@ export async function runFamilyContractTests() {
   assert('C12 not family: my plumber is Joe', detectFamilyCapture('my plumber is Joe'),   capNone, '[]');
   assert('C13 grocery: add milk to my list', detectFamilyCapture('add milk to my list'),  capNone, '[]');
 
+  assert("C14 filler name: my wife's name is also Shannon", detectFamilyCapture("my wife's name is also Shannon"), capRel(['wife','Shannon']), 'wife/Shannon (never "also")');
+  assert('C15 filler name: my son is just David', detectFamilyCapture('my son is just David'), capRel(['son','David']), 'son/David (never "just")');
+  assert("C16 filler-only defers (no real name)", detectFamilyCapture("my wife's name is also"), capNone, '[]');
+
   const total = passed + failures.length;
   console.log(`\n${BOLD}Contract: ${passed}/${total} passed${failures.length > 0 ? ` — ${RED}${failures.length} FAILED${RESET}` : ` — ${GREEN}all green${RESET}`}${RESET}\n`);
   return { passed, failed: failures.length, total, failures };
