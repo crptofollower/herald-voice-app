@@ -6,6 +6,7 @@ import type { IntentRecord } from '../hooks/llmLayers';
 import type { TierDecision, LocalContext } from './tierRouter';
 import { writeServiceProvider, detectServiceCapture, detectPhoneCapture } from '../utils/householdCapture';
 import { detectDiagnosisCapture } from '../utils/detectMedicalEvent';
+import { detectFamilyCapture } from '../utils/familyCapture';
 import { getDB } from '../db/schema';
 import { capturePerson } from '../db/capturePerson';
 import { findContactByName, setEmergencyContact, getEmergencyContact } from '../db/contactsDB';
@@ -48,6 +49,7 @@ const DETERMINISTIC_CAPTURERS: DeterministicCapturer[] = [
   (text) => detectServiceCapture(text),
   (text, ctx) => detectPhoneCapture(text, ctx.contacts),
   (text) => detectDiagnosisCapture(text),
+  (text) => detectFamilyCapture(text),
 ];
 
 // Registry: empty now. One domain added per conversion commit.

@@ -8,6 +8,7 @@
 import Database from 'better-sqlite3';
 import { setDB } from '../../src/db/schema.ts';
 import { detectFamilyRead, answerFamilyRead } from '../../src/utils/familyRead.ts';
+import { detectFamilyCapture } from '../../src/utils/familyCapture.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
 const SCHEMA_SQL = `
@@ -128,6 +129,24 @@ export async function runFamilyContractTests() {
     const answer = answerFamilyRead(detectFamilyRead('who is my mother')!);
     assert('F8 synonym mother includes Barbara', answer, (v) => v.includes('Barbara'), 'includes "Barbara"');
   }
+
+  // ── Capture detector (Build 50 — detectFamilyCapture, single member) ──
+  const capRel  = (r) => (v) => v.length === 1 && v[0].type === 'family_capture' && v[0].relation === r[0] && v[0].name === r[1];
+  const capNone = (v) => Array.isArray(v) && v.length === 0;
+
+  assert('C1 my son is Michael',        detectFamilyCapture('my son is Michael'),        capRel(['son','Michael']),      'son/Michael');
+  assert('C2 my daughter is Sarah',     detectFamilyCapture('my daughter is Sarah'),     capRel(['daughter','Sarah']),   'daughter/Sarah');
+  assert("C3 my mom's name is Barbara", detectFamilyCapture("my mom's name is Barbara"), capRel(['mom','Barbara']),      'mom/Barbara');
+  assert('C4 my son David lives in Austin', detectFamilyCapture('my son David lives in Austin'), capRel(['son','David']), 'son/David');
+  assert('C5 my wife is Shannon',       detectFamilyCapture('my wife is Shannon'),       capRel(['wife','Shannon']),     'wife/Shannon');
+  assert('C6 father-in-law David lives in Little Elm Texas', detectFamilyCapture('my father-in-law David lives in Little Elm Texas'), capRel(['father-in-law','David']), 'father-in-law/David');
+  assert('C7 location deferred (no location field)', detectFamilyCapture('my son David lives in Austin'), (v) => v.length === 1 && v[0].location === undefined, 'location undefined');
+  assert('C8 read guard: who is my wife', detectFamilyCapture('who is my wife'),          capNone, '[]');
+  assert("C9 read guard: what's my son's name", detectFamilyCapture("what's my son's name"), capNone, '[]');
+  assert('C10 compound: my two sons Grant and Tyler', detectFamilyCapture('my two sons Grant and Tyler'), capNone, '[]');
+  assert('C11 compound: my sons are Grant and Tyler', detectFamilyCapture('my sons are Grant and Tyler'), capNone, '[]');
+  assert('C12 not family: my plumber is Joe', detectFamilyCapture('my plumber is Joe'),   capNone, '[]');
+  assert('C13 grocery: add milk to my list', detectFamilyCapture('add milk to my list'),  capNone, '[]');
 
   const total = passed + failures.length;
   console.log(`\n${BOLD}Contract: ${passed}/${total} passed${failures.length > 0 ? ` — ${RED}${failures.length} FAILED${RESET}` : ` — ${GREEN}all green${RESET}`}${RESET}\n`);

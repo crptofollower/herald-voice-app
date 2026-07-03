@@ -178,6 +178,7 @@ const TESTS = [
   ["t3 sports",            "did the cowboys win",                             3, "tier3"],
   ["t3 open",              "how do i make sourdough",                        3, "tier3"],
   ["t3 fact",              "my wife's name is shannon",                      3, "tier3"],
+  ["family stmt falls through", "my son david lives in austin",             3, "tier3"],
 ];
 
 // Phone validator gate — the phone-digit read-back fix (src/utils/phone.ts).
@@ -215,7 +216,7 @@ const RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", BOLD = "\x1b[1m",
 let passed = 0;
 const failures = [];
 const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length;
-const EXPECTED_TOTAL = 199;
+const EXPECTED_TOTAL = 213;
 
 console.log(`\n${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  HERALD ROUTER + PHONE TEST SUITE — ${TOTAL} tests${RESET}`);
