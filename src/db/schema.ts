@@ -23,6 +23,7 @@
 // v15: contacts.removed_at
 // v16: service_providers duplicate-active-row one-time repair
 // v17: contacts.location (family-member location — person-as-entity attribute)
+// v18: medical_records.removed_at (soft-delete — §4a compliance for the medical drawer)
 //
 // RULE: NEVER modify a past migration. Always add at the next version number.
 //
@@ -41,7 +42,7 @@
 
 import * as SQLite from "expo-sqlite";
 
-export const SCHEMA_VERSION = 17;
+export const SCHEMA_VERSION = 18;
 export const DB_NAME = "herald_device.db";
 
 // ─── Open database ────────────────────────────────────────────────────────────
@@ -721,5 +722,15 @@ const MIGRATIONS: Record<number, (db: SQLite.SQLiteDatabase) => void> = {
       // column already exists (re-run safety) — ignore
     }
     console.log("Herald schema V17: contacts.location added");
+  },
+
+  // ── v18: medical_records.removed_at (soft-delete — §4a compliance for the medical drawer) ──
+  18: (db) => {
+    try {
+      db.execSync("ALTER TABLE medical_records ADD COLUMN removed_at TEXT;");
+    } catch {
+      // column already exists (re-run safety) — ignore
+    }
+    console.log("Herald schema V18: medical_records.removed_at added");
   },
 };
