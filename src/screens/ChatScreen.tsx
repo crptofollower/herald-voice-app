@@ -71,6 +71,7 @@ import { useDeviceMemory } from "../hooks/useDeviceMemory";
 import { useLocalLLM } from '../hooks/useLocalLLM';
 import { classifyWithLLM } from '../hooks/llmLayers';
 import { answerFromDevice } from '../utils/localAnswers';
+import { detectFamilyRead, answerFamilyRead } from '../utils/familyRead';
 import { writeTurnObservation } from '../utils/personaContext';
 import { classifyQuery, scanResidualIntent } from "../routing/tierRouter";
 import { routeIntent } from "../routing/routeIntent";
@@ -1405,6 +1406,23 @@ export default function ChatScreen() {
         return;
       }
       if (!rdActionIntent) {
+        // Family read authority (§4a single reader) — device-first, offline-safe.
+        // Runs before answerFromDevice so family reads resolve through familyRead,
+        // not the legacy localAnswers FAMILY_PATTERNS branch. detectFamilyRead's
+        // statement guard returns null for declarative "my X is Y" so family WRITES
+        // fall through to capture (D2 fix).
+        const famIntent = detectFamilyRead(text);
+        if (famIntent) {
+          const famAnswer = answerFamilyRead(famIntent);
+          addMessage({ id: generateId('msg'), role: 'user',
+            content: text, timestamp: Date.now() });
+          addMessage({ id: generateId('msg'), role: 'assistant',
+            content: famAnswer, timestamp: Date.now() });
+          speak(famAnswer);
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
         const localAnswer = answerFromDevice(text);
         if (localAnswer) {
           addMessage({ id: generateId('msg'), role: 'user',
@@ -1517,6 +1535,17 @@ export default function ChatScreen() {
 
     // Legacy device interceptor — keep as fallback for patterns not yet
     // covered by tierRouter signal groups
+    // Family read authority (§4a single reader) — mirrors the offline gate.
+    const famIntentOnline = detectFamilyRead(text);
+    if (famIntentOnline) {
+      const famAnswer = answerFamilyRead(famIntentOnline);
+      addMessage({ id: generateId("msg"), role: "user", content: text, timestamp: now });
+      addMessage({ id: generateId("msg"), role: "assistant", content: famAnswer, timestamp: now + 1 });
+      speak(famAnswer);
+      sendingRef.current = false;
+      setInputText("");
+      return;
+    }
     const localAnswer = answerFromDevice(text);
     if (localAnswer) {
       addMessage({
