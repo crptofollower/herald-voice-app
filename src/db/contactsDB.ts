@@ -48,16 +48,28 @@ export function writeContact(
   const now = new Date().toISOString();
 
   try {
-    const existing = db.getFirstSync<{ id: string }>(
-      "SELECT id FROM contacts WHERE LOWER(name) = ? AND removed_at IS NULL LIMIT 1;",
-      [contact.name.trim().toLowerCase()]
-    );
+    // Identity key is (name, relationship) — NOT name alone. Two real people can
+    // share a name (a daughter named after her mother), and one person is never
+    // silently reassigned from one relationship to another (BUG B). A
+    // relationship-bearing write matches only a row with the SAME relationship;
+    // a relationship-less write (phone/emergency caching) falls back to name-only
+    // so reachability updates still land on the existing person.
+    const rel = contact.relationship?.trim().toLowerCase() || null;
+    const existing = rel
+      ? db.getFirstSync<{ id: string }>(
+          "SELECT id FROM contacts WHERE LOWER(name) = ? AND LOWER(relationship) = ? AND removed_at IS NULL LIMIT 1;",
+          [contact.name.trim().toLowerCase(), rel]
+        )
+      : db.getFirstSync<{ id: string }>(
+          "SELECT id FROM contacts WHERE LOWER(name) = ? AND removed_at IS NULL LIMIT 1;",
+          [contact.name.trim().toLowerCase()]
+        );
 
     if (existing) {
       // Update fields that are provided — don't overwrite with nulls
       db.runSync(
         `UPDATE contacts SET
-           relationship  = COALESCE(?, relationship),
+           relationship  = relationship,
            phone         = COALESCE(?, phone),
            address       = COALESCE(?, address),
            email         = COALESCE(?, email),

@@ -9,6 +9,7 @@ import Database from 'better-sqlite3';
 import { setDB } from '../../src/db/schema.ts';
 import { detectFamilyRead, answerFamilyRead } from '../../src/utils/familyRead.ts';
 import { detectFamilyCapture } from '../../src/utils/familyCapture.ts';
+import { writeContact } from '../../src/db/contactsDB.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
 const SCHEMA_SQL = `
@@ -16,7 +17,7 @@ const SCHEMA_SQL = `
     id TEXT PRIMARY KEY, name TEXT NOT NULL, relationship TEXT, phone TEXT,
     email TEXT, birthday TEXT, importance INTEGER DEFAULT 5, entity_id TEXT,
     os_contact_id TEXT, notes TEXT, last_contact TEXT, created_at TEXT,
-    updated_at TEXT, address TEXT, removed_at TEXT, location TEXT
+    updated_at TEXT, address TEXT, removed_at TEXT, location TEXT, is_emergency INTEGER DEFAULT 0
   );
 `;
 function makeShim(db) {
@@ -151,6 +152,24 @@ export async function runFamilyContractTests() {
   assert("C14 filler name: my wife's name is also Shannon", detectFamilyCapture("my wife's name is also Shannon"), capRel(['wife','Shannon']), 'wife/Shannon (never "also")');
   assert('C15 filler name: my son is just David', detectFamilyCapture('my son is just David'), capRel(['son','David']), 'son/David (never "just")');
   assert("C16 filler-only defers (no real name)", detectFamilyCapture("my wife's name is also"), capNone, '[]');
+
+  // ── Writer collision (BUG B — same name, two relationships) ──
+  {
+    freshDB();
+    writeContact({ name: 'Shannon', relationship: 'wife', importance: 7 });
+    writeContact({ name: 'Shannon', relationship: 'daughter', importance: 7 });
+    const wife = answerFamilyRead(detectFamilyRead('who is my wife')!);
+    const daughter = answerFamilyRead(detectFamilyRead('who is my daughter')!);
+    assert('W1 wife survives same-name daughter', wife, (v) => v.includes('Shannon'), 'wife still Shannon');
+    assert('W2 daughter also captured', daughter, (v) => v.includes('Shannon'), 'daughter is Shannon');
+  }
+  {
+    freshDB();
+    writeContact({ name: 'Shannon', relationship: 'wife', importance: 7 });
+    writeContact({ name: 'Shannon', relationship: 'wife', importance: 7 });
+    const wife = answerFamilyRead(detectFamilyRead('who is my wife')!);
+    assert('W3 same rel twice = no dup', (wife.match(/Shannon/g) || []).length, (v) => v === 1, 'count === 1');
+  }
 
   const total = passed + failures.length;
   console.log(`\n${BOLD}Contract: ${passed}/${total} passed${failures.length > 0 ? ` — ${RED}${failures.length} FAILED${RESET}` : ` — ${GREEN}all green${RESET}`}${RESET}\n`);
