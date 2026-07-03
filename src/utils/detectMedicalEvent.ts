@@ -6,6 +6,8 @@
 // table (the trust-critical store). The LLM router (later build) refines
 // intent, but device-first, offline, this layer must fail toward NOT capturing.
 
+import type { IntentRecord } from '../hooks/llmLayers';
+
 export type MedicalEvent = {
   type: 'medication' | 'visit' | 'advice';
   tense: 'past' | 'future';
@@ -178,4 +180,46 @@ export function detectMedicalEvent(text: string): MedicalEvent | null {
     advice,
     raw,
   };
+}
+
+// ─── Diagnosis capture (Spine §3 verbatim) ────────────────────────────────────
+// A diagnosis is NOT a medication and NOT a visit — its own verbatim path into
+// medical_records.diagnosis. Biased to NOT capture (same guardrail as above):
+// fires only on an explicit diagnosis cue or a medical-results frame. Bare
+// "I have X" is deliberately not a trigger. The condition is carried
+// CHARACTER-FOR-CHARACTER — the full phrase, never token-truncated.
+const DIAGNOSIS_READ_GUARD =
+  /\b(what('?s| is| are)|do i have|what do i have|tell me|show me|read me|what am i diagnosed|any diagnos)\b/i;
+const DIAGNOSIS_CUE =
+  /\b(?:diagnosed with|diagnosed me with|diagnosis is|i suffer from|i(?:'ve| have) been diagnosed with|i was diagnosed with)\s+(.+)/i;
+const RESULTS_CUE =
+  /\b(?:test results?|lab results?|labs?|blood ?work|biopsy|pathology|scan|mri|ct scan|x-?ray|screening)\b/i;
+const RESULTS_HAVE =
+  /\bi\s+(?:have|'ve got|have got|got)\s+(.+)/i;
+
+function cleanCondition(raw: string): string {
+  return raw.trim().replace(/[.!?]+$/, '').trim();
+}
+
+export function detectDiagnosisCapture(text: string): IntentRecord[] {
+  const raw = text.trim();
+  if (!raw) return [];
+  if (DIAGNOSIS_READ_GUARD.test(raw)) return [];
+  if (LIST_CONTEXT.test(raw)) return []; // never read a list op as a diagnosis
+
+  const cue = raw.match(DIAGNOSIS_CUE);
+  if (cue?.[1]) {
+    const condition = cleanCondition(cue[1]);
+    if (condition.length >= 2) return [{ type: 'diagnosis_capture', condition, raw }];
+  }
+
+  if (RESULTS_CUE.test(raw)) {
+    const have = raw.match(RESULTS_HAVE);
+    if (have?.[1]) {
+      const condition = cleanCondition(have[1]);
+      if (condition.length >= 2) return [{ type: 'diagnosis_capture', condition, raw }];
+    }
+  }
+
+  return [];
 }

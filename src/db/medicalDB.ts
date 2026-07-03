@@ -87,6 +87,22 @@ export function getMedicalRecords(): MedicalRecord[] {
   );
 }
 
+// ─── Diagnoses (Spine §3 verbatim, §4a single writer/reader) ──────────────────
+// Additive, never superseding — a person can hold several diagnoses at once
+// (unlike a same-name medication). Correction is an explicit separate path, never
+// auto-retirement. Condition stored CHARACTER-FOR-CHARACTER; raw → notes (audit).
+export function writeDiagnosis(condition: string, raw: string): string {
+  return writeMedicalRecord({ diagnosis: condition.trim(), notes: raw });
+}
+
+// Single read authority for diagnoses — offline, deterministic, soft-delete aware.
+export function getDiagnoses(): MedicalRecord[] {
+  const db = getDB();
+  return db.getAllSync<MedicalRecord>(
+    "SELECT * FROM medical_records WHERE diagnosis IS NOT NULL AND trim(diagnosis) != '' AND removed_at IS NULL ORDER BY created_at DESC;"
+  );
+}
+
 // ─── Medications ──────────────────────────────────────────────────────────────
 
 export function writeMedication(

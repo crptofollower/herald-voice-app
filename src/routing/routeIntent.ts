@@ -5,6 +5,7 @@
 import type { IntentRecord } from '../hooks/llmLayers';
 import type { TierDecision, LocalContext } from './tierRouter';
 import { writeServiceProvider, detectServiceCapture, detectPhoneCapture } from '../utils/householdCapture';
+import { detectDiagnosisCapture } from '../utils/detectMedicalEvent';
 import { getDB } from '../db/schema';
 import { capturePerson } from '../db/capturePerson';
 import { findContactByName, setEmergencyContact, getEmergencyContact } from '../db/contactsDB';
@@ -46,6 +47,7 @@ export type DeterministicCapturer = (text: string, ctx: CaptureContext) => Inten
 const DETERMINISTIC_CAPTURERS: DeterministicCapturer[] = [
   (text) => detectServiceCapture(text),
   (text, ctx) => detectPhoneCapture(text, ctx.contacts),
+  (text) => detectDiagnosisCapture(text),
 ];
 
 // Registry: empty now. One domain added per conversion commit.
@@ -496,8 +498,58 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       };
     },
     async remove(item: string): Promise<CommitResult> {
-      // medical_records has no removed_at yet (schema v16). Soft-delete lands with
-      // the v17 migration; until then a deliberate noop, never a hard delete.
+      // medical_records.removed_at landed in schema v18. A visit-remove path can
+      // now soft-delete; left as a deliberate noop until a visit-remove utterance
+      // is actually wired. Never a hard delete.
+      return { status: 'noop', ack: 'Noted.' };
+    },
+    async clear(): Promise<CommitResult> {
+      return { status: 'noop', ack: 'Noted.' };
+    },
+  },
+  diagnosis_capture: {
+    async add(intent: IntentRecord, rawPhrase: string): Promise<CommitResult> {
+      if (intent.type !== 'diagnosis_capture') {
+        return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
+      }
+      const condition = intent.condition?.trim();
+      const raw = intent.raw ?? rawPhrase;
+      if (!condition || condition.length < 2) {
+        return { status: 'failed', ack: "I didn't catch that — what did the doctor say it was?" };
+      }
+      // Confirm-gate read-back: STT mangles long clinical phrases, and a wrong-
+      // stored diagnosis is the worst failure Herald can make. Verify the exact
+      // words before the write. No emotional overreach — capture honestly, gently.
+      return {
+        status: 'pending',
+        prompt: `I want to make sure I have this exactly right — you said ${condition}?`,
+        pendingKey: 'diagnosis_capture',
+        resume: async (userText: string): Promise<CommitResult> => {
+          const YES = /^(yes|yeah|yep|yup|correct|right|that'?s right|sure|ok|okay|sounds good|that'?s it|exactly|y)\b/i;
+          const NO  = /^(no|nope|nah|wrong|not right|that'?s wrong|incorrect|cancel|nevermind|never mind)\b/i;
+          if (NO.test(userText.trim())) {
+            return { status: 'noop', ack: `No problem — tell me again and I'll get it right.` };
+          }
+          if (!YES.test(userText.trim())) {
+            return { status: 'noop', ack: '' };
+          }
+          try {
+            const { writeDiagnosis, getDiagnoses } = await import('../db/medicalDB');
+            writeDiagnosis(condition, raw);
+            const verified = getDiagnoses().some(
+              d => (d.diagnosis ?? '').trim().toLowerCase() === condition.toLowerCase(),
+            );
+            if (!verified) {
+              return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
+            }
+            return { status: 'committed', ack: `Got it — I'll remember that. You can ask me about it anytime.` };
+          } catch {
+            return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
+          }
+        },
+      };
+    },
+    async remove(item: string): Promise<CommitResult> {
       return { status: 'noop', ack: 'Noted.' };
     },
     async clear(): Promise<CommitResult> {
