@@ -103,6 +103,29 @@ export function getDiagnoses(): MedicalRecord[] {
   );
 }
 
+// Spoken read-back of stored diagnoses — deterministic string assembly over the
+// getDiagnoses authority (medical read fence: never LLM-phrased). Provenance-anchored
+// ("you told me"), verbatim value, honest miss when empty. No emotional overreach —
+// warmth/attunement is Job 4, built last.
+export function getDiagnosisSummary(): string {
+  try {
+    const conditions = getDiagnoses()
+      .map((r) => (r.diagnosis ?? '').trim())
+      .filter((c) => c.length > 0);
+    if (conditions.length === 0) {
+      return "I don't have a diagnosis from you yet — if a doctor's given you one, you can tell me anytime.";
+    }
+    if (conditions.length === 1) {
+      return `You told me you have ${conditions[0]}.`;
+    }
+    const last = conditions[conditions.length - 1];
+    const rest = conditions.slice(0, -1).join(', ');
+    return `You told me you have ${rest}, and ${last}.`;
+  } catch {
+    return "I'm having trouble pulling that up right now — let's try again in a moment.";
+  }
+}
+
 // ─── Medications ──────────────────────────────────────────────────────────────
 
 export function writeMedication(

@@ -10,7 +10,7 @@
 import Database from 'better-sqlite3';
 import { setDB } from '../../src/db/schema.ts';
 import { detectDiagnosisCapture } from '../../src/utils/detectMedicalEvent.ts';
-import { writeDiagnosis, getDiagnoses } from '../../src/db/medicalDB.ts';
+import { writeDiagnosis, getDiagnoses, getDiagnosisSummary } from '../../src/db/medicalDB.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
 const SCHEMA_SQL = `
@@ -109,6 +109,18 @@ export async function runDiagnosisContractTests() {
     const conds = getDiagnoses().map(r => r.diagnosis);
     assert('WX5 soft-delete aware (removed excluded, active kept)', conds,
       (v) => v.includes('active condition') && !v.includes('removed condition'), 'active only');
+  }
+
+  // ── Read-back summary: honest miss + verbatim recall (the F14 acceptance) ──
+  {
+    freshDB();
+    assert('SX1 empty → honest miss', getDiagnosisSummary(), (v) => v.startsWith("I don't have"), "starts with I don't have");
+  }
+  {
+    freshDB();
+    writeDiagnosis('diffuse large B-cell lymphoma', 'I just got my test results back I have diffuse large B-cell lymphoma');
+    assert('SX2 read-back carries the condition VERBATIM', getDiagnosisSummary(),
+      (v) => v.includes('diffuse large B-cell lymphoma'), 'includes verbatim condition');
   }
 
   const total = passed + failures.length;

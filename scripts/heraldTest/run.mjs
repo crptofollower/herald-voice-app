@@ -109,6 +109,11 @@ const TESTS = [
   ["med meds",             "what medications am i on",                       1, "medical"],
   ["med doctor",           "who is my doctor",                               1, "medical"],
 
+  // Diagnosis read (Build 49) — routes to the diagnosis reader, tier1/medical
+  ["dx read whats",        "what's my diagnosis",                            1, "medical"],
+  ["dx read diagnosed",    "what was i diagnosed with",                      1, "medical"],
+  ["dx read conditions",   "what conditions do i have",                      1, "medical"],
+
   // Medical — Mickey phrases
   ["med what do i take",   "what do i take",                                 1, "medical"],
   ["med what am i taking", "what am i taking",                               1, "medical"],
@@ -210,7 +215,7 @@ const RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", BOLD = "\x1b[1m",
 let passed = 0;
 const failures = [];
 const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length;
-const EXPECTED_TOTAL = 194;
+const EXPECTED_TOTAL = 199;
 
 console.log(`\n${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  HERALD ROUTER + PHONE TEST SUITE — ${TOTAL} tests${RESET}`);

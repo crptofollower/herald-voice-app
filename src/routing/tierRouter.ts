@@ -8,7 +8,7 @@ import { calendarWriteIsRecent } from "../db/calendarState";
 import { getFactsSummary } from "../db/factDB";
 import { normalizeInput } from "../utils/normalizeInput";
 import { getProfileSummary } from "../db/profileDB";
-import { getMedicalSummary, getMedicalRecords } from "../db/medicalDB";
+import { getMedicalSummary, getMedicalRecords, getDiagnosisSummary } from "../db/medicalDB";
 import { getRecentMentions, formatRecentMentions } from "../db/recallDB";
 import { detectMedicalEvent } from "../utils/detectMedicalEvent";
 import type { MedicalEvent } from "../utils/detectMedicalEvent";
@@ -144,6 +144,16 @@ const TIER1_SIGNALS = {
     /\bdo you know (how old i am|my age)\b/i,
   ],
 };
+
+// Diagnosis reads — "what's my diagnosis", "what was I diagnosed with", "what
+// conditions do I have". Own branch + reader (getDiagnoses) so a diagnosis question
+// never falls to the meds/doctor summary or drops to tier 3.
+const DIAGNOSIS_READ_SIGNALS = [
+  /\bwhat('?s| is| are)\s+my\s+(diagnosis|diagnoses|condition|conditions)\b/i,
+  /\bwhat\s+(?:was|were|have)\s+i\s+diagnosed\s+with\b/i,
+  /\bwhat\s+(?:medical\s+)?conditions?\s+do\s+i\s+have\b/i,
+  /\bdo\s+i\s+have\s+(?:any\s+)?(?:diagnos\w+|medical\s+conditions?)\b/i,
+];
 
 const TIER2_SIGNALS = [
   /what do you know (about me|about my life)/i,
@@ -907,6 +917,13 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     const n = new Date();
     const startOfDay = new Date(n.getFullYear(), n.getMonth(), n.getDate()).getTime();
     return { tier: 1, tier1Response: formatRecentMentions(getRecentMentions(startOfDay)), reason: 'recall:temporal' };
+  }
+
+  // Tier 1: diagnosis read — BEFORE the general medical summary so a diagnosis
+  // question resolves to the diagnosis reader, not the meds/doctor summary. Medical
+  // read fence: isMedical=true, never routed through generative phrasing (CLAUDE.md).
+  if (DIAGNOSIS_READ_SIGNALS.some((p) => p.test(msg))) {
+    return { tier: 1, tier1Response: getDiagnosisSummary(), isMedical: true, reason: "medical:diagnosis" };
   }
 
   // Tier 1: medical
