@@ -210,7 +210,7 @@ const RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", BOLD = "\x1b[1m",
 let passed = 0;
 const failures = [];
 const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length;
-const EXPECTED_TOTAL = 162;
+const EXPECTED_TOTAL = 175;
 
 console.log(`\n${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  HERALD ROUTER + PHONE TEST SUITE — ${TOTAL} tests${RESET}`);
@@ -292,12 +292,14 @@ for (const [label, input, expected] of DOSAGE_TESTS) {
 // ─── Contract suites — wired here so one command gates everything ───────────
 const { runHouseholdContractTests } = await import('./householdContract.test.ts');
 const { runMedicalContractTests }   = await import('./medicalContract.test.ts');
+const { runFamilyContractTests }    = await import('./familyContract.test.ts');
 const hResult = await runHouseholdContractTests();
 const mResult = await runMedicalContractTests();
+const fResult = await runFamilyContractTests();
 const dResult = await runDispatchContractTests();
-const contractPassed = hResult.passed + mResult.passed + dResult.passed;
-const contractFailed = hResult.failed + mResult.failed + dResult.failed;
-const contractTotal = hResult.total + mResult.total + dResult.total;
+const contractPassed = hResult.passed + mResult.passed + fResult.passed + dResult.passed;
+const contractFailed = hResult.failed + mResult.failed + fResult.failed + dResult.failed;
+const contractTotal = hResult.total + mResult.total + fResult.total + dResult.total;
 
 console.log(`${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  RESULTS: ${GREEN}${passed + contractPassed} passed${RESET}${BOLD} / ${failures.length + contractFailed > 0 ? RED : GREEN}${failures.length + contractFailed} failed${RESET}${BOLD} / ${TOTAL + contractTotal} total${RESET}`);
