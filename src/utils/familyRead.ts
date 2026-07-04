@@ -101,10 +101,14 @@ export function answerFamilyRead(intent: FamilyReadIntent): string {
       );
     }
 
-    // De-dupe by person (name, case-insensitive).
+    // De-dupe by identity key (name + relationship, case-insensitive) — the
+    // reader's identity key MUST mirror writeContact's identity key. Two people
+    // can share a name (a daughter named after her mother); name alone is not
+    // a person (BUG C). True duplicate rows (same name, same relationship)
+    // still collapse.
     const seen = new Set<string>();
     const people = rows.filter(r => {
-      const k = r.name.trim().toLowerCase();
+      const k = `${r.name.trim().toLowerCase()}|${(r.relationship ?? '').trim().toLowerCase()}`;
       if (seen.has(k)) return false;
       seen.add(k);
       return true;

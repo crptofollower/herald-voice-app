@@ -171,6 +171,21 @@ export async function runFamilyContractTests() {
     assert('W3 same rel twice = no dup', (wife.match(/Shannon/g) || []).length, (v) => v === 1, 'count === 1');
   }
 
+  // ── Overview de-dupe (BUG C — two people sharing a name collapse in the
+  //    typeless overview; reader keyed on name alone, writer keys name+rel) ──
+  {
+    freshDB();
+    writeContact({ name: 'Shannon', relationship: 'wife', importance: 7 });
+    writeContact({ name: 'Shannon', relationship: 'daughter', importance: 7 });
+    const overview = answerFamilyRead(detectFamilyRead('tell me about my family')!);
+    assert('F9a overview shows both relationships', overview,
+      (v) => v.includes('wife') && v.includes('daughter'),
+      'includes "wife" and "daughter"');
+    assert('F9b overview lists Shannon twice (two people)', 
+      (overview.match(/Shannon/g) || []).length,
+      (v) => v === 2, 'count === 2');
+  }
+
   const total = passed + failures.length;
   console.log(`\n${BOLD}Contract: ${passed}/${total} passed${failures.length > 0 ? ` — ${RED}${failures.length} FAILED${RESET}` : ` — ${GREEN}all green${RESET}`}${RESET}\n`);
   return { passed, failed: failures.length, total, failures };
