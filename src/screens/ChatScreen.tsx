@@ -74,9 +74,9 @@ import { answerFromDevice } from '../utils/localAnswers';
 import { detectFamilyRead, answerFamilyRead } from '../utils/familyRead';
 import { writeTurnObservation } from '../utils/personaContext';
 import { classifyQuery, scanResidualIntent } from "../routing/tierRouter";
-import { routeIntent } from "../routing/routeIntent";
-import { DOMAIN_WRITERS, allConverted, composeAck } from '../routing/routeIntent';
+import { allConverted } from '../routing/routeIntent';
 import { ConversationSession } from '../routing/conversationSession';
+import { processUtterance, applyIntents } from '../routing/processUtterance';
 import type { IntentRecord } from '../hooks/llmLayers';
 import { dispatchRead, dispatchAction } from './chat/dispatch';
 import type { DispatchDeps } from './chat/dispatch';
@@ -866,27 +866,6 @@ export default function ChatScreen() {
       pendingTodoCompleteRef.current = null;
     }
 
-    // ── Pending continuation — user is answering a question a writer asked ──
-    if (sessionRef.current.hasPending()) {
-      const { resume } = sessionRef.current.takePending()!;
-      const result = await resume(text);
-      if (result.status === 'noop' && !result.ack) {
-        // Not an answer to the pending question — let it route normally below.
-        // (Do not echo here; the normal path adds its own user bubble.)
-      } else {
-        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-        const ack = composeAck([result]);
-        addMessage({ id: generateId('msg'), role: 'assistant', content: ack, timestamp: Date.now() });
-        speak(ack);
-        if (result.status === 'pending') {
-          sessionRef.current.setPending({ pendingKey: result.pendingKey, resume: result.resume });
-        }
-        sendingRef.current = false;
-        setInputText('');
-        return;
-      }
-    }
-
     // ── Pending medication CLEAR confirm (Build A — destructive, soft-delete) ──
     if (pendingMedClearRef.current) {
       if (YES.test(text.trim())) {
@@ -1112,7 +1091,7 @@ export default function ChatScreen() {
     // Deterministic-first routing: the regex/SQL classifier runs FIRST and always wins.
     // Tier-1 reads and actions are handled by the dispatch below. The on-device LLM only
     // attempts a capture when deterministic routing found nothing actionable (tier 3 gap).
-    const routeDecision = await routeIntent(text, {
+    const outcome = await processUtterance(text, sessionRef.current, {
       classifyQuery,
       classifyLLM: async (t: string) => classifyWithLLM(t, getCtx(), {
         contacts: getKnownContactNames(),
@@ -1125,6 +1104,15 @@ export default function ChatScreen() {
         lists: getKnownListNames(),
       },
     });
+    if (outcome.handled) {
+      addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+      addMessage({ id: generateId('msg'), role: 'assistant', content: outcome.responseText, timestamp: Date.now() });
+      speak(outcome.responseText);
+      sendingRef.current = false;
+      setInputText('');
+      return;
+    }
+    const routeDecision = outcome.routeDecision;
     // Read the routing decision's signals directly off the RouteDecision union.
     // Replaces the flat TierDecision shadow + routeDecisionToTier (deleted).
     const rdTier: 1 | 2 | 3 =
@@ -1144,45 +1132,6 @@ export default function ChatScreen() {
     const rdLocalContext =
       routeDecision.kind === 'memory_probe' ? routeDecision.context : undefined;
 
-    // Runs converted intents through their domain writers, speaks the verified
-    // ACK, clears the send lock. Single dispatch site for all three paths.
-    const applyConvertedIntents = async (
-      convIntents: IntentRecord[],
-      rawText: string,
-      opts?: { echoUser?: boolean },
-    ): Promise<void> => {
-      const results: import('../routing/routeIntent').CommitResult[] = [];
-      for (const intent of convIntents) {
-        const writer = DOMAIN_WRITERS[intent.type];
-        if (writer) results.push(await writer.add(intent, rawText));
-      }
-      const ack = composeAck(results);
-      if (opts?.echoUser) {
-        addMessage({ id: generateId('msg'), role: 'user', content: rawText, timestamp: Date.now() });
-      }
-      addMessage({ id: generateId('msg'), role: 'assistant', content: ack, timestamp: Date.now() });
-      speak(ack);
-      const pending = results.find(r => r.status === 'pending');
-      if (pending && pending.status === 'pending') {
-        sessionRef.current.setPending({ pendingKey: pending.pendingKey, resume: pending.resume });
-      }
-      sendingRef.current = false;
-      setInputText('');
-    };
-
-    // ── Routing authority dispatch (Commit 3) ────────────────────────────────
-    // If routeIntent returned a capture decision AND every intent type has a
-    // registered domain writer, dispatch through the authority and return.
-    // Legacy islands handle everything else (passthrough or unconverted domains).
-    if (
-      routeDecision.kind === 'capture' &&
-      allConverted(routeDecision.intents)
-    ) {
-      await applyConvertedIntents(routeDecision.intents, text, { echoUser: true });
-      return;
-    }
-    // ─────────────────────────────────────────────────────────────────────────
-
     // LLM capture — fallback classifier for the ambiguous tier-3 gap ONLY.
     if (llmStatus === 'ready' && rdTier === 3) {
       try {
@@ -1193,7 +1142,12 @@ export default function ChatScreen() {
         });
                 if (llmCaptures.length > 0) {
           if (allConverted(llmCaptures)) {
-            await applyConvertedIntents(llmCaptures, text, { echoUser: true });
+            const { responseText } = await applyIntents(llmCaptures, text, sessionRef.current);
+            addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+            addMessage({ id: generateId('msg'), role: 'assistant', content: responseText, timestamp: Date.now() });
+            speak(responseText);
+            sendingRef.current = false;
+            setInputText('');
             return;
           }
           const handled = await dispatchLocalIntent(
@@ -1268,22 +1222,32 @@ export default function ChatScreen() {
               setInputText('');
               return;
             }
-            await applyConvertedIntents(
+            const { responseText } = await applyIntents(
               [{ type: 'medical_capture', drug: guessedName, dosage: extractDosage(text), raw: text }],
               text,
-              { echoUser: true },
+              sessionRef.current,
             );
+            addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+            addMessage({ id: generateId('msg'), role: 'assistant', content: responseText, timestamp: Date.now() });
+            speak(responseText);
+            sendingRef.current = false;
+            setInputText('');
             return;
           }
           if (medCategory === 'visit') {
             // Visits tierRouter missed reach here. Route through the medical_visit
             // writer so a nameless visit ASKS "who did you see?" (Spine §5) instead
             // of writing a doctor-less row via writeMedicalFact. Heard "Dr. X" writes.
-            await applyConvertedIntents(
+            const { responseText } = await applyIntents(
               [{ type: 'medical_visit', raw: text }],
               text,
-              { echoUser: true },
+              sessionRef.current,
             );
+            addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+            addMessage({ id: generateId('msg'), role: 'assistant', content: responseText, timestamp: Date.now() });
+            speak(responseText);
+            sendingRef.current = false;
+            setInputText('');
             return;
           }
           try {
@@ -1446,7 +1410,12 @@ export default function ChatScreen() {
             });
                         if (results.length > 0) {
               if (allConverted(results)) {
-                await applyConvertedIntents(results, text, { echoUser: true });
+                const { responseText } = await applyIntents(results, text, sessionRef.current);
+                addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+                addMessage({ id: generateId('msg'), role: 'assistant', content: responseText, timestamp: Date.now() });
+                speak(responseText);
+                sendingRef.current = false;
+                setInputText('');
                 return;
               }
               addMessage({ id: generateId('msg'), role: 'user',
