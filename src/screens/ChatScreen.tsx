@@ -868,7 +868,9 @@ export default function ChatScreen() {
 
     // ── Pending medication CLEAR confirm (Build A — destructive, soft-delete) ──
     if (pendingMedClearRef.current) {
-      if (YES.test(text.trim())) {
+      const MED_CLEAR_YES = /^(yes|yeah|yep|correct|right|10-4)[\s.,!]*$/i;
+      const MED_CLEAR_NO = /^(no|nope|not yet|negative)[\s.,!]*$/i;
+      if (MED_CLEAR_YES.test(text.trim())) {
         pendingMedClearRef.current = null;
         addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
         let removed = 0;
@@ -882,7 +884,7 @@ export default function ChatScreen() {
         setInputText('');
         return;
       }
-      if (NO.test(text.trim())) {
+      if (MED_CLEAR_NO.test(text.trim())) {
         pendingMedClearRef.current = null;
         addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
         const reply = `Okay — I left your medications as they are.`;
