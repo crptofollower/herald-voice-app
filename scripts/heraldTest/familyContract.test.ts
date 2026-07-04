@@ -153,6 +153,15 @@ export async function runFamilyContractTests() {
   assert('C15 filler name: my son is just David', detectFamilyCapture('my son is just David'), capRel(['son','David']), 'son/David (never "just")');
   assert("C16 filler-only defers (no real name)", detectFamilyCapture("my wife's name is also"), capNone, '[]');
 
+  // ── BUG D — "I have a/another {relation} named {Name}" (ordinary 65+ speech;
+  //    missed on-device S53, fell to generic fallback with zero capture) ──
+  assert('C17 I have a son named Hunter', detectFamilyCapture('I have a son named Hunter'), capRel(['son','Hunter']), 'son/Hunter');
+  assert('C18 I have another son named Grant', detectFamilyCapture('I have another son named Grant'), capRel(['son','Grant']), 'son/Grant');
+  // Guard: the new pattern must NOT half-capture a compound (silent loss of the
+  // second person is worse than deferring both — compounds are Session W territory,
+  // same deferral as C10/C11).
+  assert('C19 compound named-form defers', detectFamilyCapture('I have a son named Hunter and another son named Grant'), capNone, '[]');
+
   // ── Writer collision (BUG B — same name, two relationships) ──
   {
     freshDB();

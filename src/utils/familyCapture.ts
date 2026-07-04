@@ -71,11 +71,18 @@ export function detectFamilyCapture(text: string): IntentRecord[] {
   const countCompound = new RegExp(`\\b(two|three|four|five|both|couple of|a couple of)\\s+(?:${REL})s?\\b`, 'i');
   const dualRelation  = new RegExp(`\\bmy\\s+(?:${REL})\\b[^.?]*\\band\\s+my\\s+(?:${REL})\\b`, 'i');
   const nameList      = new RegExp(`\\bmy\\s+(?:${REL})s?\\b[^.?]*\\b[A-Za-z][A-Za-z'\\-]+\\s+and\\s+[A-Za-z][A-Za-z'\\-]+`, 'i');
+  // Have-form compound: "I have a son named Hunter and another son named Grant"
+  // — none of the three guards above catch this shape (no "my", no count word).
+  // Two relation words joined by "and" inside one have-sentence → bail, never
+  // half-capture (Spine §5: a recoverable miss, never a silent drop).
+  const haveCompound = new RegExp(`\\bI\\s+have\\b[^.?]*\\b(?:${REL})\\b[^.?]*\\band\\b[^.?]*\\b(?:${REL})\\b`, 'i');
   if (countCompound.test(raw) || dualRelation.test(raw) || nameList.test(raw)) return [];
+  if (haveCompound.test(raw)) return [];
 
   // Single-member patterns — most specific first. Name is one token.
   const patterns: Array<{ re: RegExp; rel: number; name: number }> = [
     { re: new RegExp(`\\bmy\\s+(${REL})'?s\\s+name\\s+is\\s+${SKIP}([A-Za-z][A-Za-z'\\-]+)`, 'i'), rel: 1, name: 2 },
+    { re: new RegExp(`\\bI\\s+have\\s+(?:a|another)\\s+(${REL})\\s+named\\s+${SKIP}([A-Za-z][A-Za-z'\\-]+)`, 'i'), rel: 1, name: 2 },
     { re: new RegExp(`\\bmy\\s+(${REL})\\s+is\\s+${SKIP}([A-Za-z][A-Za-z'\\-]+)`, 'i'), rel: 1, name: 2 },
     { re: new RegExp(`\\bmy\\s+(${REL})\\s+([A-Za-z][A-Za-z'\\-]+)\\s+(?:lives?|is|works|moved|stays?)\\b`, 'i'), rel: 1, name: 2 },
     { re: new RegExp(`\\bmy\\s+(${REL})\\b[^.?]*\\bname\\s+is\\s+${SKIP}([A-Za-z][A-Za-z'\\-]+)`, 'i'), rel: 1, name: 2 },
