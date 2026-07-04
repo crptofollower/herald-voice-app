@@ -76,6 +76,7 @@ import { writeTurnObservation } from '../utils/personaContext';
 import { classifyQuery, scanResidualIntent } from "../routing/tierRouter";
 import { routeIntent } from "../routing/routeIntent";
 import { DOMAIN_WRITERS, allConverted, composeAck } from '../routing/routeIntent';
+import { ConversationSession } from '../routing/conversationSession';
 import type { IntentRecord } from '../hooks/llmLayers';
 import { dispatchRead, dispatchAction } from './chat/dispatch';
 import type { DispatchDeps } from './chat/dispatch';
@@ -255,10 +256,7 @@ export default function ChatScreen() {
   const pendingContactCollectRef = useRef<{ action: 'call' | 'navigate' | 'text' | 'confirm_phone' | 'confirm_call'; name: string; body?: string; phone?: string } | null>(null);
   const pendingMedClearRef = useRef<{ count: number } | null>(null);
   const pendingInsuranceRef = useRef<{ type: string; carrier: string; ack: string } | null>(null);
-  const pendingResumeRef = useRef<{
-    pendingKey: string;
-    resume: (t: string) => Promise<import('../routing/routeIntent').CommitResult>;
-  } | null>(null);
+  const sessionRef = useRef<ConversationSession>(new ConversationSession());
 
   // ── Scroll snap prevention ────────────────────────────────────────────────
   // Only auto-scroll to bottom when user is already near the bottom.
@@ -869,9 +867,8 @@ export default function ChatScreen() {
     }
 
     // ── Pending continuation — user is answering a question a writer asked ──
-    if (pendingResumeRef.current) {
-      const { resume } = pendingResumeRef.current;
-      pendingResumeRef.current = null;
+    if (sessionRef.current.hasPending()) {
+      const { resume } = sessionRef.current.takePending()!;
       const result = await resume(text);
       if (result.status === 'noop' && !result.ack) {
         // Not an answer to the pending question — let it route normally below.
@@ -882,7 +879,7 @@ export default function ChatScreen() {
         addMessage({ id: generateId('msg'), role: 'assistant', content: ack, timestamp: Date.now() });
         speak(ack);
         if (result.status === 'pending') {
-          pendingResumeRef.current = { pendingKey: result.pendingKey, resume: result.resume };
+          sessionRef.current.setPending({ pendingKey: result.pendingKey, resume: result.resume });
         }
         sendingRef.current = false;
         setInputText('');
@@ -1167,7 +1164,7 @@ export default function ChatScreen() {
       speak(ack);
       const pending = results.find(r => r.status === 'pending');
       if (pending && pending.status === 'pending') {
-        pendingResumeRef.current = { pendingKey: pending.pendingKey, resume: pending.resume };
+        sessionRef.current.setPending({ pendingKey: pending.pendingKey, resume: pending.resume });
       }
       sendingRef.current = false;
       setInputText('');
