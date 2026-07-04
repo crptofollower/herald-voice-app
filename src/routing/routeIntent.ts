@@ -325,10 +325,35 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
         prompt: confirmPrompt,
         pendingKey: 'family_capture',
         resume: async (userText: string): Promise<CommitResult> => {
-          const YES = /^(yes|yeah|yep|yup|correct|right|that'?s right|sure|ok|okay|sounds good|affirmative|confirmed|confirm|y)\b/i;
-          const NO = /^(no|nope|nah|wrong|incorrect|that'?s wrong|not right|cancel|nevermind|never mind)\b/i;
+          const YES = /^(yes|yeah|yep|yup|correct|right|that'?s right|sure|ok|okay|sounds good|affirmative|confirmed|confirm|y)[\s.,!]*$/i;
+          const NO = /^(no|nope|nah|wrong|incorrect|that'?s wrong|not right|cancel|nevermind|never mind)[\s.,!]*$/i;
           if (NO.test(userText.trim())) {
-            return { status: 'noop', ack: `No problem — what's the correct name?` };
+            return {
+              status: 'pending',
+              prompt: `No problem — what's the correct name?`,
+              pendingKey: 'family_capture_correction',
+              resume: async (correctionText: string): Promise<CommitResult> => {
+                const correctedName = correctionText.trim();
+                if (!isRealName(correctedName)) {
+                  return { status: 'noop', ack: '' };
+                }
+                try {
+                  const { capturePerson } = await import('../db/capturePerson');
+                  const { findContactByName } = await import('../db/contactsDB');
+                  capturePerson({ name: correctedName, relationship: relation, location });
+                  const saved = findContactByName(correctedName);
+                  if (!saved) {
+                    return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
+                  }
+                  const ack = location
+                    ? `Got it — I'll remember ${correctedName} is your ${relation} in ${location}.`
+                    : `Got it — I'll remember ${correctedName} is your ${relation}.`;
+                  return { status: 'committed', ack };
+                } catch {
+                  return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
+                }
+              },
+            };
           }
           if (!YES.test(userText.trim())) {
             return { status: 'noop', ack: '' };

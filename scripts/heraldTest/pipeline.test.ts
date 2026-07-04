@@ -113,8 +113,8 @@ export async function runPipelineTests() {
     const t1 = await say('my wife is Shannon');
     assert('P3a pending confirm live', t1, (v) => v.handled === true && v.responseText.includes('wife'), 'confirm prompt');
     const t2 = await say('ok my daughter is Shannon');
-    assert('P3b DEFECT E1 pinned: leading "ok" commits the OLD pending as a yes', t2, (v) => v.handled === true && v.responseText.includes('wife'), 'wife commit ack (wrong but current)');
-    assert('P3c DEFECT E1/E2 pinned: wife row written, daughter utterance swallowed', rows(), (v) => v.length === 1 && v[0].relationship === 'wife', '1 row, wife only');
+    assert('P3b E1 FIXED: leading "ok" no longer commits stale pending; re-routes as fresh daughter capture', t2, (v) => v.handled === true && v.source === 'capture' && v.responseText.includes('Shannon') && v.responseText.includes('daughter'), 'fresh capture prompt naming Shannon/daughter');
+    assert('P3c E1/E2 FIXED: neither wife nor daughter committed — stale pending abandoned, new one still pending', rows(), (v) => v.length === 0, '0 rows');
   }
   {
     const { say, rows } = freshPipeline();
@@ -122,7 +122,7 @@ export async function runPipelineTests() {
     const t1 = await say('no');
     assert('P3d NO branch asks for the correct name', t1, (v) => v.handled === true && v.responseText.toLowerCase().includes('correct name'), 'asks correct name');
     await say('Karen');
-    assert('P3e DEFECT E3 pinned: bare-name correction captures nothing', rows().length, (v) => v === 0, '0 rows');
+    assert('P3e E3 FIXED: bare-name correction commits Karen under the original relation', rows(), (v) => v.length === 1 && v[0].name === 'Karen' && v[0].relationship === 'wife', '1 row, Karen/wife');
   }
 
   const total = passed + failures.length;
