@@ -216,7 +216,7 @@ const RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", BOLD = "\x1b[1m",
 let passed = 0;
 const failures = [];
 const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length;
-const EXPECTED_TOTAL = 224;
+const EXPECTED_TOTAL = 244;
 
 console.log(`\n${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  HERALD ROUTER + PHONE TEST SUITE — ${TOTAL} tests${RESET}`);
@@ -300,14 +300,16 @@ const { runHouseholdContractTests } = await import('./householdContract.test.ts'
 const { runMedicalContractTests }   = await import('./medicalContract.test.ts');
 const { runFamilyContractTests }    = await import('./familyContract.test.ts');
 const { runDiagnosisContractTests } = await import('./diagnosisContract.test.ts');
+const { runPipelineTests } = await import('./pipeline.test.ts');
 const hResult = await runHouseholdContractTests();
 const mResult = await runMedicalContractTests();
 const fResult = await runFamilyContractTests();
 const dResult = await runDispatchContractTests();
 const dxResult = await runDiagnosisContractTests();
-const contractPassed = hResult.passed + mResult.passed + fResult.passed + dResult.passed + dxResult.passed;
-const contractFailed = hResult.failed + mResult.failed + fResult.failed + dResult.failed + dxResult.failed;
-const contractTotal = hResult.total + mResult.total + fResult.total + dResult.total + dxResult.total;
+const pResult = await runPipelineTests();
+const contractPassed = hResult.passed + mResult.passed + fResult.passed + dResult.passed + dxResult.passed + pResult.passed;
+const contractFailed = hResult.failed + mResult.failed + fResult.failed + dResult.failed + dxResult.failed + pResult.failed;
+const contractTotal = hResult.total + mResult.total + fResult.total + dResult.total + dxResult.total + pResult.total;
 
 console.log(`${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  RESULTS: ${GREEN}${passed + contractPassed} passed${RESET}${BOLD} / ${failures.length + contractFailed > 0 ? RED : GREEN}${failures.length + contractFailed} failed${RESET}${BOLD} / ${TOTAL + contractTotal} total${RESET}`);
