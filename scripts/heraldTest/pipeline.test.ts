@@ -106,15 +106,18 @@ export async function runPipelineTests() {
     assert('P2f compound wrote nothing', rows(), (v) => v.length === 2 && !v.some((r) => r.name === 'Bob' || r.name === 'Tom'), 'still 2 rows, no Bob/Tom');
   }
 
-  // ── P3: Hazard E pins — CURRENT DEFECTIVE BEHAVIOR, pinned on purpose.
-  //    S-CONFIRM flips these assertions RED-first. ──
+  // ── P3: Law 2 pins (S-DISCLOSE confirm-primitive, S60 build arc) ──
   {
-    const { say, rows } = freshPipeline();
+    const { say, rows, session } = freshPipeline();
     const t1 = await say('my wife is Shannon');
     assert('P3a pending confirm live', t1, (v) => v.handled === true && v.responseText.includes('wife'), 'confirm prompt');
     const t2 = await say('ok my daughter is Shannon');
-    assert('P3b E1 FIXED: leading "ok" no longer commits stale pending; re-routes as fresh daughter capture', t2, (v) => v.handled === true && v.source === 'capture' && v.responseText.includes('Shannon') && v.responseText.includes('daughter'), 'fresh capture prompt naming Shannon/daughter');
-    assert('P3c E1/E2 FIXED: neither wife nor daughter committed — stale pending abandoned, new one still pending', rows(), (v) => v.length === 0, '0 rows');
+    assert('P3b Law 2: unresolvable reply re-asks — does NOT re-route as a fresh capture', t2, (v) => v.handled === true && v.source === 'pending_resume', 'pending_resume, not fresh capture');
+    assert('P3b2 wife-pending stays pending — never leaks', session.hasPending(), (v) => v === true, 'true');
+    assert('P3c nothing committed yet', rows().length, (v) => v === 0, '0 rows');
+    const t3 = await say('yes');
+    assert('P3d original wife pending still resolves on a real yes', t3, (v) => v.handled === true && v.responseText.includes('Shannon'), 'commits Shannon');
+    assert('P3e one contact row after commit', rows(), (v) => v.length === 1 && v[0].relationship === 'wife', '1 row, wife');
   }
   {
     const { say, rows } = freshPipeline();
