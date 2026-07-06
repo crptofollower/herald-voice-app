@@ -12,23 +12,24 @@ import type { MutableRefObject } from 'react';
 import type { LlamaContext } from 'llama.rn';
 import type { Message } from '../../api/herald';
 import type { TierDecision } from '../../routing/tierRouter';
+import type { ConversationSession } from '../../routing/conversationSession';
 import * as IntentLauncher from 'expo-intent-launcher';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getDB } from '../../db/schema';
 import { answerHouseholdRead } from '../../utils/householdRead';
-import { guessMedicationName, deactivateMedicationByName, getActiveMedications } from '../../db/medicalDB';
+import { guessMedicationName, deactivateMedicationByName } from '../../db/medicalDB';
 import { isMedicationCorroborated } from '../../db/factDB';
 
 // Pending-confirmation refs the dispatch handlers set so the NEXT user turn can
 // resolve them (collect a phone number, confirm a medication, etc.).
 export interface DispatchPendingRefs {
   pendingContactCollectRef: MutableRefObject<{ action: 'call' | 'navigate' | 'text' | 'confirm_phone' | 'confirm_call'; name: string; body?: string; phone?: string } | null>;
-  pendingMedClearRef: MutableRefObject<{ count: number } | null>;
   pendingTodoCompleteRef: MutableRefObject<{ id: string; body: string } | null>;
 }
 
 // Everything the dispatch handlers need from the component, passed explicitly.
 export interface DispatchDeps extends DispatchPendingRefs {
+  session: ConversationSession;
   addMessage: (m: Message) => void;
   speak: (text: string, opts?: { rate?: number }) => void;
   setInputText: (s: string) => void;
@@ -85,7 +86,7 @@ export async function dispatchAction(
     addMessage, speak, generateId, llmStatus, getCtx,
     resolveContactPhone, handleCalendarAction, handleMapsAction, launchAndroidTimer,
     handleLaunchActionRef, pendingContactCollectRef,
-    pendingMedClearRef, pendingTodoCompleteRef, platformOS, openURL,
+    pendingTodoCompleteRef, platformOS, openURL, session,
   } = deps;
 
   // === arms copied from ChatScreen.tsx below ===
@@ -188,18 +189,21 @@ export async function dispatchAction(
         }
         if (actionIntent.type === 'medical_clear') {
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-          let count = 0;
-          try { count = getActiveMedications().length; } catch {}
-          if (count === 0) {
-            const reply = `You don't have any medications saved right now.`;
-            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-            speak(reply);
+          const { DOMAIN_WRITERS } = await import('../../routing/routeIntent');
+          const result = await DOMAIN_WRITERS['medical_capture']!.clear();
+          if (result.status === 'pending') {
+            session.setPending({
+              pendingKey: result.pendingKey,
+              kind: result.kind ?? 'destructive',
+              budget: 1,
+              resume: result.resume,
+            });
+            addMessage({ id: generateId('msg'), role: 'assistant', content: result.prompt, timestamp: Date.now() });
+            speak(result.prompt);
             return;
           }
-          pendingMedClearRef.current = { count };
-          const reply = `This will remove all ${count} of your medications. Are you sure?`;
-          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-          speak(reply);
+          addMessage({ id: generateId('msg'), role: 'assistant', content: result.ack, timestamp: Date.now() });
+          speak(result.ack);
           return;
         }
         if (actionIntent.type === 'household_remove') {

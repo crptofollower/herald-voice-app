@@ -98,7 +98,7 @@ import {
   getEmergencyContact,
   setEmergencyContact,
 } from "../db/contactsDB";
-import { writeMedicalFact, writeMedicalRecord, writeMedication, writeMedicalContact, guessMedicationName, confirmMedicationCapture, deactivateMedicationByName, clearAllMedications, getActiveMedications } from "../db/medicalDB";
+import { writeMedicalFact, writeMedicalRecord, writeMedication, writeMedicalContact, guessMedicationName, confirmMedicationCapture, deactivateMedicationByName } from "../db/medicalDB";
 import { extractDosage } from "../utils/detectMedicalEvent";
 import { drainPendingWrites, getPendingCount, queueWrite } from "../db/pendingWritesDB";
 import { _registerContactExtractor, writeFacts, extractFactsLocally, getFactCount, isMedicalCaptureIntent, isMedicationCorroborated, medicalCategoryFromText } from "../db/factDB";
@@ -255,7 +255,6 @@ export default function ChatScreen() {
   // Pending contact collection — when Herald asks "what's their number/address?"
   // the next user message resolves this and executes the original intent.
   const pendingContactCollectRef = useRef<{ action: 'call' | 'navigate' | 'text' | 'confirm_phone' | 'confirm_call'; name: string; body?: string; phone?: string } | null>(null);
-  const pendingMedClearRef = useRef<{ count: number } | null>(null);
   const pendingInsuranceRef = useRef<{ type: string; carrier: string; ack: string } | null>(null);
   const sessionRef = useRef<ConversationSession>(new ConversationSession());
 
@@ -838,14 +837,13 @@ export default function ChatScreen() {
     if (!text) return;
 
     // ── Law 0 bridge (interim, Step 3) ─────────────────────────────────────────
-    // Catches emergency BEFORE any of the 4 legacy ref-pendings can intercept or
+    // Catches emergency BEFORE any of the 3 legacy ref-pendings can intercept or
     // misread it. TEMPORARY: delete this block once Step 4 migrates
-    // pendingMedClearRef/pendingTodoCompleteRef/pendingInsuranceRef/
-    // pendingContactCollectRef into ConversationSession — at that point
-    // processUtterance's own Law 0 check (below) is the single consumer, as specced.
+    // pendingTodoCompleteRef/pendingInsuranceRef/pendingContactCollectRef
+    // into ConversationSession — at that point processUtterance's own Law 0 check
+    // (below) is the single consumer, as specced.
     if (detectEmergency(text)) {
       pendingTodoCompleteRef.current = null;
-      pendingMedClearRef.current = null;
       pendingContactCollectRef.current = null;
       pendingInsuranceRef.current = null;
       if (sessionRef.current.hasPending()) sessionRef.current.clearPending();
@@ -911,38 +909,6 @@ export default function ChatScreen() {
       }
       // Not a yes/no — clear pending and fall through to normal routing
       pendingTodoCompleteRef.current = null;
-    }
-
-    // ── Pending medication CLEAR confirm (Build A — destructive, soft-delete) ──
-    if (pendingMedClearRef.current) {
-      const MED_CLEAR_YES = /^(yes|yeah|yep|correct|right|10-4)[\s.,!]*$/i;
-      const MED_CLEAR_NO = /^(no|nope|not yet|negative)[\s.,!]*$/i;
-      if (MED_CLEAR_YES.test(text.trim())) {
-        pendingMedClearRef.current = null;
-        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-        let removed = 0;
-        try { removed = clearAllMedications(); } catch {}
-        const reply = removed > 0
-          ? `Done — cleared ${removed} ${removed === 1 ? 'medication' : 'medications'}. You can start fresh anytime.`
-          : `There were no active medications to clear.`;
-        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-        speak(reply);
-        sendingRef.current = false;
-        setInputText('');
-        return;
-      }
-      if (MED_CLEAR_NO.test(text.trim())) {
-        pendingMedClearRef.current = null;
-        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-        const reply = `Okay — I left your medications as they are.`;
-        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-        speak(reply);
-        sendingRef.current = false;
-        setInputText('');
-        return;
-      }
-      // Not a yes/no — cancel the clear (fail safe: never wipe on ambiguity)
-      pendingMedClearRef.current = null;
     }
 
     // ── Pending contact collection — user is providing a number or address ──
@@ -2523,8 +2489,8 @@ export default function ChatScreen() {
     launchAndroidTimer,
     handleLaunchActionRef,
     pendingContactCollectRef,
-    pendingMedClearRef,
     pendingTodoCompleteRef,
+    session: sessionRef.current,
     platformOS: Platform.OS,
     openURL: Linking.openURL,
   }), [addMessage, speak, llmStatus, getCtx, inferLocal]);

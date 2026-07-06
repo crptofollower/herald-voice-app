@@ -21,6 +21,12 @@ export type PendingSlot = {
 // any domain resume runs, from any pending, any budget state).
 export const CANCEL_RE = /^(never\s*mind|nevermind|cancel|stop|forget\s+it)[\s.,!]*$/i;
 
+// Anchored destructive-confirm vocabulary (C2 point 2, narrow set — a filler
+// "ok" must never commit a wipe). Capture-confirm retrofit is a separate
+// carried item; do not widen this set without founder decision.
+export const CONFIRM_YES_RE = /^(yes|yeah|yep|correct|right|10-4)[\s.,!]*$/i;
+export const CONFIRM_NO_RE  = /^(no|nope|not yet|negative)[\s.,!]*$/i;
+
 const DEFAULT_STANDARD_BUDGET = 2;
 
 function releaseAck(kind: PendingKind): string {

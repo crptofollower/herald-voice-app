@@ -28,6 +28,7 @@ export type RouteDecision =
 export type CommitResult =
   | { status: 'committed'; ack: string }
   | { status: 'pending';   prompt: string; pendingKey: string;
+      kind?: 'standard' | 'destructive';
       resume: (userText: string) => Promise<CommitResult> }
   | { status: 'noop';      ack: string }
   | { status: 'failed';    ack: string };
@@ -469,13 +470,45 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       } catch { return { status: 'failed', ack: "I couldn't do that right now — try again." }; }
     },
     async clear(): Promise<CommitResult> {
+      // Destructive class (Spine §4a + S_DISCLOSE §4.5): clear NEVER executes
+      // without an explicit anchored YES. Ambiguity releases, never wipes.
+      let count = 0;
       try {
-        const { clearAllMedications } = await import('../db/medicalDB');
-        const changes = clearAllMedications();
-        return changes > 0
-          ? { status: 'committed', ack: `Done — cleared ${changes} ${changes === 1 ? 'medication' : 'medications'}.` }
-          : { status: 'noop', ack: `There were no active medications to clear.` };
-      } catch { return { status: 'failed', ack: "I couldn't do that right now — try again." }; }
+        const { getActiveMedications } = await import('../db/medicalDB');
+        count = getActiveMedications().length;
+      } catch {
+        return { status: 'failed', ack: "I couldn't do that right now — try again." };
+      }
+      if (count === 0) {
+        return { status: 'noop', ack: `You don't have any medications saved right now.` };
+      }
+      return {
+        status: 'pending',
+        kind: 'destructive',
+        prompt: `This will remove all ${count} of your medications. Are you sure?`,
+        pendingKey: 'medical_clear',
+        resume: async (userText: string): Promise<CommitResult> => {
+          const trimmed = userText.trim();
+          const { CONFIRM_YES_RE, CONFIRM_NO_RE } = await import('./conversationSession');
+          if (CONFIRM_NO_RE.test(trimmed)) {
+            return { status: 'noop', ack: `Okay — I left your medications as they are.` };
+          }
+          if (CONFIRM_YES_RE.test(trimmed)) {
+            let removed = 0;
+            try {
+              const { clearAllMedications } = await import('../db/medicalDB');
+              removed = clearAllMedications();
+            } catch {
+              return { status: 'failed', ack: "I couldn't do that right now — try again." };
+            }
+            return { status: 'committed',
+              ack: removed > 0
+                ? `Done — cleared ${removed} ${removed === 1 ? 'medication' : 'medications'}. You can start fresh anytime.`
+                : `There were no active medications to clear.` };
+          }
+          return { status: 'noop', ack: '' }; // ambiguous → primitive releases; never executes
+        },
+      };
     },
   },
   medical_visit: {

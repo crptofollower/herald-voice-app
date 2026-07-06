@@ -33,7 +33,7 @@ export async function applyIntents(
   const responseText = composeAck(results);
   const pending = results.find(r => r.status === 'pending');
   if (pending && pending.status === 'pending') {
-    session.setPending({ pendingKey: pending.pendingKey, resume: pending.resume });
+    session.setPending({ pendingKey: pending.pendingKey, resume: pending.resume, kind: pending.kind });
   }
   return { responseText, commits: results };
 }
