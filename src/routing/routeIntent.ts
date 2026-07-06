@@ -4,7 +4,7 @@
 
 import type { IntentRecord } from '../hooks/llmLayers';
 import type { TierDecision, LocalContext } from './tierRouter';
-import { writeServiceProvider, detectServiceCapture, detectPhoneCapture } from '../utils/householdCapture';
+import { writeServiceProvider, detectServiceCapture, detectPhoneCapture, detectInsuranceCapture, captureHouseholdInsurance, normalizeCarrier } from '../utils/householdCapture';
 import { detectDiagnosisCapture } from '../utils/detectMedicalEvent';
 import { detectFamilyCapture } from '../utils/familyCapture';
 import { getDB } from '../db/schema';
@@ -48,6 +48,7 @@ export type DeterministicCapturer = (text: string, ctx: CaptureContext) => Inten
 // reached only when every capturer here returns []. One entry today; phone/list/todo
 // follow, one per gated commit.
 const DETERMINISTIC_CAPTURERS: DeterministicCapturer[] = [
+  (text) => detectInsuranceCapture(text),
   (text) => detectServiceCapture(text),
   (text, ctx) => detectPhoneCapture(text, ctx.contacts),
   (text) => detectDiagnosisCapture(text),
@@ -651,6 +652,96 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       return { status: 'noop', ack: 'Noted.' };
     },
   },
+  insurance_capture: {
+    async add(intent: IntentRecord, _rawPhrase: string): Promise<CommitResult> {
+      if (intent.type !== 'insurance_capture') {
+        return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
+      }
+      const { insType, carrier } = intent as { insType?: string; carrier?: string };
+      // Deterministic floor — never speak a model-echoed placeholder as a carrier.
+      const BAD = /^(unknown|insurance_capture|insurance|none|null|n\/a)$/i;
+      const cleanCarrier = normalizeCarrier((carrier ?? '').trim());
+      const cleanType = (insType ?? '').trim().toLowerCase();
+      const typeOk = cleanType.length >= 2 && !BAD.test(cleanType);
+      const spokenType = typeOk ? cleanType : '';
+
+      const commit = (finalCarrier: string, finalType: string): CommitResult => {
+        const insId = captureHouseholdInsurance(finalType || 'unknown', finalCarrier);
+        if (!insId) {
+          return { status: 'failed', ack: "Hmm — I couldn't hold onto that just now. Mind telling me once more?" };
+        }
+        return {
+          status: 'committed',
+          ack: finalType
+            ? `Got it — ${finalCarrier} for your ${finalType} insurance.`
+            : `Got it — ${finalCarrier} for your insurance.`,
+        };
+      };
+
+      const extractCarrier = (raw: string): string | null => {
+        let t = raw.trim().replace(/[.!?]+$/, '');
+        t = t.replace(/^(it'?s|that'?s|they'?re|the carrier is|i'?m with|we'?re with|with)\s+/i, '');
+        // A fresh capture command is not a carrier answer — let the ladder re-ask.
+        if (/^(my|our)\s+\w/i.test(t)) return null;
+        if (/^(do|does|did|who|what|which|is|are|can|could|would|where|when|how)\b/i.test(t)) return null;
+        const candidate = normalizeCarrier(t);
+        if (candidate.length < 2 || BAD.test(candidate)) return null;
+        return candidate;
+      };
+
+      // Correction/collection stage (R2): the pending owns the carrier answer.
+      // It never routes fresh, never crosses a boundary (Law 2, Spine §3a).
+      function askCarrierStage(finalType: string, prompt: string): CommitResult {
+        return {
+          status: 'pending',
+          prompt,
+          pendingKey: 'insurance_capture',
+          kind: 'standard',
+          reaskPrompt: `I'm not sure I'm following — who's your insurance with?`,
+          resume: async (reply: string): Promise<CommitResult> => {
+            const c = extractCarrier(reply);
+            if (!c) return { status: 'noop', ack: '' }; // → primitive re-ask ladder
+            return confirmStage(c, finalType);
+          },
+        };
+      }
+
+      function confirmStage(finalCarrier: string, finalType: string): CommitResult {
+        return {
+          status: 'pending',
+          prompt: finalType
+            ? `Got it — ${finalCarrier} for your ${finalType} insurance, right?`
+            : `Got it — ${finalCarrier} insurance, right?`,
+          pendingKey: 'insurance_capture',
+          kind: 'standard',
+          reaskPrompt: finalType
+            ? `I'm not sure I'm following — is your ${finalType} insurance with ${finalCarrier}?`
+            : `I'm not sure I'm following — is your insurance with ${finalCarrier}?`,
+          resume: async (reply: string): Promise<CommitResult> => {
+            const trimmed = reply.trim();
+            const { CONFIRM_YES_RE, CONFIRM_NO_RE } = await import('./conversationSession');
+            if (CONFIRM_YES_RE.test(trimmed)) return commit(finalCarrier, finalType);
+            if (CONFIRM_NO_RE.test(trimmed)) {
+              return askCarrierStage(finalType, `No problem — what's the correct carrier?`);
+            }
+            return { status: 'noop', ack: '' }; // ambiguous → re-ask ladder, NEVER implicit NO
+          },
+        };
+      }
+
+      const carrierOk = cleanCarrier.length >= 2 && !BAD.test(cleanCarrier);
+      if (!carrierOk) {
+        return askCarrierStage(spokenType, `I didn't quite catch that — who's your insurance with?`);
+      }
+      return confirmStage(cleanCarrier, spokenType);
+    },
+    async remove(_item: string): Promise<CommitResult> {
+      return { status: 'noop', ack: 'Noted.' };
+    },
+    async clear(): Promise<CommitResult> {
+      return { status: 'noop', ack: 'Noted.' };
+    },
+  },
 };
 
 // allConverted: returns true when every intent in a capture decision has a
@@ -700,7 +791,15 @@ export async function routeIntent(
     // flows to the capture path → DOMAIN_WRITERS. Visits/advice were previously
     // routed to dispatch's medical_capture branch; that island is retired (V4).
     const isMedicalCapture = actionType === 'medical_capture';
-    if (actionType !== 'list_add' && actionType !== 'todo_add' && !isMedicalCapture) {
+    // S64 D5: typeless insurance statements classify as profile_update at tier-1.
+    // They are captures of a correction-prone fact (§4 confirm-before-save) and
+    // must reach the insurance writer — never an unconfirmed local_profile write
+    // into a table householdRead never reads. field 'provider' is NOT diverted
+    // ("my provider is Dr. Smith" is not insurance). Dual-write audit: carried.
+    const isInsuranceProfileUpdate =
+      decision.actionIntent.type === 'profile_update' &&
+      decision.actionIntent.field === 'insurance';
+    if (actionType !== 'list_add' && actionType !== 'todo_add' && !isMedicalCapture && !isInsuranceProfileUpdate) {
       return {
         kind: 'device_action',
         tier: 1,

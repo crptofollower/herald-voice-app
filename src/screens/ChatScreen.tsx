@@ -254,7 +254,6 @@ export default function ChatScreen() {
   // Pending contact collection — when Herald asks "what's their number/address?"
   // the next user message resolves this and executes the original intent.
   const pendingContactCollectRef = useRef<{ action: 'call' | 'navigate' | 'text' | 'confirm_phone' | 'confirm_call'; name: string; body?: string; phone?: string } | null>(null);
-  const pendingInsuranceRef = useRef<{ type: string; carrier: string; ack: string } | null>(null);
   const sessionRef = useRef<ConversationSession>(new ConversationSession());
 
   // ── Scroll snap prevention ────────────────────────────────────────────────
@@ -746,35 +745,6 @@ export default function ChatScreen() {
           }
           return true;
         }
-        case 'insurance_capture': {
-          const { type, insType, carrier, agent, phone } = intent as {
-            type: 'insurance_capture'; insType: string; carrier: string;
-            agent?: string; phone?: string;
-          };
-          void agent;
-          void phone;
-          // Guard against the on-device model echoing schema names or placeholders
-          // into data fields instead of real values. Deterministic floor — never
-          // speak a garbage carrier/type to the user; ask a clean question instead.
-          const BAD = /^(unknown|insurance_capture|insurance|none|null|n\/a)$/i;
-          const cleanCarrier = (carrier ?? '').trim();
-          const cleanType = (insType ?? '').trim();
-          const carrierOk = cleanCarrier.length >= 2 && !BAD.test(cleanCarrier);
-          const typeOk = cleanType.length >= 2 && !BAD.test(cleanType);
-          if (!carrierOk) {
-            addMessage({ id: generateId('msg'), role: 'user', content: originalText, timestamp: Date.now() });
-            replyAndReset(`I didn't quite catch that — who's your insurance with?`);
-            return true;
-          }
-          const spokenType = typeOk ? cleanType : 'insurance';
-          const ack = typeOk
-            ? `Got it — ${cleanCarrier} for your ${spokenType} insurance, right?`
-            : `Got it — ${cleanCarrier} insurance, right?`;
-          pendingInsuranceRef.current = { type: cleanType || 'unknown', carrier: cleanCarrier, ack };
-          addMessage({ id: generateId('msg'), role: 'user', content: originalText, timestamp: Date.now() });
-          replyAndReset(ack);
-          return true;
-        }
         default:
           replyAndReset(`I couldn't quite get that — try a different way.`);
           return true;
@@ -836,14 +806,13 @@ export default function ChatScreen() {
     if (!text) return;
 
     // ── Law 0 bridge (interim, Step 3) ─────────────────────────────────────────
-    // Catches emergency BEFORE any of the 2 legacy ref-pendings can intercept or
+    // Catches emergency BEFORE the 1 legacy ref-pending can intercept or
     // misread it. TEMPORARY: delete this block once Step 4 migrates
-    // pendingInsuranceRef/pendingContactCollectRef into ConversationSession — at
+    // pendingContactCollectRef into ConversationSession — at
     // that point processUtterance's own Law 0 check (below) is the single
     // consumer, as specced.
     if (detectEmergency(text)) {
       pendingContactCollectRef.current = null;
-      pendingInsuranceRef.current = null;
       if (sessionRef.current.hasPending()) sessionRef.current.clearPending();
       await dispatchEmergency(text);
       setInputText('');
@@ -1023,43 +992,6 @@ export default function ChatScreen() {
       // Fall through to normal routing
     }
 
-    // ── Pending insurance confirm ──
-    if (pendingInsuranceRef.current) {
-      const pending = pendingInsuranceRef.current;
-      if (YES.test(text.trim())) {
-        pendingInsuranceRef.current = null;
-        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-        const { captureHouseholdInsurance } = await import('../utils/householdCapture');
-        const insId = captureHouseholdInsurance(pending.type, pending.carrier);
-        const reply = insId
-          ? `Got it — ${pending.carrier} for your ${pending.type} insurance.`
-          : `Hmm — I couldn't hold onto that just now. Mind telling me once more?`;
-        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-        speak(reply);
-        sendingRef.current = false;
-        setInputText('');
-        return;
-      }
-      if (NO.test(text.trim())) {
-        pendingInsuranceRef.current = null;
-        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-        const reply = `No problem — what's the correct carrier?`;
-        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-        speak(reply);
-        sendingRef.current = false;
-        setInputText('');
-        return;
-      }
-      pendingInsuranceRef.current = null;
-      addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-      const reply = `No problem — what's the correct carrier?`;
-      addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-      speak(reply);
-      sendingRef.current = false;
-      setInputText('');
-      return;
-    }
-
     // Deterministic-first routing: the regex/SQL classifier runs FIRST and always wins.
     // Tier-1 reads and actions are handled by the dispatch below. The on-device LLM only
     // attempts a capture when deterministic routing found nothing actionable (tier 3 gap).
@@ -1154,20 +1086,6 @@ export default function ChatScreen() {
     const householdResult = captureHousehold(text);
 
     if (householdResult && householdResult.type !== 'needs_llm' && 'captured' in householdResult) {
-      if (householdResult.pendingConfirm) {
-        // Insurance: no write yet — set pending confirm, read back for user to verify.
-        pendingInsuranceRef.current = {
-          type: householdResult.pendingConfirm.type,
-          carrier: householdResult.pendingConfirm.carrier,
-          ack: householdResult.ack,
-        };
-        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-        addMessage({ id: generateId('msg'), role: 'assistant', content: householdResult.ack, timestamp: Date.now() });
-        speak(householdResult.ack);
-        sendingRef.current = false;
-        setInputText('');
-        return;
-      }
       // Legal document add/remove: ack is already set by householdCapture to reflect
       // the actual commit result (captured:true = wrote/removed, captured:false = gap).
       // Speak exactly what was returned — never invent a success ack for a failed write.

@@ -84,6 +84,43 @@ const INSURANCE_PATTERNS = [
   /\bmy ([\w\s]+?)\s+(?:insurance\s+)?(?:policy|plan)\s+is\s+(?:with\s+)?([\w\s\-']+?)[.!?]?$/i,
 ];
 
+// Typeless insurance statements — mirrors tierRouter's PROFILE_UPDATE insurance
+// phrasings (S64 D5). Every phrasing routeIntent's intercept diverts MUST match
+// here; insurance.test.ts T-INS-10 encodes the invariant. No REPLACE_GUARD:
+// supersession lives in writeInsurancePolicy (retire-by-type), and compound
+// remove-and-replace utterances match none of these patterns anyway.
+const INSURANCE_TYPELESS_PATTERNS = [
+  /\b(?:change|update|my\s+new)\s+(?:my\s+)?insurance\s+(?:is\s+|to\s+)(.+?)[.!?]?$/i,
+  /\bI\s+(?:changed|switched|updated)\s+my\s+insurance\s+(?:to\s+)?(.+?)[.!?]?$/i,
+  /\bmy\s+insurance\s+(?:is\s+now|changed\s+to|is)\s+(?:with\s+)?(.+?)[.!?]?$/i,
+];
+
+const INSURANCE_READ_GUARD = /\b(what('s| is| are)|tell (me )?my|show (me )?my|read (me )?my|what do i have|do i have|who('s| is)|where('s| is))\b/i;
+
+export function detectInsuranceCapture(text: string): IntentRecord[] {
+  if (INSURANCE_READ_GUARD.test(text)) return [];
+  for (const pattern of INSURANCE_PATTERNS) {
+    const m = text.match(pattern);
+    if (!m) continue;
+    const insType = m[1]?.trim().toLowerCase() ?? '';
+    const carrierRaw = (m[2]?.trim() ?? '').replace(/^with\s+/i, '').split(/\s+and\s+/i)[0].trim();
+    const carrier = normalizeCarrier(carrierRaw);
+    if (insType.length >= 2 && carrier.length >= 2) {
+      return [{ type: 'insurance_capture', insType, carrier, raw: text }];
+    }
+  }
+  for (const pattern of INSURANCE_TYPELESS_PATTERNS) {
+    const m = text.match(pattern);
+    if (!m) continue;
+    const carrierRaw = (m[1]?.trim() ?? '').replace(/^with\s+/i, '').split(/\s+and\s+/i)[0].trim();
+    const carrier = normalizeCarrier(carrierRaw);
+    if (carrier.length >= 2) {
+      return [{ type: 'insurance_capture', insType: '', carrier, raw: text }];
+    }
+  }
+  return [];
+}
+
 // ─── Legal document patterns ──────────────────────────────────────────────────
 // "my will is with my attorney Karen Smith"
 // "my power of attorney is at the bank"
@@ -122,7 +159,7 @@ const CARRIER_ALIASES: Record<string, string> = {
   'kaiser': 'Kaiser Permanente', 'kaiser permanente': 'Kaiser Permanente',
 };
 
-function normalizeCarrier(raw: string): string {
+export function normalizeCarrier(raw: string): string {
   const key = raw.trim().toLowerCase().replace(/\s+/g, ' ');
   return CARRIER_ALIASES[key] ?? raw.trim();
 }
@@ -340,30 +377,6 @@ export function captureHousehold(text: string): HouseholdCaptureResult | Househo
           type: 'legal_document',
           captured: true,
           ack: `Got it — I'll remember your ${docType} is with ${location}.`,
-        };
-      }
-    }
-  }
-
-  // ── Insurance ──────────────────────────────────────────────────────────────
-  for (const pattern of INSURANCE_PATTERNS) {
-    const m = text.match(pattern);
-    if (m) {
-      const insType = m[1]?.trim().toLowerCase() ?? '';
-      const carrierRaw = (m[2]?.trim() ?? '').replace(/^with\s+/i, '').split(/\s+and\s+/i)[0].trim();
-      const carrier = normalizeCarrier(carrierRaw);
-      const agent = m[3]?.trim();
-      const phoneCheck = m[4] ? normalizePhone(m[4]) : null;
-      const phone = phoneCheck?.valid ? phoneCheck.normalized : undefined;
-      const phoneSuspect = !!phoneCheck && !phoneCheck.valid && phoneCheck.issue !== 'empty';
-      if (insType.length >= 2 && carrier.length >= 2) {
-        // Don't write yet — confirm first
-        // Return a special result that ChatScreen uses to set pendingInsuranceRef
-        return {
-          type: 'insurance',
-          captured: false,
-          pendingConfirm: { type: insType, carrier },
-          ack: `Got it — ${carrier} for your ${insType} insurance, right?`,
         };
       }
     }
