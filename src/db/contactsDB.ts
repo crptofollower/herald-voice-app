@@ -166,6 +166,39 @@ export function findContactByName(name: string): Contact | null {
   }
 }
 
+// ─── findAllContactMatches ────────────────────────────────────────────────────
+//
+// Like findContactByRelationship + findContactByName combined, but returns
+// EVERY live match instead of top-1. Feeds the disambiguation stage — when
+// more than one match exists, Herald asks which one instead of guessing.
+
+export function findAllContactMatches(input: string): Contact[] {
+  const db = getDB();
+  const term = input.trim().toLowerCase();
+  try {
+    const rows = db.getAllSync<Contact>(
+      `SELECT * FROM contacts
+       WHERE removed_at IS NULL
+         AND (LOWER(relationship) = ? OR LOWER(name) LIKE ?)
+       ORDER BY importance DESC;`,
+      [term, `%${term}%`]
+    );
+    // A contact can satisfy both predicates (e.g. relationship "daughter"
+    // AND name contains the search term) — dedup by id.
+    const seen = new Set<string>();
+    const deduped: Contact[] = [];
+    for (const row of rows) {
+      if (!seen.has(row.id)) {
+        seen.add(row.id);
+        deduped.push(row);
+      }
+    }
+    return deduped;
+  } catch {
+    return [];
+  }
+}
+
 // ─── getImportantContacts ─────────────────────────────────────────────────────
 //
 // Returns contacts with importance >= threshold, ordered by importance.
