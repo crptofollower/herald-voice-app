@@ -2,6 +2,7 @@ import { routeIntent, DOMAIN_WRITERS, composeAck, allConverted } from './routeIn
 import type { RouteDecision, CommitResult } from './routeIntent';
 import type { IntentRecord } from '../hooks/llmLayers';
 import { ConversationSession } from './conversationSession';
+import { detectEmergency } from './emergencySignals';
 
 // D0 commit 2 (S54 addendum): the headless pipeline seam. UI (ChatScreen) calls
 // this and renders the result; P-tests call it directly. No React, no UI, no TTS.
@@ -14,6 +15,7 @@ export type RouteDeps = Parameters<typeof routeIntent>[1];
 
 export type UtteranceOutcome =
   | { handled: true; source: 'pending_resume' | 'capture'; responseText: string; commits: CommitResult[] }
+  | { handled: true; source: 'emergency' }
   | { handled: false; routeDecision: RouteDecision };
 
 /** The single commit loop: run intents through domain writers, arm the session
@@ -41,6 +43,15 @@ export async function processUtterance(
   session: ConversationSession,
   deps: RouteDeps,
 ): Promise<UtteranceOutcome> {
+  // 0) Law 0 — emergency preempts everything (Spine §3a). Checked before pending
+  //    resolution, before routing, before any classifier. A held pending is
+  //    RELEASED, never resumed — no re-ask, no ladder, no ack generated here
+  //    (ChatScreen speaks the actual emergency reply). No route decision is
+  //    ever computed for an emergency utterance.
+  if (detectEmergency(text)) {
+    if (session.hasPending()) session.clearPending();
+    return { handled: true, source: 'emergency' };
+  }
   // 1) Pending continuation — the confirm-primitive (Law 2: a pending state
   //    never leaks). resolvePending owns cancel-escape, the domain resume,
   //    the re-ask ladder, and release — it never falls through to fresh

@@ -77,6 +77,7 @@ import { classifyQuery, scanResidualIntent } from "../routing/tierRouter";
 import { allConverted } from '../routing/routeIntent';
 import { ConversationSession } from '../routing/conversationSession';
 import { processUtterance, applyIntents } from '../routing/processUtterance';
+import { detectEmergency } from '../routing/emergencySignals';
 import type { IntentRecord } from '../hooks/llmLayers';
 import { dispatchRead, dispatchAction } from './chat/dispatch';
 import type { DispatchDeps } from './chat/dispatch';
@@ -788,6 +789,35 @@ export default function ChatScreen() {
 
   // ── Send ──────────────────────────────────────────────────────────────────
 
+  // Emergency dispatch (SMS + GPS). Detection lives in emergencySignals.ts —
+  // this function only does device-side effects (Linking/expo-location/speak),
+  // consistent with processUtterance staying pure (no React/UI/TTS per its header).
+  const dispatchEmergency = useCallback(async (text: string) => {
+    addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+    const emergencyContact = getEmergencyContact();
+    if (!emergencyContact?.phone) {
+      const reply = `I want to help — but I don't have an emergency contact set up yet. Tell me who to reach and their number.`;
+      addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+      speak(reply);
+      return;
+    }
+    let locationText = '';
+    try {
+      const { requestForegroundPermissionsAsync, getCurrentPositionAsync, Accuracy } = await import('expo-location');
+      const { status } = await requestForegroundPermissionsAsync();
+      if (status === 'granted') {
+        const loc = await getCurrentPositionAsync({ accuracy: Accuracy.High, timeInterval: 3000 });
+        locationText = ` My location: https://maps.google.com/?q=${loc.coords.latitude},${loc.coords.longitude}`;
+      }
+    } catch { /* silent — send SMS without location if GPS fails */ }
+    const smsBody = encodeURIComponent(`Herald alert: I may need help.${locationText}`);
+    const smsUrl = `sms:${emergencyContact.phone}?body=${smsBody}`;
+    await Linking.openURL(smsUrl);
+    const reply = `Opening a message to ${emergencyContact.name}. Stay with me.`;
+    addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+    speak(reply);
+  }, [addMessage, speak]);
+
   const sendMessage = useCallback(async (text: string) => {
     const now = Date.now();
     if (now - lastSentRef.current < 1000) return;
@@ -806,6 +836,23 @@ export default function ChatScreen() {
     // nothing downstream has to care which device produced the text.
     text = normalizeInput(text);
     if (!text) return;
+
+    // ── Law 0 bridge (interim, Step 3) ─────────────────────────────────────────
+    // Catches emergency BEFORE any of the 4 legacy ref-pendings can intercept or
+    // misread it. TEMPORARY: delete this block once Step 4 migrates
+    // pendingMedClearRef/pendingTodoCompleteRef/pendingInsuranceRef/
+    // pendingContactCollectRef into ConversationSession — at that point
+    // processUtterance's own Law 0 check (below) is the single consumer, as specced.
+    if (detectEmergency(text)) {
+      pendingTodoCompleteRef.current = null;
+      pendingMedClearRef.current = null;
+      pendingContactCollectRef.current = null;
+      pendingInsuranceRef.current = null;
+      if (sessionRef.current.hasPending()) sessionRef.current.clearPending();
+      await dispatchEmergency(text);
+      setInputText('');
+      return;
+    }
 
     lastSentRef.current = now;
     sendingRef.current = true;
@@ -1106,6 +1153,12 @@ export default function ChatScreen() {
         lists: getKnownListNames(),
       },
     });
+    if (outcome.handled && outcome.source === 'emergency') {
+      await dispatchEmergency(text);
+      sendingRef.current = false;
+      setInputText('');
+      return;
+    }
     if (outcome.handled) {
       addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
       addMessage({ id: generateId('msg'), role: 'assistant', content: outcome.responseText, timestamp: Date.now() });
@@ -1266,46 +1319,6 @@ export default function ChatScreen() {
         if (isPersonalWrite) localFactsWritten = true;
       }
     }
-    // ── Emergency safe word — runs BEFORE offline gate (SMS/GPS work offline) ──
-    // Negative lookahead prevents false-positives on "help me find/remember/set X"
-    const EMERGENCY_SIGNALS = [
-      /\b(i need help|call for help|i('m| am) having an emergency|this is an emergency|send help)\b/i,
-      /\bhelp me\b(?!\s+(?:find|remember|with|look|check|set|add|show|get|open|play|call|text|remind|schedule|book|order|understand|explain|figure|make|write|read|tell|search|navigate|go|turn|start|stop|cancel))/i,
-      /\bherald.{0,10}(help|emergency|i('m| am) scared|i('ve| have) fallen)\b/i,
-    ];
-    if (EMERGENCY_SIGNALS.some(p => p.test(text))) {
-      addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-      const emergencyContact = getEmergencyContact();
-      if (!emergencyContact?.phone) {
-        const reply = `I want to help — but I don't have an emergency contact set up yet. Tell me who to reach and their number.`;
-        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-        speak(reply);
-        sendingRef.current = false;
-        setInputText('');
-        return;
-      }
-      // Get current GPS location
-      let locationText = '';
-      try {
-        const { requestForegroundPermissionsAsync, getCurrentPositionAsync, Accuracy } = await import('expo-location');
-        const { status } = await requestForegroundPermissionsAsync();
-        if (status === 'granted') {
-          const loc = await getCurrentPositionAsync({ accuracy: Accuracy.High, timeInterval: 3000 });
-          locationText = ` My location: https://maps.google.com/?q=${loc.coords.latitude},${loc.coords.longitude}`;
-        }
-      } catch { /* silent — send SMS without location if GPS fails */ }
-      // Open SMS to emergency contact pre-filled
-      const smsBody = encodeURIComponent(`Herald alert: I may need help.${locationText}`);
-      const smsUrl = `sms:${emergencyContact.phone}?body=${smsBody}`;
-      await Linking.openURL(smsUrl);
-      const reply = `Opening a message to ${emergencyContact.name}. Stay with me.`;
-      addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-      speak(reply);
-      sendingRef.current = false;
-      setInputText('');
-      return;
-    }
-
     // Profile update — local SQLite, runs before offline gate
     if (rdActionIntent?.type === 'profile_update') {
       addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
@@ -1755,7 +1768,7 @@ export default function ChatScreen() {
         });
       } catch { /* never block the UI */ }
     }
-  }, [userId, messages, personaKey, lat, lng, locationLabel, getContextBlock, addMessage, setError, resetSpeech, enqueueSentence, resetStreamState, stop, llmStatus, getCtx, dispatchLocalIntent]);
+  }, [userId, messages, personaKey, lat, lng, locationLabel, getContextBlock, addMessage, setError, resetSpeech, enqueueSentence, resetStreamState, stop, llmStatus, getCtx, dispatchLocalIntent, dispatchEmergency]);
 
   const handleSend = useCallback(() => {
     sendMessage(inputText.trim());
