@@ -29,6 +29,7 @@ export type CommitResult =
   | { status: 'committed'; ack: string }
   | { status: 'pending';   prompt: string; pendingKey: string;
       kind?: 'standard' | 'destructive';
+      reaskPrompt?: string;
       resume: (userText: string) => Promise<CommitResult> }
   | { status: 'noop';      ack: string }
   | { status: 'failed';    ack: string };

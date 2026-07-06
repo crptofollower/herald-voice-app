@@ -100,6 +100,7 @@ export class ConversationSession {
       this.pending = {
         pendingKey: result.pendingKey,
         resume: result.resume,
+        reaskPrompt: result.reaskPrompt,
         kind: slot.kind,
         budget: slot.kind === 'destructive' ? 1 : DEFAULT_STANDARD_BUDGET,
       };
