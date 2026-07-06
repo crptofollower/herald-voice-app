@@ -21,10 +21,13 @@ scripts/**
 !scripts/heraldTest/tsconfig.json
 !scripts/heraldTest/_stubs/
 !scripts/heraldTest/_stubs/expo-sqlite.ts
+!scripts/heraldTest/_stubs/react-native.ts
 !scripts/heraldTest/medicalContract.test.ts
 !scripts/heraldTest/householdContract.test.ts
 !scripts/heraldTest/dispatchContract.test.ts
 !scripts/heraldTest/medClear.test.ts
+!scripts/heraldTest/todoComplete.test.ts
 # keep derived/installed files out — mirrors are copies of tracked src/, node_modules is installed
 scripts/heraldTest/node_modules/
 scripts/heraldTest/src/
+

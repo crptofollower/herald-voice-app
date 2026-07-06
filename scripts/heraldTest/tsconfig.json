@@ -5,7 +5,8 @@
     "paths": {
       "expo-sqlite": ["./scripts/heraldTest/_stubs/expo-sqlite.ts"],
       "expo-calendar": ["./scripts/heraldTest/_stubs/expo-calendar.ts"],
-      "../db/calendarCacheDB": ["./scripts/heraldTest/_stubs/calendarCacheDB.ts"]
+      "../db/calendarCacheDB": ["./scripts/heraldTest/_stubs/calendarCacheDB.ts"],
+      "react-native": ["./scripts/heraldTest/_stubs/react-native.ts"]
     }
   }
 }
