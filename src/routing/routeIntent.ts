@@ -224,7 +224,41 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       return { status: 'committed', ack };
     },
     async remove(item: string): Promise<CommitResult> {
-      return { status: 'noop', ack: 'Noted.' };
+      const db = getDB();
+      const row = db.getFirstSync<{ id: string; body: string; checked: number }>(
+        `SELECT id, body, checked FROM list_items WHERE id = ?;`,
+        [item],
+      );
+      if (!row || row.checked !== 0) {
+        return { status: 'noop', ack: "I don't have that on your list anymore." };
+      }
+      const body = row.body;
+      return {
+        status: 'pending',
+        kind: 'standard',
+        prompt: `Just to make sure — you're saying you've completed '${body}'? I can mark that off your list.`,
+        pendingKey: 'todo_complete',
+        resume: async (userText: string): Promise<CommitResult> => {
+          const trimmed = userText.trim();
+          const { CONFIRM_YES_RE, CONFIRM_NO_RE } = await import('./conversationSession');
+          if (CONFIRM_NO_RE.test(trimmed)) {
+            return { status: 'noop', ack: `Got it — leaving '${body}' on your list.` };
+          }
+          if (CONFIRM_YES_RE.test(trimmed)) {
+            try {
+              const now = new Date().toISOString();
+              db.runSync(
+                `UPDATE list_items SET checked = 1, removed_at = ? WHERE id = ?;`,
+                [now, item],
+              );
+            } catch {
+              return { status: 'failed', ack: "Couldn't update that. Try again." };
+            }
+            return { status: 'committed', ack: `Done — crossed off '${body}'.` };
+          }
+          return { status: 'noop', ack: '' };
+        },
+      };
     },
     async clear(): Promise<CommitResult> {
       return { status: 'noop', ack: 'Noted.' };

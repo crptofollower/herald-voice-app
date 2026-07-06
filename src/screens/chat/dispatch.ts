@@ -24,7 +24,6 @@ import { isMedicationCorroborated } from '../../db/factDB';
 // resolve them (collect a phone number, confirm a medication, etc.).
 export interface DispatchPendingRefs {
   pendingContactCollectRef: MutableRefObject<{ action: 'call' | 'navigate' | 'text' | 'confirm_phone' | 'confirm_call'; name: string; body?: string; phone?: string } | null>;
-  pendingTodoCompleteRef: MutableRefObject<{ id: string; body: string } | null>;
 }
 
 // Everything the dispatch handlers need from the component, passed explicitly.
@@ -86,7 +85,7 @@ export async function dispatchAction(
     addMessage, speak, generateId, llmStatus, getCtx,
     resolveContactPhone, handleCalendarAction, handleMapsAction, launchAndroidTimer,
     handleLaunchActionRef, pendingContactCollectRef,
-    pendingTodoCompleteRef, platformOS, openURL, session,
+    platformOS, openURL, session,
   } = deps;
 
   // === arms copied from ChatScreen.tsx below ===
@@ -659,10 +658,22 @@ export async function dispatchAction(
               speak(reply);
               return;
             }
-            pendingTodoCompleteRef.current = bestMatch;
-            const reply = `Just to make sure — you're saying you've completed '${bestMatch.body}'? I can mark that off your list.`;
-            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-            speak(reply);
+            const { DOMAIN_WRITERS } = await import('../../routing/routeIntent');
+            const result = await DOMAIN_WRITERS['todo_add']!.remove(bestMatch.id);
+            if (result.status === 'pending') {
+              session.setPending({
+                pendingKey: result.pendingKey,
+                kind: result.kind ?? 'standard',
+                budget: 2,
+                resume: result.resume,
+              });
+              addMessage({ id: generateId('msg'), role: 'assistant', content: result.prompt, timestamp: Date.now() });
+              speak(result.prompt);
+              return;
+            }
+            addMessage({ id: generateId('msg'), role: 'assistant', content: result.ack, timestamp: Date.now() });
+            speak(result.ack);
+            return;
           } catch {
             const reply = `Something went wrong. Try again.`;
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });

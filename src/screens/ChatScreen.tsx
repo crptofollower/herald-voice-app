@@ -251,7 +251,6 @@ export default function ChatScreen() {
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const tokenBatchRef = useRef<string>('');
   const batchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingTodoCompleteRef = useRef<{ id: string; body: string } | null>(null);
   // Pending contact collection — when Herald asks "what's their number/address?"
   // the next user message resolves this and executes the original intent.
   const pendingContactCollectRef = useRef<{ action: 'call' | 'navigate' | 'text' | 'confirm_phone' | 'confirm_call'; name: string; body?: string; phone?: string } | null>(null);
@@ -837,13 +836,12 @@ export default function ChatScreen() {
     if (!text) return;
 
     // ── Law 0 bridge (interim, Step 3) ─────────────────────────────────────────
-    // Catches emergency BEFORE any of the 3 legacy ref-pendings can intercept or
+    // Catches emergency BEFORE any of the 2 legacy ref-pendings can intercept or
     // misread it. TEMPORARY: delete this block once Step 4 migrates
-    // pendingTodoCompleteRef/pendingInsuranceRef/pendingContactCollectRef
-    // into ConversationSession — at that point processUtterance's own Law 0 check
-    // (below) is the single consumer, as specced.
+    // pendingInsuranceRef/pendingContactCollectRef into ConversationSession — at
+    // that point processUtterance's own Law 0 check (below) is the single
+    // consumer, as specced.
     if (detectEmergency(text)) {
-      pendingTodoCompleteRef.current = null;
       pendingContactCollectRef.current = null;
       pendingInsuranceRef.current = null;
       if (sessionRef.current.hasPending()) sessionRef.current.clearPending();
@@ -868,47 +866,6 @@ export default function ChatScreen() {
       try {
         await initDB();
       } catch {}
-    }
-
-    // Pending todo completion confirm — check before routing
-    const YES = /^(yes|yeah|yep|correct|right|10-4)\b/i;
-    const NO = /^(no|nope|not yet|negative)\b/i;
-    if (pendingTodoCompleteRef.current) {
-      const pending = pendingTodoCompleteRef.current;
-      if (YES.test(text.trim())) {
-        pendingTodoCompleteRef.current = null;
-        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-        try {
-          const { getDB } = await import('../db/schema');
-          const db = getDB();
-          db.runSync(
-            `UPDATE list_items SET checked = 1, removed_at = ? WHERE id = ?;`,
-            [new Date().toISOString(), pending.id]
-          );
-          const reply = `Done — crossed off '${pending.body}'.`;
-          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-          speak(reply);
-        } catch {
-          const reply = `Couldn't update that. Try again.`;
-          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-          speak(reply);
-        }
-        sendingRef.current = false;
-        setInputText('');
-        return;
-      }
-      if (NO.test(text.trim())) {
-        pendingTodoCompleteRef.current = null;
-        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-        const reply = `Got it — leaving '${pending.body}' on your list.`;
-        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-        speak(reply);
-        sendingRef.current = false;
-        setInputText('');
-        return;
-      }
-      // Not a yes/no — clear pending and fall through to normal routing
-      pendingTodoCompleteRef.current = null;
     }
 
     // ── Pending contact collection — user is providing a number or address ──
@@ -2489,7 +2446,6 @@ export default function ChatScreen() {
     launchAndroidTimer,
     handleLaunchActionRef,
     pendingContactCollectRef,
-    pendingTodoCompleteRef,
     session: sessionRef.current,
     platformOS: Platform.OS,
     openURL: Linking.openURL,
