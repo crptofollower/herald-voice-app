@@ -563,8 +563,8 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   if (CALL_SIGNALS.some((p) => p.test(msg)) && !REMINDER_SIGNALS.some((p) => p.test(msg)) && !CALL_NUMBER_STATEMENT.test(msg) && !POSSESSIVE_CONTACT_STATEMENT.test(msg) && !TODO_ADD_PREFIX.test(msg) && !READ_QUERY_PREFIX.test(msg)) {
     const CALL_EXCLUDE = /^(me|you|back|again|later|now|soon|ahead|us|them|it|that)$/i;
     const contactMatch =
-      msg.match(/\b(?:call|phone|dial|ring)\s+((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+)?\w+(?:\s+\w+)?)/i) ??
-      msg.match(/\bgive\s+((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+)?\w+(?:\s+\w+)?)\s+a\s+(?:call|ring)\b/i);
+      msg.match(/\b(?:call|phone|dial|ring)\s+(?:my\s+(?:son|daughter|wife|husband|mom|dad|mother|father|brother|sister|grandson|granddaughter)\s+)?((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+)?\w+(?:\s+\w+)?)/i) ??
+      msg.match(/\bgive\s+(?:my\s+(?:son|daughter|wife|husband|mom|dad|mother|father|brother|sister|grandson|granddaughter)\s+)?((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+)?\w+(?:\s+\w+)?)\s+a\s+(?:call|ring)\b/i);
     const rawContact = contactMatch?.[1]?.trim() ?? '';
     const strippedContact = rawContact
       .replace(/^(a\s+)?number\s+for\s+/i, '')
