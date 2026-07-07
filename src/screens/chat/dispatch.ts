@@ -151,21 +151,26 @@ export async function dispatchAction(
         if (actionIntent.type === 'sms') {
           const { contact, message } = actionIntent;
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-          // Try to resolve contact number first
-          const resolvedSms = await resolveContactPhone(contact);
-          if (resolvedSms?.phone) {
-            const smsUrl = `sms:${resolvedSms.phone.replace(/\D/g, '')}${message ? `?body=${encodeURIComponent(message)}` : ''}`;
-            await openURL(smsUrl);
-            const reply = message
-              ? `Opening a message to ${resolvedSms.name} with your note ready.`
-              : `Opening a message to ${resolvedSms.name}.`;
+          try {
+            const resolvedSms = await resolveContactPhone(contact);
+            if (resolvedSms?.phone) {
+              const smsUrl = `sms:${resolvedSms.phone.replace(/\D/g, '')}${message ? `?body=${encodeURIComponent(message)}` : ''}`;
+              await openURL(smsUrl);
+              const reply = message
+                ? `Opening a message to ${resolvedSms.name} with your note ready.`
+                : `Opening a message to ${resolvedSms.name}.`;
+              addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+              speak(reply);
+            } else {
+              const reply = `I don't have a number for ${contact}. What's their number?`;
+              addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+              speak(reply);
+              pendingContactCollectRef.current = { action: 'text', name: contact, body: message };
+            }
+          } catch {
+            const reply = `I couldn't open a message to ${contact} — try again.`;
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
-          } else {
-            const reply = `I don't have a number for ${contact}. What's their number?`;
-            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-            speak(reply);
-            pendingContactCollectRef.current = { action: 'text', name: contact, body: message };
           }
           return;
         }
