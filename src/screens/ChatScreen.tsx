@@ -1008,6 +1008,7 @@ export default function ChatScreen() {
         contacts: getKnownContactNames(),
         lists: getKnownListNames(),
       },
+      resolveContact: resolveContactPhoneRef.current ?? undefined,
     });
     if (outcome.handled && outcome.source === 'emergency') {
       await dispatchEmergency(text);

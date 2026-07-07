@@ -216,7 +216,7 @@ const RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", BOLD = "\x1b[1m",
 let passed = 0;
 const failures = [];
 const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length;
-const EXPECTED_TOTAL = 321;   // was 311; +10 net new (runCommitEffects.test.ts)
+const EXPECTED_TOTAL = 332;   // was 321; +11 contact_call.test.ts
 
 console.log(`\n${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  HERALD ROUTER + PHONE TEST SUITE — ${TOTAL} tests${RESET}`);
@@ -307,6 +307,7 @@ const { runMedClearTests } = await import('./medClear.test.ts');
 const { runTodoCompleteTests } = await import('./todoComplete.test.ts');
 const { runInsuranceTests } = await import('./insurance.test.ts');
 const { runContactsDBTests } = await import('./contactsDB.test.ts');
+const { runContactCallTests } = await import('./contact_call.test.ts');
 const { runRunCommitEffectsTests } = await import('./runCommitEffects.test.ts');
 const hResult = await runHouseholdContractTests();
 const mResult = await runMedicalContractTests();
@@ -320,10 +321,11 @@ const mcResult = await runMedClearTests();
 const tcResult = await runTodoCompleteTests();
 const insResult = await runInsuranceTests();
 const cdbResult = await runContactsDBTests();
+const ctResult = await runContactCallTests();
 const rceResult = await runRunCommitEffectsTests();
-const contractPassed = hResult.passed + mResult.passed + fResult.passed + dResult.passed + dxResult.passed + pResult.passed + cpResult.passed + lzResult.passed + mcResult.passed + tcResult.passed + insResult.passed + cdbResult.passed + rceResult.passed;
-const contractFailed = hResult.failed + mResult.failed + fResult.failed + dResult.failed + dxResult.failed + pResult.failed + cpResult.failed + lzResult.failed + mcResult.failed + tcResult.failed + insResult.failed + cdbResult.failed + rceResult.failed;
-const contractTotal = hResult.total + mResult.total + fResult.total + dResult.total + dxResult.total + pResult.total + cpResult.total + lzResult.total + mcResult.total + tcResult.total + insResult.total + cdbResult.total + rceResult.total;
+const contractPassed = hResult.passed + mResult.passed + fResult.passed + dResult.passed + dxResult.passed + pResult.passed + cpResult.passed + lzResult.passed + mcResult.passed + tcResult.passed + insResult.passed + cdbResult.passed + ctResult.passed + rceResult.passed;
+const contractFailed = hResult.failed + mResult.failed + fResult.failed + dResult.failed + dxResult.failed + pResult.failed + cpResult.failed + lzResult.failed + mcResult.failed + tcResult.failed + insResult.failed + cdbResult.failed + ctResult.failed + rceResult.failed;
+const contractTotal = hResult.total + mResult.total + fResult.total + dResult.total + dxResult.total + pResult.total + cpResult.total + lzResult.total + mcResult.total + tcResult.total + insResult.total + cdbResult.total + ctResult.total + rceResult.total;
 
 console.log(`${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  RESULTS: ${GREEN}${passed + contractPassed} passed${RESET}${BOLD} / ${failures.length + contractFailed > 0 ? RED : GREEN}${failures.length + contractFailed} failed${RESET}${BOLD} / ${TOTAL + contractTotal} total${RESET}`);

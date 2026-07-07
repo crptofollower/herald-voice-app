@@ -23,6 +23,9 @@ export type IntentRecord =
   | { type: 'address_capture'; name: string; address: string }
   | { type: 'emergency_contact'; name: string; phone?: string }
   | { type: 'diagnosis_capture'; condition: string; raw: string }
+  | { type: 'contact_call'; contact: string;
+      candidates?: Array<{ name: string; relationship?: string; phone: string; importance: number }>;
+      devicePhone?: string; deviceName?: string; raw: string }
   | { type: 'todo_add'; body: string }
   | { type: 'todo_complete'; hint: string }
   | { type: 'pass' };

@@ -9,7 +9,7 @@ import { detectDiagnosisCapture } from '../utils/detectMedicalEvent';
 import { detectFamilyCapture } from '../utils/familyCapture';
 import { getDB } from '../db/schema';
 import { capturePerson } from '../db/capturePerson';
-import { findContactByName, setEmergencyContact, getEmergencyContact } from '../db/contactsDB';
+import { findContactByName, findAllContactMatches, setEmergencyContact, getEmergencyContact } from '../db/contactsDB';
 
 type ActionIntent = NonNullable<TierDecision['actionIntent']>;
 
@@ -58,6 +58,22 @@ const DETERMINISTIC_CAPTURERS: DeterministicCapturer[] = [
   (text) => detectDiagnosisCapture(text),
   (text) => detectFamilyCapture(text),
 ];
+
+export async function resolveContactCallIntent(
+  contactName: string,
+  raw: string,
+  deps: { resolveContact?: (n: string) => Promise<{phone:string;name:string;contactId?:string;source:'herald'|'device'}|null> },
+): Promise<IntentRecord> {
+  const candidates = findAllContactMatches(contactName);
+  if (candidates.length > 0) {
+    return { type: 'contact_call', contact: contactName, candidates, raw };
+  }
+  const device = deps.resolveContact ? await deps.resolveContact(contactName) : null;
+  if (device) {
+    return { type: 'contact_call', contact: contactName, devicePhone: device.phone, deviceName: device.name, raw };
+  }
+  return { type: 'contact_call', contact: contactName, raw };
+}
 
 // Registry: empty now. One domain added per conversion commit.
 export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
@@ -746,6 +762,145 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       return { status: 'noop', ack: 'Noted.' };
     },
   },
+  contact_call: {
+    async add(intent: IntentRecord, _rawPhrase: string): Promise<CommitResult> {
+      if (intent.type !== 'contact_call') {
+        return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
+      }
+      const { contact, candidates, devicePhone, deviceName } = intent;
+      type CallCandidate = { name: string; relationship?: string; phone: string; importance: number };
+
+      const herald = (candidates ?? []).filter((c): c is CallCandidate => !!c.phone?.trim());
+
+      const handleFor = (c: CallCandidate): string =>
+        c.relationship?.trim()
+          ? `your ${c.relationship} ${c.name}`
+          : `at ...${c.phone.replace(/\D/g, '').slice(-4)}`;
+
+      const commitDial = (name: string, phone: string): CommitResult => {
+        const digits = phone.replace(/\D/g, '');
+        if (digits.length < 10) {
+          return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
+        }
+        return {
+          status: 'committed',
+          ack: `Calling ${name}.`,
+          effect: {
+            kind: 'dial',
+            phone: digits,
+            failAck: `I couldn't open the dialer — try calling ${name} manually.`,
+          },
+        };
+      };
+
+      const matchCandidate = (reply: string, list: CallCandidate[]): CallCandidate | null => {
+        const t = reply.trim().toLowerCase();
+        for (const c of list) {
+          const nameLower = c.name.toLowerCase();
+          if (t === nameLower || t.includes(nameLower) || nameLower.includes(t)) return c;
+          const rel = c.relationship?.trim().toLowerCase();
+          if (rel && (t === rel || t.includes(rel) || rel.includes(t))) return c;
+        }
+        return null;
+      };
+
+      const extractPhone10 = (raw: string): string | null => {
+        const m = raw.match(/([\d\s\-\(\)\+\.]{7,})/);
+        if (!m) return null;
+        const digits = m[1].replace(/\D/g, '');
+        if (digits.length !== 10) return null;
+        return digits;
+      };
+
+      function collectStage(contactLabel: string): CommitResult {
+        return {
+          status: 'pending',
+          prompt: `I don't have a number for ${contactLabel}. What's their number?`,
+          pendingKey: 'contact_call',
+          kind: 'standard',
+          reaskPrompt: `I still didn't catch a full 10-digit number — can you say ${contactLabel}'s number again, slowly?`,
+          resume: async (reply: string): Promise<CommitResult> => {
+            const phone = extractPhone10(reply);
+            if (!phone) return { status: 'noop', ack: '' };
+            capturePerson({ name: contactLabel, phone, importance: 7 });
+            return commitDial(contactLabel, phone);
+          },
+        };
+      }
+
+      function deviceConfirmStage(name: string, phone: string): CommitResult {
+        return {
+          status: 'pending',
+          prompt: `I found ${name} in your contacts — want me to call them?`,
+          pendingKey: 'contact_call',
+          kind: 'standard',
+          reaskPrompt: `I'm not sure I'm following — should I call ${name}?`,
+          resume: async (reply: string): Promise<CommitResult> => {
+            const trimmed = reply.trim();
+            const { CONFIRM_YES_RE, CONFIRM_NO_RE } = await import('./conversationSession');
+            if (CONFIRM_YES_RE.test(trimmed)) {
+              capturePerson({ name, phone, importance: 5 });
+              return commitDial(name, phone);
+            }
+            if (CONFIRM_NO_RE.test(trimmed)) {
+              return { status: 'noop', ack: 'No problem — who were you trying to reach?' };
+            }
+            return { status: 'noop', ack: '' };
+          },
+        };
+      }
+
+      function disambiguateStage(list: CallCandidate[], contactLabel: string): CommitResult {
+        const guess = list[0];
+        const relPrefix = guess.relationship?.trim() ? `your ${guess.relationship} ` : '';
+        return {
+          status: 'pending',
+          prompt: `I've got more than one ${contactLabel} — did you mean ${relPrefix}${guess.name}?`,
+          pendingKey: 'contact_call',
+          kind: 'standard',
+          reaskPrompt: `I'm not sure I'm following — which ${contactLabel} did you mean?`,
+          resume: async (reply: string): Promise<CommitResult> => {
+            const trimmed = reply.trim();
+            const { CONFIRM_YES_RE, CONFIRM_NO_RE } = await import('./conversationSession');
+            if (CONFIRM_YES_RE.test(trimmed)) return commitDial(guess.name, guess.phone);
+            if (CONFIRM_NO_RE.test(trimmed)) {
+              const remaining = list.slice(1);
+              if (remaining.length === 0) return collectStage(contactLabel);
+              const handles = remaining.map(handleFor).join(', ');
+              return {
+                status: 'pending',
+                prompt: `No problem — I've also got ${handles}. Which one?`,
+                pendingKey: 'contact_call',
+                kind: 'standard',
+                reaskPrompt: `I'm not sure I'm following — which one did you mean?`,
+                resume: async (pick: string): Promise<CommitResult> => {
+                  const matched = matchCandidate(pick, remaining);
+                  if (!matched) return { status: 'noop', ack: '' };
+                  return commitDial(matched.name, matched.phone);
+                },
+              };
+            }
+            return { status: 'noop', ack: '' };
+          },
+        };
+      }
+
+      if (herald.length > 1) return disambiguateStage(herald, contact);
+      if (herald.length === 1) return commitDial(herald[0].name, herald[0].phone);
+      const phone = devicePhone?.trim();
+      if (phone) {
+        const name = deviceName?.trim() || contact;
+        return deviceConfirmStage(name, phone);
+      }
+      return collectStage(contact);
+    },
+    async remove(_item: string): Promise<CommitResult> {
+      return { status: 'noop', ack: 'Noted.' };
+    },
+    async clear(): Promise<CommitResult> {
+      return { status: 'noop', ack: 'Noted.' };
+    },
+  },
 };
 
 // allConverted: returns true when every intent in a capture decision has a
@@ -774,6 +929,7 @@ export async function routeIntent(
     classifyLLM: ((text: string) => Promise<IntentRecord[]>) | null;
     llmReady: boolean;
     captureContext?: CaptureContext;
+    resolveContact?: (nameOrRelation: string) => Promise<{phone:string;name:string;contactId?:string;source:'herald'|'device'}|null>;
   },
 ): Promise<RouteDecision> {
   const decision = await deps.classifyQuery(text);
@@ -803,6 +959,14 @@ export async function routeIntent(
     const isInsuranceProfileUpdate =
       decision.actionIntent.type === 'profile_update' &&
       decision.actionIntent.field === 'insurance';
+    if (actionType === 'call') {
+      const rawContact = (decision.actionIntent as any).contact ?? '';
+      const contactName = rawContact.replace(/\s+(?:at|on|using|with|via)\b.*/i, '').trim();
+      if (contactName) {
+        const intent = await resolveContactCallIntent(contactName, text, deps);
+        return { kind: 'capture', intents: [intent], source: 'deterministic', reason: 'routeIntent:contact_call_intercept' };
+      }
+    }
     if (actionType !== 'list_add' && actionType !== 'todo_add' && !isMedicalCapture && !isInsuranceProfileUpdate) {
       return {
         kind: 'device_action',
