@@ -37,7 +37,7 @@ export interface DispatchDeps extends DispatchPendingRefs {
   llmStatus: string;
   getCtx: () => LlamaContext | null;
   inferLocal: (prompt: string, maxTokens: number) => Promise<string | null>;
-  resolveContactPhone: (nameOrRelation: string) => Promise<{ phone: string; name: string; contactId?: string; source: 'herald' | 'device' } | null>;
+  resolveContactPhone: (nameOrRelation: string) => Promise<{ phone: string; name: string; contactId?: string; source: 'herald' | 'device' } | { phone: null; name: string; source: 'device'; candidateNames: string[] } | null>;
   handleCalendarAction: (value: string) => Promise<void>;
   handleMapsAction: (query: string) => Promise<void>;
   launchAndroidTimer: (seconds: number) => Promise<boolean>;
@@ -159,6 +159,14 @@ export async function dispatchAction(
               const reply = message
                 ? `Opening a message to ${resolvedSms.name} with your note ready.`
                 : `Opening a message to ${resolvedSms.name}.`;
+              addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+              speak(reply);
+            } else if (resolvedSms && 'candidateNames' in resolvedSms && resolvedSms.candidateNames.length > 0) {
+              // Honest ambiguity — never silently guess-text (CLAUDE.md Trust
+              // First). No pending armed here on purpose: asking for the fuller
+              // name is safer than holding a phone-less contact in a legacy ref.
+              const names = resolvedSms.candidateNames.join(', ');
+              const reply = `I found more than one ${contact} in your contacts — ${names}. Which one did you mean? Say their full name.`;
               addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
               speak(reply);
             } else {

@@ -62,7 +62,7 @@ const DETERMINISTIC_CAPTURERS: DeterministicCapturer[] = [
 export async function resolveContactCallIntent(
   contactName: string,
   raw: string,
-  deps: { resolveContact?: (n: string) => Promise<{phone:string;name:string;contactId?:string;source:'herald'|'device'}|null> },
+  deps: { resolveContact?: (n: string) => Promise<{phone:string;name:string;contactId?:string;source:'herald'|'device'}|{phone:null;name:string;source:'device';candidateNames:string[]}|null> },
 ): Promise<IntentRecord> {
   const clean = contactName.trim().toLowerCase().replace(/^(?:my|the|a)\s+/, '');
   const allMatches = findAllContactMatches(clean);
@@ -71,7 +71,7 @@ export async function resolveContactCallIntent(
     return { type: 'contact_call', contact: contactName, candidates: withPhone, raw };
   }
   const device = deps.resolveContact ? await deps.resolveContact(clean) : null;
-  if (device) {
+  if (device && device.phone) {
     return { type: 'contact_call', contact: contactName, devicePhone: device.phone, deviceName: device.name, raw };
   }
   return { type: 'contact_call', contact: contactName, raw };
@@ -932,7 +932,7 @@ export async function routeIntent(
     classifyLLM: ((text: string) => Promise<IntentRecord[]>) | null;
     llmReady: boolean;
     captureContext?: CaptureContext;
-    resolveContact?: (nameOrRelation: string) => Promise<{phone:string;name:string;contactId?:string;source:'herald'|'device'}|null>;
+    resolveContact?: (nameOrRelation: string) => Promise<{phone:string;name:string;contactId?:string;source:'herald'|'device'}|{phone:null;name:string;source:'device';candidateNames:string[]}|null>;
   },
 ): Promise<RouteDecision> {
   const decision = await deps.classifyQuery(text);

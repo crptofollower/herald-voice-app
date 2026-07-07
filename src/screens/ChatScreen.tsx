@@ -215,7 +215,7 @@ export default function ChatScreen() {
   const { status: llmStatus, activeModel, getCtx, inferLocal } = useLocalLLM();
   void activeModel;
 
-  type ResolveContactFn = (nameOrRelation: string) => Promise<{ phone: string; name: string; contactId?: string; source: 'herald' | 'device' } | null>;
+  type ResolveContactFn = (nameOrRelation: string) => Promise<{ phone: string; name: string; contactId?: string; source: 'herald' | 'device' } | { phone: null; name: string; source: 'device'; candidateNames: string[] } | null>;
   const resolveContactPhoneRef = useRef<ResolveContactFn | null>(null);
   const handleLaunchActionRef = useRef<((appName: string) => Promise<void>) | null>(null);
 
@@ -1380,7 +1380,7 @@ export default function ChatScreen() {
         // (hasConfirmCallPending). Any other pendingContactCollectRef action
         // ('call' | 'navigate' | 'text' | 'confirm_phone') must still unlock
         // the gate here, or every message after it silently drops (S68 freeze).
-        if (pendingContactCollectRef.current?.action !== 'confirm_call') {
+        if ((pendingContactCollectRef.current as { action: 'call' | 'navigate' | 'text' | 'confirm_phone' | 'confirm_call'; name: string; body?: string; phone?: string } | null)?.action !== 'confirm_call') {
           sendingRef.current = false;
           setInputText('');
         }
@@ -2044,7 +2044,7 @@ export default function ChatScreen() {
   // Pass 2: OS device contacts via expo-contacts — broader coverage
   // Returns null if not found — caller handles graceful fallback.
 
-  const resolveContactPhone = async (nameOrRelation: string): Promise<{ phone: string; name: string; contactId?: string; source: 'herald' | 'device' } | null> => {
+  const resolveContactPhone = async (nameOrRelation: string): Promise<{ phone: string; name: string; contactId?: string; source: 'herald' | 'device' } | { phone: null; name: string; source: 'device'; candidateNames: string[] } | null> => {
     const clean = nameOrRelation.trim().toLowerCase().replace(/^(?:my|the|a)\s+/, '');
 
     // Pass 1: Herald contacts table
@@ -2082,8 +2082,16 @@ export default function ChatScreen() {
 
       const candidates = exactMatches.length > 0 ? exactMatches : partialMatches;
 
-      // Multiple matches — can't pick one safely, return null so caller asks
-      if (candidates.length > 1) return null;
+      // Multiple matches — honest ambiguity, never a silent guess or a silent
+      // "not found." Surface the real names so the caller can ask which one
+      // (Graceful Confusion Rule, CLAUDE.md) instead of claiming no number exists.
+      if (candidates.length > 1) {
+        const candidateNames = candidates
+          .map(c => c.name)
+          .filter((n): n is string => !!n)
+          .slice(0, 5);
+        return { phone: null, name: nameOrRelation, source: 'device' as const, candidateNames };
+      }
 
       const match = candidates[0];
       if (match?.phoneNumbers?.[0]?.number) {
