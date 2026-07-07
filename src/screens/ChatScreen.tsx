@@ -75,6 +75,7 @@ import { detectFamilyRead, answerFamilyRead } from '../utils/familyRead';
 import { writeTurnObservation } from '../utils/personaContext';
 import { classifyQuery, scanResidualIntent } from "../routing/tierRouter";
 import { allConverted } from '../routing/routeIntent';
+import { runCommitEffects } from '../utils/commitEffects';
 import { ConversationSession } from '../routing/conversationSession';
 import { processUtterance, applyIntents } from '../routing/processUtterance';
 import { detectEmergency } from '../routing/emergencySignals';
@@ -1018,6 +1019,14 @@ export default function ChatScreen() {
       addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
       addMessage({ id: generateId('msg'), role: 'assistant', content: outcome.responseText, timestamp: Date.now() });
       speak(outcome.responseText);
+      await runCommitEffects(outcome.commits, {
+        openURL: Linking.openURL,
+        handleMapsAction,
+        onEffectFailure: (failAck) => {
+          addMessage({ id: generateId('msg'), role: 'assistant', content: failAck, timestamp: Date.now() });
+          speak(failAck);
+        },
+      });
       sendingRef.current = false;
       setInputText('');
       return;
@@ -1052,10 +1061,18 @@ export default function ChatScreen() {
         });
                 if (llmCaptures.length > 0) {
           if (allConverted(llmCaptures)) {
-            const { responseText } = await applyIntents(llmCaptures, text, sessionRef.current);
+            const { responseText, commits } = await applyIntents(llmCaptures, text, sessionRef.current);
             addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
             addMessage({ id: generateId('msg'), role: 'assistant', content: responseText, timestamp: Date.now() });
             speak(responseText);
+            await runCommitEffects(commits, {
+              openURL: Linking.openURL,
+              handleMapsAction,
+              onEffectFailure: (failAck) => {
+                addMessage({ id: generateId('msg'), role: 'assistant', content: failAck, timestamp: Date.now() });
+                speak(failAck);
+              },
+            });
             sendingRef.current = false;
             setInputText('');
             return;
@@ -1118,7 +1135,7 @@ export default function ChatScreen() {
               setInputText('');
               return;
             }
-            const { responseText } = await applyIntents(
+            const { responseText, commits } = await applyIntents(
               [{ type: 'medical_capture', drug: guessedName, dosage: extractDosage(text), raw: text }],
               text,
               sessionRef.current,
@@ -1126,6 +1143,14 @@ export default function ChatScreen() {
             addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
             addMessage({ id: generateId('msg'), role: 'assistant', content: responseText, timestamp: Date.now() });
             speak(responseText);
+            await runCommitEffects(commits, {
+              openURL: Linking.openURL,
+              handleMapsAction,
+              onEffectFailure: (failAck) => {
+                addMessage({ id: generateId('msg'), role: 'assistant', content: failAck, timestamp: Date.now() });
+                speak(failAck);
+              },
+            });
             sendingRef.current = false;
             setInputText('');
             return;
@@ -1134,7 +1159,7 @@ export default function ChatScreen() {
             // Visits tierRouter missed reach here. Route through the medical_visit
             // writer so a nameless visit ASKS "who did you see?" (Spine §5) instead
             // of writing a doctor-less row via writeMedicalFact. Heard "Dr. X" writes.
-            const { responseText } = await applyIntents(
+            const { responseText, commits } = await applyIntents(
               [{ type: 'medical_visit', raw: text }],
               text,
               sessionRef.current,
@@ -1142,6 +1167,14 @@ export default function ChatScreen() {
             addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
             addMessage({ id: generateId('msg'), role: 'assistant', content: responseText, timestamp: Date.now() });
             speak(responseText);
+            await runCommitEffects(commits, {
+              openURL: Linking.openURL,
+              handleMapsAction,
+              onEffectFailure: (failAck) => {
+                addMessage({ id: generateId('msg'), role: 'assistant', content: failAck, timestamp: Date.now() });
+                speak(failAck);
+              },
+            });
             sendingRef.current = false;
             setInputText('');
             return;
@@ -1266,10 +1299,18 @@ export default function ChatScreen() {
             });
                         if (results.length > 0) {
               if (allConverted(results)) {
-                const { responseText } = await applyIntents(results, text, sessionRef.current);
+                const { responseText, commits } = await applyIntents(results, text, sessionRef.current);
                 addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
                 addMessage({ id: generateId('msg'), role: 'assistant', content: responseText, timestamp: Date.now() });
                 speak(responseText);
+                await runCommitEffects(commits, {
+                  openURL: Linking.openURL,
+                  handleMapsAction,
+                  onEffectFailure: (failAck) => {
+                    addMessage({ id: generateId('msg'), role: 'assistant', content: failAck, timestamp: Date.now() });
+                    speak(failAck);
+                  },
+                });
                 sendingRef.current = false;
                 setInputText('');
                 return;

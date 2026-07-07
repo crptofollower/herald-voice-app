@@ -29,6 +29,7 @@ scripts/**
 !scripts/heraldTest/todoComplete.test.ts
 !scripts/heraldTest/insurance.test.ts
 !scripts/heraldTest/contactsDB.test.ts
+!scripts/heraldTest/runCommitEffects.test.ts
 # keep derived/installed files out — mirrors are copies of tracked src/, node_modules is installed
 scripts/heraldTest/node_modules/
 scripts/heraldTest/src/
