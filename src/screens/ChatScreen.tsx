@@ -1376,7 +1376,11 @@ export default function ChatScreen() {
         }
         // Do not unlock sendingRef if a confirm_call is pending —
         // the confirm handler owns the gate until the user answers.
-        if (!pendingContactCollectRef.current) {
+        // NOTE: only 'confirm_call' has a matching bypass in sendMessage
+        // (hasConfirmCallPending). Any other pendingContactCollectRef action
+        // ('call' | 'navigate' | 'text' | 'confirm_phone') must still unlock
+        // the gate here, or every message after it silently drops (S68 freeze).
+        if (pendingContactCollectRef.current?.action !== 'confirm_call') {
           sendingRef.current = false;
           setInputText('');
         }
