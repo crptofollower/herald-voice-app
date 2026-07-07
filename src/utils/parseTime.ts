@@ -153,11 +153,16 @@ export function parseCalendarWriteIntent(text: string): string | null {
   return `${title}|${date}|${time}`;
 }
 
+// Common message-opener words — never the second word of a contact name.
+// Bounded stopgap for greedy name capture; durable fix is contact-anchored
+// splitting in the C-4 contact_text arc.
+const SMS_BODY_OPENERS = /^(?:how|what|when|where|why|that|to|about|i|i'm|im|hi|hey|hello|please|can|could|will|would|are|is|do|don't|dont|good|thanks|thank|the|a|your|you're|youre|happy|call|come|meet|see|be|we|let's|lets)$/i;
+
 export function parseSmsIntent(text: string): { contact: string; message: string } | null {
   const patterns: RegExp[] = [
-    /\b(?:text|message|msg)\s+((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+|Ms\.?\s+)?\w+(?:\s+\w+)?)\s+(.+)/i,
-    /\bsend\s+(?:a\s+)?(?:text|message)\s+to\s+((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+|Ms\.?\s+)?\w+(?:\s+\w+)?)\s+(?:that\s+|saying\s+)?(.+)/i,
-    /\btell\s+((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+|Ms\.?\s+)?\w+(?:\s+\w+)?)\s+(?:that\s+)?(.+)/i,
+    /\b(?:text|message|msg)\s+((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+|Ms\.?\s+)?\w+(?:\s+(?!(?:how|what|when|where|why|that|to|about|i|i'm|im|hi|hey|hello|please|can|could|will|would|are|is|do|don't|dont|good|thanks|thank|the|a|your|you're|youre|happy|call|come|meet|see|be|we|let's|lets)\b)\w+)?)\s+(.+)/i,
+    /\bsend\s+(?:a\s+)?(?:text|message)\s+to\s+((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+|Ms\.?\s+)?\w+(?:\s+(?!(?:how|what|when|where|why|that|to|about|i|i'm|im|hi|hey|hello|please|can|could|will|would|are|is|do|don't|dont|good|thanks|thank|the|a|your|you're|youre|happy|call|come|meet|see|be|we|let's|lets)\b)\w+)?)\s+(?:that\s+|saying\s+)?(.+)/i,
+    /\btell\s+((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+|Ms\.?\s+)?\w+(?:\s+(?!(?:how|what|when|where|why|that|to|about|i|i'm|im|hi|hey|hello|please|can|could|will|would|are|is|do|don't|dont|good|thanks|thank|the|a|your|you're|youre|happy|call|come|meet|see|be|we|let's|lets)\b)\w+)?)\s+(?:that\s+)?(.+)/i,
   ];
   for (const p of patterns) {
     const m = text.match(p);
