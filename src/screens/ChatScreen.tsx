@@ -1021,7 +1021,7 @@ export default function ChatScreen() {
       addMessage({ id: generateId('msg'), role: 'assistant', content: outcome.responseText, timestamp: Date.now() });
       speak(outcome.responseText);
       await runCommitEffects(outcome.commits, {
-        openURL: Linking.openURL,
+        openURL: (url) => Linking.openURL(url),
         handleMapsAction,
         onEffectFailure: (failAck) => {
           addMessage({ id: generateId('msg'), role: 'assistant', content: failAck, timestamp: Date.now() });
@@ -1067,7 +1067,7 @@ export default function ChatScreen() {
             addMessage({ id: generateId('msg'), role: 'assistant', content: responseText, timestamp: Date.now() });
             speak(responseText);
             await runCommitEffects(commits, {
-              openURL: Linking.openURL,
+              openURL: (url) => Linking.openURL(url),
               handleMapsAction,
               onEffectFailure: (failAck) => {
                 addMessage({ id: generateId('msg'), role: 'assistant', content: failAck, timestamp: Date.now() });
@@ -1145,7 +1145,7 @@ export default function ChatScreen() {
             addMessage({ id: generateId('msg'), role: 'assistant', content: responseText, timestamp: Date.now() });
             speak(responseText);
             await runCommitEffects(commits, {
-              openURL: Linking.openURL,
+              openURL: (url) => Linking.openURL(url),
               handleMapsAction,
               onEffectFailure: (failAck) => {
                 addMessage({ id: generateId('msg'), role: 'assistant', content: failAck, timestamp: Date.now() });
@@ -1169,7 +1169,7 @@ export default function ChatScreen() {
             addMessage({ id: generateId('msg'), role: 'assistant', content: responseText, timestamp: Date.now() });
             speak(responseText);
             await runCommitEffects(commits, {
-              openURL: Linking.openURL,
+              openURL: (url) => Linking.openURL(url),
               handleMapsAction,
               onEffectFailure: (failAck) => {
                 addMessage({ id: generateId('msg'), role: 'assistant', content: failAck, timestamp: Date.now() });
@@ -1305,7 +1305,7 @@ export default function ChatScreen() {
                 addMessage({ id: generateId('msg'), role: 'assistant', content: responseText, timestamp: Date.now() });
                 speak(responseText);
                 await runCommitEffects(commits, {
-                  openURL: Linking.openURL,
+                  openURL: (url) => Linking.openURL(url),
                   handleMapsAction,
                   onEffectFailure: (failAck) => {
                     addMessage({ id: generateId('msg'), role: 'assistant', content: failAck, timestamp: Date.now() });
@@ -2420,7 +2420,7 @@ export default function ChatScreen() {
     pendingContactCollectRef,
     session: sessionRef.current,
     platformOS: Platform.OS,
-    openURL: Linking.openURL,
+    openURL: (url) => Linking.openURL(url),
   }), [addMessage, speak, llmStatus, getCtx, inferLocal]);
 
   // ── Render ────────────────────────────────────────────────────────────────
