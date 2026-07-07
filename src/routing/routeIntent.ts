@@ -26,7 +26,11 @@ export type RouteDecision =
 // write that was not verified. Added here; wired to domains one commit at a time.
 
 export type CommitResult =
-  | { status: 'committed'; ack: string }
+  | { status: 'committed'; ack: string;
+      effect?:
+        | { kind: 'dial'; phone: string; failAck: string }
+        | { kind: 'sms'; phone: string; body?: string; failAck: string }
+        | { kind: 'navigate'; address: string; failAck: string } }
   | { status: 'pending';   prompt: string; pendingKey: string;
       kind?: 'standard' | 'destructive';
       reaskPrompt?: string;
