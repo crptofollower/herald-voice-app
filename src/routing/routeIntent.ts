@@ -64,11 +64,13 @@ export async function resolveContactCallIntent(
   raw: string,
   deps: { resolveContact?: (n: string) => Promise<{phone:string;name:string;contactId?:string;source:'herald'|'device'}|null> },
 ): Promise<IntentRecord> {
-  const candidates = findAllContactMatches(contactName);
-  if (candidates.length > 0) {
-    return { type: 'contact_call', contact: contactName, candidates, raw };
+  const clean = contactName.trim().toLowerCase().replace(/^(?:my|the|a)\s+/, '');
+  const allMatches = findAllContactMatches(clean);
+  const withPhone = allMatches.filter(c => !!c.phone?.trim());
+  if (withPhone.length > 0) {
+    return { type: 'contact_call', contact: contactName, candidates: withPhone, raw };
   }
-  const device = deps.resolveContact ? await deps.resolveContact(contactName) : null;
+  const device = deps.resolveContact ? await deps.resolveContact(clean) : null;
   if (device) {
     return { type: 'contact_call', contact: contactName, devicePhone: device.phone, deviceName: device.name, raw };
   }
@@ -829,6 +831,8 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       }
 
       function deviceConfirmStage(name: string, phone: string): CommitResult {
+        const LOOSE_YES_RE = /^\s*(yes|yeah|yep|sure|ok|okay|go ahead|call them|do it)\b/i;
+        const LOOSE_NO_RE = /^\s*(no|nope|cancel|never mind|nevermind|don't|dont|stop)\b/i;
         return {
           status: 'pending',
           prompt: `I found ${name} in your contacts — want me to call them?`,
@@ -837,12 +841,11 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
           reaskPrompt: `I'm not sure I'm following — should I call ${name}?`,
           resume: async (reply: string): Promise<CommitResult> => {
             const trimmed = reply.trim();
-            const { CONFIRM_YES_RE, CONFIRM_NO_RE } = await import('./conversationSession');
-            if (CONFIRM_YES_RE.test(trimmed)) {
+            if (LOOSE_YES_RE.test(trimmed)) {
               capturePerson({ name, phone, importance: 5 });
               return commitDial(name, phone);
             }
-            if (CONFIRM_NO_RE.test(trimmed)) {
+            if (LOOSE_NO_RE.test(trimmed)) {
               return { status: 'noop', ack: 'No problem — who were you trying to reach?' };
             }
             return { status: 'noop', ack: '' };
