@@ -226,6 +226,8 @@ export function getTopFacts(limit = 20): Fact[] {
     return db.getAllSync<Fact>(
       `SELECT * FROM facts
        WHERE (valid_until IS NULL OR valid_until > date('now'))
+         AND (context_type IS NULL OR context_type != 'corrected')
+         AND category NOT IN ('style', 'correction')
        ORDER BY use_count DESC, source_date DESC LIMIT ?;`,
       [limit]
     );
@@ -324,6 +326,10 @@ export function expireTemporalFacts(): void {
     db.runSync(
       "UPDATE facts SET context_type = 'historical' WHERE valid_until IS NOT NULL AND valid_until <= date('now') AND context_type = 'active';"
     );
+    // Reclassify internal-signal rows that leaked into facts before the promotion gate existed (Build 66). Idempotent.
+    db.runSync(
+      "UPDATE facts SET context_type = 'corrected' WHERE category IN ('style','correction') AND (context_type IS NULL OR context_type != 'corrected');"
+    );
   } catch {}
 }
 
@@ -394,6 +400,10 @@ export function getFactCount(): number {
 // Observations accumulate; when confidence threshold is met or user confirms,
 // they graduate to facts via promoteObservation().
 
+// Internal signal categories — staging-only. Never graduate into the
+// user-facing facts table; they are system state, not user memories.
+export const INTERNAL_OBSERVATION_CATEGORIES = new Set(['style', 'correction']);
+
 export function writeObservation(
   observation: string,
   category: string,
@@ -445,6 +455,8 @@ export function promoteObservation(observationId: string): string | null {
       [observationId]
     );
     if (!obs) return null;
+
+    if (INTERNAL_OBSERVATION_CATEGORIES.has(obs.category)) return null;
 
     // Graduate to facts table as inferred fact
     const factId = writeFact(obs.observation, obs.category, {
