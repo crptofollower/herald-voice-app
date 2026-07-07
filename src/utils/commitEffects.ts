@@ -30,7 +30,8 @@ export async function runCommitEffects(
       } else if (effect.kind === 'navigate') {
         await deps.handleMapsAction(effect.address);
       }
-    } catch {
+    } catch (err) {
+      console.error('[commitEffects] openURL failed', effect.kind, 'phone' in effect ? effect.phone : effect.address, err);
       deps.onEffectFailure(effect.failAck);
     }
   }

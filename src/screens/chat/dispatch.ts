@@ -151,8 +151,9 @@ export async function dispatchAction(
         if (actionIntent.type === 'sms') {
           const { contact, message } = actionIntent;
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          let resolvedSms;
           try {
-            const resolvedSms = await resolveContactPhone(contact);
+            resolvedSms = await resolveContactPhone(contact);
             if (resolvedSms?.phone) {
               const smsUrl = `sms:${resolvedSms.phone.replace(/\D/g, '')}${message ? `?body=${encodeURIComponent(message)}` : ''}`;
               await openURL(smsUrl);
@@ -175,7 +176,8 @@ export async function dispatchAction(
               speak(reply);
               pendingContactCollectRef.current = { action: 'text', name: contact, body: message };
             }
-          } catch {
+          } catch (err) {
+            console.error('[dispatch sms] openURL failed', resolvedSms?.phone, err);
             const reply = `I couldn't open a message to ${contact} — try again.`;
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
