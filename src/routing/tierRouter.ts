@@ -367,7 +367,7 @@ const LIST_CLEAR_SIGNALS = [
 ];
 
 const LIST_UPDATE_SIGNALS = [
-  /\b(change|update|replace)\s+(.+?)\s+(to|with)\s+(.+?)\s+on\s+(my\s+)?(\w+\s+)?list\b/i,
+  /\b(change|update|replace)\s+(.+?)\s+(to|with)\s+(.+?)(?:\s+on\s+(my\s+)?(\w+\s+)?list)?\s*$/i,
 ];
 
 const LIST_ADD_CONTEXTUAL_SIGNALS = [
@@ -751,7 +751,7 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   // Device: list update
   if (LIST_UPDATE_SIGNALS.some((p) => p.test(msg))) {
     const m = msg.match(
-      /\b(?:change|update|replace)\s+(.+?)\s+(?:to|with)\s+(.+?)\s+on\s+(?:my\s+)?(?:(\w+)\s+)?list\b/i,
+      /\b(?:change|update|replace)\s+(.+?)\s+(?:to|with)\s+(.+?)(?:\s+on\s+(?:my\s+)?(?:(\w+)\s+)?list)?\s*$/i,
     );
     const oldItem = (m?.[1] ?? '').trim();
     const newItem = (m?.[2] ?? '').trim();
