@@ -66,11 +66,38 @@ export async function resolveContactCallIntent(
 ): Promise<IntentRecord> {
   const clean = contactName.trim().toLowerCase().replace(/^(?:my|the|a)\s+/, '');
   const allMatches = findAllContactMatches(clean);
-  const withPhone = allMatches.filter(c => !!c.phone?.trim());
+  let withPhone = allMatches.filter(c => !!c.phone?.trim());
+
+  // Relationship→name→phone second hop. A relationship word ("son") may match a
+  // row that is itself phoneless — captured as a family fact, not a numbered
+  // contact. The NUMBER lives on a name-keyed row (or the OS contact book). So
+  // resolve the matched person's NAME forward instead of stopping. The two-row
+  // split for one person is a Rung-5 entity-unification concern; this is the
+  // safe read-side join, not a write/merge, and never fabricates a number.
+  let resolvedName: string | null = null;
+  if (withPhone.length === 0 && allMatches.length > 0) {
+    resolvedName = allMatches[0].name;
+    const seen = new Set<string>();
+    const bridged: ReturnType<typeof findAllContactMatches> = [];
+    for (const m of allMatches) {
+      for (const b of findAllContactMatches(m.name)) {
+        if (!b.phone?.trim() || seen.has(b.id)) continue;
+        seen.add(b.id);
+        // Carry the relationship label forward so read-back can say "your son Hunter".
+        bridged.push({ ...b, relationship: b.relationship ?? m.relationship });
+      }
+    }
+    withPhone = bridged;
+  }
+
   if (withPhone.length > 0) {
     return { type: 'contact_call', contact: contactName, candidates: withPhone, raw };
   }
-  const device = deps.resolveContact ? await deps.resolveContact(clean) : null;
+
+  // Device fallback resolves the PERSON'S NAME (e.g. "Hunter"), never the bare
+  // relationship word ("son"), which the OS contact book will not contain.
+  const deviceQuery = resolvedName ?? clean;
+  const device = deps.resolveContact ? await deps.resolveContact(deviceQuery) : null;
   if (device && device.phone) {
     return { type: 'contact_call', contact: contactName, devicePhone: device.phone, deviceName: device.name, raw };
   }
