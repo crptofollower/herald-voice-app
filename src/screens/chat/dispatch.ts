@@ -19,6 +19,8 @@ import { getDB } from '../../db/schema';
 import { answerHouseholdRead } from '../../utils/householdRead';
 import { guessMedicationName, deactivateMedicationByName } from '../../db/medicalDB';
 import { isMedicationCorroborated } from '../../db/factDB';
+import type { CommitResult } from '../../routing/routeIntent';
+import { matchCandidateToken } from '../../routing/conversationSession';
 
 // Pending-confirmation refs the dispatch handlers set so the NEXT user turn can
 // resolve them (collect a phone number, confirm a medication, etc.).
@@ -150,13 +152,37 @@ export async function dispatchAction(
               addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
               speak(reply);
             } else if (resolvedSms && 'candidateNames' in resolvedSms && resolvedSms.candidateNames.length > 0) {
-              // Honest ambiguity — never silently guess-text (CLAUDE.md Trust
-              // First). No pending armed here on purpose: asking for the fuller
-              // name is safer than holding a phone-less contact in a legacy ref.
+              // Pending Disambiguation Commit 1: refs-only candidates (names),
+              // resolved live at commit time — never a cached phone-less
+              // contact. Matches spec PENDING_DISAMBIGUATION_DESIGN_SPEC.md §6.
+              const smsCandidates = resolvedSms.candidateNames.map(n => ({ label: n, ref: n }));
               const names = resolvedSms.candidateNames.join(', ');
-              const reply = `I found more than one ${contact} in your contacts — ${names}. Which one did you mean? Say their full name.`;
+              const reply = `I found more than one ${contact} in your contacts — ${names}. Which one did you mean?`;
               addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
               speak(reply);
+              session.setPending({
+                pendingKey: 'sms_disambiguate',
+                kind: 'standard',
+                reaskPrompt: `I'm not sure I caught that — which one did you mean: ${names}?`,
+                resume: async (replyText: string): Promise<CommitResult> => {
+                  const match = matchCandidateToken(replyText, smsCandidates);
+                  if (match === 'ambiguous' || match === 'none') return { status: 'noop', ack: '' };
+                  const picked = await resolveContactPhone(match.ref);
+                  if (!picked?.phone) {
+                    return { status: 'failed', ack: `I don't have a number for ${match.label}. What's their number?` };
+                  }
+                  const smsUrl = `sms:${picked.phone.replace(/\D/g, '')}${message ? `?body=${encodeURIComponent(message)}` : ''}`;
+                  try {
+                    await openURL(smsUrl);
+                    const okReply = message
+                      ? `Opening a message to ${picked.name} with your note ready.`
+                      : `Opening a message to ${picked.name}.`;
+                    return { status: 'committed', ack: okReply };
+                  } catch {
+                    return { status: 'failed', ack: `I couldn't open a message to ${picked.name} — try again.` };
+                  }
+                },
+              });
             } else {
               const reply = `I don't have a number for ${contact}. What's their number?`;
               addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
@@ -503,6 +529,7 @@ export async function dispatchAction(
               [listName, `%${item}%`],
             );
             let reply: string;
+            let armPending = false;
             if (matches.length === 0) {
               reply = `I don't see ${item} on your ${listName} list.`;
             } else if (matches.length === 1) {
@@ -526,10 +553,47 @@ export async function dispatchAction(
                 ? `Done — ${matches[0].body} is off your ${listName} list. That clears it.`
                 : `Done — ${matches[0].body} is off. Still on your ${listName} list: ${left.join(', ')}.`;
             } else {
-              reply = `I see a few matches for ${item} — which one did you mean?`;
+              // Pending Disambiguation Commit 1: arm a candidates pending
+              // instead of asking and dropping the answer (Law 2 leak fix).
+              reply = `I see a few matches for ${item} — which one did you mean: ${matches.map(m => m.body).join(', ')}?`;
+              armPending = true;
             }
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
+            if (armPending) {
+              const removeCandidates = matches.map(m => ({ label: m.body, ref: m.id }));
+              session.setPending({
+                pendingKey: 'list_remove_disambiguate',
+                kind: 'standard',
+                reaskPrompt: `I'm not sure which one you meant — ${matches.map(m => m.body).join(', ')}?`,
+                resume: async (replyText: string): Promise<CommitResult> => {
+                  const match = matchCandidateToken(replyText, removeCandidates);
+                  if (match === 'ambiguous' || match === 'none') return { status: 'noop', ack: '' };
+                  try {
+                    const db2 = getDB();
+                    db2.runSync(`UPDATE list_items SET checked = 1, removed_at = ? WHERE id = ?;`, [new Date().toISOString(), match.ref]);
+                    const remaining2 = db2.getAllSync<{ body: string }>(
+                      `SELECT li.body FROM list_items li JOIN lists l ON l.id = li.list_id
+                       WHERE l.name = ? AND li.checked = 0 ORDER BY li.created_at ASC;`,
+                      [listName]
+                    );
+                    const seen2 = new Set<string>();
+                    const left2 = remaining2.map(r => r.body).filter(b => {
+                      const k = b.trim().toLowerCase();
+                      if (seen2.has(k)) return false;
+                      seen2.add(k);
+                      return true;
+                    });
+                    const okReply = left2.length === 0
+                      ? `Done — ${match.label} is off your ${listName} list. That clears it.`
+                      : `Done — ${match.label} is off. Still on your ${listName} list: ${left2.join(', ')}.`;
+                    return { status: 'committed', ack: okReply };
+                  } catch {
+                    return { status: 'failed', ack: `Something went wrong removing that. Try again.` };
+                  }
+                },
+              });
+            }
           } catch {
             const reply = `Something went wrong removing that. Try again.`;
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
@@ -590,6 +654,7 @@ export async function dispatchAction(
               [listName, `%${oldItem}%`],
             );
             let reply: string;
+            let armPending = false;
             if (matches.length === 0) {
               reply = `I don't see ${oldItem} on your ${listName} list.`;
             } else if (matches.length === 1) {
@@ -597,10 +662,33 @@ export async function dispatchAction(
               db.runSync(`UPDATE list_items SET body = ? WHERE id = ?;`, [newItem, matches[0].id]);
               reply = `Updated ${prevBody} to ${newItem} on your ${listName} list.`;
             } else {
-              reply = `I see a few matches for ${oldItem} — which one did you mean?`;
+              // Pending Disambiguation Commit 1: same fix as list_remove —
+              // this site mirrors it exactly and was found during audit,
+              // not in the original spec's §6 table (flagged before building).
+              reply = `I see a few matches for ${oldItem} — which one did you mean: ${matches.map(m => m.body).join(', ')}?`;
+              armPending = true;
             }
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
+            if (armPending) {
+              const updateCandidates = matches.map(m => ({ label: m.body, ref: m.id }));
+              session.setPending({
+                pendingKey: 'list_update_disambiguate',
+                kind: 'standard',
+                reaskPrompt: `I'm not sure which one you meant — ${matches.map(m => m.body).join(', ')}?`,
+                resume: async (replyText: string): Promise<CommitResult> => {
+                  const match = matchCandidateToken(replyText, updateCandidates);
+                  if (match === 'ambiguous' || match === 'none') return { status: 'noop', ack: '' };
+                  try {
+                    const db2 = getDB();
+                    db2.runSync(`UPDATE list_items SET body = ? WHERE id = ?;`, [newItem, match.ref]);
+                    return { status: 'committed', ack: `Updated ${match.label} to ${newItem} on your ${listName} list.` };
+                  } catch {
+                    return { status: 'failed', ack: `Something went wrong updating that. Try again.` };
+                  }
+                },
+              });
+            }
           } catch {
             const reply = `Something went wrong updating that. Try again.`;
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });

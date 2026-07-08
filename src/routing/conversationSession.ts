@@ -27,6 +27,35 @@ export const CANCEL_RE = /^(never\s*mind|nevermind|cancel|stop|forget\s+it)[\s.,
 export const CONFIRM_YES_RE = /^(yes|yeah|yep|correct|right|10-4)[\s.,!]*$/i;
 export const CONFIRM_NO_RE  = /^(no|nope|not yet|negative)[\s.,!]*$/i;
 
+// Deterministic candidate matcher (Pending Disambiguation, Commit 1 — spec
+// PENDING_DISAMBIGUATION_DESIGN_SPEC.md §3). Exact normalized match wins;
+// otherwise a single distinct token hit wins; anything else is ambiguous or
+// no-match and must re-ask, never guess. No substring/fuzzy matching in v1 —
+// a false-positive match is a fabrication-class trust failure (spec §3).
+export type MatchableCandidate = { label: string; ref: string };
+
+const normalizeForMatch = (s: string): string =>
+  s.trim().toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ');
+
+export function matchCandidateToken(
+  replyText: string,
+  candidates: MatchableCandidate[],
+): MatchableCandidate | 'ambiguous' | 'none' {
+  const t = normalizeForMatch(replyText);
+  if (!t) return 'none';
+  const tTokens = new Set(t.split(' '));
+
+  const exact = candidates.filter(c => normalizeForMatch(c.label) === t);
+  if (exact.length === 1) return exact[0];
+
+  const hits = candidates.filter(c =>
+    normalizeForMatch(c.label).split(' ').some(tok => tTokens.has(tok)),
+  );
+  if (hits.length === 1) return hits[0];
+  if (hits.length > 1) return 'ambiguous';
+  return 'none';
+}
+
 const DEFAULT_STANDARD_BUDGET = 2;
 
 function releaseAck(kind: PendingKind): string {
