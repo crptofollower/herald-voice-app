@@ -1,6 +1,6 @@
 // src/hooks/useLocalLLM.ts
 // On-device LLM lifecycle: load, infer, release.
-// Falls through to Railway on any failure (inferLocal returns null).
+// Load failure is silent: status becomes 'error'; callers treat it as flag-off.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState } from 'react-native';
@@ -17,10 +17,6 @@ export type LocalLLMStatus =
   | 'ready'
   | 'error';
 
-const INFERENCE_TIMEOUT_MS = 8_000;
-
-const STOP_TOKENS = ['\n\n', '<|end|>', '<|eot_id|>'];
-
 const LLAMA_INIT_BASE = {
   n_ctx: 2048,
   n_gpu_layers: 0,
@@ -32,7 +28,6 @@ function modelKindFromPath(path: string): 'small' | 'large' {
 
 export function useLocalLLM(): {
   status: LocalLLMStatus;
-  inferLocal: (prompt: string, maxTokens?: number) => Promise<string | null>;
   activeModel: 'small' | 'large' | null;
   getCtx: () => LlamaContext | null;
 } {
@@ -165,99 +160,7 @@ export function useLocalLLM(): {
     };
   }, [setStatusSafe]);
 
-  const inferLocal = useCallback(
-    async (prompt: string, maxTokens = 256): Promise<string | null> => {
-      if (statusRef.current !== 'ready') return null;
-
-      const ctx = ctxRef.current;
-      if (!ctx) return null;
-
-      const trimmed = prompt.trim();
-      if (!trimmed) return null;
-
-      try {
-        const completionPromise = ctx.completion({
-          messages: [{ role: 'user', content: trimmed }],
-          n_predict: maxTokens,
-          temperature: 0.7,
-          stop: STOP_TOKENS,
-        });
-
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          setTimeout(
-            () => reject(new Error('local inference timeout')),
-            INFERENCE_TIMEOUT_MS,
-          );
-        });
-
-        const result = await Promise.race([completionPromise, timeoutPromise]);
-        const text = result?.text?.trim();
-        return text && text.length > 0 ? text : null;
-      } catch (err) {
-        console.warn('[Herald] inferLocal failed, falling through to Railway:', err);
-        return null;
-      }
-    },
-    [],
-  );
-
   const getCtx = useCallback(() => ctxRef.current, []);
 
-  return { status, inferLocal, activeModel, getCtx };
-}
-
-export async function classifyIntent(
-  userText: string,
-  knownContacts: string[],
-  knownLists: string[],
-  ctx: LlamaContext | null,
-): Promise<string | null> {
-  if (!ctx) return null;
-
-  const prompt = `You are an intent classifier. Respond with ONLY a JSON
-object or the word PASS. No explanation, no other text.
-
-INTENTS:
-{"type":"list_remove","item":"ITEM","listName":"LIST"}
-{"type":"list_add","item":"ITEM","listName":"LIST"}
-{"type":"call","contact":"NAME"}
-{"type":"sms","contact":"NAME","message":"MSG"}
-{"type":"photo_open"}
-{"type":"app_open","appName":"NAME"}
-{"type":"household_read","query":"QUERY"}
-{"type":"reminder","body":"WHAT","time":"WHEN"}
-
-Rules:
-- Known contacts: ${knownContacts.slice(0, 15).join(', ') || 'none'}
-- Known lists: ${knownLists.join(', ') || 'grocery, todo'}
-- "I got X" / "I picked up X" / "already have X" → list_remove
-- "running low on X" / "we need X" / "out of X" → list_add, listName=grocery
-- "call/ring/phone [name or relationship]" → call
-- "open [app]" / "show my photos" → photo_open or app_open
-- "who is my [doctor/dentist/etc]" / "what is my [fact]" → household_read
-- Anything needing live data, general knowledge, or unclear → PASS
-RESPOND WITH ONLY THE JSON OR THE WORD PASS.
-
-User: "${userText.replace(/"/g, '\\"')}"`;
-
-  try {
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('classify timeout')), 5000),
-    );
-    const completionPromise = ctx.completion({
-      messages: [{ role: 'user', content: prompt }],
-      n_predict: 60,
-      temperature: 0.1,
-      stop: ['\n', '<|end|>', '<|eot_id|>'],
-    });
-    const result = await Promise.race([completionPromise, timeoutPromise]);
-    const raw = result?.text?.trim();
-    if (!raw || raw === 'PASS') return null;
-    const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return null;
-    JSON.parse(jsonMatch[0]);
-    return jsonMatch[0];
-  } catch {
-    return null;
-  }
+  return { status, activeModel, getCtx };
 }

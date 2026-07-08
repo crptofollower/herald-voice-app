@@ -36,7 +36,6 @@ export interface DispatchDeps extends DispatchPendingRefs {
   generateId: (prefix: string) => string;
   llmStatus: string;
   getCtx: () => LlamaContext | null;
-  inferLocal: (prompt: string, maxTokens: number) => Promise<string | null>;
   resolveContactPhone: (nameOrRelation: string) => Promise<{ phone: string; name: string; contactId?: string; source: 'herald' | 'device' } | { phone: null; name: string; source: 'device'; candidateNames: string[] } | null>;
   handleCalendarAction: (value: string) => Promise<void>;
   handleMapsAction: (query: string) => Promise<void>;
@@ -47,31 +46,19 @@ export interface DispatchDeps extends DispatchPendingRefs {
 }
 
 // Tier-1 READ dispatch (calendar/medical/family/profile). Filled in Stage 1.3.
-// isMedical reads are spoken verbatim — NEVER wrapped by the LLM (CLAUDE.md).
+// ALL reads are spoken verbatim from the deterministic layer. No generative
+// wrapping path exists (Spine §3 — phrase-out removed, LLM_LIVE P2 / Build A).
 export async function dispatchRead(
   response: string,
-  llmWrap: boolean,
-  isMedical: boolean,
   text: string,
   deps: DispatchDeps,
 ): Promise<void> {
-  const { addMessage, speak, generateId, inferLocal } = deps;
+  const { addMessage, speak, generateId } = deps;
   // User bubble — added once, here, for the routed read.
   addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
 
-  let finalResponse = response;
-  // Medical reads are NEVER LLM-wrapped (CLAUDE.md). Wrap only non-medical reads,
-  // and only when the router asked for it.
-  if (llmWrap && !isMedical) {
-    const wrapped = await inferLocal(
-      `You are Herald. Report ONLY the following confirmed data in one warm sentence. Do NOT add medical explanations, drug descriptions, or any information not in the data. Do NOT refuse. Just say what's there.\nData: "${response}"\nUser asked: "${text}"`,
-      60
-    );
-    if (wrapped) finalResponse = wrapped;
-  }
-
-  addMessage({ id: generateId('msg'), role: 'assistant', content: finalResponse, timestamp: Date.now() });
-  speak(finalResponse);
+  addMessage({ id: generateId('msg'), role: 'assistant', content: response, timestamp: Date.now() });
+  speak(response);
 }
 
 // Tier-1 ACTION dispatch (alarm/timer/sms/calendar/medical/call/nav/reminder/

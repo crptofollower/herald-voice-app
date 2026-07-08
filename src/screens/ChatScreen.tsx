@@ -212,7 +212,7 @@ export default function ChatScreen() {
 
   const persona = PERSONAS[personaKey] ?? PERSONAS[DEFAULT_PERSONA];
 
-  const { status: llmStatus, activeModel, getCtx, inferLocal } = useLocalLLM();
+  const { status: llmStatus, activeModel, getCtx } = useLocalLLM();
   void activeModel;
 
   type ResolveContactFn = (nameOrRelation: string) => Promise<{ phone: string; name: string; contactId?: string; source: 'herald' | 'device' } | { phone: null; name: string; source: 'device'; candidateNames: string[] } | null>;
@@ -1045,10 +1045,6 @@ export default function ChatScreen() {
       routeDecision.kind === 'device_action' ? routeDecision.actionIntent : undefined;
     const rdTier1Response =
       routeDecision.kind === 'device_read' ? routeDecision.response : undefined;
-    const rdLlmWrap =
-      routeDecision.kind === 'device_read' ? routeDecision.llmWrap : undefined;
-    const rdIsMedical =
-      routeDecision.kind === 'device_read' ? routeDecision.isMedical : undefined;
     const rdLocalContext =
       routeDecision.kind === 'memory_probe' ? routeDecision.context : undefined;
 
@@ -1237,8 +1233,6 @@ export default function ChatScreen() {
         } else if (rdTier1Response) {
           await dispatchRead(
             rdTier1Response,
-            rdLlmWrap ?? false,
-            rdIsMedical ?? false,
             text,
             buildDispatchDeps(),
           );
@@ -1390,8 +1384,6 @@ export default function ChatScreen() {
       if (rdTier1Response) {
         await dispatchRead(
           rdTier1Response,
-          rdLlmWrap ?? false,
-          rdIsMedical ?? false,
           text,
           buildDispatchDeps(),
         );
@@ -2411,7 +2403,6 @@ export default function ChatScreen() {
     generateId,
     llmStatus,
     getCtx,
-    inferLocal,
     resolveContactPhone,
     handleCalendarAction,
     handleMapsAction,
@@ -2421,7 +2412,7 @@ export default function ChatScreen() {
     session: sessionRef.current,
     platformOS: Platform.OS,
     openURL: (url) => Linking.openURL(url),
-  }), [addMessage, speak, llmStatus, getCtx, inferLocal]);
+  }), [addMessage, speak, llmStatus, getCtx]);
 
   // ── Render ────────────────────────────────────────────────────────────────
 

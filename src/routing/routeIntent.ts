@@ -14,7 +14,7 @@ import { findContactByName, findAllContactMatches, setEmergencyContact, getEmerg
 type ActionIntent = NonNullable<TierDecision['actionIntent']>;
 
 export type RouteDecision =
-  | { kind: 'device_read'; tier: 1; response: string; llmWrap?: boolean; isMedical?: boolean; reason: string }
+  | { kind: 'device_read'; tier: 1; response: string; isMedical?: boolean; reason: string }
   | { kind: 'device_action'; tier: 1; actionIntent: ActionIntent; reason: string }
   | { kind: 'capture'; intents: IntentRecord[]; source: 'deterministic' | 'llm'; reason: string }
   | { kind: 'memory_probe'; tier: 2; context: LocalContext; reason: string }
@@ -942,7 +942,6 @@ export async function routeIntent(
       kind: 'device_read',
       tier: 1,
       response: decision.tier1Response,
-      llmWrap: decision.llmWrap,
       isMedical: decision.isMedical,
       reason: decision.reason,
     };

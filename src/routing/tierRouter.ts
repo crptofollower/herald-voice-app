@@ -23,8 +23,7 @@ export type Tier = 1 | 2 | 3;
 export interface TierDecision {
   tier: Tier;
   tier1Response?: string;
-  llmWrap?: boolean;
-  isMedical?: boolean;   // tier-1 medical reads — NEVER route through the LLM wrapper (CLAUDE.md)
+  isMedical?: boolean;   // tier-1 medical reads — deterministic template only; no generative path exists (Spine §3)
   actionIntent?:
     | { type: 'alarm';    time: string;  label: string }
     | { type: 'timer'; minutes: number; label: string }

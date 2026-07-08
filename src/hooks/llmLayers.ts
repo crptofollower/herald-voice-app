@@ -31,7 +31,6 @@ export type IntentRecord =
   | { type: 'pass' };
 
 const CLASSIFY_TIMEOUT_MS = 5_000;
-const PHRASE_TIMEOUT_MS = 8_000;
 
 function extractJsonObject(raw: string): string | null {
   const m = raw.match(/\{[\s\S]*\}/);
