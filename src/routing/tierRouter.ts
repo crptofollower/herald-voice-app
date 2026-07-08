@@ -110,8 +110,6 @@ const TIER1_SIGNALS = {
     /what (medication|medications|meds|pills) am i (on|taking)/i,
     /my (medication|medications|meds|prescriptions)/i,
     /what did (my|the) doctor/i,
-    /who is my (doctor|physician|specialist)/i,
-    /my doctor('s name)?/i,
     /medical (history|records|info)/i,
     /what do you (have|know) about my (health|medical|medications|meds)/i,
     /\bwhat do i take\b/i,
@@ -153,6 +151,16 @@ const DIAGNOSIS_READ_SIGNALS = [
   /\bwhat\s+(?:was|were|have)\s+i\s+diagnosed\s+with\b/i,
   /\bwhat\s+(?:medical\s+)?conditions?\s+do\s+i\s+have\b/i,
   /\bdo\s+i\s+have\s+(?:any\s+)?(?:diagnos\w+|medical\s+conditions?)\b/i,
+];
+
+// Doctor reads — own reader (§4a one-reader). "Who is/are my doctor(s)" must
+// never resolve to the medication summary. Answers from medical_records
+// doctor_name rows; empty → honest miss, never a confident wrong read.
+const DOCTOR_READ_SIGNALS = [
+  /\bwho\s+(?:is|are)\s+my\s+(?:doctor|doctors|physician|physicians|specialist|specialists)\b/i,
+  /\bwhat(?:'s| is)\s+my\s+doctor'?s?\s+name\b/i,
+  /\bdo\s+(?:i|you)\s+(?:have|know)\s+(?:a\s+|my\s+)?(?:doctor|physician|gp|general practitioner)\b/i,
+  /\bmy\s+doctors?\b.*\bname/i,
 ];
 
 const TIER2_SIGNALS = [
@@ -428,6 +436,22 @@ function getVisitSummary(): string {
   if (names.length === 2) return `You've seen ${names[0]} and ${names[1]}.`;
   const last = names.pop();
   return `You've seen ${names.join(', ')}, and ${last}.`;
+}
+
+function getDoctorSummary(): string {
+  const records = getMedicalRecords().filter((r) => r.doctor_name && r.doctor_name.trim());
+  if (records.length === 0) {
+    return "I don't have a doctor for you yet — you can tell me anytime.";
+  }
+  const names: string[] = [];
+  for (const r of records) {
+    const name = r.doctor_name!.trim();
+    if (!names.includes(name)) names.push(name);
+  }
+  if (names.length === 1) return `You've mentioned ${names[0]}.`;
+  if (names.length === 2) return `You've mentioned ${names[0]} and ${names[1]}.`;
+  const last = names.pop();
+  return `You've mentioned ${names.join(', ')}, and ${last}.`;
 }
 
 export async function classifyQuery(message: string): Promise<TierDecision> {
@@ -924,6 +948,11 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   // read fence: isMedical=true, never routed through generative phrasing (CLAUDE.md).
   if (DIAGNOSIS_READ_SIGNALS.some((p) => p.test(msg))) {
     return { tier: 1, tier1Response: getDiagnosisSummary(), isMedical: true, reason: "medical:diagnosis" };
+  }
+
+  // Tier 1: doctor read — BEFORE the general medical summary (§4a one-reader).
+  if (DOCTOR_READ_SIGNALS.some((p) => p.test(msg))) {
+    return { tier: 1, tier1Response: getDoctorSummary(), isMedical: true, reason: "medical:doctor_read" };
   }
 
   // Tier 1: medical
