@@ -262,7 +262,7 @@ export default function ChatScreen() {
   // If they've scrolled up to read (Freddie response etc.), leave them there.
   const isAtBottomRef = useRef(true);
 
-  const { speak, enqueueSentence, resetSpeech, stop, isSpeaking } = useSpeech();
+  const { speak, enqueueSentence, resetSpeech, stop, isSpeaking, isSpeakingRef } = useSpeech();
   const [handsFreeMode, setHandsFreeMode] = useState(false);
   const handsFreeRef = useRef(false);
 
@@ -1663,7 +1663,7 @@ export default function ChatScreen() {
       sendMessage(trimmed);
     }, 600);
   }, [sendMessage]);
-  const { isRecording, startRecording, stopRecording } = useMic(handleTranscript);
+  const { isRecording, startRecording, stopRecording } = useMic(handleTranscript, isSpeakingRef);
 
   useRaiseToWake({
     aiName: aiName || 'Herald',
@@ -1682,7 +1682,9 @@ export default function ChatScreen() {
 
   useEffect(() => {
     if (!isSpeaking && handsFreeRef.current && !isStreaming) {
-      const timer = setTimeout(() => startRecording(), 300);
+      // Ref check AT FIRE TIME — state was true 700ms ago is not proof it's
+      // true now; startRecording itself re-checks, this just avoids the call.
+      const timer = setTimeout(() => { if (!isSpeakingRef.current) startRecording(); }, 700);
       return () => clearTimeout(timer);
     }
   }, [isSpeaking, isStreaming, startRecording]);

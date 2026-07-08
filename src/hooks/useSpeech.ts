@@ -88,6 +88,14 @@ async function fetchAudioDataUri(text: string): Promise<string> {
 
 export function useSpeech() {
   const [isSpeaking, setIsSpeaking] = useState(false);
+  // Half-duplex authority: a ref mirror of isSpeaking, readable synchronously
+  // at the moment the mic tries to open. State alone races (stale by the time
+  // a timer fires); the ref is the truth the mic checks.
+  const isSpeakingRef = useRef(false);
+  const setSpeaking = useCallback((v: boolean) => {
+    isSpeakingRef.current = v;
+    setIsSpeaking(v);
+  }, []);
 
   const textQueueRef  = useRef<string[]>([]);
   const audioQueueRef = useRef<string[]>([]);
@@ -117,7 +125,7 @@ export function useSpeech() {
     fetchingRef.current   = false;
     playingRef.current    = false;
     expoSpeakingRef.current = false;
-    setIsSpeaking(false);
+    setSpeaking(false);
 
     if (soundRef.current) {
       try {
@@ -137,7 +145,7 @@ export function useSpeech() {
   const runPlaybackLoop = useCallback(async (gen: number) => {
     if (playingRef.current) return;
     playingRef.current = true;
-    setIsSpeaking(true);
+    setSpeaking(true);
 
     while (gen === genRef.current) {
       const nextUri = audioQueueRef.current.shift();
@@ -183,7 +191,7 @@ export function useSpeech() {
     }
 
     playingRef.current = false;
-    if (gen === genRef.current && !expoSpeakingRef.current) setIsSpeaking(false);
+    if (gen === genRef.current && !expoSpeakingRef.current) setSpeaking(false);
   }, []);
 
   // ── Fetch loop ─────────────────────────────────────────────────────────────
@@ -206,17 +214,17 @@ export function useSpeech() {
         if (gen !== genRef.current || expoSpeakingRef.current) continue;
         expoSpeakingRef.current = true;
         ExpoSpeech.stop();
-        setIsSpeaking(true);
+        setSpeaking(true);
         ExpoSpeech.speak(clean, {
           rate: 0.9,
           pitch: 1.0,
           onDone: () => {
             expoSpeakingRef.current = false;
-            if (!playingRef.current) setIsSpeaking(false);
+            if (!playingRef.current) setSpeaking(false);
           },
           onError: () => {
             expoSpeakingRef.current = false;
-            if (!playingRef.current) setIsSpeaking(false);
+            if (!playingRef.current) setSpeaking(false);
           },
         });
       }
@@ -229,7 +237,7 @@ export function useSpeech() {
     if (expoSpeakingRef.current) return;
     const next = expoQueueRef.current.shift();
     if (!next) {
-      setIsSpeaking(false);
+      setSpeaking(false);
       return;
     }
     expoSpeakingRef.current = true;
@@ -254,7 +262,7 @@ export function useSpeech() {
       if (!clean) return;
 
       if (ON_DEVICE_TTS || isShortOrOneSentence(clean)) {
-        setIsSpeaking(true);
+        setSpeaking(true);
         expoQueueRef.current.push(clean);
         drainExpoQueue();
         return;
@@ -285,13 +293,13 @@ export function useSpeech() {
       if (!clean) return;
 
       if (ON_DEVICE_TTS || isShortOrOneSentence(clean)) {
-        setIsSpeaking(true);
+        setSpeaking(true);
         await configureAudio();
         ExpoSpeech.speak(clean, {
           rate: 0.9,
           pitch: 1.0,
-          onDone: () => setIsSpeaking(false),
-          onError: () => setIsSpeaking(false),
+          onDone: () => setSpeaking(false),
+          onError: () => setSpeaking(false),
         });
         return;
       }
@@ -301,5 +309,5 @@ export function useSpeech() {
     [stop, enqueueSentence, configureAudio]
   );
 
-  return { speak, enqueueSentence, resetSpeech, stop, isSpeaking };
+  return { speak, enqueueSentence, resetSpeech, stop, isSpeaking, isSpeakingRef };
 }

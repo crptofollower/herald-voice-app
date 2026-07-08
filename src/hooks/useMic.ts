@@ -4,12 +4,19 @@ import {
   useSpeechRecognitionEvent,
 } from 'expo-speech-recognition';
 
-export function useMic(onTranscript: (text: string) => void) {
+export function useMic(
+  onTranscript: (text: string) => void,
+  ttsActiveRef?: { current: boolean },
+) {
   const [isRecording, setIsRecording] = useState(false);
   const maxTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bufferRef = useRef<string>('');
   const bufferTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const turnActiveRef = useRef(false);
+  // Engine session guard: start() on an already-active session wedges the
+  // Android recognizer (Listening shown, no results delivered) or fires a
+  // non-no-speech error that kills a live turn. One session at a time, always.
+  const engineActiveRef = useRef(false);
   const BUFFER_WINDOW = 2500;
 
   const START_CONFIG = {
@@ -27,12 +34,16 @@ export function useMic(onTranscript: (text: string) => void) {
   const restartListening = () => {
     try {
       ExpoSpeechRecognitionModule.start(START_CONFIG);
+      engineActiveRef.current = true;
     } catch (e) {
       console.error('[useMic] restart failed:', e);
     }
   };
 
   useSpeechRecognitionEvent('result', (event) => {
+    // Half-duplex: never transcribe while Herald is speaking — Herald's own
+    // voice buffered into an utterance is a fabrication-class failure.
+    if (ttsActiveRef?.current) return;
     if (event.isFinal) {
       const text = event.results[0]?.transcript?.trim();
       if (!text) return; // noise segment - keep the mic hot, don't end the turn
@@ -67,6 +78,7 @@ export function useMic(onTranscript: (text: string) => void) {
   });
 
   useSpeechRecognitionEvent('error', (event) => {
+    engineActiveRef.current = false;
     // no-speech mid-turn = engine timed out on a pause; re-arm, keep the buffer
     if (event.error === 'no-speech' && turnActiveRef.current && bufferRef.current.trim()) {
       restartListening();
@@ -83,6 +95,7 @@ export function useMic(onTranscript: (text: string) => void) {
   });
 
   useSpeechRecognitionEvent('end', () => {
+    engineActiveRef.current = false;
     // Engine ended its segment. If a turn is in progress with buffered words,
     // this is a mid-utterance pause, not turn-over: re-arm and keep the buffer.
     if (turnActiveRef.current && bufferRef.current.trim()) {
@@ -127,11 +140,14 @@ export function useMic(onTranscript: (text: string) => void) {
   // render → called startRecording() → triggered re-render → loop.
   const startRecording = useCallback(async () => {
     try {
+      if (engineActiveRef.current) return;      // session already live — never double-start
+      if (ttsActiveRef?.current) return;        // Herald is audible — mic stays closed
       const { granted } =
         await ExpoSpeechRecognitionModule.requestPermissionsAsync();
       if (!granted) { console.error('[useMic] Mic permission denied'); return; }
       turnActiveRef.current = false; // clean slate for a new turn
       ExpoSpeechRecognitionModule.start(START_CONFIG);
+      engineActiveRef.current = true;
       setIsRecording(true);
       maxTimer.current = setTimeout(() => stopRecording(), 30000);
     } catch (e) {
