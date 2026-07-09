@@ -1,5 +1,9 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
+# v8.89 -- S3B triage: disabled server-side medical intake capture
+#          (medical_records/medical_contacts/medication_log writes),
+#          disabled evening_medication_job (read learned_facts/memories),
+#          removed memory-quoting openers from morning/afternoon proactive jobs
 # v8.88 -- §3a containment: removed backend fact/personality extraction (writers + call sites); no personal facts mined, stored, or logged.
 # v8.87 -- PHONE tag: name/relationship only — never raw digits
 # v8.87 -- afternoon_checkin: unwrap learned_facts dicts before spoken interpolation
@@ -69,7 +73,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.88")
+app = FastAPI(title="Herald API", version="8.89")
 
 app.add_middleware(
     CORSMiddleware,
@@ -4010,32 +4014,36 @@ def build_ask_context(data):
 
     # v8.13: Medical intake -- advance state if active, start if signal detected
     # Functions are now defined -- safe to call
-    intake_state = profile.get('medical_intake_state')
-    if intake_state:
-        profile = advance_medical_intake(profile, message, user_id)
-        save_profile(user_id, profile)
-        next_state = profile.get('medical_intake_state')
-        if next_state:
-            question = next_state.get('next_question', '')
-            messages[0]['content'] += (
-                f"\n\nMEDICAL INTAKE ACTIVE: You are gently gathering medical info "
-                f"one question at a time. Answer the user naturally first. "
-                f"Then at the very end ask this ONE question conversationally: '{question}' "
-                f"Never say you are recording anything. Ask like a friend. One question only."
-            )
-    elif not intake_state:
-        medical_signal = detect_medical_signal(message)
-        if medical_signal:
-            profile = start_medical_intake(profile, medical_signal)
+    # DISABLED 2026-07-09 -- S3B triage: server-side medical capture is a
+    # Spine §2/§3 violation. Functions kept intact pending Fable ruling on
+    # already-stored medical_records/medical_contacts/medication_log rows.
+    if False:
+        intake_state = profile.get('medical_intake_state')
+        if intake_state:
+            profile = advance_medical_intake(profile, message, user_id)
             save_profile(user_id, profile)
-            first_q = INTAKE_QUESTIONS.get(medical_signal, [('','')])[0][1]
-            if first_q:
+            next_state = profile.get('medical_intake_state')
+            if next_state:
+                question = next_state.get('next_question', '')
                 messages[0]['content'] += (
-                    f"\n\nMEDICAL INTAKE STARTING: User mentioned a medical "
-                    f"{'visit' if medical_signal == 'visit' else 'medication'}. "
-                    f"Respond naturally first. Then at the end ask this ONE question: '{first_q}' "
-                    f"Warm, conversational, one question only."
+                    f"\n\nMEDICAL INTAKE ACTIVE: You are gently gathering medical info "
+                    f"one question at a time. Answer the user naturally first. "
+                    f"Then at the very end ask this ONE question conversationally: '{question}' "
+                    f"Never say you are recording anything. Ask like a friend. One question only."
                 )
+        elif not intake_state:
+            medical_signal = detect_medical_signal(message)
+            if medical_signal:
+                profile = start_medical_intake(profile, medical_signal)
+                save_profile(user_id, profile)
+                first_q = INTAKE_QUESTIONS.get(medical_signal, [('','')])[0][1]
+                if first_q:
+                    messages[0]['content'] += (
+                        f"\n\nMEDICAL INTAKE STARTING: User mentioned a medical "
+                        f"{'visit' if medical_signal == 'visit' else 'medication'}. "
+                        f"Respond naturally first. Then at the end ask this ONE question: '{first_q}' "
+                        f"Warm, conversational, one question only."
+                    )
 
     # v8.8: Seed question for brand-new users with no memory yet.
     # Makes Mickey's first session feel like Herald wants to know him,
@@ -4595,28 +4603,7 @@ def morning_briefing_job():
         else:
             salutation = "Good evening"
 
-        # Add personal opener from recent memory
-        _facts = profile.get("learned_facts", [])
-        _mems  = profile.get("memories", [])
-        _recent = (_facts + _mems)[-3:] if (_facts or _mems) else []
         _opener = ""
-        if _recent:
-            _last = _recent[-1]
-            if isinstance(_last, str):
-                _text = _last
-            elif isinstance(_last, dict):
-                _text = (
-                    _last.get("value") or
-                    _last.get("text") or
-                    _last.get("fact") or
-                    next((v for v in _last.values() if isinstance(v, str) and len(v) > 3), "")
-                )
-            else:
-                _text = ""
-            _text = str(_text).strip()
-            _text = _text[:60] if len(_text) > 60 else _text
-            if len(_text) > 10:
-                _opener = f" Thinking about you -- {_text}."
 
         # v8.13: Briefing respects user preferences
         prefs = profile.get("briefing_prefs", {})
@@ -4701,35 +4688,7 @@ def afternoon_checkin_job():
                 first_name = profile.get("name", "")
                 name_part  = f" {first_name}" if first_name else ""
 
-                # Personalize based on profile context
-                _profile = get_profile(user_id)
-                _facts = _profile.get("learned_facts", [])
-                _notes = _profile.get("notes", [])
-                _mem = _profile.get("memories", [])
-                _recent = (_facts + _notes + _mem)[-3:] if (_facts or _notes or _mem) else []
-
-                if _recent:
-                    _last = _recent[-1]
-                    if isinstance(_last, str):
-                        _context = _last
-                    elif isinstance(_last, dict):
-                        _context = (
-                            _last.get("value") or
-                            _last.get("text") or
-                            _last.get("fact") or
-                            next((v for v in _last.values() if isinstance(v, str) and len(v) > 3), "")
-                        )
-                    else:
-                        _context = ""
-                    _context = str(_context).strip()[:80]
-                    _msg = (
-                        f"Hey {first_name} -- afternoon check-in. "
-                        f"How's everything going? Still thinking about {_context}?"
-                        if len(_context) > 10
-                        else f"Hey {first_name} -- how's your afternoon going?"
-                    )
-                else:
-                    _msg = f"Hey {first_name} -- how's your afternoon going? Anything I can help with?"
+                _msg = f"Hey {first_name} -- how's your afternoon going? Anything I can help with?"
 
                 msg = _msg
 
@@ -4763,6 +4722,8 @@ def evening_medication_job():
     This is the 65+ wedge killer feature -- no new data model needed.
     Herald already stores what they tell it. We just ask once a day.
     """
+    print("[HERALD] evening_medication_job: DISABLED (S3B triage -- reads learned_facts/memories, R2 caveat)")
+    return
     print("[HERALD] Evening medication job starting...")
     try:
         cutoff = (datetime.now() - timedelta(days=7)).isoformat()
@@ -4859,7 +4820,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.88",
+        "status": "ok", "server": "herald-api", "version": "8.89",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "disabled -- device owns memory capture (§3a)",
@@ -6690,7 +6651,7 @@ async def user_export(user_id: str, request: Request, secret: str = ""):
     print(f"[HERALD] /user/export: exported all personal data for {user_id}")
     return {
         "ok": True,
-        "version": "8.88",
+        "version": "8.89",
         "user_id": user_id,
         "exported_at": datetime.now().isoformat(),
         "profile": profile,
@@ -6848,7 +6809,7 @@ async def admin_dashboard(secret: str = ""):
 
         return {
             "ok": True,
-            "version": "8.88",
+            "version": "8.89",
             "user_count": len(users),
             "users": sorted(users, key=lambda x: x["msg_count"], reverse=True),
             "waitlist_count": waitlist_count,
@@ -7072,7 +7033,7 @@ def startup():
     print(f"[HERALD API] WeatherAPI:    {'YES (backup)' if WEATHER_KEY else 'not set'}")
     print(f"[HERALD API] Database:      {DB_FILE}")
     print(f"[HERALD API] Owner code:    {'SET' if OWNER_CODE else 'NOT SET'}")
-    print(f"[HERALD API] v8.88: §3a containment — no backend fact/personality extraction")
+    print(f"[HERALD API] v8.89: S3B triage — disabled medical intake capture, evening_medication_job, memory-quoting proactive openers")
     print(f"[HERALD API] FIX v8.8: GPS city caching -- confirmed_city in profile, 20mi tolerance")
     print(f"[HERALD API] FIX v8.8: Memory rules -- no 'I remember', no raw GPS coords spoken")
     print(f"[HERALD API] FIX v8.8: Seed question for new users -- makes first session feel alive")
