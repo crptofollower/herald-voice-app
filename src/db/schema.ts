@@ -2,7 +2,7 @@
 // Herald device SQLite — table definitions and migration runner.
 // Session L — Device-First Intelligence Layer
 //
-// SCHEMA VERSION: 17
+// SCHEMA VERSION: 19
 // v1: Initial schema — facts, profile, medical, calendar_cache (ISO strings), life_tracker
 // v2: calendar_cache rebuilt with Unix ms timestamps (timezone fix)
 // v3: Entity graph + importance scoring + temporal awareness (locked Session L spec)
@@ -24,6 +24,8 @@
 // v16: service_providers duplicate-active-row one-time repair
 // v17: contacts.location (family-member location — person-as-entity attribute)
 // v18: medical_records.removed_at (soft-delete — §4a compliance for the medical drawer)
+// v19: medical_records.status + surfaced_at (Beat 1 surfacing), medical_contacts.removed_at
+//      (MEDICAL_SURFACING_DESIGN_SPEC §2.1 — three additive columns, one migration)
 //
 // RULE: NEVER modify a past migration. Always add at the next version number.
 //
@@ -42,7 +44,7 @@
 
 import * as SQLite from "expo-sqlite";
 
-export const SCHEMA_VERSION = 18;
+export const SCHEMA_VERSION = 19;
 export const DB_NAME = "herald_device.db";
 
 // ─── Open database ────────────────────────────────────────────────────────────
@@ -732,5 +734,25 @@ const MIGRATIONS: Record<number, (db: SQLite.SQLiteDatabase) => void> = {
       // column already exists (re-run safety) — ignore
     }
     console.log("Herald schema V18: medical_records.removed_at added");
+  },
+
+  // ── v19: Beat 1 surfacing columns (MEDICAL_SURFACING_DESIGN_SPEC §2.1) ──────
+  19: (db) => {
+    try {
+      db.execSync("ALTER TABLE medical_records ADD COLUMN status TEXT DEFAULT 'noted';");
+    } catch {
+      // column already exists (re-run safety) — ignore
+    }
+    try {
+      db.execSync("ALTER TABLE medical_records ADD COLUMN surfaced_at TEXT;");
+    } catch {
+      // column already exists (re-run safety) — ignore
+    }
+    try {
+      db.execSync("ALTER TABLE medical_contacts ADD COLUMN removed_at TEXT;");
+    } catch {
+      // column already exists (re-run safety) — ignore
+    }
+    console.log("Herald schema V19: medical_records.status/surfaced_at + medical_contacts.removed_at added");
   },
 };

@@ -216,7 +216,7 @@ const RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", BOLD = "\x1b[1m",
 let passed = 0;
 const failures = [];
 const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length;
-const EXPECTED_TOTAL = 340;   // was 336; +4 medicalContract M21–M23
+const EXPECTED_TOTAL = 349;   // was 340; +9 schemaMigrationContract SM1-SM9
 
 console.log(`\n${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  HERALD ROUTER + PHONE TEST SUITE — ${TOTAL} tests${RESET}`);
@@ -310,6 +310,7 @@ const { runContactsDBTests } = await import('./contactsDB.test.ts');
 const { runContactCallTests } = await import('./contact_call.test.ts');
 const { runRunCommitEffectsTests } = await import('./runCommitEffects.test.ts');
 const { runDoctorReadTests } = await import('./doctorRead.test.ts');
+const { runSchemaMigrationContractTests } = await import('./schemaMigrationContract.test.ts');
 const hResult = await runHouseholdContractTests();
 const mResult = await runMedicalContractTests();
 const fResult = await runFamilyContractTests();
@@ -325,9 +326,10 @@ const cdbResult = await runContactsDBTests();
 const ctResult = await runContactCallTests();
 const rceResult = await runRunCommitEffectsTests();
 const drResult = await runDoctorReadTests();
-const contractPassed = hResult.passed + mResult.passed + fResult.passed + dResult.passed + dxResult.passed + pResult.passed + cpResult.passed + lzResult.passed + mcResult.passed + tcResult.passed + insResult.passed + cdbResult.passed + ctResult.passed + rceResult.passed + drResult.passed;
-const contractFailed = hResult.failed + mResult.failed + fResult.failed + dResult.failed + dxResult.failed + pResult.failed + cpResult.failed + lzResult.failed + mcResult.failed + tcResult.failed + insResult.failed + cdbResult.failed + ctResult.failed + rceResult.failed + drResult.failed;
-const contractTotal = hResult.total + mResult.total + fResult.total + dResult.total + dxResult.total + pResult.total + cpResult.total + lzResult.total + mcResult.total + tcResult.total + insResult.total + cdbResult.total + ctResult.total + rceResult.total + drResult.total;
+const smResult = await runSchemaMigrationContractTests();
+const contractPassed = hResult.passed + mResult.passed + fResult.passed + dResult.passed + dxResult.passed + pResult.passed + cpResult.passed + lzResult.passed + mcResult.passed + tcResult.passed + insResult.passed + cdbResult.passed + ctResult.passed + rceResult.passed + drResult.passed + smResult.passed;
+const contractFailed = hResult.failed + mResult.failed + fResult.failed + dResult.failed + dxResult.failed + pResult.failed + cpResult.failed + lzResult.failed + mcResult.failed + tcResult.failed + insResult.failed + cdbResult.failed + ctResult.failed + rceResult.failed + drResult.failed + smResult.failed;
+const contractTotal = hResult.total + mResult.total + fResult.total + dResult.total + dxResult.total + pResult.total + cpResult.total + lzResult.total + mcResult.total + tcResult.total + insResult.total + cdbResult.total + ctResult.total + rceResult.total + drResult.total + smResult.total;
 
 console.log(`${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  RESULTS: ${GREEN}${passed + contractPassed} passed${RESET}${BOLD} / ${failures.length + contractFailed > 0 ? RED : GREEN}${failures.length + contractFailed} failed${RESET}${BOLD} / ${TOTAL + contractTotal} total${RESET}`);

@@ -32,6 +32,7 @@ scripts/**
 !scripts/heraldTest/contact_call.test.ts
 !scripts/heraldTest/runCommitEffects.test.ts
 !scripts/heraldTest/doctorRead.test.ts
+!scripts/heraldTest/schemaMigrationContract.test.ts
 !scripts/heraldTest/parseSmsIntent.test.ts
 # keep derived/installed files out — mirrors are copies of tracked src/, node_modules is installed
 scripts/heraldTest/node_modules/
