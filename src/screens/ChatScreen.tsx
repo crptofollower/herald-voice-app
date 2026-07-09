@@ -1400,6 +1400,25 @@ export default function ChatScreen() {
       }
     }
 
+    // ── Tier 2 — memory probe: answered device-only, ALWAYS. ────────────────────
+    // Personal recall never crosses to the backend (Spine §2; Routing Law 3).
+    // Structural guarantee that a memory_probe cannot fall through to the network
+    // dispatch below, regardless of phrasing. Uses the same local readers as the
+    // offline gate; on a genuine miss it stays honest (Graceful Confusion) rather
+    // than asking the backend to synthesize from context that no longer crosses.
+    if (rdTier === 2) {
+      const fam2 = detectFamilyRead(text);
+      const probeAnswer = fam2 ? answerFamilyRead(fam2) : answerFromDevice(text);
+      const reply = probeAnswer
+        ?? "I'm not sure I'm following you — can you help me understand?";
+      addMessage({ id: generateId("msg"), role: "user", content: text, timestamp: now });
+      addMessage({ id: generateId("msg"), role: "assistant", content: reply, timestamp: now + 1 });
+      speak(reply);
+      sendingRef.current = false;
+      setInputText("");
+      return;
+    }
+
     // Legacy device interceptor — keep as fallback for patterns not yet
     // covered by tierRouter signal groups
     // Family read authority (§4a single reader) — mirrors the offline gate.

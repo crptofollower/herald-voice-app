@@ -34,6 +34,16 @@ const PROFILE_PATTERNS = [
   /what have i told you/i,
   /what do you remember/i,
   /tell me what you know/i,
+  // Tier-2 memory-probe phrasings that previously fell through to the backend.
+  // Broad self-knowledge probes — answered from the device profile/facts summary,
+  // never the network (Spine §2).
+  /how well do you know me/i,
+  /what do you have on me/i,
+  /what did i tell you/i,
+  /what('?s| is) in my (memory|profile|history)/i,
+  /remind me what you know/i,
+  /what do you know about my life/i,
+  /do you remember (me|what i (said|told))/i,
 ];
 
 const MEDICATION_PATTERNS = [
