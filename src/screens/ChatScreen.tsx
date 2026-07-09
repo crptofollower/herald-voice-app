@@ -1321,12 +1321,19 @@ export default function ChatScreen() {
         }
 
         // Honest offline fallback
-        const offlineReplies = [
-          "I'm not connected right now — ask me about your calendar, medications, contacts, or lists.",
-          "No connection at the moment. I can still help with anything on your phone — what do you need?",
-          "I'm offline but still here. Calendar, contacts, medications, lists — what do you need?",
-        ];
-        const offlineReply = offlineReplies[Math.floor(Math.random() * offlineReplies.length)];
+        // Model unavailable → "not connected" pool is honest.
+        // Model ready but nothing usable → Graceful Confusion (don't claim offline).
+        let offlineReply: string;
+        if (llmStatus !== 'ready') {
+          const offlineReplies = [
+            "I'm not connected right now — ask me about your calendar, medications, contacts, or lists.",
+            "No connection at the moment. I can still help with anything on your phone — what do you need?",
+            "I'm offline but still here. Calendar, contacts, medications, lists — what do you need?",
+          ];
+          offlineReply = offlineReplies[Math.floor(Math.random() * offlineReplies.length)];
+        } else {
+          offlineReply = "I'm not sure I'm following you — can you help me understand?";
+        }
         addMessage({ id: generateId('msg'), role: 'user',
           content: text, timestamp: Date.now() });
         addMessage({ id: generateId('msg'), role: 'assistant',
