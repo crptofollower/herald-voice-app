@@ -216,7 +216,7 @@ const RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", BOLD = "\x1b[1m",
 let passed = 0;
 const failures = [];
 const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length;
-const EXPECTED_TOTAL = 350;   // was 349; +1 llmLayers decode-config test
+const EXPECTED_TOTAL = 366;   // was 350; +16 WALL-1 wire-boundary fence
 
 console.log(`\n${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  HERALD ROUTER + PHONE TEST SUITE — ${TOTAL} tests${RESET}`);
@@ -312,6 +312,7 @@ const { runRunCommitEffectsTests } = await import('./runCommitEffects.test.ts');
 const { runDoctorReadTests } = await import('./doctorRead.test.ts');
 const { runSchemaMigrationContractTests } = await import('./schemaMigrationContract.test.ts');
 const { runLlmLayersContractTests } = await import('./llmLayers.test.ts');
+const { runWall1ContractTests } = await import('./wall1.test.ts');
 const hResult = await runHouseholdContractTests();
 const mResult = await runMedicalContractTests();
 const fResult = await runFamilyContractTests();
@@ -329,9 +330,10 @@ const rceResult = await runRunCommitEffectsTests();
 const drResult = await runDoctorReadTests();
 const smResult = await runSchemaMigrationContractTests();
 const llResult = await runLlmLayersContractTests();
-const contractPassed = hResult.passed + mResult.passed + fResult.passed + dResult.passed + dxResult.passed + pResult.passed + cpResult.passed + lzResult.passed + mcResult.passed + tcResult.passed + insResult.passed + cdbResult.passed + ctResult.passed + rceResult.passed + drResult.passed + smResult.passed + llResult.passed;
-const contractFailed = hResult.failed + mResult.failed + fResult.failed + dResult.failed + dxResult.failed + pResult.failed + cpResult.failed + lzResult.failed + mcResult.failed + tcResult.failed + insResult.failed + cdbResult.failed + ctResult.failed + rceResult.failed + drResult.failed + smResult.failed + llResult.failed;
-const contractTotal = hResult.total + mResult.total + fResult.total + dResult.total + dxResult.total + pResult.total + cpResult.total + lzResult.total + mcResult.total + tcResult.total + insResult.total + cdbResult.total + ctResult.total + rceResult.total + drResult.total + smResult.total + llResult.total;
+const w1Result = await runWall1ContractTests();
+const contractPassed = hResult.passed + mResult.passed + fResult.passed + dResult.passed + dxResult.passed + pResult.passed + cpResult.passed + lzResult.passed + mcResult.passed + tcResult.passed + insResult.passed + cdbResult.passed + ctResult.passed + rceResult.passed + drResult.passed + smResult.passed + llResult.passed + w1Result.passed;
+const contractFailed = hResult.failed + mResult.failed + fResult.failed + dResult.failed + dxResult.failed + pResult.failed + cpResult.failed + lzResult.failed + mcResult.failed + tcResult.failed + insResult.failed + cdbResult.failed + ctResult.failed + rceResult.failed + drResult.failed + smResult.failed + llResult.failed + w1Result.failed;
+const contractTotal = hResult.total + mResult.total + fResult.total + dResult.total + dxResult.total + pResult.total + cpResult.total + lzResult.total + mcResult.total + tcResult.total + insResult.total + cdbResult.total + ctResult.total + rceResult.total + drResult.total + smResult.total + llResult.total + w1Result.total;
 
 console.log(`${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  RESULTS: ${GREEN}${passed + contractPassed} passed${RESET}${BOLD} / ${failures.length + contractFailed > 0 ? RED : GREEN}${failures.length + contractFailed} failed${RESET}${BOLD} / ${TOTAL + contractTotal} total${RESET}`);

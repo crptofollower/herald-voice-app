@@ -20,7 +20,6 @@
 
 import {
   API_BASE,
-  MAX_CONTEXT_MESSAGES,
   OWNER_AUTH_CODE,
   REQUEST_TIMEOUT_MS,
 } from "../constants/api";
@@ -184,6 +183,33 @@ async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> 
   return response.json() as Promise<T>;
 }
 
+// ─── Wire-body allowlist (Spine §2 / Routing Law 3) ───────────────────────────
+//
+// The ONLY keys permitted to cross to the backend on /ask and /ask/stream.
+// Personal memory — profile, facts, medical context, conversation history,
+// derived topics, persona — NEVER crosses. This is the single writer of the
+// request body; call sites cannot bypass it, and WALL-1 gates it. A missing
+// warm phrase-out is the accepted cost until on-device phrasing ships; a leaked
+// personal fact is not (Trust > Reliability > Simplicity > Speed).
+const ASK_WIRE_ALLOWLIST = [
+  "user_id",
+  "message",
+  "local_time",
+  "local_date",
+  "lat",
+  "lng",
+  "location_label",
+] as const;
+
+export function buildAskWireBody(payload: AskPayload): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  for (const key of ASK_WIRE_ALLOWLIST) {
+    const value = (payload as Record<string, unknown>)[key];
+    if (value !== undefined) body[key] = value;
+  }
+  return body;
+}
+
 // ─── askHeraldStream -- the real one ──────────────────────────────────────────
 //
 // Connects to /ask/stream and parses the backend's actual SSE format.
@@ -200,11 +226,8 @@ export function askHeraldStream(
 ): AbortController {
   const outerController = new AbortController();
 
-  const trimmedHistory = payload.history
-    .slice(-MAX_CONTEXT_MESSAGES)
-    .map(({ role, content }) => ({ role, content }));
-
-  const body = JSON.stringify({ ...payload, history: trimmedHistory });
+  // Personal memory never crosses — body is the wire allowlist only (WALL-1).
+  const body = JSON.stringify(buildAskWireBody(payload));
 
   (async () => {
     const streamController = new AbortController();
@@ -371,12 +394,9 @@ export function askHeraldStream(
 // ─── /ask -- non-streaming (kept for internal callers) ────────────────────────
 
 export async function askHerald(payload: AskPayload): Promise<AskResponse> {
-  const trimmedHistory = payload.history
-    .slice(-MAX_CONTEXT_MESSAGES)
-    .map(({ role, content }) => ({ role, content }));
   return apiFetch<AskResponse>("/ask", {
     method: "POST",
-    body: JSON.stringify({ ...payload, history: trimmedHistory }),
+    body: JSON.stringify(buildAskWireBody(payload)),
   });
 }
 
