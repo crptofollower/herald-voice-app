@@ -2,7 +2,7 @@
 // On-device intent classification for Herald.
 //
 // Layer 1 — classifyWithLLM: messy speech → structured IntentRecord JSON
-//   Temperature 0.1, n_predict 80, 5s timeout.
+//   Temperature 0, n_predict 120, 5s timeout.
 //   Falls back to null on any failure — caller uses tierRouter regex as fallback.
 //
 // MedicalEvent import kept minimal — type only, no runtime dependency.
@@ -193,7 +193,9 @@ User: "${trimmed.replace(/"/g, '\\"')}"`;
       ctx.completion({
         messages: [{ role: 'user', content: prompt }],
         n_predict: 120,
-        temperature: 0.1,
+        temperature: 0,
+        top_k: 1,
+        seed: 0,
         stop: ['\n\n', '<|end|>', '<|eot_id|>'],
       }),
       new Promise<never>((_, reject) =>
