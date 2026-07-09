@@ -18,6 +18,8 @@ import { DOMAIN_WRITERS } from '../../src/routing/routeIntent.ts';
 import {
   writeMedication,
   confirmMedicationCapture,
+  writeDiagnosis,
+  SubstringGateRejection,
   getActiveMedications,
   getMedicalSummary,
   deactivateMedicationByName,
@@ -150,7 +152,7 @@ export async function runMedicalContractTests() {
 
   // ── M7: confirmMedicationCapture on new name → action is "created" ─────────
   freshDB();
-  const result7 = confirmMedicationCapture('Atorvastatin', '20mg');
+  const result7 = confirmMedicationCapture('Atorvastatin', '20mg', "I'm now taking Atorvastatin 20mg");
   assert('M7 confirmMedicationCapture creates new row', result7.action,
     v => v === 'created', '"created"');
   const meds7 = getActiveMedications();
@@ -162,7 +164,7 @@ export async function runMedicalContractTests() {
   // inserts a new one. Only the new row is active.
   freshDB();
   writeMedication({ name: 'Metformin', dosage: '500mg', is_active: 1 });
-  const result8 = confirmMedicationCapture('Metformin', '1000mg');
+  const result8 = confirmMedicationCapture('Metformin', '1000mg', 'increase my Metformin to 1000mg');
   assert('M8 confirmMedicationCapture supersedes existing row', result8.action,
     v => v === 'superseded', '"superseded"');
 
@@ -308,6 +310,48 @@ export async function runMedicalContractTests() {
   assert('M20 notes include raw and advice verbatim', recs20[0]?.notes,
     v => v === 'I saw Dr. Lee today — cut salt',
     '"I saw Dr. Lee today — cut salt"');
+
+  // ── M21: Substring Gate rejects an inferred diagnosis value ────────────────
+  // MEDICAL_SURFACING_DESIGN_SPEC §1.2, case 1. "prediabetes" is not a
+  // substring of the raw phrase — this is the exact fabrication class the
+  // gate exists to make structurally unwritable.
+  freshDB();
+  {
+    let threw21 = false;
+    try {
+      writeDiagnosis('prediabetes', "my doctor says I can't eat sugar anymore");
+    } catch (e) {
+      threw21 = e instanceof SubstringGateRejection;
+    }
+    assert('M21 Substring Gate rejects inferred diagnosis value', threw21,
+      v => v === true, true);
+    const recs21 = getMedicalRecords();
+    assert('M21 rejected diagnosis writes zero rows', recs21.length,
+      v => v === 0, '0');
+  }
+
+  // ── M22: Substring Gate accepts normalizer-derived dosage ──────────────────
+  // MEDICAL_SURFACING_DESIGN_SPEC §1.2, case 2. "five milligrams" → "5mg" via
+  // the registered spoken-dosage normalizer (extractDosage) — must be accepted.
+  freshDB();
+  const result22 = confirmMedicationCapture('lisinopril', '5mg', 'I take lisinopril five milligrams');
+  assert('M22 Substring Gate accepts normalizer-derived dosage', result22.action,
+    v => v === 'created', '"created"');
+
+  // ── M23: Substring Gate rejects a mismatched normalizer output ─────────────
+  // MEDICAL_SURFACING_DESIGN_SPEC §1.2, case 3. Same raw phrase as M22 but a
+  // dosage the normalizer would never produce from it — must reject.
+  freshDB();
+  {
+    let threw23 = false;
+    try {
+      confirmMedicationCapture('lisinopril', '10mg', 'I take lisinopril five milligrams');
+    } catch (e) {
+      threw23 = e instanceof SubstringGateRejection;
+    }
+    assert('M23 Substring Gate rejects mismatched dosage', threw23,
+      v => v === true, true);
+  }
 
   const total = passed + failures.length;
   console.log(

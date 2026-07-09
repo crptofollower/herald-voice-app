@@ -95,16 +95,16 @@ export async function runDiagnosisContractTests() {
   }
   {
     freshDB();
-    writeDiagnosis('type 2 diabetes', 'raw a');
-    writeDiagnosis('atrial fibrillation', 'raw b');
+    writeDiagnosis('type 2 diabetes', 'I was diagnosed with type 2 diabetes');
+    writeDiagnosis('atrial fibrillation', 'my diagnosis is atrial fibrillation');
     const conds = getDiagnoses().map(r => r.diagnosis);
     assert('WX4 additive, not superseding (both held)', conds,
       (v) => v.includes('type 2 diabetes') && v.includes('atrial fibrillation'), 'both present');
   }
   {
     const db = freshDB();
-    writeDiagnosis('active condition', 'raw active');
-    writeDiagnosis('removed condition', 'raw removed');
+    writeDiagnosis('active condition', 'I was diagnosed with active condition');
+    writeDiagnosis('removed condition', 'I was diagnosed with removed condition');
     db.prepare("UPDATE medical_records SET removed_at = datetime('now') WHERE diagnosis = ?").run('removed condition');
     const conds = getDiagnoses().map(r => r.diagnosis);
     assert('WX5 soft-delete aware (removed excluded, active kept)', conds,

@@ -13,7 +13,7 @@
 // facts flow: Railway extraction → SSE done payload → this file.
 
 import { getDB } from "./schema";
-import { extractDrugName } from "../utils/detectMedicalEvent";
+import { extractDrugName, extractDosage } from "../utils/detectMedicalEvent";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -51,6 +51,36 @@ export interface MedicalContact {
   is_primary: number; // 1 = primary, 0 = other
   notes?: string;
   created_at: string;
+}
+
+// ─── Substring Gate (Spine §3 verbatim rule, mechanically enforced) ───────────
+// MEDICAL_SURFACING_DESIGN_SPEC §1.1: a trust-critical value may be written
+// only if it is (a) a contiguous substring of raw_phrase (case/whitespace
+// normalized), or (b) the output of a registered deterministic normalizer
+// (at ratification: extractDosage's spoken-number table) applied to
+// raw_phrase. No raw_phrase → fail closed; an unprovenanced value is never
+// trusted, no exceptions. Law 4 made mechanical: inference may propose a
+// link, it may never author a value inside a row.
+export class SubstringGateRejection extends Error {
+  constructor(public readonly value: string, public readonly rawPhrase: string) {
+    super(`Substring Gate rejected "${value}" — not in raw_phrase, not a registered normalizer output.`);
+    this.name = 'SubstringGateRejection';
+  }
+}
+
+function normalizeForGate(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+export function passesSubstringGate(value: string, rawPhrase: string | undefined): boolean {
+  if (!value?.trim()) return true;
+  if (!rawPhrase?.trim()) return false;
+  const normValue = normalizeForGate(value);
+  const normRaw = normalizeForGate(rawPhrase);
+  if (normRaw.includes(normValue)) return true;
+  const normalizedDosage = extractDosage(rawPhrase);
+  if (normalizedDosage && normalizeForGate(normalizedDosage) === normValue) return true;
+  return false;
 }
 
 // ─── Medical Records ──────────────────────────────────────────────────────────
@@ -92,7 +122,11 @@ export function getMedicalRecords(): MedicalRecord[] {
 // (unlike a same-name medication). Correction is an explicit separate path, never
 // auto-retirement. Condition stored CHARACTER-FOR-CHARACTER; raw → notes (audit).
 export function writeDiagnosis(condition: string, raw: string): string {
-  return writeMedicalRecord({ diagnosis: condition.trim(), notes: raw });
+  const trimmedCondition = condition.trim();
+  if (!passesSubstringGate(trimmedCondition, raw)) {
+    throw new SubstringGateRejection(trimmedCondition, raw);
+  }
+  return writeMedicalRecord({ diagnosis: trimmedCondition, notes: raw });
 }
 
 // Single read authority for diagnoses — offline, deterministic, soft-delete aware.
@@ -274,6 +308,12 @@ export function confirmMedicationCapture(
 ): { id: string; action: 'created' | 'superseded'; previousId?: string } {
   const db = getDB();
   const trimmedName = name.trim();
+  if (!passesSubstringGate(trimmedName, rawValue)) {
+    throw new SubstringGateRejection(trimmedName, rawValue ?? '');
+  }
+  if (dosage && !passesSubstringGate(dosage, rawValue)) {
+    throw new SubstringGateRejection(dosage, rawValue ?? '');
+  }
   const existing = db.getFirstSync<{ id: string }>(
     "SELECT id FROM medications WHERE LOWER(name) = ? AND is_active = 1 LIMIT 1;",
     [trimmedName.toLowerCase()]

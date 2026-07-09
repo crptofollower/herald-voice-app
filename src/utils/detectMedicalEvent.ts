@@ -121,7 +121,12 @@ export function extractDosage(text: string): string | undefined {
   const spoken = text.match(SPOKEN_DOSAGE_PATTERN);
   if (!spoken) return undefined;
   const word = spoken[1].toLowerCase().trim();
-  const unit = spoken[2].toLowerCase();
+  const unitRaw = spoken[2].toLowerCase();
+  const UNIT_ABBREVIATIONS: Record<string, string> = {
+    milligram: 'mg', milligrams: 'mg',
+    microgram: 'mcg', micrograms: 'mcg',
+  };
+  const unit = UNIT_ABBREVIATIONS[unitRaw] ?? unitRaw;
   const digit = SPOKEN_NUMBERS[word] ?? SPOKEN_NUMBERS[word.replace(/\s+/g,'-')] ?? word;
   return `${digit}${unit}`;
 }
