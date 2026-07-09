@@ -109,7 +109,7 @@ function mockClassifyLLM(text) {
   return Promise.resolve(scripted ?? null);
 }
 
-/** @type {Array<[string, string, { kind: string; actionType?: string; intentType?: string }, { kind: string; actionType?: string; intentType?: string }]>} */
+/** @type {Array<[string, string, { kind: string; actionType?: string; intentType?: string; reason?: string; responseEquals?: string }, { kind: string; actionType?: string; intentType?: string; reason?: string; responseEquals?: string }]>} */
 const CASES = [
   [
     "med read beats LLM",
@@ -219,6 +219,46 @@ const CASES = [
     { kind: "device_action", actionType: "todo_complete" },
     { kind: "device_action", actionType: "todo_complete" },
   ],
+  [
+    "named weekday + calendar → unresolved (not today)",
+    "what's on my calendar next Tuesday",
+    {
+      kind: "device_read",
+      reason: "calendar:unresolved_weekday",
+      responseEquals: "I can only tell you about today, tomorrow, this week, or next week right now.",
+    },
+    {
+      kind: "device_read",
+      reason: "calendar:unresolved_weekday",
+      responseEquals: "I can only tell you about today, tomorrow, this week, or next week right now.",
+    },
+  ],
+  [
+    "named weekday + scheduled → unresolved (not next week)",
+    "do I have anything scheduled next Tuesday",
+    {
+      kind: "device_read",
+      reason: "calendar:unresolved_weekday",
+      responseEquals: "I can only tell you about today, tomorrow, this week, or next week right now.",
+    },
+    {
+      kind: "device_read",
+      reason: "calendar:unresolved_weekday",
+      responseEquals: "I can only tell you about today, tomorrow, this week, or next week right now.",
+    },
+  ],
+  [
+    "plain today calendar still calendar:today",
+    "what's on my calendar today",
+    { kind: "device_read", reason: "calendar:today" },
+    { kind: "device_read", reason: "calendar:today" },
+  ],
+  [
+    "weekday in alarm phrase not caught by weekday gate",
+    "wake me up monday morning",
+    { kind: "device_action", actionType: "alarm" },
+    { kind: "device_action", actionType: "alarm" },
+  ],
 ];
 
 function describeDecision(d) {
@@ -228,12 +268,19 @@ function describeDecision(d) {
   if (d.kind === "capture") {
     return `capture/${d.intent.type}`;
   }
+  if (d.kind === "device_read" && d.reason) {
+    return `device_read/${d.reason}`;
+  }
   return d.kind;
 }
 
 function describeExpect(e) {
   if (e.actionType) return `${e.kind}/${e.actionType}`;
   if (e.intentType) return `${e.kind}/${e.intentType}`;
+  if (e.reason) {
+    const extra = e.responseEquals ? ` (honest miss)` : "";
+    return `${e.kind}/${e.reason}${extra}`;
+  }
   return e.kind;
 }
 
@@ -248,6 +295,8 @@ function matches(decision, expect) {
   if (expect.intentType) {
     return decision.kind === "capture" && decision.intent.type === expect.intentType;
   }
+  if (expect.reason && decision.reason !== expect.reason) return false;
+  if (expect.responseEquals && decision.response !== expect.responseEquals) return false;
   return true;
 }
 

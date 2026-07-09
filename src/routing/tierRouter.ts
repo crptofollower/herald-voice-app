@@ -868,6 +868,22 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     };
   }
 
+  const NAMED_WEEKDAY = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
+  const hasNamedWeekday = NAMED_WEEKDAY.test(msg);
+  const isCalendarIntent =
+    TIER1_SIGNALS.calendar_today.some((p) => p.test(msg)) ||
+    TIER1_SIGNALS.calendar_tomorrow.some((p) => p.test(msg)) ||
+    TIER1_SIGNALS.calendar_week.some((p) => p.test(msg)) ||
+    TIER1_SIGNALS.calendar_next_week.some((p) => p.test(msg));
+
+  if (hasNamedWeekday && isCalendarIntent) {
+    return {
+      tier: 1,
+      tier1Response: "I can only tell you about today, tomorrow, this week, or next week right now.",
+      reason: "calendar:unresolved_weekday",
+    };
+  }
+
   // Tier 1: calendar today — exclude if tomorrow, this week, or next week is present
   const hasNextWeek = /\bnext week\b/i.test(msg);
   if (
