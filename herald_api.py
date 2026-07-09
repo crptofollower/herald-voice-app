@@ -1,5 +1,6 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
+# v8.88 -- §3a containment: removed backend fact/personality extraction (writers + call sites); no personal facts mined, stored, or logged.
 # v8.87 -- PHONE tag: name/relationship only — never raw digits
 # v8.87 -- afternoon_checkin: unwrap learned_facts dicts before spoken interpolation
 # v8.84 -- /diag breadcrumb + crash endpoints (Mickey Motorola crash forensics)
@@ -68,7 +69,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.87")
+app = FastAPI(title="Herald API", version="8.88")
 
 app.add_middleware(
     CORSMiddleware,
@@ -1973,154 +1974,6 @@ def _build_medical_context(user_id: str, conn=None) -> str:
     finally:
         if owns_conn and conn:
             conn.close()
-
-
-def extract_learned_facts(user_id, user_message, herald_reply):
-    try:
-        prompt = f"""Analyze this conversation turn. Extract facts the USER revealed about themselves.
-
-User said: "{user_message[:300]}"
-Herald replied: "{herald_reply[:200]}"
-
-Return ONLY valid JSON, no other text, no markdown fences:
-
-If facts were revealed:
-{{"learned": [{{"category": "music", "value": "loves jazz", "confidence": "high"}}]}}
-
-Categories: music, food, sports, health, location, family, work, hobby, routine, preference
-
-If nothing new was revealed:
-{{"learned": null}}
-
-Rules:
-- Only extract what the USER said, not what Herald said
-- high confidence = explicit statement (I love jazz), medium = implied
-- Max 3 facts per turn
-- Values must be under 40 characters"""
-
-        messages = [{"role": "user", "content": prompt}]
-        result = call_openrouter(messages, use_search=False, model=HAIKU_MODEL, timeout=8)
-        clean = result.strip().replace("```json", "").replace("```", "").strip()
-        data  = json.loads(clean)
-        facts = data.get("learned")
-        if not facts:
-            return
-        profile = get_profile(user_id)
-        learned = profile.setdefault("learned_facts", [])
-        added = 0
-        for fact in facts:
-            cat  = fact.get("category", "").strip()
-            val  = fact.get("value", "").strip()
-            conf = fact.get("confidence", "medium")
-            if cat and val:
-                match = next(
-                    (f for f in learned if f.get("category") == cat and f.get("value") == val),
-                    None,
-                )
-                if match is not None:
-                    match["learned_at"] = datetime.now().isoformat()
-                    match["mention_count"] = match.get("mention_count", 1) + 1
-                else:
-                    learned.append({
-                        "category":   cat,
-                        "value":      val,
-                        "confidence": conf,
-                        "learned_at": datetime.now().isoformat()
-                    })
-                    added += 1
-        profile["learned_facts"] = learned[-50:]
-        save_profile(user_id, profile)
-        if added:
-            new_vals = [f["value"] for f in learned[-added:]]
-            print(f"[HERALD] Learned {added} new fact(s) for {user_id}: {new_vals}")
-    except Exception as e:
-        print(f"[HERALD] extract_learned_facts (non-fatal): {e}")
-
-
-def update_personality_profile(user_id: str, message: str):
-    """
-    v8.54: Extract communication style signals from one user message.
-    Accumulates into profile["personality_profile"] over time.
-    humor_weight increments on dark/dry signal. Never decrements -- earned not lost.
-    Safe to call in background thread -- non-fatal on any error.
-    """
-    try:
-        if not _check_extraction_budget(user_id):
-            return
-        prompt = PERSONALITY_EXTRACTION_PROMPT.format(message=message[:300])
-        payload = json.dumps({
-            "model": HAIKU_MODEL,
-            "max_tokens": 120,
-            "messages": [{"role": "user", "content": prompt}]
-        }).encode("utf-8")
-        req = urllib.request.Request(OR_URL, data=payload, headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {OPENROUTER_KEY}",
-            "HTTP-Referer": "https://apexempire.ai",
-            "X-Title": "Herald Personal AI"
-        }, method="POST")
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            data = json.loads(resp.read().decode())
-        raw = data["choices"][0]["message"]["content"].strip()
-        raw = raw.replace("```json", "").replace("```", "").strip()
-        extracted = json.loads(raw)
-
-        profile = get_profile(user_id)
-        pp = profile.get("personality_profile", {
-            "comm_style": "neutral",
-            "humor_weight": 0.0,
-            "humor_type": "none",
-            "register": "assistant",
-            "earned_phrases": [],
-            "avg_word_count": 10,
-            "samples": 0,
-            "last_updated": ""
-        })
-
-        # Update sample count and rolling average word count
-        samples = pp.get("samples", 0) + 1
-        prev_avg = pp.get("avg_word_count", 10)
-        new_wc = extracted.get("word_count", 10)
-        pp["avg_word_count"] = round((prev_avg * (samples - 1) + new_wc) / samples, 1)
-        pp["samples"] = samples
-
-        # Communication style -- majority vote via simple last-N wins
-        new_style = extracted.get("comm_style", "neutral")
-        if new_style in ("direct", "verbose", "casual", "formal"):
-            pp["comm_style"] = new_style
-
-        # Humor weight -- increments on signal, never decrements
-        humor_signal = extracted.get("humor_signal", "none")
-        if humor_signal in ("dark", "dry"):
-            pp["humor_weight"] = min(1.0, round(pp.get("humor_weight", 0.0) + 0.05, 2))
-            pp["humor_type"] = humor_signal
-        elif humor_signal == "warm":
-            pp["humor_type"] = "warm"
-
-        # Register -- inferred from style + avg word count
-        if pp["comm_style"] == "direct" and pp["avg_word_count"] < 8:
-            pp["register"] = "peer"
-        elif pp["comm_style"] == "formal":
-            pp["register"] = "friendly-formal"
-        else:
-            pp["register"] = "conversational"
-
-        # Earned phrases -- deduplicated, max 10 stored
-        new_phrases = extracted.get("earned_phrases", [])
-        existing = pp.get("earned_phrases", [])
-        for phrase in new_phrases:
-            phrase = phrase.strip()
-            if phrase and phrase.lower() not in [p.lower() for p in existing]:
-                existing.append(phrase)
-        pp["earned_phrases"] = existing[-10:]
-
-        pp["last_updated"] = datetime.now().isoformat()
-        profile["personality_profile"] = pp
-        save_profile_async(user_id, profile)
-        print(f"[PERSONALITY] {user_id}: style={pp['comm_style']} humor={pp['humor_weight']} register={pp['register']} samples={samples}")
-
-    except Exception as e:
-        print(f"[PERSONALITY] update_personality_profile (non-fatal): {e}")
 
 
 def build_personality_block(profile: dict) -> str:
@@ -4121,8 +3974,7 @@ def build_ask_context(data):
     if any(s in msg_lower for s in EMERGENCY_SIGNALS):
         # Store in profile -- the LLM will extract the details naturally
         profile.setdefault("emergency_contacts", [])
-        # Mark message for LLM extraction on next learn cycle
-        profile["_pending_emergency_extract"] = message[:200]
+        # §3a containment: no raw-utterance stash for backend extraction.
         print(f"[HERALD] Emergency contact signal detected for {user_id}")
 
     if "call you" in msg_lower or "your name is" in msg_lower:
@@ -5007,10 +4859,10 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.87",
+        "status": "ok", "server": "herald-api", "version": "8.88",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
-        "learning_loop": "enabled -- every message",
+        "learning_loop": "disabled -- device owns memory capture (§3a)",
         "watcher_system": "enabled (explicit + implicit + gas + travel/task/research)",
         "model_routing": "Haiku default / Sonnet for judgment",
         "streaming": "enabled (/ask/stream)",
@@ -5563,16 +5415,8 @@ async def ask(request: Request):
         "_last_message_at": datetime.now().isoformat()
     })
 
-    threading.Thread(
-        target=extract_learned_facts,
-        args=(user_id, message, reply),
-        daemon=True
-    ).start()
-    threading.Thread(
-        target=update_personality_profile,
-        args=(user_id, message),
-        daemon=True
-    ).start()
+    # §3a containment: backend no longer mines personal facts or personality
+    # from utterances. Device owns memory capture (Spine §2 / §3).
     threading.Thread(
         target=_run_watcher_pipeline,
         args=(message, profile, user_id),
@@ -5939,19 +5783,9 @@ async def ask_stream(request: Request):
                     "_last_message_at": datetime.now().isoformat()
                 })
 
+                # §3a containment: no backend fact/personality extraction.
+                # Device owns memory capture; the stream returns no learned facts.
                 extracted_facts = []
-                _facts_before = len(get_profile(user_id).get("learned_facts", []))
-                extract_learned_facts(user_id, message, reply)
-                _new_facts = get_profile(user_id).get("learned_facts", [])[_facts_before:]
-                extracted_facts = [
-                    {"category": f.get("category", ""), "value": f.get("value", "")}
-                    for f in _new_facts
-                ]
-                threading.Thread(
-                    target=update_personality_profile,
-                    args=(user_id, message),
-                    daemon=True
-                ).start()
 
                 yield _sse_event({**base_done, "full": reply, "action": action, "used_search": use_search, "facts": extracted_facts})
 
@@ -6856,7 +6690,7 @@ async def user_export(user_id: str, request: Request, secret: str = ""):
     print(f"[HERALD] /user/export: exported all personal data for {user_id}")
     return {
         "ok": True,
-        "version": "8.87",
+        "version": "8.88",
         "user_id": user_id,
         "exported_at": datetime.now().isoformat(),
         "profile": profile,
@@ -7014,7 +6848,7 @@ async def admin_dashboard(secret: str = ""):
 
         return {
             "ok": True,
-            "version": "8.87",
+            "version": "8.88",
             "user_count": len(users),
             "users": sorted(users, key=lambda x: x["msg_count"], reverse=True),
             "waitlist_count": waitlist_count,
@@ -7238,7 +7072,7 @@ def startup():
     print(f"[HERALD API] WeatherAPI:    {'YES (backup)' if WEATHER_KEY else 'not set'}")
     print(f"[HERALD API] Database:      {DB_FILE}")
     print(f"[HERALD API] Owner code:    {'SET' if OWNER_CODE else 'NOT SET'}")
-    print(f"[HERALD API] v8.87: PHONE tag — name/relationship only, never raw digits")
+    print(f"[HERALD API] v8.88: §3a containment — no backend fact/personality extraction")
     print(f"[HERALD API] FIX v8.8: GPS city caching -- confirmed_city in profile, 20mi tolerance")
     print(f"[HERALD API] FIX v8.8: Memory rules -- no 'I remember', no raw GPS coords spoken")
     print(f"[HERALD API] FIX v8.8: Seed question for new users -- makes first session feel alive")
