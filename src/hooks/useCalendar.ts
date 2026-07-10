@@ -161,6 +161,7 @@ async function syncCalendar(userId: string) {
           source: "device_calendar",
           externalId: appt.external_id,
         });
+        console.log("[HERALD] appointment saved (device_calendar):", appt.title);
       } catch {
         // Non-fatal — one bad row should never block the rest of the sync
         // or crash the app (matches the existing outer try/catch's intent).
