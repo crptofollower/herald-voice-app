@@ -65,7 +65,6 @@ import { normalizeInput } from "../utils/normalizeInput";
 import { beacon } from "../utils/diag";
 import { useCalendar } from "../hooks/useCalendar";
 import { useLocation } from "../hooks/useLocation";
-import { useHealthData, formatHealthAnswer } from "../hooks/useHealthData";
 import { useMic } from "../hooks/useMic";
 import { useRaiseToWake } from "../hooks/useRaiseToWake";
 import { useDeviceMemory } from "../hooks/useDeviceMemory";
@@ -285,7 +284,6 @@ export default function ChatScreen() {
 
   useProactiveQueue();
   useCalendar();
-  const healthSummary = useHealthData();
   const { lat, lng, label: locationLabel, available } = useLocation();
   const {
     saveMemory: saveDeviceMemory,
@@ -1315,17 +1313,6 @@ export default function ChatScreen() {
           setInputText('');
           return;
         }
-        const healthAnswer = formatHealthAnswer(healthSummary, text);
-        if (healthAnswer) {
-          addMessage({ id: generateId('msg'), role: 'user',
-            content: text, timestamp: Date.now() });
-          addMessage({ id: generateId('msg'), role: 'assistant',
-            content: healthAnswer, timestamp: Date.now() });
-          speak(healthAnswer);
-          sendingRef.current = false;
-          setInputText('');
-          return;
-        }
         const localAnswer = answerFromDevice(text);
         if (localAnswer) {
           addMessage({ id: generateId('msg'), role: 'user',
@@ -1465,9 +1452,8 @@ export default function ChatScreen() {
     // offline gate; on a genuine miss it stays honest (Graceful Confusion) rather
     // than asking the backend to synthesize from context that no longer crosses.
     if (rdTier === 2) {
-      const health2 = formatHealthAnswer(healthSummary, text);
       const fam2 = detectFamilyRead(text);
-      const probeAnswer = health2 ?? (fam2 ? answerFamilyRead(fam2) : answerFromDevice(text));
+      const probeAnswer = fam2 ? answerFamilyRead(fam2) : answerFromDevice(text);
       const reply = probeAnswer
         ?? "I'm not sure I'm following you — can you help me understand?";
       addMessage({ id: generateId("msg"), role: "user", content: text, timestamp: now });
@@ -1487,15 +1473,6 @@ export default function ChatScreen() {
       addMessage({ id: generateId("msg"), role: "user", content: text, timestamp: now });
       addMessage({ id: generateId("msg"), role: "assistant", content: famAnswer, timestamp: now + 1 });
       speak(famAnswer);
-      sendingRef.current = false;
-      setInputText("");
-      return;
-    }
-    const healthAnswerOnline = formatHealthAnswer(healthSummary, text);
-    if (healthAnswerOnline) {
-      addMessage({ id: generateId("msg"), role: "user", content: text, timestamp: now });
-      addMessage({ id: generateId("msg"), role: "assistant", content: healthAnswerOnline, timestamp: now + 1 });
-      speak(healthAnswerOnline);
       sendingRef.current = false;
       setInputText("");
       return;
