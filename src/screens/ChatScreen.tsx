@@ -72,6 +72,7 @@ import { useDeviceMemory } from "../hooks/useDeviceMemory";
 import { useLocalLLM } from '../hooks/useLocalLLM';
 import { classifyWithLLM } from '../hooks/llmLayers';
 import { answerFromDevice } from '../utils/localAnswers';
+import { parseTimeFromText } from '../utils/parseTime';
 import { detectFamilyRead, answerFamilyRead } from '../utils/familyRead';
 import { writeTurnObservation } from '../utils/personaContext';
 import { classifyQuery, scanResidualIntent } from "../routing/tierRouter";
@@ -255,6 +256,13 @@ export default function ChatScreen() {
   // Pending contact collection — when Herald asks "what's their number/address?"
   // the next user message resolves this and executes the original intent.
   const pendingContactCollectRef = useRef<{ action: 'call' | 'navigate' | 'text' | 'confirm_phone' | 'confirm_call'; name: string; body?: string; phone?: string } | null>(null);
+  // Pending calendar field collection — one missing field at a time (title or time).
+  const pendingCalendarCollectRef = useRef<{
+    title: string;
+    dateStr: string;
+    timeStr: string;
+    missing: 'title' | 'time';
+  } | null>(null);
   const sessionRef = useRef<ConversationSession>(new ConversationSession());
 
   // ── Scroll snap prevention ────────────────────────────────────────────────
@@ -811,6 +819,7 @@ export default function ChatScreen() {
     // consumer, as specced.
     if (detectEmergency(text)) {
       pendingContactCollectRef.current = null;
+      pendingCalendarCollectRef.current = null;
       if (sessionRef.current.hasPending()) sessionRef.current.clearPending();
       await dispatchEmergency(text);
       setInputText('');
@@ -988,6 +997,47 @@ export default function ChatScreen() {
       // Looks like they changed their mind or said something unrelated
       pendingContactCollectRef.current = null;
       // Fall through to normal routing
+    }
+
+    // ── Pending calendar field collection — title or time answer ─────────────
+    if (pendingCalendarCollectRef.current) {
+      const pending = pendingCalendarCollectRef.current;
+      addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+
+      if (pending.missing === 'title') {
+        // Verbatim title — no reformatting, no time parsing on this turn.
+        const newTitle = text.trim();
+        pendingCalendarCollectRef.current = null;
+        // If a time was already parsed this write, skip the redundant time ask.
+        const timePart = pending.timeStr && /^\d{1,2}:\d{2}$/.test(pending.timeStr)
+          ? pending.timeStr
+          : '';
+        await handleCalendarAction(`${newTitle}|${pending.dateStr}|${timePart}`);
+        sendingRef.current = false;
+        setInputText('');
+        return;
+      }
+
+      // missing === 'time'
+      const parsed = parseTimeFromText(text);
+      if (parsed) {
+        pendingCalendarCollectRef.current = null;
+        const hh = String(parsed.hour).padStart(2, '0');
+        const mm = String(parsed.minute).padStart(2, '0');
+        await handleCalendarAction(`${pending.title}|${pending.dateStr}|${hh}:${mm}`);
+        sendingRef.current = false;
+        setInputText('');
+        return;
+      }
+      // Graceful Confusion: offer a best guess + ask once more — do not repeat
+      // the static first question, and do not fall through to generic GC below.
+      const heard = text.trim();
+      const reply = `I didn't catch a time in that — I heard "${heard}". Did you mean noon for "${pending.title}", or can you say the time again?`;
+      addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+      speak(reply);
+      sendingRef.current = false;
+      setInputText('');
+      return;
     }
 
     // Deterministic-first routing: the regex/SQL classifier runs FIRST and always wins.
@@ -1911,18 +1961,42 @@ export default function ChatScreen() {
 
   const handleCalendarAction = async (value: string) => {
     const parts = value.split("|");
-    const title = parts[0]?.trim() || "Appointment";
+    const title = parts[0]?.trim() ?? "";
     const dateStr = parts[1]?.trim() || "";
     const timeStr = parts[2]?.trim() || "";
 
+    // One question per turn — title before time. "Appointment" is the old
+    // parseTime fallback (fabricated) — treat as no real title.
+    if (!title || title === "Appointment") {
+      pendingCalendarCollectRef.current = {
+        title: '',
+        dateStr,
+        timeStr, // preserve whatever was already parsed this call, even if empty
+        missing: 'title',
+      };
+      addMessage({
+        id: generateId("msg"),
+        role: "assistant",
+        content: "What would you like me to call this?",
+        timestamp: Date.now(),
+      });
+      setActionStatus("confirming");
+      return;
+    }
+
     if (!timeStr || !/^\d{1,2}:\d{2}$/.test(timeStr)) {
+      pendingCalendarCollectRef.current = {
+        title,
+        dateStr,
+        timeStr: '',
+        missing: 'time',
+      };
       addMessage({
         id: generateId("msg"),
         role: "assistant",
         content: `What time should I put "${title}" on your calendar?`,
         timestamp: Date.now(),
       });
-      setPendingAction(null);
       setActionStatus("confirming");
       return;
     }

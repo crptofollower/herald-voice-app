@@ -124,11 +124,16 @@ export function parseCalendarWriteIntent(text: string): string | null {
     !hasWriteVerb;
   if (isRead) return null;
 
-  let title = 'Appointment';
+  // Empty when no frame matches — never invent a title (Trust First / verbatim).
+  let title = '';
   const titleMatch =
     text.match(/\bput (.+?) on my calendar/i) ??
     text.match(/\badd (.+?) to (?:my )?calendar/i) ??
-    text.match(/\bschedule (.+?) on (?:my )?calendar/i);
+    text.match(/\bschedule (.+?) on (?:my )?calendar/i) ??
+    // Inverted order: verb + calendar first, title after
+    text.match(/\badd (?:to|on) (?:my )?calendar\s+(.+)/i) ??
+    text.match(/\bput (?:to|on) (?:my )?calendar\s+(.+)/i) ??
+    text.match(/\bschedule (?:to|on) (?:my )?calendar\s+(.+)/i);
   if (titleMatch?.[1]) {
     const raw = titleMatch[1].trim();
     if (raw && !/^(that|this|it)$/i.test(raw)) {
