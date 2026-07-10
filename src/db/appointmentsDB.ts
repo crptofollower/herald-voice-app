@@ -5,6 +5,15 @@
 // (device_calendar source, daily sync) and handleCalendarAction in
 // ChatScreen.tsx (user_told source, spoken intent) — the write path
 // itself is singular.
+// ARCHITECTURAL LAYER: Source, not Memory (founder-ratified 2026-07-10).
+// This table is a trusted-device-source cache — it answers "what's
+// scheduled," never "what's confirmed true about the user's life."
+// It must NEVER be read by proactive/surfacing logic that speaks with
+// Herald's confirmed-memory voice (e.g. medical surfacing, Commit G of
+// MEDICAL_SURFACING_DESIGN_SPEC). Canonical medical memory lives
+// exclusively in medical_records, populated only through explicit user
+// statement or confirmed capture. See: Sources → Canonical Records →
+// Memory → Reasoning (four-layer model).
 
 import { getDB } from "./schema";
 
