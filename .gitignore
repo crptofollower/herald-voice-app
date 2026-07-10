@@ -39,3 +39,19 @@ scripts/**
 # keep derived/installed files out â€” mirrors are copies of tracked src/, node_modules is installed
 scripts/heraldTest/node_modules/
 scripts/heraldTest/src/
+
+# Debug/scratch output — never commit
+HERALD_CODEBASE_AUDIT_REPORT.md
+_diff_*.txt
+_cs_diff.txt
+_diag_diff.txt
+_pre45_upq.ts
+clip_trace.txt
+doctor_test_log.txt
+herald_filtered.txt
+herald_rn_only.txt
+herald_routing_only.txt
+herald_test_log*.txt
+med_clear_diff.txt
+route_intent_out.txt
+tsc_out.txt
