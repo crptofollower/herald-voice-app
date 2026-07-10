@@ -1,5 +1,12 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
+# v8.90 -- S3B Commit A: removed backend personalization readers
+#          (build_about_me, build_personality_block,
+#          build_preferences_summary, facts/notes/prefs/life_tracker/
+#          episodic/medical context from build_system), fixed seed-gate
+#          personal-data read, closed /admin/user/{user_id} medical/
+#          life_moments/life_tracker/learned_facts/personality_profile
+#          exposure. Tier-3 answers are now contextless by design.
 # v8.89 -- S3B triage: disabled server-side medical intake capture
 #          (medical_records/medical_contacts/medication_log writes),
 #          disabled evening_medication_job (read learned_facts/memories),
@@ -73,7 +80,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.89")
+app = FastAPI(title="Herald API", version="8.90")
 
 app.add_middleware(
     CORSMiddleware,
@@ -222,25 +229,6 @@ RESEARCH_OFFER_PHRASES = [
     "{name}, {topic} keeps coming up for you. I can put together a proper briefing — current thinking, what the research says, what to watch — and send it over.",
     "I've noticed you're digging into {topic}, {name}. Want me to do a proper pull on that and email you something worth reading?",
 ]
-
-# ── PERSONALITY EXTRACTION ────────────────────────────────────────────────────
-# v8.54: Per-user communication style and humor calibration.
-# Runs every 3rd message alongside extract_learned_facts.
-# Stored in profile["personality_profile"] -- accumulates over time.
-# humor_weight: 0.0 (neutral) -> 1.0 (fully earned). Never decrements.
-
-PERSONALITY_EXTRACTION_PROMPT = """Analyze this single user message for communication style signals.
-
-User message: "{message}"
-
-Return ONLY valid JSON, no preamble, no markdown:
-{{"comm_style": "direct|verbose|casual|formal", "humor_signal": "dark|dry|warm|none", "earned_phrases": [], "word_count": 5}}
-
-Rules:
-- comm_style: direct = short declarative, verbose = long explanatory, casual = loose grammar/slang, formal = structured
-- humor_signal: dark = morbid/gallows, dry = deadpan understatement, warm = lighthearted, none = neutral
-- earned_phrases: exact short phrases or confirmations the user typed (max 3, only if genuinely distinctive -- e.g. "Clear", "Copy that", "Roger", "Bet", "Facts"). Empty list if nothing distinctive.
-- word_count: integer word count of the message"""
 
 BUILT_CAPABILITIES = ["email"]
 
@@ -1980,202 +1968,6 @@ def _build_medical_context(user_id: str, conn=None) -> str:
             conn.close()
 
 
-def build_personality_block(profile: dict) -> str:
-    """
-    v8.54: Build the personality injection for build_system().
-    Returns empty string if fewer than 10 samples -- too early to calibrate.
-    Never crashes -- safe to call even if personality_profile key is missing.
-    """
-    try:
-        pp = profile.get("personality_profile", {})
-        samples = pp.get("samples", 0)
-        if samples < 10:
-            return ""
-
-        style = pp.get("comm_style", "neutral")
-        humor_weight = pp.get("humor_weight", 0.0)
-        humor_type = pp.get("humor_type", "none")
-        register = pp.get("register", "conversational")
-        phrases = pp.get("earned_phrases", [])
-        avg_wc = pp.get("avg_word_count", 10)
-
-        lines = ["COMMUNICATION STYLE (calibrated from this user over time):"]
-
-        # Style line
-        if style == "direct" and avg_wc < 8:
-            lines.append("- Direct. Short answers. Gets to the point fast.")
-        elif style == "verbose":
-            lines.append("- Appreciates context and detail. Don't truncate.")
-        elif style == "casual":
-            lines.append("- Casual register. Loose grammar fine. Match their energy.")
-        elif style == "formal":
-            lines.append("- Prefers structured, precise responses.")
-        else:
-            lines.append("- Still calibrating style -- neutral for now.")
-
-        # Register line
-        if register == "peer":
-            lines.append("- Register: peer. Skip assistant softening. Talk like a colleague.")
-        elif register == "friendly-formal":
-            lines.append("- Register: trusted advisor. Warm but precise.")
-        else:
-            lines.append("- Register: conversational friend.")
-
-        # Humor line
-        if humor_weight >= 0.6 and humor_type == "dark":
-            lines.append("- Humor: dark and dry -- fully earned. Brief, not forced.")
-        elif humor_weight >= 0.4 and humor_type in ("dark", "dry"):
-            lines.append("- Humor: dry -- emerging. Occasional understatement fine.")
-        elif humor_weight >= 0.2 and humor_type == "warm":
-            lines.append("- Humor: warm and light. Keep it clean.")
-        else:
-            lines.append("- Humor: neutral -- not yet calibrated. Don't initiate.")
-
-        # Earned phrases
-        if phrases:
-            phrase_str = ", ".join(f'"{p}"' for p in phrases[:5])
-            lines.append(f"- Phrases this user actually uses: {phrase_str}. Echo occasionally -- never force it.")
-
-        return "\n".join(lines)
-
-    except Exception:
-        return ""
-
-
-# ── PROFILE SUMMARY ───────────────────────────────────────────────────────────
-
-def build_preferences_summary(profile):
-    prefs = profile.get("preferences", {})
-    query_counts = profile.get("query_counts", {})
-    lines = []
-    food = [k for k,v in prefs.get("food",{}).items() if v >= 2]
-    if food: lines.append(f"Food preferences: {', '.join(food)}")
-    music = [k for k,v in prefs.get("music",{}).items() if v >= 2]
-    if music: lines.append(f"Music taste: {', '.join(music)}")
-    sports = [k for k,v in prefs.get("sports",{}).items() if v >= 1]
-    if sports: lines.append(f"Follows: {', '.join(sports)}")
-    if query_counts:
-        top = sorted(query_counts.items(), key=lambda x: -x[1])[:3]
-        top_cats = [f"{cat} ({count}x)" for cat,count in top if count >= 3]
-        if top_cats: lines.append(f"Most common requests: {', '.join(top_cats)}")
-    return "\n".join(lines) if lines else ""
-
-
-# ── BUILD ABOUT ME ────────────────────────────────────────────────────────────
-
-def build_about_me(profile):
-    name          = profile.get("name", "")
-    ai_name       = profile.get("ai_name", "Herald")
-    location      = profile.get("location", "")
-    notes         = profile.get("notes", [])
-    memories      = profile.get("memories", [])
-    learned_facts = profile.get("learned_facts", [])
-    query_counts  = profile.get("query_counts", {})
-    created       = profile.get("created_at", "")
-    user_id       = profile.get("user_id", "")
-
-    days_known = 0
-    if created:
-        try:
-            days_known = (datetime.now() - datetime.fromisoformat(created)).days
-        except Exception:
-            pass
-
-    all_notes = list(dict.fromkeys((memories + notes)[-10:]))
-    top_cats  = [c for c, n in sorted(query_counts.items(), key=lambda x: -x[1])[:3] if n >= 2]
-    facts_str = "; ".join([f"{f['value']} ({f['category']})" for f in learned_facts[-20:]]) \
-                if learned_facts else "none yet"
-
-    moments_str = ""
-    try:
-        conn = _db_conn()
-        c = conn.cursor()
-        c.execute("""
-            SELECT summary, days_ago FROM life_moments
-            WHERE user_id = ? AND active = 1
-            ORDER BY weight DESC, created_at DESC LIMIT 6
-        """, (user_id,))
-        rows = c.fetchall()
-        conn.close()
-        if rows:
-            parts = []
-            for summary, days_ago in rows:
-                if days_ago == 0: age = "today"
-                elif days_ago == 1: age = "yesterday"
-                elif days_ago < 7: age = f"{days_ago} days ago"
-                elif days_ago < 30: age = f"{days_ago // 7} weeks ago"
-                else: age = f"{days_ago // 30} months ago"
-                parts.append(f"{summary} ({age})")
-            moments_str = "; ".join(parts)
-    except Exception:
-        pass
-
-    tracker_str = ""
-    try:
-        conn = _db_conn()
-        c = conn.cursor()
-        c.execute("""
-            SELECT item_name, next_due_date FROM life_tracker
-            WHERE user_id = ? AND active = 1
-            ORDER BY next_due_date ASC LIMIT 5
-        """, (user_id,))
-        trows = c.fetchall()
-        conn.close()
-        if trows:
-            tracker_str = "; ".join([f"{n} (due {nxt})" for n, nxt in trows])
-    except Exception:
-        pass
-
-    profile_context = (
-        f"Name: {name or 'not yet known'}\n"
-        f"Location: {location or 'not yet known'}\n"
-        f"Days we have known each other: {days_known}\n"
-        f"Things they have told me: {'; '.join(all_notes) if all_notes else 'none yet'}\n"
-        f"Facts learned from conversation: {facts_str}\n"
-        f"Most asked about: {', '.join(top_cats) if top_cats else 'not yet known'}\n"
-        f"Life moments shared: {moments_str if moments_str else 'none captured yet'}\n"
-        f"Life tracker items: {tracker_str if tracker_str else 'none tracked yet'}"
-    )
-
-    prompt = [
-        {"role": "system", "content": (
-            f"You are {ai_name}, a warm personal AI companion. "
-            "The user asked what you know about them. "
-            "Write a natural, conversational 2 to 4 sentence response from memory. "
-            "No bullet points, no lists, no markdown, no asterisks. "
-            "Speak like a trusted friend who genuinely remembers things about this person. "
-            "IMPORTANT: Never say 'I remember' or 'I recall' or 'Based on what I know'. "
-            "Just know things naturally, the way a friend does. "
-            "Format all numbers in words for text-to-speech. "
-            f"{'Use their name once naturally.' if name else ''} "
-            "If you know very little yet, say so warmly and invite them to share more."
-        )},
-        {"role": "user", "content": f"Profile:\n{profile_context}\n\nWhat do you know about me?"}
-    ]
-
-    try:
-        result = call_openrouter(prompt, use_search=False, model=HAIKU_MODEL, timeout=8)
-        if result and len(result) > 20:
-            return result
-    except Exception as e:
-        print(f"[HERALD] build_about_me LLM failed, using fast fallback: {e}")
-
-    first_name = name if name else "friend"
-    parts = [f"Here is what I know so far, {first_name}."]
-    if location:
-        parts.append(f"You are based in {location}.")
-    if all_notes:
-        parts.append(f"You have mentioned: {'; '.join(all_notes[:3])}.")
-    if learned_facts:
-        vals = [f["value"] for f in learned_facts[-3:]]
-        parts.append(f"I have also picked up that {', '.join(vals)}.")
-    if not all_notes and not learned_facts:
-        parts.append("Honestly I am still getting to know you. The more we talk the better I understand what matters to you.")
-    else:
-        parts.append("The more you share the better I get.")
-    return " ".join(parts)
-
-
 def get_trial_status(profile):
     if profile.get("is_owner"):
         return {"status": "paid", "days_remaining": 999, "show_wall": False}
@@ -3188,131 +2980,12 @@ def build_system(profile, local_time=None, owner=False, empire=None, lat=None, l
 
     date_line = f"Today is {local_day}, {local_date}." if local_date and local_day else (f"Today is {local_date}." if local_date else "")
 
-    all_memory = list(dict.fromkeys((memories + notes)[-12:]))
-    notes_line = ("What this user has told you (remember and use naturally): "
-                  + "; ".join(all_memory)) if all_memory else ""
-
     auto_open = profile.get("auto_open_apps", False)
     auto_open_line = "User preference: open apps directly without asking -- no action cards." if auto_open else ""
 
-    prefs_summary = build_preferences_summary(profile)
-    prefs_line = f"Preferences learned over time:\n{prefs_summary}" if prefs_summary else ""
-
-    learned_facts = profile.get("learned_facts", [])
-    facts_line = ""
-    if learned_facts:
-        now = datetime.now()
-        confidence_weights = {"high": 1.5, "medium": 1.0, "low": 0.6}
-
-        def _learned_fact_score(f):
-            conf = confidence_weights.get(str(f.get("confidence", "medium")).lower(), 1.0)
-            recency = 1.0
-            learned_at = f.get("learned_at")
-            if learned_at:
-                try:
-                    ts = learned_at.replace("Z", "+00:00") if isinstance(learned_at, str) and learned_at.endswith("Z") else learned_at
-                    dt = datetime.fromisoformat(ts)
-                    if getattr(dt, "tzinfo", None) is not None:
-                        dt = dt.replace(tzinfo=None)
-                    days = (now - dt).days
-                    if days <= 7:
-                        recency = 2.0
-                    elif days <= 30:
-                        recency = 1.5
-                    elif days <= 90:
-                        recency = 1.0
-                    else:
-                        recency = 0.5
-                except (ValueError, TypeError, AttributeError):
-                    recency = 1.0
-            return conf * recency
-
-        recent    = sorted(learned_facts, key=_learned_fact_score, reverse=True)[:20]
-        facts_str = "; ".join([f"{f['value']} ({f['category']})" for f in recent])
-        facts_line = f"Facts learned from conversation: {facts_str}"
-
     watcher_context = _build_watcher_context(profile)
 
-    user_id = profile.get("user_id", "")
-    life_tracker_line = ""
-    episodic_line = ""
-    medical_context = ""
-    calendar_line = ""
-    conn = None
-    try:
-        conn = _db_conn()
-        calendar_line = _get_calendar_line(user_id, conn)
-        c = conn.cursor()
-
-        c.execute("""
-            SELECT category, item_name, last_date, next_due_date, interval_days
-            FROM life_tracker
-            WHERE user_id = ? AND active = 1 AND source != 'calendar'
-            ORDER BY next_due_date ASC
-            LIMIT 8
-        """, (user_id,))
-        tracker_rows = c.fetchall()
-        if tracker_rows:
-            today = date.today()
-            due_items = []
-            for cat, name_item, last, nxt, interval in tracker_rows:
-                try:
-                    due = date.fromisoformat(nxt)
-                    days_until = (due - today).days
-                    if days_until <= 14:
-                        if days_until < 0:
-                            due_items.append(f"{name_item} is overdue by {abs(days_until)} days")
-                        elif days_until == 0:
-                            due_items.append(f"{name_item} is due today")
-                        else:
-                            due_items.append(f"{name_item} is due in {days_until} days")
-                    elif days_until <= 30:
-                        due_items.append(f"{name_item} coming up in {days_until} days")
-                except Exception:
-                    pass
-            if due_items:
-                life_tracker_line = "Life tracker reminders due soon: " + "; ".join(due_items) + ". Mention these naturally if relevant to the conversation."
-
-        c.execute("""
-            SELECT summary, category, emotion, days_ago,
-                   COALESCE(times_referenced, 0) as refs
-            FROM life_moments
-            WHERE user_id = ? AND active = 1
-        """, (user_id,))
-        all_rows = c.fetchall()
-        if all_rows:
-            scored = []
-            for row in all_rows:
-                summary, cat, emotion, days_ago, refs = row
-                score = calculate_moment_weight(cat, emotion or 'neutral', days_ago or 0, refs)
-                scored.append((score, summary, cat, emotion, days_ago))
-            scored.sort(reverse=True)
-            moment_rows = [(r[1], r[2], r[3], r[4]) for r in scored[:8]]
-            if moment_rows:
-                moment_lines = []
-                for summary, cat, emotion, days_ago in moment_rows:
-                    if days_ago == 0:
-                        age = "today"
-                    elif days_ago == 1:
-                        age = "yesterday"
-                    elif days_ago < 7:
-                        age = f"{days_ago} days ago"
-                    elif days_ago < 30:
-                        age = f"{days_ago // 7} week{'s' if days_ago >= 14 else ''} ago"
-                    else:
-                        age = f"{days_ago // 30} month{'s' if days_ago >= 60 else ''} ago"
-                    moment_lines.append(f"{summary} ({age})")
-                episodic_line = "Life moments this user has shared: " + "; ".join(moment_lines) + ". Reference these naturally like a friend who remembers -- never robotically."
-
-        medical_context = _build_medical_context(user_id, conn)
-    except Exception:
-        pass
-    finally:
-        if conn:
-            conn.close()
-
-    context_parts = [p for p in [medical_context, calendar_line, notes_line, auto_open_line, prefs_line, facts_line, life_tracker_line, episodic_line] if p]
-    personality_block = build_personality_block(profile)
+    context_parts = [auto_open_line] if auto_open_line else []
     context_block = "\n".join(context_parts) if context_parts else "Still learning about this user."
     device_line = f"\nDevice memory: {device_context}" if device_context else ""
     empire_section = f"\n\n{empire}" if owner and empire else ""
@@ -3352,7 +3025,6 @@ YOUR VOICE:
 - Humor: dry, occasional, never forced. Play along when the user is clearly joking.
   Never initiate humor on serious topics. Never punch at real tragedy for a laugh.
   Humor deepens as trust deepens. Earn the laugh -- never chase it.
-{personality_block}
 - When someone shares something worrying -- health, a relationship, money -- ask one
   follow-up question first. Stay calm. Show you are paying attention.
   Never jump to advice before you understand the situation.
@@ -3431,8 +3103,7 @@ YOUR RULES:
   Complex topics get a short paragraph. Never pad. Never summarize what you just said.
 - Never use asterisks, markdown, bullet points, or raw URLs in responses.
 - NEVER say: I do not have access to that. I cannot look that up. My knowledge has a cutoff.
-  I don't have memory of our conversations. I can't remember previous sessions.
-  These phrases are BANNED. You have the user's profile, memories, and notes -- use them.
+  These phrases are BANNED for general knowledge and search questions.
 - NEVER list sources or citations unless the user specifically asks.
 - For local business queries give ONE confident recommendation with a MAPS tag.
   You know the user's city. Recommend confidently like a friend who knows the area.
@@ -4048,10 +3719,8 @@ def build_ask_context(data):
     # v8.8: Seed question for brand-new users with no memory yet.
     # Makes Mickey's first session feel like Herald wants to know him,
     # not like talking to a blank slate.
-    msg_count     = profile.get("_msg_count", 0)
-    user_memories = profile.get("memories", [])
-    user_facts    = profile.get("learned_facts", [])
-    if msg_count <= 2 and not user_memories and not user_facts and not profile.get('medical_intake_state'):
+    msg_count = profile.get("_msg_count", 0)
+    if msg_count <= 2 and not profile.get('medical_intake_state'):
         messages[0]["content"] += (
             "\n\nNEW USER SEED INSTRUCTION: This user is brand new -- you know almost "
             "nothing about them yet. After responding naturally to whatever they said, "
@@ -4820,7 +4489,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.89",
+        "status": "ok", "server": "herald-api", "version": "8.90",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "disabled -- device owns memory capture (§3a)",
@@ -5314,16 +4983,6 @@ async def ask(request: Request):
     user_id   = ctx["user_id"]
     msg_lower = ctx["msg_lower"]
 
-    if is_about_me_query(message):
-        reply = build_about_me(profile)
-        trial = get_trial_status(profile)
-        if profile.get("pending_watch_offer"):
-            save_profile_fields(user_id, {"pending_watch_offer": None})
-        return {"reply": reply, "action": None,
-                "ai_name": profile.get("ai_name", "Herald"),
-                "name": profile.get("name", ""),
-                "used_search": False, **_trial_fields(trial)}
-
     direct_reply, _ = get_direct_reply(ctx)
     if direct_reply:
         reply, action = parse_action(direct_reply, _local_date)
@@ -5672,13 +5331,6 @@ async def ask_stream(request: Request):
             if profile.get("pending_watch_offer"):
                 save_profile_fields(user_id, {"pending_watch_offer": None})
 
-            if is_about_me_query(message):
-                reply = build_about_me(profile)
-                yield _sse_event({"t": reply})
-                yield _sse_event({"t": "[S]"})
-                yield _sse_event({**base_done, "full": reply, "action": None, "used_search": False})
-                return
-
             direct_reply, _ = get_direct_reply(ctx)
             if direct_reply:
                 reply, action = parse_action(direct_reply, _local_date)
@@ -5888,13 +5540,7 @@ async def greeting(request: Request):
     opener = pick_greeting_opener(hour, local_time)
     greeting_core = _greeting_with_name(opener, name)
 
-    learned_location = ""
-    for fact in profile.get("learned_facts", []):
-        if fact.get("category") == "location":
-            learned_location = fact.get("value", "")
-            break
-
-    location = location_label or profile.get("location", "") or learned_location
+    location = location_label or profile.get("location", "")
 
     weather_line = ""
     if location:
@@ -5906,14 +5552,7 @@ async def greeting(request: Request):
             first = weather.split('.')[0].strip()
             weather_line = f" {first}."
 
-    memories  = profile.get("memories", [])
-    notes     = profile.get("notes", [])
-    all_notes = (memories + notes)[-5:]
-    memory_hook = ""
-    if all_notes:
-        memory_hook = f" You mentioned {all_notes[-1]}."
-
-    greeting_text = f"{greeting_core}{weather_line}{memory_hook}"
+    greeting_text = f"{greeting_core}{weather_line}"
 
     return {"ok": True, "greeting": greeting_text, "ai_name": ai_name, "name": name}
 
@@ -6651,7 +6290,7 @@ async def user_export(user_id: str, request: Request, secret: str = ""):
     print(f"[HERALD] /user/export: exported all personal data for {user_id}")
     return {
         "ok": True,
-        "version": "8.89",
+        "version": "8.90",
         "user_id": user_id,
         "exported_at": datetime.now().isoformat(),
         "profile": profile,
@@ -6776,19 +6415,14 @@ async def admin_dashboard(secret: str = ""):
     try:
         users = []
         for uid, profile in user_profiles.items():
-            pp = profile.get("personality_profile", {})
             users.append({
                 "user_id":        uid,
                 "name":           profile.get("name", ""),
                 "ai_name":        profile.get("ai_name", "Herald"),
                 "confirmed_city": profile.get("confirmed_city", ""),
                 "msg_count":      profile.get("_msg_count", 0),
-                "memory_count":   len(profile.get("memories", [])) + len(profile.get("learned_facts", [])),
                 "is_beta":        profile.get("is_beta", False),
                 "is_owner":       profile.get("is_owner", False),
-                "personality_samples": pp.get("samples", 0),
-                "humor_weight":   pp.get("humor_weight", 0.0),
-                "comm_style":     pp.get("comm_style", "neutral"),
             })
 
         # Waitlist count
@@ -6809,7 +6443,7 @@ async def admin_dashboard(secret: str = ""):
 
         return {
             "ok": True,
-            "version": "8.89",
+            "version": "8.90",
             "user_count": len(users),
             "users": sorted(users, key=lambda x: x["msg_count"], reverse=True),
             "waitlist_count": waitlist_count,
@@ -6829,18 +6463,6 @@ async def admin_user_detail(user_id: str, secret: str = ""):
     profile = get_profile(user_id)
     if not profile.get("name") and not profile.get("ai_name"):
         return JSONResponse({"error": "user not found"}, status_code=404)
-    try:
-        conn = _db_conn()
-        c = conn.cursor()
-        c.execute("SELECT summary, category, emotion, days_ago FROM life_moments WHERE user_id=? AND active=1 ORDER BY weight DESC LIMIT 10", (user_id,))
-        moments = [{"summary": r[0], "category": r[1], "emotion": r[2], "days_ago": r[3]} for r in c.fetchall()]
-        c.execute("SELECT category, item_name, next_due_date FROM life_tracker WHERE user_id=? AND active=1 ORDER BY next_due_date ASC LIMIT 10", (user_id,))
-        tracker = [{"category": r[0], "item": r[1], "due": r[2]} for r in c.fetchall()]
-        c.execute("SELECT doctor_name, specialty, visit_date, outcome FROM medical_records WHERE user_id=? AND active=1 ORDER BY visit_date DESC LIMIT 5", (user_id,))
-        medical = [{"doctor": r[0], "specialty": r[1], "date": r[2], "outcome": r[3]} for r in c.fetchall()]
-        conn.close()
-    except Exception:
-        moments = []; tracker = []; medical = []
 
     return {
         "ok": True,
@@ -6850,14 +6472,8 @@ async def admin_user_detail(user_id: str, secret: str = ""):
         "confirmed_city": profile.get("confirmed_city", ""),
         "msg_count": profile.get("_msg_count", 0),
         "trust_level": profile.get("trust_level", 0),
-        "memories": profile.get("memories", [])[-20:],
-        "learned_facts": profile.get("learned_facts", [])[-20:],
-        "personality_profile": profile.get("personality_profile", {}),
         "watches": profile.get("watches", []),
         "proactive_queue": profile.get("proactive_queue", []),
-        "life_moments": moments,
-        "life_tracker": tracker,
-        "medical_records": medical,
         "created_at": profile.get("created_at", ""),
     }
 
@@ -7033,7 +6649,7 @@ def startup():
     print(f"[HERALD API] WeatherAPI:    {'YES (backup)' if WEATHER_KEY else 'not set'}")
     print(f"[HERALD API] Database:      {DB_FILE}")
     print(f"[HERALD API] Owner code:    {'SET' if OWNER_CODE else 'NOT SET'}")
-    print(f"[HERALD API] v8.89: S3B triage — disabled medical intake capture, evening_medication_job, memory-quoting proactive openers")
+    print(f"[HERALD API] v8.90: S3B Commit A — removed backend personalization readers, closed admin medical-data exposure, tier-3 now contextless")
     print(f"[HERALD API] FIX v8.8: GPS city caching -- confirmed_city in profile, 20mi tolerance")
     print(f"[HERALD API] FIX v8.8: Memory rules -- no 'I remember', no raw GPS coords spoken")
     print(f"[HERALD API] FIX v8.8: Seed question for new users -- makes first session feel alive")
