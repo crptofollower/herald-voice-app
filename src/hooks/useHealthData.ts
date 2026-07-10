@@ -14,7 +14,6 @@ import {
 } from "react-native-health-connect";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useStore } from "../store/useStore";
-import { API_BASE } from "../constants/api";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -209,22 +208,11 @@ async function fetchHealthData(
     await AsyncStorage.setItem(HEALTH_CACHE_KEY, JSON.stringify(health));
     await AsyncStorage.setItem(HEALTH_SYNC_KEY, Date.now().toString());
 
-    // Send daily summary to backend (background, non-blocking)
-    sendHealthToBackend(userId, health).catch(() => {});
-
     console.log(`[HERALD] Health sync: ${stepsToday} steps, ${sleepHours}h sleep`);
 
   } catch (err) {
     console.log("[HERALD] Health sync failed (non-fatal):", err);
   }
-}
-
-async function sendHealthToBackend(userId: string, health: HealthSummary) {
-  await fetch(`${API_BASE}/health/sync`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ user_id: userId, health }),
-  });
 }
 
 // ─── Helper for ChatScreen to format health answers ───────────────────────────

@@ -87,7 +87,6 @@ import { refreshCalendarCache } from "../db/calendarCacheDB";
 import { markCalendarWrite } from "../db/calendarState";
 import { initDB, isDBReady } from "../db/useDeviceDB";
 import { getDB } from "../db/schema";
-import { runMigration } from "../routing/migration";
 import { setProfileField, setProfileFields } from "../db/profileDB";
 import {
   writeContact,
@@ -437,15 +436,11 @@ export default function ChatScreen() {
     return () => clearTimeout(t);
   }, []);
 
-  // ── Session L: init device SQLite and run one-time migration ─────────────
+  // ── Session L: init device SQLite, calendar cache, contacts, profile sync ─
   useEffect(() => {
     if (!userId) return;
     beacon('chat_mounted');
     initDB().then(async () => {
-      try {
-        await runMigration(userId);
-      } catch {}
-
       try {
         await refreshCalendarCache();
       } catch {}

@@ -4,8 +4,7 @@
 //
 // Three tables: medical_records, medications, medical_contacts.
 // Device SQLite is the runtime source of truth for Tier 1 medical queries.
-// Rows are written from on-device chat (writeMedicalFact, SSE onFacts) and
-// may be bootstrapped once from Railway via migration.ts (/user/export).
+// Rows are written from on-device chat (writeMedicalFact, SSE onFacts).
 // Ongoing use does not sync these tables back to the cloud.
 //
 // This file fixes the Session W gap: medical data was extracted by the
@@ -396,54 +395,5 @@ export function getMedicalSummary(): string {
   } catch (err) {
     console.error("[Herald] getMedicalSummary read failed:", err);
     return "I'm having trouble pulling up your medical information right now — let's try that again in a moment.";
-  }
-}
-
-// ─── Bulk import (used by migration.ts) ──────────────────────────────────────
-
-export function importMedicalRecords(records: MedicalRecord[]): void {
-  for (const r of records) {
-    try {
-      const db = getDB();
-      db.runSync(
-        `INSERT OR IGNORE INTO medical_records
-           (id, visit_date, doctor_name, facility, reason, diagnosis, follow_up, notes, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);`,
-        [r.id, r.visit_date ?? null, r.doctor_name ?? null, r.facility ?? null,
-         r.reason ?? null, r.diagnosis ?? null, r.follow_up ?? null,
-         r.notes ?? null, r.created_at]
-      );
-    } catch {}
-  }
-}
-
-export function importMedications(meds: Medication[]): void {
-  for (const m of meds) {
-    try {
-      const db = getDB();
-      db.runSync(
-        `INSERT OR IGNORE INTO medications
-           (id, name, dosage, frequency, prescribing_doctor, start_date, end_date, is_active, notes, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
-        [m.id, m.name, m.dosage ?? null, m.frequency ?? null,
-         m.prescribing_doctor ?? null, m.start_date ?? null, m.end_date ?? null,
-         m.is_active ?? 1, m.notes ?? null, m.created_at]
-      );
-    } catch {}
-  }
-}
-
-export function importMedicalContacts(contacts: MedicalContact[]): void {
-  for (const c of contacts) {
-    try {
-      const db = getDB();
-      db.runSync(
-        `INSERT OR IGNORE INTO medical_contacts
-           (id, name, specialty, phone, address, is_primary, notes, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
-        [c.id, c.name, c.specialty ?? null, c.phone ?? null,
-         c.address ?? null, c.is_primary ?? 0, c.notes ?? null, c.created_at]
-      );
-    } catch {}
   }
 }

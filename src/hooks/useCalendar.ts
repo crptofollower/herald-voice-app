@@ -8,7 +8,6 @@ import { useEffect, useRef } from "react";
 import * as Calendar from "expo-calendar";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useStore } from "../store/useStore";
-import { API_BASE } from "../constants/api";
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -145,17 +144,7 @@ async function syncCalendar(userId: string) {
       return;
     }
 
-    // Send to backend
-    const response = await fetch(`${API_BASE}/calendar/sync`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ user_id: userId, appointments }),
-    });
-
-    if (response.ok) {
-      await AsyncStorage.setItem(LAST_SYNC_KEY, Date.now().toString());
-      console.log(`[HERALD] Calendar sync: ${appointments.length} appointments sent`);
-    }
+    await AsyncStorage.setItem(LAST_SYNC_KEY, Date.now().toString());
 
   } catch (err) {
     // Non-fatal -- calendar sync failing should never crash the app

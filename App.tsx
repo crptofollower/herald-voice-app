@@ -35,7 +35,6 @@ import OnboardingScreen from "./src/screens/OnboardingScreen";
 import ChatScreen from "./src/screens/ChatScreen";
 import { ONESIGNAL_APP_ID } from "./src/constants/api";
 import { runMigrations } from './src/migrations/runMigrations';
-import { runMigration } from './src/routing/migration';
 import { initDB, isDBReady } from './src/db/useDeviceDB';
 import {
   runModelDownloadService,
@@ -134,20 +133,6 @@ function Navigation() {
       setSqliteChecked(true);
     })();
   }, [_hasHydrated]);
-
-  useEffect(() => {
-    if (!_hasHydrated || !sqliteChecked || !onboardingComplete || !userId) return;
-    AsyncStorage.getItem('herald_migration_attempts').then(async (attemptsStr) => {
-      const attempts = parseInt(attemptsStr ?? '0');
-      if (attempts >= 3) return; // give up after 3 failures — user onboards fresh
-      try {
-        await runMigration(userId);
-        await AsyncStorage.removeItem('herald_migration_attempts');
-      } catch {
-        await AsyncStorage.setItem('herald_migration_attempts', String(attempts + 1));
-      }
-    });
-  }, [_hasHydrated, sqliteChecked, onboardingComplete, userId]);
 
   if (!_hasHydrated || !sqliteChecked) {
     return <View style={{ flex: 1, backgroundColor: "#0A1628" }} />;
