@@ -584,8 +584,11 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   // Device: call — resolves contact on device, fires tel: intent
   const TODO_ADD_PREFIX = /^(I need to|I have to|I gotta|I've got to|don't let me forget|I should|I must)\s+/i;
   if (CALL_SIGNALS.some((p) => p.test(msg)) && !REMINDER_SIGNALS.some((p) => p.test(msg)) && !CALL_NUMBER_STATEMENT.test(msg) && !POSSESSIVE_CONTACT_STATEMENT.test(msg) && !TODO_ADD_PREFIX.test(msg) && !READ_QUERY_PREFIX.test(msg)) {
-    const CALL_EXCLUDE = /^(me|you|back|again|later|now|soon|ahead|us|them|it|that)$/i;
+    const CALL_EXCLUDE = /^(me|you|back|again|later|now|soon|ahead|us|them|it|that|help|ambulance|backup|someone|anyone|911|emergency)$/i;
+    // "call for [the] X" / "schedule a call for [the] X" — try BEFORE bare
+    // "call <name>" so filler "for"/"for the" is never captured as the name.
     const contactMatch =
+      msg.match(/\b(?:call|phone|dial|ring)\s+for\s+(?:the\s+)?((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+)?\w+(?:\s+\w+)?)/i) ??
       msg.match(/\b(?:call|phone|dial|ring)\s+(?:my\s+(?:son|daughter|wife|husband|mom|dad|mother|father|brother|sister|grandson|granddaughter)\s+)?((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+)?\w+(?:\s+\w+)?)/i) ??
       msg.match(/\bgive\s+(?:my\s+(?:son|daughter|wife|husband|mom|dad|mother|father|brother|sister|grandson|granddaughter)\s+)?((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+)?\w+(?:\s+\w+)?)\s+a\s+(?:call|ring)\b/i);
     const rawContact = contactMatch?.[1]?.trim() ?? '';
@@ -593,7 +596,9 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
       .replace(/^(a\s+)?number\s+for\s+/i, '')
       .replace(/^the\s+number\s+for\s+/i, '')
       .trim();
-    const contact = CALL_EXCLUDE.test(strippedContact.split(' ')[0]) ? '' : strippedContact;
+    // Drop leading a/an/the so "an ambulance" excludes on "ambulance", not "an".
+    const excludeHead = strippedContact.replace(/^(a|an|the)\s+/i, '').split(/\s+/)[0] ?? '';
+    const contact = CALL_EXCLUDE.test(excludeHead) ? '' : strippedContact;
     if (contact) {
       return {
         tier: 1,

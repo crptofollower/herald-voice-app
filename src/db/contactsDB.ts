@@ -150,16 +150,39 @@ export function findContactByRelationship(relationship: string): Contact | null 
 //
 // "how is Sarah doing" → findContactByName('Sarah')
 // Partial match — "Sar" finds "Sarah". Returns best match.
+//
+// Generic shared tokens ("company", "inc", …) are not enough on their own:
+// a hit requires at least one distinguishing word, and every distinguishing
+// word in the query must appear in the contact name.
+
+const CONTACT_NAME_STOPWORDS = new Set([
+  'company', 'co', 'inc', 'llc', 'ltd', 'corp', 'corporation',
+  'the', 'a', 'an', 'and', 'of', 'for', 'my', 'our',
+]);
+
+/** Distinctive tokens for name match; null = stopword-only / empty → no name hit. */
+function distinctiveNameTokens(raw: string): string[] | null {
+  const words = raw.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return null;
+  const distinctive = words.filter((w) => !CONTACT_NAME_STOPWORDS.has(w));
+  return distinctive.length > 0 ? distinctive : null;
+}
 
 export function findContactByName(name: string): Contact | null {
   const db = getDB();
+  const distinctive = distinctiveNameTokens(name);
+  if (!distinctive) return null;
   try {
+    // Every distinguishing word must appear — "company" alone never selects,
+    // and "insurance company" cannot match on the shared "company" token.
+    const clauses = distinctive.map(() => 'LOWER(name) LIKE ?').join(' AND ');
+    const params = distinctive.map((w) => `%${w}%`);
     return db.getFirstSync<Contact>(
       `SELECT * FROM contacts
-       WHERE LOWER(name) LIKE ? AND removed_at IS NULL
+       WHERE ${clauses} AND removed_at IS NULL
        ORDER BY importance DESC
        LIMIT 1;`,
-      [`%${name.toLowerCase().trim()}%`]
+      params
     ) ?? null;
   } catch {
     return null;
@@ -171,18 +194,33 @@ export function findContactByName(name: string): Contact | null {
 // Like findContactByRelationship + findContactByName combined, but returns
 // EVERY live match instead of top-1. Feeds the disambiguation stage — when
 // more than one match exists, Herald asks which one instead of guessing.
+// Name branch uses the same distinguishing-word rule as findContactByName.
 
 export function findAllContactMatches(input: string): Contact[] {
   const db = getDB();
   const term = input.trim().toLowerCase();
+  const distinctive = distinctiveNameTokens(term);
   try {
-    const rows = db.getAllSync<Contact>(
-      `SELECT * FROM contacts
-       WHERE removed_at IS NULL
-         AND (LOWER(relationship) = ? OR LOWER(name) LIKE ?)
-       ORDER BY importance DESC;`,
-      [term, `%${term}%`]
-    );
+    let rows: Contact[];
+    if (!distinctive) {
+      // Stopword-only needle (e.g. "company") — relationship exact only, never name LIKE.
+      rows = db.getAllSync<Contact>(
+        `SELECT * FROM contacts
+         WHERE removed_at IS NULL AND LOWER(relationship) = ?
+         ORDER BY importance DESC;`,
+        [term]
+      );
+    } else {
+      const nameClauses = distinctive.map(() => 'LOWER(name) LIKE ?').join(' AND ');
+      const nameParams = distinctive.map((w) => `%${w}%`);
+      rows = db.getAllSync<Contact>(
+        `SELECT * FROM contacts
+         WHERE removed_at IS NULL
+           AND (LOWER(relationship) = ? OR (${nameClauses}))
+         ORDER BY importance DESC;`,
+        [term, ...nameParams]
+      );
+    }
     // A contact can satisfy both predicates (e.g. relationship "daughter"
     // AND name contains the search term) — dedup by id.
     const seen = new Set<string>();
