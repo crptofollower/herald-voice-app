@@ -1,5 +1,9 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
+# v8.91 -- S3B Commit B: removed implicit watcher pipeline
+#          (classify_topic, topic_touches, offer promotion/
+#          _get_offer_phrase, extraction budget) -- R4. Explicit
+#          watches (store_watch, extract_explicit_watch) unchanged.
 # v8.90 -- S3B Commit A: removed backend personalization readers
 #          (build_about_me, build_personality_block,
 #          build_preferences_summary, facts/notes/prefs/life_tracker/
@@ -80,7 +84,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.90")
+app = FastAPI(title="Herald API", version="8.91")
 
 app.add_middleware(
     CORSMiddleware,
@@ -199,37 +203,6 @@ def route_model(message: str) -> str:
     return HAIKU_MODEL
 
 
-# ── WATCHER SYSTEM ────────────────────────────────────────────────────────────
-
-MAX_EXTRACTION_CALLS_PER_DAY = 30
-_extraction_counts: dict = {}
-
-WATCH_OFFER_PHRASES = [
-    "Hey {name}, I've noticed you've been curious about {topic} lately — want me to keep an eye out and let you know when something interesting comes up?",
-    "You know what I've picked up on, {name}? You ask about {topic} pretty often. I can start keeping you posted automatically if you'd like.",
-    "I don't miss much, {name} — and I've noticed {topic} keeps coming up for you. Say the word and I'll watch it for you.",
-    "{name}, just between us — {topic} keeps coming up in our conversations. Want me to flag anything new so you don't have to remember to ask?",
-    "I've been paying attention, {name}. {topic} is clearly on your radar. I can take that off your plate and just tell you when something worth knowing happens.",
-]
-
-TRAVEL_OFFER_PHRASES = [
-    "Hey {name}, {topic} keeps coming up — are you planning a trip? If so I can pull together great places, local tips, and hidden gems and send it all to your email.",
-    "{name}, I've noticed a lot of questions about {topic} lately. Sounds like a trip might be in the works? Say the word and I'll put something great together for you.",
-    "You know what I'm picking up on, {name}? I think there's a {topic} trip being planned. Am I right? I'd love to help — I know some places most tourists never find.",
-]
-
-TASK_OFFER_PHRASES = [
-    "Hey {name}, you've been dealing with {topic} for a bit. Want me to pull together what you need to know — key questions to ask, what to watch out for, rough costs — and send it to your email?",
-    "{name}, I've noticed {topic} keeps coming up. I can put together a solid rundown — what to know, next steps, who to call — and send it straight to you.",
-    "I've been following along on the {topic} situation, {name}. Want me to do some digging and send you a proper summary? Easier than asking piece by piece.",
-]
-
-RESEARCH_OFFER_PHRASES = [
-    "Hey {name}, you've asked about {topic} a few times now. Want me to pull together what's actually worth knowing and send it to your email?",
-    "{name}, {topic} keeps coming up for you. I can put together a proper briefing — current thinking, what the research says, what to watch — and send it over.",
-    "I've noticed you're digging into {topic}, {name}. Want me to do a proper pull on that and email you something worth reading?",
-]
-
 BUILT_CAPABILITIES = ["email"]
 
 CAPABILITY_TRIGGERS = {
@@ -253,27 +226,6 @@ WATCH_KEYWORDS = [
     "alert me", "tell me when", "follow", "track",
     "keep me posted", "heads up when", "update me", "flag it",
 ]
-
-TOPIC_CLASSIFICATION_PROMPT = """You analyze a single user message to detect recurring interest signals.
-
-User message: {message}
-User name: {name}
-Known topic touches: {touches_json}
-
-Determine:
-1. Is there a trackable topic in this message?
-2. Natural language label (short — e.g. "Italy travel", "car brake repair", "makeup trends", "the Mavericks", "managing diabetes")
-3. Interest type — exactly one:
-   - ongoing: permanent interest (sports team, weather, beauty, celebrity, cooking)
-   - trip_planning: destination being researched for an upcoming trip
-   - task_planning: project with an end (car repair, home reno, job search)
-   - research: subject they want to understand (health condition, investing, history)
-4. Logistics signals? (packing, flights, hotels, "how far is", "best time to visit")
-5. Acute health symptom? (chest pain, fever, headache = YES — never promote these)
-6. Chronic or research health topic? (diabetes, a medication, a condition = research type — OK)
-
-Return ONLY valid JSON. No preamble. No markdown.
-{{"touch_worthy": true, "topic_label": "label", "interest_type": "ongoing", "logistics_signals": false, "is_acute_health": false}}"""
 
 EXPLICIT_WATCH_PROMPT = """User asked Herald to watch or monitor something.
 
@@ -847,17 +799,6 @@ def is_owner(user_id, auth_code=None):
 
 # ── WATCHER HELPERS ───────────────────────────────────────────────────────────
 
-def _check_extraction_budget(user_id: str) -> bool:
-    today = date.today().isoformat()
-    record = _extraction_counts.get(user_id, {"date": today, "count": 0})
-    if record["date"] != today:
-        record = {"date": today, "count": 0}
-    if record["count"] >= MAX_EXTRACTION_CALLS_PER_DAY:
-        return False
-    record["count"] += 1
-    _extraction_counts[user_id] = record
-    return True
-
 def has_watch_intent(message: str) -> bool:
     msg_lower = message.lower()
     return any(kw in msg_lower for kw in WATCH_KEYWORDS)
@@ -872,94 +813,6 @@ def check_capability_offer(message: str, profile: dict):
         if any(t in msg_lower for t in triggers):
             return CAPABILITY_OFFERS.get(cap)
     return None
-
-def _get_offer_phrase(interest_type: str, name: str, topic: str, touch_count: int) -> str:
-    pools = {
-        "trip_planning": TRAVEL_OFFER_PHRASES,
-        "task_planning":  TASK_OFFER_PHRASES,
-        "research":       RESEARCH_OFFER_PHRASES,
-        "ongoing":        WATCH_OFFER_PHRASES,
-    }
-    phrases = pools.get(interest_type, WATCH_OFFER_PHRASES)
-    return phrases[touch_count % len(phrases)].format(name=name or "there", topic=topic)
-
-def log_topic_touch(profile: dict, topic_label: str, interest_type: str) -> dict:
-    touches = profile.get("topic_touches", [])
-    today = date.today().isoformat()
-    existing = next((t for t in touches if t["topic_label"] == topic_label), None)
-    if existing:
-        last_seen = existing.get("last_seen", today)
-        try:
-            days_since = (date.today() - date.fromisoformat(last_seen)).days
-        except Exception:
-            days_since = 0
-        if days_since > 30:
-            existing["count"] = 1
-            existing["first_seen"] = today
-        else:
-            existing["count"] += 1
-        existing["last_seen"] = today
-        existing["interest_type"] = interest_type
-    else:
-        touches.append({
-            "topic_label": topic_label,
-            "interest_type": interest_type,
-            "count": 1,
-            "first_seen": today,
-            "last_seen": today,
-            "offered": False,
-            "offer_suppressed_until": None,
-        })
-    profile["topic_touches"] = touches
-    return profile
-
-def check_promotion_threshold(profile: dict, topic_label: str, classification: dict) -> bool:
-    touches = profile.get("topic_touches", [])
-    touch = next((t for t in touches if t["topic_label"] == topic_label), None)
-    if not touch:
-        return False
-    if touch.get("offered"):
-        return False
-    suppressed_until = touch.get("offer_suppressed_until")
-    if suppressed_until:
-        try:
-            if date.today() < date.fromisoformat(suppressed_until):
-                return False
-        except Exception:
-            pass
-    count = touch.get("count", 0)
-    if count % 3 != 0:
-        return False
-    interest_type = classification.get("interest_type", "ongoing")
-    logistics = classification.get("logistics_signals", False)
-    # v8.12.2: Lowered thresholds -- swarm should feel present faster.
-    # North star: Herald notices things the way a friend does -- quickly.
-    # Medical/family topics have lower threshold because they matter more.
-    thresholds = {"ongoing": 3, "trip_planning": 3, "task_planning": 3, "research": 3}
-    # Price/score topics fire even faster -- 2 touches and swarm offers to watch
-    price_score_keywords = ['price', 'gas', 'score', 'stock', 'crypto', 'bitcoin', 'market']
-    if any(kw in topic_label.lower() for kw in price_score_keywords):
-        thresholds["ongoing"] = 2
-    # Medical/family topics fire at 2 -- these matter most
-    priority_keywords = ['doctor', 'medication', 'prescription', 'family', 'finance', 'bill', 'insurance']
-    if any(kw in topic_label.lower() for kw in priority_keywords):
-        thresholds["ongoing"] = 2
-    required = thresholds.get(interest_type, 7)
-    if interest_type == "trip_planning":
-        return count >= required and logistics
-    return count >= required
-
-def mark_topic_offered(profile: dict, topic_label: str, accepted: bool) -> dict:
-    touches = profile.get("topic_touches", [])
-    for touch in touches:
-        if touch["topic_label"] == topic_label:
-            if accepted:
-                touch["offered"] = True
-            else:
-                future = (date.today() + timedelta(days=14)).isoformat()
-                touch["offer_suppressed_until"] = future
-    profile["topic_touches"] = touches
-    return profile
 
 def store_watch(profile: dict, watch_data: dict) -> dict:
     watches = profile.get("watches", [])
@@ -1007,13 +860,6 @@ def _build_watcher_context(profile: dict) -> str:
                     f"Example: 'Got it — I'll keep an eye on {desc} and let you know.' "
                     f"Keep it brief. Main answer first."
                 )
-            elif offer.get("type") == "implicit_offer":
-                offer_text = offer.get("offer_text", "")
-                lines.append(
-                    f"INSTRUCTION: Herald noticed a recurring interest. "
-                    f"At the END of your response, naturally add (word for word): "
-                    f"'{offer_text}' — Answer the question first. Offer is secondary."
-                )
             elif offer.get("type") == "capability_offer":
                 cap_text = offer.get("offer_text", "")
                 lines.append(
@@ -1022,41 +868,6 @@ def _build_watcher_context(profile: dict) -> str:
         except Exception:
             pass
     return " ".join(lines)
-
-def classify_topic(message: str, profile: dict):
-    user_id = profile.get("user_id", "unknown")
-    if not _check_extraction_budget(user_id):
-        return None
-    touches = profile.get("topic_touches", [])
-    name = profile.get("name", "")
-    prompt = TOPIC_CLASSIFICATION_PROMPT.format(
-        message=message[:400],
-        name=name,
-        touches_json=json.dumps([
-            {"topic_label": t["topic_label"], "count": t["count"]}
-            for t in touches[:10]
-        ])
-    )
-    try:
-        payload = json.dumps({
-            "model": HAIKU_MODEL,
-            "max_tokens": 120,
-            "messages": [{"role": "user", "content": prompt}]
-        }).encode("utf-8")
-        req = urllib.request.Request(OR_URL, data=payload, headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {OPENROUTER_KEY}",
-            "HTTP-Referer": "https://apexempire.ai",
-            "X-Title": "Herald Personal AI"
-        }, method="POST")
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            data = json.loads(resp.read().decode())
-        raw = data["choices"][0]["message"]["content"].strip()
-        raw = raw.replace("```json", "").replace("```", "").strip()
-        return json.loads(raw)
-    except Exception as e:
-        print(f"[HERALD] classify_topic (non-fatal): {e}")
-        return None
 
 def extract_explicit_watch(message: str):
     prompt = EXPLICIT_WATCH_PROMPT.format(message=message[:300])
@@ -1421,44 +1232,6 @@ def _run_watcher_pipeline(message: str, profile: dict, user_id: str):
         changed = False
         pending_offer = None
 
-        # v8.13: Watch acceptance handler -- fires before new watch detection
-        pending = profile.get("pending_watch_offer")
-        if pending:
-            accept_words = ['yes', 'yeah', 'sure', 'please', 'do it', 'go ahead',
-                            'absolutely', 'ok', 'okay', 'yep', 'yup', 'sounds good']
-            if any(w in message.lower() for w in accept_words):
-                try:
-                    offer = json.loads(pending) if isinstance(pending, str) else pending
-                    if offer.get("type") == "implicit_offer":
-                        topic    = offer.get("topic_label", "that")
-                        int_type = offer.get("interest_type", "ongoing")
-                        watch_obj = {
-                            "type":        int_type,
-                            "description": topic,
-                            "params":      {"topic": topic},
-                            "offer_email": offer.get("offer_email", False),
-                        }
-                        profile = store_watch(profile, watch_obj)
-                        profile = mark_topic_offered(profile, topic, accepted=True)
-                        if offer.get("offer_email") and profile.get("email"):
-                            content = generate_watch_content(watch_obj, profile)
-                            threading.Thread(
-                                target=send_watch_email,
-                                args=(profile, watch_obj, content),
-                                daemon=True
-                            ).start()
-                        profile["pending_watch_offer"] = None
-                        save_profile_fields(user_id, {
-                            "watches":             profile.get("watches", []),
-                            "topic_touches":       profile.get("topic_touches", []),
-                            "pending_watch_offer": None,
-                        })
-                        changed = True
-                        print(f"[HERALD] Watch accepted: {topic}")
-                        return  # Don't start a new watch on acceptance message
-                except Exception as e:
-                    print(f"[HERALD] Watch acceptance error (non-fatal): {e}")
-
         if has_watch_intent(message):
             watch_data = extract_explicit_watch(message)
             if watch_data:
@@ -1475,36 +1248,9 @@ def _run_watcher_pipeline(message: str, profile: dict, user_id: str):
                     })
                 changed = True
                 print(f"[HERALD] Explicit watch stored: {watch_data.get('description')}")
-        classification = classify_topic(message, profile)
-        if (classification
-                and classification.get("touch_worthy")
-                and not classification.get("is_acute_health")):
-            topic_label = classification.get("topic_label", "")
-            interest_type = classification.get("interest_type", "ongoing")
-            profile = log_topic_touch(profile, topic_label, interest_type)
-            changed = True
-            if not pending_offer and check_promotion_threshold(profile, topic_label, classification):
-                touches = profile.get("topic_touches", [])
-                touch = next((t for t in touches if t["topic_label"] == topic_label), {})
-                touch_count = touch.get("count", 0)
-                offer_text = _get_offer_phrase(
-                    interest_type,
-                    profile.get("name", ""),
-                    topic_label,
-                    touch_count
-                )
-                pending_offer = json.dumps({
-                    "type": "implicit_offer",
-                    "topic_label": topic_label,
-                    "interest_type": interest_type,
-                    "offer_text": offer_text,
-                    "offer_email": interest_type in ["trip_planning", "task_planning", "research"],
-                })
-                print(f"[HERALD] Implicit watch offer queued: {topic_label} ({interest_type})")
         if changed or pending_offer:
             save_profile_fields(user_id, {
                 "watches": profile.get("watches", []),
-                "topic_touches": profile.get("topic_touches", []),
                 "pending_watch_offer": pending_offer,
             })
     except Exception as e:
@@ -4489,11 +4235,11 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.90",
+        "status": "ok", "server": "herald-api", "version": "8.91",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "disabled -- device owns memory capture (§3a)",
-        "watcher_system": "enabled (explicit + implicit + gas + travel/task/research)",
+        "watcher_system": "enabled (explicit + gas)",
         "model_routing": "Haiku default / Sonnet for judgment",
         "streaming": "enabled (/ask/stream)",
         "search": f"brave={'configured' if BRAVE_KEY else 'NOT SET'} | fallback=haiku:online",
@@ -6290,7 +6036,7 @@ async def user_export(user_id: str, request: Request, secret: str = ""):
     print(f"[HERALD] /user/export: exported all personal data for {user_id}")
     return {
         "ok": True,
-        "version": "8.90",
+        "version": "8.91",
         "user_id": user_id,
         "exported_at": datetime.now().isoformat(),
         "profile": profile,
@@ -6443,7 +6189,7 @@ async def admin_dashboard(secret: str = ""):
 
         return {
             "ok": True,
-            "version": "8.90",
+            "version": "8.91",
             "user_count": len(users),
             "users": sorted(users, key=lambda x: x["msg_count"], reverse=True),
             "waitlist_count": waitlist_count,
@@ -6649,7 +6395,7 @@ def startup():
     print(f"[HERALD API] WeatherAPI:    {'YES (backup)' if WEATHER_KEY else 'not set'}")
     print(f"[HERALD API] Database:      {DB_FILE}")
     print(f"[HERALD API] Owner code:    {'SET' if OWNER_CODE else 'NOT SET'}")
-    print(f"[HERALD API] v8.90: S3B Commit A — removed backend personalization readers, closed admin medical-data exposure, tier-3 now contextless")
+    print(f"[HERALD API] v8.91: S3B Commit B — removed implicit watcher pipeline, explicit watches unchanged")
     print(f"[HERALD API] FIX v8.8: GPS city caching -- confirmed_city in profile, 20mi tolerance")
     print(f"[HERALD API] FIX v8.8: Memory rules -- no 'I remember', no raw GPS coords spoken")
     print(f"[HERALD API] FIX v8.8: Seed question for new users -- makes first session feel alive")
