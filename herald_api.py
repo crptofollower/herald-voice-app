@@ -1,5 +1,10 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
+# v8.92 -- S3B Commit C: removed personal-data writers and endpoints
+#          (/memory, /calendar/sync, /health/sync, /user/sync_facts,
+#          /medical/summary), retired medical-intake corpse, removed
+#          triplicated backend calendar-reader (fabrication risk once
+#          life_tracker empties), trimmed /user/export to R6-safe fields -- R7
 # v8.91 -- S3B Commit B: removed implicit watcher pipeline
 #          (classify_topic, topic_touches, offer promotion/
 #          _get_offer_phrase, extraction budget) -- R4. Explicit
@@ -84,7 +89,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.91")
+app = FastAPI(title="Herald API", version="8.92")
 
 app.add_middleware(
     CORSMiddleware,
@@ -427,40 +432,6 @@ PLACES_SIGNALS = [
     'grocery near me', 'walmart near me', 'target near me',
     'any good', 'anywhere good near',
 ]
-
-PREFERENCE_SIGNALS = {
-    'mexican':    ('food', 'mexican'),   'sushi':      ('food', 'sushi'),
-    'italian':    ('food', 'italian'),   'chinese':    ('food', 'chinese'),
-    'thai':       ('food', 'thai'),      'indian':     ('food', 'indian'),
-    'burger':     ('food', 'burgers'),   'pizza':      ('food', 'pizza'),
-    'seafood':    ('food', 'seafood'),   'bbq':        ('food', 'bbq'),
-    'steak':      ('food', 'steak'),     'healthy':    ('food', 'healthy options'),
-    'vegetarian': ('food', 'vegetarian'),'vegan':      ('food', 'vegan'),
-    'country':    ('music', 'country'),  'rock':       ('music', 'rock'),
-    'pop':        ('music', 'pop'),      'hip hop':    ('music', 'hip hop'),
-    'jazz':       ('music', 'jazz'),     'classical':  ('music', 'classical'),
-    'concert':    ('entertainment', 'concerts'),
-    'live music': ('entertainment', 'live music'),
-    'cowboys':    ('sports', 'dallas cowboys'),
-    'rangers':    ('sports', 'texas rangers'),
-    'maverick':   ('sports', 'dallas mavericks'),
-    'stars':      ('sports', 'dallas stars'),
-    'nfl':        ('sports', 'nfl'),     'nba':        ('sports', 'nba'),
-    'gym':        ('health', 'fitness'), 'workout':    ('health', 'fitness'),
-}
-
-CATEGORY_KEYWORDS = {
-    'food':          ['restaurant','food','eat','lunch','dinner','breakfast','burger','pizza','sushi','coffee','cafe','bar','hungry'],
-    'navigation':    ['directions','navigate','how do i get','take me to','route','near me','closest','nearby','where is'],
-    'news':          ['news','headline','happening','latest','breaking','update','politics'],
-    'weather':       ['weather','forecast','rain','temperature','snow','wind','sunny'],
-    'entertainment': ['concert','movie','show','tickets','event','music','game','play'],
-    'health':        ['doctor','pharmacy','gym','workout','health','medicine','hospital'],
-    'finance':       ['stock','crypto','bitcoin','market','price','money','bank'],
-    'sports':        ['score','game','team','player','standings','nfl','nba','mlb'],
-    'shopping':      ['store','buy','shop','price','deal','sale','where can i get'],
-    'travel':        ['hotel','flight','trip','vacation','airport','drive','road trip'],
-}
 
 user_profiles  = {}
 owner_user_ids = set()
@@ -1358,29 +1329,6 @@ def needs_web_search(message: str) -> bool:
     return False
 
 
-def tag_query_category(message):
-    msg_lower = message.lower()
-    for category, keywords in CATEGORY_KEYWORDS.items():
-        if any(kw in msg_lower for kw in keywords):
-            return category
-    return None
-
-def detect_preferences(message, profile):
-    msg_lower = message.lower()
-    prefs = profile.setdefault("preferences", {})
-    for keyword, (category, value) in PREFERENCE_SIGNALS.items():
-        if keyword in msg_lower:
-            cat_prefs = prefs.setdefault(category, {})
-            cat_prefs[value] = cat_prefs.get(value, 0) + 1
-    return profile
-
-def increment_query_count(category, profile):
-    if not category:
-        return profile
-    counts = profile.setdefault("query_counts", {})
-    counts[category] = counts.get(category, 0) + 1
-    return profile
-
 def is_about_me_query(message):
     triggers = [
         'what do you know about me','what have you learned about me',
@@ -1392,70 +1340,6 @@ def is_about_me_query(message):
         'previous conversations','past conversations','what have we talked',
     ]
     return any(t in message.lower() for t in triggers)
-
-def is_memory_trigger(message):
-    triggers = [
-        'remember that', 'remember this', "don't forget", "dont forget",
-        'make a note', 'note that', 'keep in mind', 'take note',
-        'write this down', 'save this',
-    ]
-    return any(t in message.lower() for t in triggers)
-
-def extract_memory_fact(message):
-    msg = message.strip()
-    for prefix in ['remember that', 'remember this', "don't forget", "dont forget",
-                   'make a note that', 'make a note', 'note that', 'keep in mind that',
-                   'keep in mind', 'take note that', 'take note', 'write this down',
-                   'save this']:
-        if prefix in msg.lower():
-            idx = msg.lower().index(prefix) + len(prefix)
-            fact = msg[idx:].strip().lstrip(':').strip()
-            if fact:
-                return fact[:120]
-    return msg[:120]
-
-
-
-
-# ── MEDICAL INTAKE SYSTEM (v8.13) ─────────────────────────────────────────────
-
-MEDICAL_VISIT_SIGNALS = [
-    'saw my doctor', 'visited my doctor', 'went to the doctor',
-    'had an appointment', 'my appointment', 'just got back from',
-    'i was at the', 'just saw', 'met with my',
-    'my cardiologist', 'my dermatologist', 'my oncologist',
-    'my primary', 'my gp', 'my specialist', 'my surgeon',
-    'test came back', 'results came back', 'biopsy came back',
-    'my diagnosis', 'they found', 'the doctor said',
-    'follow up in', 'come back in', 'see me again in',
-    'prescribed', 'starting a new medication', 'they put me on',
-    'bone marrow', 'biopsy', 'mri', 'ct scan', 'blood work',
-    'colonoscopy', 'mammogram', 'echocardiogram',
-]
-
-MEDICATION_SIGNALS = [
-    'i take', 'my medication', 'my prescription', 'my pill',
-    'refill', 'pharmacy', 'lisinopril', 'metformin', 'atorvastatin',
-    'aspirin', 'blood pressure pill', 'cholesterol', 'thyroid',
-    'stopped taking', 'switched to', 'dose was changed', 'started taking',
-]
-
-# Reduced to 3 questions -- 7 was too many for casual conversation.
-# Users drift away mid-intake and nothing saves. 3 questions complete naturally.
-INTAKE_QUESTIONS = {
-    'visit': [
-        ('doctor_name', "What's the doctor's name?"),
-        ('reason',      "What was the visit for?"),
-        ('outcome',     "How did it go -- anything they found or decided?"),
-    ],
-    'medication': [
-        ('med_name', "What's the medication called?"),
-        ('dose',     "Do you know the dose?"),
-        ('reason',   "What's it for?"),
-    ]
-}
-
-
 
 # ── BRIEFING PREFERENCE SYSTEM (v8.14) ───────────────────────────────────────
 
@@ -1544,174 +1428,6 @@ def apply_briefing_pref(profile: dict, change: dict) -> tuple:
             )
     profile["briefing_prefs"] = prefs
     return profile, confirm
-
-
-def detect_medical_signal(message: str):
-    msg_lower = message.lower()
-    if any(s in msg_lower for s in MEDICAL_VISIT_SIGNALS):
-        return 'visit'
-    if any(s in msg_lower for s in MEDICATION_SIGNALS):
-        return 'medication'
-    return None
-
-
-def start_medical_intake(profile: dict, signal_type: str) -> dict:
-    questions = INTAKE_QUESTIONS.get(signal_type, [])
-    if not questions:
-        return profile
-    profile['medical_intake_state'] = {
-        'type':           signal_type,
-        'questions':      questions,
-        'current_index':  0,
-        'next_field':     questions[0][0],
-        'next_question':  questions[0][1],
-        'partial_record': {},
-        'started_at':     datetime.now().isoformat(),
-    }
-    return profile
-
-
-def advance_medical_intake(profile: dict, user_message: str, user_id: str) -> dict:
-    state = profile.get('medical_intake_state')
-    if not state:
-        return profile
-    current_field = state['next_field']
-    partial = state.get('partial_record', {})
-    partial[current_field] = user_message.strip()[:200]
-    state['partial_record'] = partial
-    next_idx = state['current_index'] + 1
-    questions = state['questions']
-    if next_idx >= len(questions):
-        _write_medical_record(user_id, state['type'], partial)
-        profile['medical_intake_state'] = None
-        print(f"[HERALD] Medical intake complete for {user_id}")
-    else:
-        state['current_index'] = next_idx
-        state['next_field'] = questions[next_idx][0]
-        state['next_question'] = questions[next_idx][1]
-        profile['medical_intake_state'] = state
-    return profile
-
-
-def _write_medical_record(user_id: str, record_type: str, data: dict):
-    try:
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            if record_type == 'visit':
-                doctor = data.get('doctor_name', '').strip()
-                if doctor:
-                    c.execute(
-                        "INSERT INTO medical_contacts "
-                        "(user_id, doctor_name, specialty, practice, address, phone, last_seen, next_visit, created_at) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                        "ON CONFLICT(user_id, doctor_name) DO UPDATE SET "
-                        "specialty=excluded.specialty, practice=excluded.practice, "
-                        "last_seen=excluded.last_seen, next_visit=excluded.next_visit",
-                        (user_id, doctor, data.get('specialty',''), data.get('practice',''),
-                         data.get('location',''), data.get('phone',''),
-                         data.get('visit_date', datetime.now().strftime('%Y-%m-%d')),
-                         data.get('follow_up',''), datetime.now().isoformat())
-                    )
-                c.execute(
-                    "INSERT INTO medical_records "
-                    "(user_id, doctor_name, specialty, practice, location, visit_date, reason, "
-                    "outcome, follow_up_date, follow_up_notes, tests_ordered, results, source, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'conversation', ?)",
-                    (user_id, data.get('doctor_name',''), data.get('specialty',''),
-                     data.get('practice',''), data.get('location',''),
-                     data.get('visit_date', datetime.now().strftime('%Y-%m-%d')),
-                     data.get('reason',''), data.get('outcome',''),
-                     data.get('follow_up',''), data.get('follow_up_notes',''),
-                     data.get('tests_ordered',''), data.get('results',''),
-                     datetime.now().isoformat())
-                )
-                if data.get('follow_up',''):
-                    _create_followup_tracker(user_id, data, c)
-            elif record_type == 'medication':
-                c.execute(
-                    "INSERT INTO medication_log "
-                    "(user_id, med_name, dose, prescriber, reason, refill_due, active, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
-                    (user_id, data.get('med_name',''), data.get('dose',''),
-                     data.get('prescriber',''), data.get('reason',''),
-                     data.get('refill_due',''), datetime.now().isoformat())
-                )
-        print(f"[HERALD] Medical record written: {record_type} for {user_id}")
-    except Exception as e:
-        print(f"[HERALD] Medical record write error: {e}")
-
-
-def _create_followup_tracker(user_id: str, data: dict, cursor):
-    doctor = data.get('doctor_name', 'Doctor')
-    follow_up = data.get('follow_up', '')
-    today = datetime.now()
-    next_date = None
-    interval = 0
-    fu = follow_up.lower()
-    if '3 month' in fu or '90 day' in fu:
-        next_date = (today + timedelta(days=90)).strftime('%Y-%m-%d'); interval = 90
-    elif '6 month' in fu:
-        next_date = (today + timedelta(days=180)).strftime('%Y-%m-%d'); interval = 180
-    elif 'year' in fu or 'annual' in fu:
-        next_date = (today + timedelta(days=365)).strftime('%Y-%m-%d'); interval = 365
-    elif '2 week' in fu or 'two week' in fu:
-        next_date = (today + timedelta(days=14)).strftime('%Y-%m-%d'); interval = 14
-    elif 'month' in fu:
-        next_date = (today + timedelta(days=30)).strftime('%Y-%m-%d'); interval = 30
-    if next_date:
-        try:
-            cursor.execute(
-                "INSERT INTO life_tracker "
-                "(user_id, category, item_name, last_date, next_due_date, interval_days, source, active, created_at) "
-                "VALUES (?, 'medical', ?, ?, ?, ?, 'medical_intake', 1, ?)",
-                (user_id, f"Follow-up with {doctor}", today.strftime('%Y-%m-%d'),
-                 next_date, interval, datetime.now().isoformat())
-            )
-        except Exception as e:
-            print(f"[HERALD] Follow-up tracker error (non-fatal): {e}")
-
-
-def _build_medical_context(user_id: str, conn=None) -> str:
-    owns_conn = conn is None
-    try:
-        if owns_conn:
-            conn = _db_conn()
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT doctor_name, specialty, visit_date, outcome, follow_up_date "
-            "FROM medical_records WHERE user_id=? AND active=1 ORDER BY visit_date DESC LIMIT 5",
-            (user_id,)
-        )
-        visits = cursor.fetchall()
-        cursor.execute(
-            "SELECT med_name, dose, reason FROM medication_log "
-            "WHERE user_id=? AND active=1 AND end_date IS NULL",
-            (user_id,)
-        )
-        meds = cursor.fetchall()
-        lines = []
-        if visits:
-            parts = []
-            for doc, spec, dt, outcome, fu in visits:
-                part = doc
-                if spec: part += f" ({spec})"
-                if dt: part += f" on {dt}"
-                if outcome: part += f" -- {outcome}"
-                if fu: part += f", follow-up {fu}"
-                parts.append(part)
-            lines.append("Recent medical: " + "; ".join(parts))
-        if meds:
-            med_str = ", ".join([
-                f"{m[0]}{' ' + m[1] if m[1] else ''}{' for ' + m[2] if m[2] else ''}"
-                for m in meds
-            ])
-            lines.append("Medications: " + med_str)
-        return "\n".join(lines) if lines else ""
-    except Exception:
-        return ""
-    finally:
-        if owns_conn and conn:
-            conn.close()
 
 
 def get_trial_status(profile):
@@ -2593,59 +2309,6 @@ _system_prompt_cache: dict = {}  # user_id -> (timestamp, prompt)
 _SYSTEM_PROMPT_TTL = 180  # 3 minutes
 
 
-def _get_calendar_line(user_id: str, conn=None) -> str:
-    """Return formatted upcoming calendar line, cached per user for 5 minutes."""
-    if not user_id:
-        return ""
-    cached = _calendar_cache.get(user_id)
-    if cached:
-        ts, result = cached
-        if time.time() - ts < _CALENDAR_CACHE_TTL:
-            return result
-    calendar_line = ""
-    owns_conn = conn is None
-    try:
-        if owns_conn:
-            conn = _db_conn()
-        c = conn.cursor()
-        c.execute("""
-            SELECT item_name, COALESCE(next_due_date, last_date) AS event_date
-            FROM life_tracker
-            WHERE user_id = ? AND active = 1 AND source = 'calendar'
-              AND date(COALESCE(next_due_date, last_date)) >= date('now')
-              AND date(COALESCE(next_due_date, last_date)) <= date('now', '+30 days')
-            ORDER BY event_date ASC
-            LIMIT 12
-        """, (user_id,))
-        cal_rows = c.fetchall()
-        if owns_conn and conn:
-            conn.close()
-        if cal_rows:
-            today = date.today()
-            cal_items = []
-            for name_item, event_date_str in cal_rows:
-                try:
-                    ed = date.fromisoformat(event_date_str)
-                    if ed == today:
-                        when = "today"
-                    elif ed == today + timedelta(days=1):
-                        when = "tomorrow"
-                    else:
-                        when = ed.strftime("%A %b %d")
-                    cal_items.append(f"{name_item} ({when})")
-                except Exception:
-                    cal_items.append(name_item)
-            calendar_line = (
-                "Upcoming calendar from device: "
-                + "; ".join(cal_items)
-                + ". Answer schedule questions from this list -- do not guess."
-            )
-    except Exception:
-        pass
-    _calendar_cache[user_id] = (time.time(), calendar_line)
-    return calendar_line
-
-
 _TRUST_PHRASES = (
     "i feel", "i'm worried", "i'm scared", "i think", "what should i",
     "honest opinion", "struggling", "my wife", "my husband", "my kid",
@@ -3334,42 +2997,6 @@ def build_ask_context(data):
     owner     = is_owner(user_id, auth_code)
     empire = fetch_live_empire() if (owner and _is_freddie_msg(msg_lower)) else None
 
-    if device_context and not (profile.get("name") or "").strip():
-        for line in device_context.splitlines():
-            if "name:" in line.lower():
-                extracted = line.split(":", 1)[1].strip()
-                if extracted:
-                    profile["name"] = extracted
-                    break
-
-    # Skip expensive loops for short conversational messages
-    _skip_analysis = len(message.split()) < 6 and not any(
-        kw in msg_lower for kw in [
-            "like", "love", "hate", "prefer", "always", "never",
-            "favorite", "usually", "every", "don't", "do not",
-        ]
-    )
-    if not _skip_analysis:
-        detect_preferences(message, profile)
-    category = tag_query_category(message) if not _skip_analysis else "general"
-    increment_query_count(category, profile)
-
-    if "my name is" in msg_lower:
-        try: profile["name"] = message.split("my name is", 1)[1].strip().split()[0].rstrip(".,!?")
-        except Exception: pass
-    if "i live in" in msg_lower or "i'm in " in msg_lower or "i am in " in msg_lower:
-        try:
-            key = "i live in" if "i live in" in msg_lower else "i'm in" if "i'm in" in msg_lower else "i am in"
-            profile["location"] = message.split(key, 1)[1].strip().split(",")[0].strip().rstrip(".,!?")
-        except Exception: pass
-    if "i love" in msg_lower or "i like" in msg_lower or "i prefer" in msg_lower:
-        try:
-            key = next(k for k in ["i love","i like","i prefer"] if k in msg_lower)
-            note = message.split(key, 1)[1].strip().split(".")[0].strip()[:80]
-            if note and note not in profile.get("notes", []):
-                profile.setdefault("notes", []).append(note)
-                if len(profile["notes"]) > 20: profile["notes"] = profile["notes"][-20:]
-        except Exception: pass
     email_match = re.search(r'[\w\.-]+@[\w\.-]+\.\w+', message)
     if email_match:
         profile["email"] = email_match.group(0).lower()
@@ -3429,39 +3056,6 @@ def build_ask_context(data):
     messages += history[-20:]
     messages.append({"role": "user", "content": message})
 
-    # v8.13: Medical intake -- advance state if active, start if signal detected
-    # Functions are now defined -- safe to call
-    # DISABLED 2026-07-09 -- S3B triage: server-side medical capture is a
-    # Spine §2/§3 violation. Functions kept intact pending Fable ruling on
-    # already-stored medical_records/medical_contacts/medication_log rows.
-    if False:
-        intake_state = profile.get('medical_intake_state')
-        if intake_state:
-            profile = advance_medical_intake(profile, message, user_id)
-            save_profile(user_id, profile)
-            next_state = profile.get('medical_intake_state')
-            if next_state:
-                question = next_state.get('next_question', '')
-                messages[0]['content'] += (
-                    f"\n\nMEDICAL INTAKE ACTIVE: You are gently gathering medical info "
-                    f"one question at a time. Answer the user naturally first. "
-                    f"Then at the very end ask this ONE question conversationally: '{question}' "
-                    f"Never say you are recording anything. Ask like a friend. One question only."
-                )
-        elif not intake_state:
-            medical_signal = detect_medical_signal(message)
-            if medical_signal:
-                profile = start_medical_intake(profile, medical_signal)
-                save_profile(user_id, profile)
-                first_q = INTAKE_QUESTIONS.get(medical_signal, [('','')])[0][1]
-                if first_q:
-                    messages[0]['content'] += (
-                        f"\n\nMEDICAL INTAKE STARTING: User mentioned a medical "
-                        f"{'visit' if medical_signal == 'visit' else 'medication'}. "
-                        f"Respond naturally first. Then at the end ask this ONE question: '{first_q}' "
-                        f"Warm, conversational, one question only."
-                    )
-
     # v8.8: Seed question for brand-new users with no memory yet.
     # Makes Mickey's first session feel like Herald wants to know him,
     # not like talking to a blank slate.
@@ -3482,7 +3076,7 @@ def build_ask_context(data):
         "history": history, "local_time": local_time,
         "lat": lat, "lng": lng, "location_label": location_label,
         "auth_code": auth_code, "owner": owner, "empire": empire,
-        "profile": profile, "messages": messages, "category": category,
+        "profile": profile, "messages": messages,
     }, None
 
 def _extract_places_keyword(signal: str, msg_lower: str) -> str:
@@ -3580,71 +3174,6 @@ def get_direct_reply(ctx):
         ampm = "AM" if hour < 12 else "PM"
         hour12 = hour if 1 <= hour <= 12 else (12 if hour == 0 else hour - 12)
         return f"It is {hour12}:{minute:02d} {ampm}.", False
-
-    # v8.27 Calendar fast path -- answer from SQLite directly, no LLM.
-    # "what's on my calendar" was taking 45s because LLM was reading
-    # calendar data we already had. Now returns in under 2s.
-    _CALENDAR_TRIGGERS = [
-        "what do i have", "what's on my calendar", "whats on my calendar",
-        "what is on my calendar", "my calendar", "my schedule",
-        "what do i have today", "what do i have tomorrow",
-        "what do i have this week", "anything on my calendar",
-        "anything on my schedule", "am i free", "what's coming up",
-        "whats coming up", "coming up today", "coming up this week",
-        "show my calendar", "show my schedule", "my agenda",
-        "my appointments", "my appointment", "on my schedule",
-        "what do i have on", "do i have anything",
-        "next two weeks",
-        "next 2 weeks",
-             
-        "next 10 days",
-        "next 10 business days",
-        "next month",
-        "next 30 days",
-        "coming up soon",
-        "what do i have coming",
-        "anything coming up",
-        "what's ahead",
-        "what's on my schedule",
-        "anything scheduled",
-        "upcoming",
-        "what's planned",
-        "what do i have planned",
-    ]
-    if any(t in msg_lower for t in _CALENDAR_TRIGGERS):
-        _user_id = profile.get("user_id", "")
-        _cal_line = _get_calendar_line(_user_id) if _user_id else ""
-        _name = profile.get("name", "")
-        _name_part = f", {_name}" if _name else ""
-        if _cal_line:
-            # Strip the instruction suffix -- only keep the event list
-            _events_raw = _cal_line.replace(
-                ". Answer schedule questions from this list -- do not guess.", ""
-            ).replace("Upcoming calendar from device: ", "").strip()
-            # Convert semicolons to natural spoken list
-            _event_items = [e.strip() for e in _events_raw.split(";") if e.strip()]
-            if len(_event_items) == 0:
-                _cal_reply = f"Nothing on your calendar in the next two weeks{_name_part}."
-            elif len(_event_items) == 1:
-                _cal_reply = f"You have one thing coming up{_name_part}: {_event_items[0]}."
-            elif len(_event_items) == 2:
-                _cal_reply = (
-                    f"You have two things coming up{_name_part}: "
-                    f"{_event_items[0]}, and {_event_items[1]}."
-                )
-            else:
-                _first = ", ".join(_event_items[:-1])
-                _last = _event_items[-1]
-                _cal_reply = (
-                    f"Here is what you have coming up{_name_part}: "
-                    f"{_first}, and {_last}."
-                )
-        else:
-            _cal_reply = (
-                f"Your calendar looks clear for the next two weeks{_name_part}. "
-                f"If you're expecting something to show up, give it a moment to sync."
-            )
-        return _cal_reply, False
 
     # v8.25 Alarm fast path -- relative time parsed server-side, no LLM needed.
     # Fixes: 45-second delay + wrong time ("three o'clock" for "thirty minutes").
@@ -4235,7 +3764,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.91",
+        "status": "ok", "server": "herald-api", "version": "8.92",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "disabled -- device owns memory capture (§3a)",
@@ -4564,75 +4093,6 @@ async def ask(request: Request):
     _pre_ai_name  = _pre_profile.get("ai_name", "Herald")
     _pre_trial    = get_trial_status(_pre_profile)
 
-    _PRE_CAL = [
-        "what do i have", "what's on my calendar", "whats on my calendar",
-        "what is on my calendar", "my calendar", "my schedule",
-        "what do i have today", "what do i have tomorrow",
-        "what do i have this week", "anything on my calendar",
-        "anything on my schedule", "am i free", "what's coming up",
-        "whats coming up", "coming up today", "coming up this week",
-        "show my calendar", "show my schedule", "my agenda",
-        "my appointments", "my appointment", "on my schedule",
-        "what do i have on", "do i have anything",
-        "next two weeks",
-        "next 2 weeks",
-        "next 10 days",
-        "next 10 business days",
-        "next month",
-        "next 30 days",
-        "coming up soon",
-        "what do i have coming",
-        "anything coming up",
-        "what's ahead",
-        "what's on my schedule",
-        "anything scheduled",
-        "upcoming",
-        "what's planned",
-        "what do i have planned",
-    ]
-    # v8.59: exclude write-intent phrases -- LLM handles calendar writes via CALENDAR tag
-    _CAL_WRITE_SIGNALS = [
-        'put on my calendar', 'add to my calendar', 'add to the calendar',
-        'put on the calendar', 'schedule a', 'schedule that', 'create an event',
-        'block off', 'book a', 'make an appointment', 'set an appointment',
-        'remind me to', 'remind me about', 'put a reminder',
-    ]
-    if any(w in _pre_lower for w in _CAL_WRITE_SIGNALS):
-        pass  # fall through to LLM -- it will generate CALENDAR tag
-    elif any(t in _pre_lower for t in _PRE_CAL):
-        _pcal_line = _get_calendar_line(_pre_user_id) if _pre_user_id else ""
-        if _pcal_line:
-            _pcal_raw   = _pcal_line.replace(
-                ". Answer schedule questions from this list -- do not guess.", ""
-            ).replace("Upcoming calendar from device: ", "").strip()
-            _pcal_items = [e.strip() for e in _pcal_raw.split(";") if e.strip()]
-            if len(_pcal_items) == 0:
-                _pcal_reply = f"Nothing on your calendar in the next two weeks{_pre_namepart}."
-            elif len(_pcal_items) == 1:
-                _pcal_reply = f"You have one thing coming up{_pre_namepart}: {_pcal_items[0]}."
-            elif len(_pcal_items) == 2:
-                _pcal_reply = (
-                    f"You have two things coming up{_pre_namepart}: "
-                    f"{_pcal_items[0]}, and {_pcal_items[1]}."
-                )
-            else:
-                _pcal_first = ", ".join(_pcal_items[:-1])
-                _pcal_reply = (
-                    f"Here is what you have coming up{_pre_namepart}: "
-                    f"{_pcal_first}, and {_pcal_items[-1]}."
-                )
-        else:
-            _pcal_reply = (
-                f"Your calendar looks clear for the next two weeks{_pre_namepart}. "
-                f"If you're expecting something to show up, give it a moment to sync."
-            )
-        return {
-            "reply": _pcal_reply, "action": None,
-            "ai_name": _pre_ai_name, "name": _pre_name,
-            "used_search": False,
-            **_trial_fields(_pre_trial),
-        }
-
     _PRE_TIME = [
         'what time is it', 'what is the time', "what's the time",
         'what time is it right now', 'current time', 'time right now',
@@ -4850,65 +4310,6 @@ async def ask_stream(request: Request):
                 )
                 yield _sse_event({"typing": True})
                 yield _sse_event({**_pre_done, "full": _pcal_write_reply, "action": None, "used_search": False})
-                return
-
-            # Calendar pre-check
-            _PRE_CAL = [
-                "what do i have", "what's on my calendar", "whats on my calendar",
-                "what is on my calendar", "my calendar", "my schedule",
-                "what do i have today", "what do i have tomorrow",
-                "what do i have this week", "anything on my calendar",
-                "anything on my schedule", "am i free", "what's coming up",
-                "whats coming up", "coming up today", "coming up this week",
-                "show my calendar", "show my schedule", "my agenda",
-                "my appointments", "my appointment", "on my schedule",
-                "what do i have on", "do i have anything",
-                "next two weeks",
-                "next 2 weeks",
-                "next 10 days",
-                "next 10 business days",
-                "next month",
-                "next 30 days",
-                "coming up soon",
-                "what do i have coming",
-                "anything coming up",
-                "what's ahead",
-                "what's on my schedule",
-                "anything scheduled",
-                "upcoming",
-                "what's planned",
-                "what do i have planned",
-            ]
-            if any(t in _pre_lower for t in _PRE_CAL):
-                _pcal_line = _get_calendar_line(_pre_user_id) if _pre_user_id else ""
-                if _pcal_line:
-                    _pcal_raw   = _pcal_line.replace(
-                        ". Answer schedule questions from this list -- do not guess.", ""
-                    ).replace("Upcoming calendar from device: ", "").strip()
-                    _pcal_items = [e.strip() for e in _pcal_raw.split(";") if e.strip()]
-                    if len(_pcal_items) == 0:
-                        _pcal_reply = f"Nothing on your calendar in the next two weeks{_pre_namepart}."
-                    elif len(_pcal_items) == 1:
-                        _pcal_reply = f"You have one thing coming up{_pre_namepart}: {_pcal_items[0]}."
-                    elif len(_pcal_items) == 2:
-                        _pcal_reply = (
-                            f"You have two things coming up{_pre_namepart}: "
-                            f"{_pcal_items[0]}, and {_pcal_items[1]}."
-                        )
-                    else:
-                        _pcal_first = ", ".join(_pcal_items[:-1])
-                        _pcal_reply = (
-                            f"Here is what you have coming up{_pre_namepart}: "
-                            f"{_pcal_first}, and {_pcal_items[-1]}."
-                        )
-                else:
-                    _pcal_reply = (
-                        f"Your calendar looks clear for the next two weeks{_pre_namepart}. "
-                        f"If you're expecting something to show up, give it a moment to sync."
-                    )
-                yield _sse_event({"t": _pcal_reply})
-                yield _sse_event({"t": "[S]"})
-                yield _sse_event({**_pre_done, "full": _pcal_reply, "action": None, "used_search": False})
                 return
 
             # Weather pre-check -- bypasses build_ask_context for weather queries
@@ -5303,38 +4704,6 @@ async def greeting(request: Request):
     return {"ok": True, "greeting": greeting_text, "ai_name": ai_name, "name": name}
 
 
-@app.post("/memory")
-async def memory(request: Request):
-    data    = await request.json()
-    user_id = data.get("user_id", "").strip()
-    message = data.get("message", "").strip()
-    fact    = data.get("fact", "").strip()
-
-    if not user_id:
-        return JSONResponse({"error": "user_id required"}, status_code=400)
-
-    profile = get_profile(user_id)
-
-    if not fact and message:
-        fact = extract_memory_fact(message)
-
-    if fact:
-        memories = profile.setdefault("memories", [])
-        if fact not in memories:
-            memories.append(fact)
-            if len(memories) > 30:
-                memories = memories[-30:]
-            profile["memories"] = memories
-            save_profile(user_id, profile)
-            name    = profile.get("name", "")
-            confirm = f"Got it{', ' + name if name else ''}. I will remember that."
-            return {"ok": True, "fact": fact, "confirm": confirm}
-        else:
-            return {"ok": True, "fact": fact, "confirm": "Already have that noted."}
-    else:
-        return JSONResponse({"error": "No fact to remember"}, status_code=400)
-
-
 @app.post("/tts")
 async def tts(request: Request):
     data  = await request.json()
@@ -5694,271 +5063,6 @@ async def sync(request: Request):
         return JSONResponse({"ok": False, "error": f"VM unreachable: {str(e)[:100]}"}, status_code=503)
 
 
-@app.post("/calendar/sync")
-async def calendar_sync(request: Request):
-    data         = await request.json()
-    user_id      = data.get("user_id", "").strip()
-    appointments = data.get("appointments", [])
-
-    if not user_id or not appointments:
-        return {"ok": True, "stored": 0}
-
-    stored = 0
-    try:
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            c.execute("""
-                CREATE TABLE IF NOT EXISTS life_tracker (
-                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id      TEXT NOT NULL,
-                    category     TEXT NOT NULL,
-                    item_name    TEXT NOT NULL,
-                    last_date    TEXT,
-                    next_due_date TEXT,
-                    interval_days INTEGER DEFAULT 0,
-                    source       TEXT DEFAULT 'calendar',
-                    active       INTEGER DEFAULT 1,
-                    created_at   TEXT NOT NULL
-                )
-            """)
-            for appt in appointments:
-                title    = appt.get("title", "").strip()
-                date_str = appt.get("date", "")
-                category = appt.get("category", "appointment")
-                interval = appt.get("interval", 0)
-                if not title or not date_str:
-                    continue
-                try:
-                    appt_date = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-                    appt_date_str = appt_date.strftime("%Y-%m-%d")
-                except Exception:
-                    continue
-                next_due = appt_date_str
-                if interval > 0:
-                    next_date = appt_date + timedelta(days=interval)
-                    next_due  = next_date.strftime("%Y-%m-%d")
-                c.execute("""
-                    SELECT id FROM life_tracker
-                    WHERE user_id = ? AND item_name = ? AND last_date = ?
-                """, (user_id, title, appt_date_str))
-                if c.fetchone():
-                    c.execute("""
-                        UPDATE life_tracker SET next_due_date = ?
-                        WHERE user_id = ? AND item_name = ? AND last_date = ?
-                          AND source = 'calendar'
-                          AND (next_due_date IS NULL OR next_due_date = '')
-                    """, (next_due, user_id, title, appt_date_str))
-                    continue
-                c.execute("""
-                    INSERT INTO life_tracker
-                    (user_id, category, item_name, last_date, next_due_date,
-                     interval_days, source, active, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, 'calendar', 1, ?)
-                """, (
-                    user_id, category, title, appt_date_str,
-                    next_due, interval, datetime.now().isoformat()
-                ))
-                stored += 1
-        print(f"[HERALD] Calendar sync: {stored} new appointments stored for {user_id}")
-        return {"ok": True, "stored": stored, "received": len(appointments)}
-    except Exception as e:
-        print(f"[HERALD] Calendar sync error: {e}")
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-
-@app.get("/medical/summary")
-async def medical_summary(user_id: str, send_email: bool = False):
-    if not user_id:
-        return JSONResponse({"error": "user_id required"}, status_code=400)
-    profile = get_profile(user_id)
-    name    = profile.get("name", "there")
-    try:
-        conn = _db_conn()
-        c    = conn.cursor()
-        c.execute("""
-            SELECT doctor_name, specialty, practice, location,
-                   visit_date, reason, outcome, follow_up_date,
-                   tests_ordered, results
-            FROM medical_records
-            WHERE user_id = ? AND active = 1
-            ORDER BY visit_date ASC
-        """, (user_id,))
-        visits = c.fetchall()
-        c.execute("""
-            SELECT med_name, dose, prescriber, reason, start_date
-            FROM medication_log
-            WHERE user_id = ? AND active = 1 AND end_date IS NULL
-            ORDER BY start_date ASC
-        """, (user_id,))
-        meds = c.fetchall()
-        c.execute("""
-            SELECT item_name, next_due_date
-            FROM life_tracker
-            WHERE user_id = ? AND active = 1 AND category = 'medical'
-            ORDER BY next_due_date ASC
-        """, (user_id,))
-        followups = c.fetchall()
-        conn.close()
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
-
-    lines = ["MEDICAL HISTORY SUMMARY",
-             f"Prepared by Herald for {name}",
-             f"Generated: {datetime.now().strftime('%B %d, %Y')}", ""]
-    if visits:
-        lines.append("MEDICAL VISITS")
-        lines.append("-" * 40)
-        for doc, spec, practice, loc, dt, reason, outcome, fu, tests, results in visits:
-            lines.append(f"Date:     {dt}")
-            lines.append(f"Doctor:   {doc}{' (' + spec + ')' if spec else ''}")
-            if practice: lines.append(f"Practice: {practice}{', ' + loc if loc else ''}")
-            if reason:   lines.append(f"Reason:   {reason}")
-            if outcome:  lines.append(f"Outcome:  {outcome}")
-            if tests:    lines.append(f"Tests:    {tests}")
-            if results:  lines.append(f"Results:  {results}")
-            if fu:       lines.append(f"Follow-up:{fu}")
-            lines.append("")
-    if meds:
-        lines.append("CURRENT MEDICATIONS")
-        lines.append("-" * 40)
-        for med_name, dose, prescriber, reason, start in meds:
-            line = f"{med_name}"
-            if dose:       line += f" {dose}"
-            if reason:     line += f" ({reason})"
-            if prescriber: line += f" — prescribed by {prescriber}"
-            if start:      line += f" since {start}"
-            lines.append(line)
-        lines.append("")
-    if followups:
-        lines.append("UPCOMING FOLLOW-UPS")
-        lines.append("-" * 40)
-        for item, due in followups:
-            lines.append(f"{item}: {due}")
-        lines.append("")
-    lines.append("This summary was compiled from conversations with Herald.")
-    lines.append("Always verify dates and details with your healthcare providers.")
-    summary_text = "\n".join(lines)
-
-    if send_email:
-        email = profile.get("email", "")
-        if email and SENDGRID_KEY:
-            _send_medical_summary_email(profile, summary_text)
-            return {"ok": True, "sent_to": email, "summary": summary_text}
-        return {"ok": False, "error": "No email on file", "summary": summary_text}
-    return {"ok": True, "summary": summary_text}
-
-
-def _send_medical_summary_email(profile: dict, summary_text: str):
-    email = profile.get("email", "")
-    name  = profile.get("name", "there")
-    if not email or not SENDGRID_KEY:
-        return
-    html_body = summary_text.replace("\n", "<br>")
-    html = (
-        f'<div style="font-family:Georgia,serif;max-width:600px;margin:0 auto;'
-        f'padding:32px 24px;background:#fafafa;">'
-        f'<div style="border-left:3px solid #1A9B8A;padding-left:16px;margin-bottom:24px;">'
-        f'<p style="margin:0;color:#1A9B8A;font-size:12px;letter-spacing:0.1em;'
-        f'text-transform:uppercase;">Herald Medical Summary</p>'
-        f'<h2 style="margin:8px 0 0;color:#1a1a1a;font-size:20px;">Your Medical History</h2>'
-        f'</div>'
-        f'<div style="color:#333;line-height:1.8;font-size:15px;font-family:monospace;">'
-        f'{html_body}</div>'
-        f'<div style="margin-top:32px;padding-top:16px;border-top:1px solid #e5e5e5;">'
-        f'<p style="color:#999;font-size:12px;margin:0;">'
-        f'Sent by Herald &middot; herald@apexempire.ai<br>'
-        f'Always verify with your healthcare providers.</p>'
-        f'</div></div>'
-    )
-    payload = json.dumps({
-        "personalizations": [{"to": [{"email": email, "name": name}]}],
-        "from": {"email": "herald@apexempire.ai", "name": "Herald"},
-        "subject": "Your Medical History Summary — Herald",
-        "content": [{"type": "text/html", "value": html}]
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        "https://api.sendgrid.com/v3/mail/send",
-        data=payload,
-        headers={"Content-Type": "application/json",
-                 "Authorization": f"Bearer {SENDGRID_KEY}"},
-        method="POST"
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            print(f"[HERALD] Medical summary sent to {email} | {resp.status}")
-    except Exception as e:
-        print(f"[HERALD] Medical summary email failed: {e}")
-
-
-@app.post("/health/sync")
-async def health_sync(request: Request):
-    data    = await request.json()
-    user_id = data.get("user_id", "").strip()
-    health  = data.get("health", {})
-
-    if not user_id or not health:
-        return {"ok": True}
-
-    steps    = health.get("steps_today", 0)
-    sleep    = health.get("sleep_hours_last", 0)
-    hr       = health.get("heart_rate_latest", 0)
-    calories = health.get("calories_today", 0)
-    today    = datetime.now().strftime("%Y-%m-%d")
-
-    parts = []
-    if steps > 0:    parts.append(f"{steps:,} steps")
-    if sleep > 0:    parts.append(f"{sleep} hours of sleep")
-    if hr > 0:       parts.append(f"heart rate {hr} bpm")
-    if calories > 0: parts.append(f"{calories:,} calories burned")
-
-    if not parts:
-        return {"ok": True}
-
-    summary = f"Health on {today}: " + ", ".join(parts)
-
-    try:
-        conn = _db_conn()
-        c    = conn.cursor()
-        c.execute("""
-            CREATE TABLE IF NOT EXISTS life_moments (
-                id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id    TEXT NOT NULL,
-                summary    TEXT NOT NULL,
-                category   TEXT DEFAULT 'health',
-                emotion    TEXT DEFAULT 'neutral',
-                weight     INTEGER DEFAULT 3,
-                days_ago   INTEGER DEFAULT 0,
-                active     INTEGER DEFAULT 1,
-                source     TEXT DEFAULT 'health_connect',
-                created_at TEXT NOT NULL
-            )
-        """)
-        c.execute("""
-            SELECT id FROM life_moments
-            WHERE user_id = ? AND source = 'health_connect'
-              AND date(created_at) = date('now')
-        """, (user_id,))
-        if c.fetchone():
-            c.execute("""
-                UPDATE life_moments SET summary = ?
-                WHERE user_id = ? AND source = 'health_connect'
-                  AND date(created_at) = date('now')
-            """, (summary, user_id))
-        else:
-            c.execute("""
-                INSERT INTO life_moments
-                (user_id, summary, category, emotion, weight, days_ago,
-                 active, source, created_at)
-                VALUES (?, ?, 'health', 'neutral', 3, 0, 1, 'health_connect', ?)
-            """, (user_id, summary, datetime.now().isoformat()))
-        conn.commit()
-        conn.close()
-        print(f"[HERALD] Health sync stored for {user_id}: {summary[:60]}")
-        return {"ok": True}
-    except Exception as e:
-        print(f"[HERALD] Health sync error: {e}")
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
 
 @app.get("/user/export/{user_id}")
 async def user_export(user_id: str, request: Request, secret: str = ""):
@@ -6006,96 +5110,17 @@ async def user_export(user_id: str, request: Request, secret: str = ""):
         ):
             return JSONResponse({"error": "unauthorized"}, status_code=403)
 
-    try:
-        conn = _db_conn()
-        c = conn.cursor()
-
-        def rows_as_dicts(cursor):
-            cols = [d[0] for d in cursor.description]
-            return [dict(zip(cols, row)) for row in cursor.fetchall()]
-
-        c.execute("SELECT * FROM medical_records WHERE user_id=? AND active=1", (user_id,))
-        medical_records = rows_as_dicts(c)
-
-        c.execute("SELECT * FROM medical_contacts WHERE user_id=? AND active=1", (user_id,))
-        medical_contacts = rows_as_dicts(c)
-
-        c.execute("SELECT * FROM medication_log WHERE user_id=? AND active=1", (user_id,))
-        medications = rows_as_dicts(c)
-
-        c.execute("SELECT * FROM life_tracker WHERE user_id=? AND active=1", (user_id,))
-        life_tracker = rows_as_dicts(c)
-
-        c.execute("SELECT * FROM life_moments WHERE user_id=? AND active=1", (user_id,))
-        life_moments = rows_as_dicts(c)
-
-        conn.close()
-    except Exception as e:
-        return JSONResponse({"error": f"export failed: {e}"}, status_code=500)
-
-    print(f"[HERALD] /user/export: exported all personal data for {user_id}")
+    print(f"[HERALD] /user/export: exported profile for {user_id}")
     return {
         "ok": True,
-        "version": "8.91",
+        "version": "8.92",
         "user_id": user_id,
         "exported_at": datetime.now().isoformat(),
         "profile": profile,
-        "medical_records": medical_records,
-        "medical_contacts": medical_contacts,
-        "medications": medications,
-        "life_tracker": life_tracker,
-        "life_moments": life_moments,
     }
 
 
-@app.post("/user/sync_facts")
-async def user_sync_facts(request: Request):
-    """
-    v8.63: Session L — device SQLite backup sync.
-    Receives structured facts extracted on device and writes them to Railway
-    as a backup. Device is source of truth; Railway copy is for recovery only.
-    Body: { user_id, facts: [{ category, value }] }
-    """
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "invalid JSON"}, status_code=400)
 
-    user_id = body.get("user_id", "").strip()
-    facts = body.get("facts", [])
-
-    if not user_id:
-        return JSONResponse({"error": "user_id required"}, status_code=400)
-    if not isinstance(facts, list):
-        return JSONResponse({"error": "facts must be a list"}, status_code=400)
-
-    written = 0
-    try:
-        with get_db_connection() as conn:
-            c = conn.cursor()
-            for fact in facts:
-                category = fact.get("category", "general")
-                value = fact.get("value", "").strip()
-                if not value:
-                    continue
-                # Write to life_moments as backup — same table migration.ts reads from
-                c.execute(
-                    """INSERT INTO life_moments (user_id, role, content, active, created_at)
-                       VALUES (?, 'assistant', ?, 1, ?)
-                       ON CONFLICT DO NOTHING""",
-                    (user_id, f"[{category}] {value}", datetime.now().isoformat())
-                )
-                written += 1
-            conn.commit()
-    except Exception as e:
-        print(f"[HERALD] /user/sync_facts error: {e}")
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-    print(f"[HERALD] /user/sync_facts: wrote {written} facts for {user_id}")
-    return {"ok": True, "written": written}
-
-
-# ── STARTUP ───────────────────────────────────────────────────────────────────
 
 @app.post("/admin/clear_profile_field")
 async def admin_clear_profile_field(request: Request):
@@ -6189,7 +5214,7 @@ async def admin_dashboard(secret: str = ""):
 
         return {
             "ok": True,
-            "version": "8.91",
+            "version": "8.92",
             "user_count": len(users),
             "users": sorted(users, key=lambda x: x["msg_count"], reverse=True),
             "waitlist_count": waitlist_count,
@@ -6395,7 +5420,7 @@ def startup():
     print(f"[HERALD API] WeatherAPI:    {'YES (backup)' if WEATHER_KEY else 'not set'}")
     print(f"[HERALD API] Database:      {DB_FILE}")
     print(f"[HERALD API] Owner code:    {'SET' if OWNER_CODE else 'NOT SET'}")
-    print(f"[HERALD API] v8.91: S3B Commit B — removed implicit watcher pipeline, explicit watches unchanged")
+    print(f"[HERALD API] v8.92: S3B Commit C — removed personal-data writers/endpoints, retired medical-intake, trimmed /user/export")
     print(f"[HERALD API] FIX v8.8: GPS city caching -- confirmed_city in profile, 20mi tolerance")
     print(f"[HERALD API] FIX v8.8: Memory rules -- no 'I remember', no raw GPS coords spoken")
     print(f"[HERALD API] FIX v8.8: Seed question for new users -- makes first session feel alive")
