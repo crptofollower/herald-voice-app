@@ -4,7 +4,43 @@
 // Used by tierRouter.ts for alarm and SMS intents.
 
 export function parseTimeFromText(text: string): { hour: number; minute: number } | null {
-  const t = text.toLowerCase().replace(/\b(a)\.(m)\./gi, 'am').replace(/\b(p)\.(m)\./gi, 'pm');
+  let t = text.toLowerCase().replace(/\b(a)\.(m)\./gi, 'am').replace(/\b(p)\.(m)\./gi, 'pm');
+
+  // Voice-first: normalize spelled-out hours to digits before digit patterns.
+  // Longest-first so "twelve" is not partially eaten by shorter tokens.
+  const HOUR_WORDS: [string, string][] = [
+    ['twelve', '12'], ['eleven', '11'], ['ten', '10'],
+    ['nine', '9'], ['eight', '8'], ['seven', '7'],
+    ['six', '6'], ['five', '5'], ['four', '4'],
+    ['three', '3'], ['two', '2'], ['one', '1'],
+  ];
+  for (const [word, digit] of HOUR_WORDS) {
+    t = t.replace(new RegExp(`\\b${word}\\b`, 'gi'), digit);
+  }
+
+  // Default smart AM/PM when no period-of-day word is present.
+  // noon stays 12, 1-5 → PM, 6-11 → AM, 0 → midnight.
+  const applySmartAmPm = (h: number): number => {
+    if (h === 12) return 12;
+    if (h >= 1 && h <= 5) return h + 12;
+    if (h >= 6 && h <= 11) return h;
+    if (h === 0) return 0;
+    return h;
+  };
+
+  // Explicit period word beats the generic 1-5→PM / 6-11→AM guess.
+  // Bucket words only influence AM/PM here — never flatten minutes.
+  const applyPeriodOrSmartAmPm = (h: number): number => {
+    if (/\bmorning\b/.test(t)) {
+      return h === 12 ? 0 : h;
+    }
+    if (/\b(afternoon|evening|tonight|night)\b/.test(t)) {
+      if (h === 12) return 12;
+      if (h >= 1 && h <= 11) return h + 12;
+      return h;
+    }
+    return applySmartAmPm(h);
+  };
 
   // "7am", "7 am", "7:00am", "7:00 am", "7:30 pm"
   const absolute = t.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
@@ -18,16 +54,10 @@ export function parseTimeFromText(text: string): { hour: number; minute: number 
   }
 
   // "at 7", "at 9", "wake me at 10" — no AM/PM
-  // Heuristic: 6-11 = AM, 12 = noon, 1-5 = PM, default PM for ambiguous
   const plainHour = t.match(/\bat\s+(\d{1,2})(?::(\d{2}))?\b(?!\s*[ap]m)/i);
   if (plainHour) {
-    let h = parseInt(plainHour[1]);
+    const h = applyPeriodOrSmartAmPm(parseInt(plainHour[1]));
     const m = parseInt(plainHour[2] ?? '0');
-    // Smart AM/PM inference
-    if (h === 12) { /* noon — leave as 12 */ }
-    else if (h >= 1 && h <= 5) h += 12; // 1-5 → PM
-    else if (h >= 6 && h <= 11) { /* AM — leave as is */ }
-    else if (h === 0) h = 0; // midnight
     return { hour: h, minute: m };
   }
 
@@ -42,7 +72,17 @@ export function parseTimeFromText(text: string): { hour: number; minute: number 
     return { hour: target.getHours(), minute: target.getMinutes() };
   }
 
-  // Named times
+  // Bare "HH:MM" or "HH" — before named buckets so an explicit number always wins.
+  // Period-of-day word (if any) resolves AM/PM; minutes are always preserved.
+  const bare = t.match(/\b(\d{1,2})(?::(\d{2}))?\b(?!\s*[ap]m)/i);
+  if (bare) {
+    const h = applyPeriodOrSmartAmPm(parseInt(bare[1]));
+    const m = parseInt(bare[2] ?? '0');
+    return { hour: h, minute: m };
+  }
+
+  // Named bucket defaults — only when NO number is present in the text.
+  // Word-boundary match so "afternoon" ≠ "noon", "midnight" ≠ "night".
   const named: Record<string, [number, number]> = {
     'morning':   [7,  0],
     'noon':      [12, 0],
@@ -54,7 +94,7 @@ export function parseTimeFromText(text: string): { hour: number; minute: number 
     'midnight':  [0,  0],
   };
   for (const [word, [h, m]] of Object.entries(named)) {
-    if (t.includes(word)) return { hour: h, minute: m };
+    if (new RegExp(`\\b${word}\\b`).test(t)) return { hour: h, minute: m };
   }
 
   return null;
