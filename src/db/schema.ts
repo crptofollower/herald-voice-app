@@ -2,7 +2,7 @@
 // Herald device SQLite — table definitions and migration runner.
 // Session L — Device-First Intelligence Layer
 //
-// SCHEMA VERSION: 19
+// SCHEMA VERSION: 20
 // v1: Initial schema — facts, profile, medical, calendar_cache (ISO strings), life_tracker
 // v2: calendar_cache rebuilt with Unix ms timestamps (timezone fix)
 // v3: Entity graph + importance scoring + temporal awareness (locked Session L spec)
@@ -26,6 +26,8 @@
 // v18: medical_records.removed_at (soft-delete — §4a compliance for the medical drawer)
 // v19: medical_records.status + surfaced_at (Beat 1 surfacing), medical_contacts.removed_at
 //      (MEDICAL_SURFACING_DESIGN_SPEC §2.1 — three additive columns, one migration)
+// v20: appointments table (canonical domain record — closes confirmed gap,
+//      Herald-owned scheduling memory independent of the device-calendar mirror)
 //
 // RULE: NEVER modify a past migration. Always add at the next version number.
 //
@@ -44,7 +46,7 @@
 
 import * as SQLite from "expo-sqlite";
 
-export const SCHEMA_VERSION = 19;
+export const SCHEMA_VERSION = 20;
 export const DB_NAME = "herald_device.db";
 
 // ─── Open database ────────────────────────────────────────────────────────────
@@ -754,5 +756,32 @@ const MIGRATIONS: Record<number, (db: SQLite.SQLiteDatabase) => void> = {
       // column already exists (re-run safety) — ignore
     }
     console.log("Herald schema V19: medical_records.status/surfaced_at + medical_contacts.removed_at added");
+  },
+
+  // ── v20: appointments (canonical domain record — closes confirmed gap) ─────
+  20: (db) => {
+    db.execSync(`
+      CREATE TABLE IF NOT EXISTS appointments (
+        id             TEXT PRIMARY KEY,
+        title          TEXT NOT NULL,
+        category       TEXT,
+        appt_date      TEXT NOT NULL,
+        appt_date_precision TEXT NOT NULL DEFAULT 'exact',
+        end_date       TEXT,
+        location       TEXT,
+        notes          TEXT,
+        source         TEXT NOT NULL,
+        external_id    TEXT,
+        raw_phrase     TEXT,
+        status         TEXT NOT NULL DEFAULT 'upcoming',
+        created_at     TEXT NOT NULL,
+        updated_at     TEXT NOT NULL,
+        removed_at     TEXT
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_appointments_external
+        ON appointments(external_id) WHERE external_id IS NOT NULL;
+    `);
+    console.log("Herald schema V20: appointments table added (canonical domain record)");
   },
 };

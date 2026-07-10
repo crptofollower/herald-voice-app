@@ -70,7 +70,7 @@ export async function runSchemaMigrationContractTests() {
     await runMigrations();
 
     const meta = db.prepare('SELECT version FROM schema_meta ORDER BY version DESC LIMIT 1;').get();
-    assert('SM1 fresh install lands at schema_meta v19', meta?.version, v => v === 19, 19);
+    assert('SM1 fresh install lands at schema_meta v20', meta?.version, v => v === 20, 20);
 
     const mrCols = columnNames(db, 'medical_records');
     assert('SM2 fresh install: medical_records has status', mrCols.includes('status'), v => v === true, true);
@@ -105,7 +105,7 @@ export async function runSchemaMigrationContractTests() {
     await runMigrations();
 
     const meta = db.prepare('SELECT version FROM schema_meta ORDER BY version DESC LIMIT 1;').get();
-    assert('SM6 upgrade from v18 lands at v19', meta?.version, v => v === 19, 19);
+    assert('SM6 upgrade from v18 lands at v20', meta?.version, v => v === 20, 20);
 
     const mrCols = columnNames(db, 'medical_records');
     assert('SM7 upgrade: medical_records gains status + surfaced_at', 

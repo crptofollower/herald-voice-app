@@ -89,6 +89,7 @@ import { markCalendarWrite } from "../db/calendarState";
 import { initDB, isDBReady } from "../db/useDeviceDB";
 import { getDB } from "../db/schema";
 import { setProfileField, setProfileFields } from "../db/profileDB";
+import { addAppointment } from "../db/appointmentsDB";
 import {
   writeContact,
   resolvePhoneNumber,
@@ -2038,6 +2039,20 @@ export default function ChatScreen() {
       timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       notes: "Added by Herald",
     });
+
+    try {
+      addAppointment({
+        title,
+        apptDateISO: startDate.toISOString(),
+        apptDatePrecision: "exact",
+        endDateISO: endDate.toISOString(),
+        source: "user_told",
+        rawPhrase: `${title}|${dateStr}|${timeStr}`,
+      });
+    } catch {
+      // Non-fatal — OS calendar write already succeeded; Herald's own
+      // memory of it is best-effort, never blocks the user-facing ACK.
+    }
 
     const timeDisplay = startDate.toLocaleTimeString("en-US", {
       hour: "numeric",

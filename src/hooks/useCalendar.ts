@@ -8,6 +8,7 @@ import { useEffect, useRef } from "react";
 import * as Calendar from "expo-calendar";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useStore } from "../store/useStore";
+import { addAppointment } from "../db/appointmentsDB";
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -137,11 +138,33 @@ async function syncCalendar(userId: string) {
         category:  detectCategory(e.title, e.notes ?? ""),
         interval:  estimateInterval(detectCategory(e.title, e.notes ?? "")),
         all_day:   e.allDay,
+        external_id: e.id,
       }));
 
     if (appointments.length === 0) {
       await AsyncStorage.setItem(LAST_SYNC_KEY, Date.now().toString());
       return;
+    }
+
+    for (const appt of appointments) {
+      try {
+        const startISO = new Date(appt.date).toISOString();
+        const endISO = appt.end_date ? new Date(appt.end_date).toISOString() : undefined;
+        addAppointment({
+          title: appt.title,
+          category: appt.category,
+          apptDateISO: startISO,
+          apptDatePrecision: appt.all_day ? "date_only" : "exact",
+          endDateISO: endISO,
+          location: appt.location || undefined,
+          notes: appt.notes || undefined,
+          source: "device_calendar",
+          externalId: appt.external_id,
+        });
+      } catch {
+        // Non-fatal — one bad row should never block the rest of the sync
+        // or crash the app (matches the existing outer try/catch's intent).
+      }
     }
 
     await AsyncStorage.setItem(LAST_SYNC_KEY, Date.now().toString());
