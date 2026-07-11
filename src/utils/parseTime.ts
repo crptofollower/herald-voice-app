@@ -193,8 +193,27 @@ export function parseCalendarWriteIntent(text: string): string | null {
     date = d.toLocaleDateString('en-CA');
   } else if (/\btoday\b/i.test(text)) {
     date = new Date().toLocaleDateString('en-CA');
+  } else {
+    const weekdayMatch = text.match(
+      /\b(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i
+    );
+    if (weekdayMatch) {
+      const names = [
+        'sunday',
+        'monday',
+        'tuesday',
+        'wednesday',
+        'thursday',
+        'friday',
+        'saturday',
+      ];
+      const targetDay = names.indexOf(weekdayMatch[1].toLowerCase());
+      const d = new Date();
+      const diff = (targetDay - d.getDay() + 7) % 7;
+      d.setDate(d.getDate() + diff);
+      date = d.toLocaleDateString('en-CA');
+    }
   }
-
   return `${title}|${date}|${time}`;
 }
 

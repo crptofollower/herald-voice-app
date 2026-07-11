@@ -2019,9 +2019,17 @@ export default function ChatScreen() {
         startDate.setFullYear(year, month - 1, day);
         startDate.setHours(h, m, 0, 0);
       } else {
-        startDate = new Date();
-        startDate.setDate(startDate.getDate() + 1);
-        startDate.setHours(h || 9, m || 0, 0, 0);
+        // No safe date guess — Graceful Confusion, never silent tomorrow substitution.
+        const reply = "I'm not sure I'm following you — can you help me understand?";
+        addMessage({
+          id: generateId("msg"),
+          role: "assistant",
+          content: reply,
+          timestamp: Date.now(),
+        });
+        speak(reply);
+        setActionStatus("confirming");
+        return;
       }
       if (isNaN(startDate.getTime())) throw new Error("invalid date");
     } catch {
@@ -2049,6 +2057,7 @@ export default function ChatScreen() {
         source: "user_told",
         rawPhrase: `${title}|${dateStr}|${timeStr}`,
       });
+      console.log("[HERALD] appointment saved (user_told):", title);
     } catch {
       // Non-fatal — OS calendar write already succeeded; Herald's own
       // memory of it is best-effort, never blocks the user-facing ACK.
