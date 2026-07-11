@@ -254,6 +254,21 @@ export async function runMedicalContractTests() {
     );
   }
 
+  // ── M16b: FUTURE_VISIT gerund "I'm seeing Dr …" (Commit E / seeing-dr gap) ─
+  {
+    const { detectMedicalEvent } = await import('../../src/utils/detectMedicalEvent.ts');
+    const ev16b = detectMedicalEvent("I'm seeing Dr Sarver next Tuesday");
+    assert(
+      "M16b detectMedicalEvent: \"I'm seeing Dr Sarver next Tuesday\" → future visit, Dr Sarver",
+      ev16b,
+      (v) => {
+        const e = v as { type?: string; tense?: string; doctor_name?: string } | null;
+        return e?.type === 'visit' && e?.tense === 'future' && e?.doctor_name === 'Dr Sarver';
+      },
+      '{ type: "visit", tense: "future", doctor_name: "Dr Sarver" }'
+    );
+  }
+
   // ── M17: clean doctor name → exactly one visit record, doctor_name verbatim ─
   // "I saw Dr. Sarver today" — a clean "Dr. X" name is HEARD, not guessed.
   // Visit policy + Spine §5: write immediately, verbatim. This case SHOULD write.
