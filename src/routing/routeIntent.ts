@@ -5,7 +5,7 @@
 import type { IntentRecord } from '../hooks/llmLayers';
 import type { TierDecision, LocalContext } from './tierRouter';
 import { writeServiceProvider, detectServiceCapture, detectPhoneCapture, detectInsuranceCapture, captureHouseholdInsurance, normalizeCarrier } from '../utils/householdCapture';
-import { detectDiagnosisCapture } from '../utils/detectMedicalEvent';
+import { detectDiagnosisCapture, detectDoctorIntroCapture } from '../utils/detectMedicalEvent';
 import { detectFamilyCapture } from '../utils/familyCapture';
 import { getDB } from '../db/schema';
 import { capturePerson } from '../db/capturePerson';
@@ -52,6 +52,7 @@ export type DeterministicCapturer = (text: string, ctx: CaptureContext) => Inten
 // reached only when every capturer here returns []. One entry today; phone/list/todo
 // follow, one per gated commit.
 const DETERMINISTIC_CAPTURERS: DeterministicCapturer[] = [
+  (text) => detectDoctorIntroCapture(text),
   (text) => detectInsuranceCapture(text),
   (text) => detectServiceCapture(text),
   (text, ctx) => detectPhoneCapture(text, ctx.contacts),
@@ -695,6 +696,57 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       };
     },
     async remove(item: string): Promise<CommitResult> {
+      return { status: 'noop', ack: 'Noted.' };
+    },
+    async clear(): Promise<CommitResult> {
+      return { status: 'noop', ack: 'Noted.' };
+    },
+  },
+  doctor_intro_capture: {
+    async add(intent: IntentRecord, rawPhrase: string): Promise<CommitResult> {
+      if (intent.type !== 'doctor_intro_capture') {
+        return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
+      }
+      const name = (intent as any).name?.trim();
+      const specialty = (intent as any).specialty?.trim();
+      const raw = (intent as any).raw ?? rawPhrase;
+      if (!name || !specialty) {
+        return { status: 'failed', ack: "I didn't catch that — who's your doctor and what's their specialty?" };
+      }
+      return {
+        status: 'pending',
+        prompt: `Say yes and I'll remember ${name} as your ${specialty}.`,
+        pendingKey: 'doctor_intro_capture',
+        resume: async (userText: string): Promise<CommitResult> => {
+          const YES = /^(yes|yeah|yep|yup|correct|right|that'?s right|sure|ok|okay|sounds good|that'?s it|exactly|y)\b/i;
+          const NO  = /^(no|nope|nah|wrong|not right|that'?s wrong|incorrect|cancel|nevermind|never mind)\b/i;
+          if (NO.test(userText.trim())) {
+            return { status: 'noop', ack: `No problem — tell me again and I'll get it right.` };
+          }
+          if (!YES.test(userText.trim())) {
+            return { status: 'noop', ack: '' };
+          }
+          try {
+            const { writeMedicalContact, getMedicalContacts, passesSubstringGate } = await import('../db/medicalDB');
+            if (!passesSubstringGate(name, raw) || !passesSubstringGate(specialty, raw)) {
+              return { status: 'failed', ack: "I want to make sure I get this exactly right — can you say that again?" };
+            }
+            writeMedicalContact({ name, specialty, is_primary: 0 });
+            const verified = getMedicalContacts().some(
+              c => c.name.trim().toLowerCase() === name.toLowerCase() &&
+                   (c.specialty ?? '').trim().toLowerCase() === specialty.toLowerCase(),
+            );
+            if (!verified) {
+              return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
+            }
+            return { status: 'committed', ack: `Got it — I'll remember ${name} as your ${specialty}.` };
+          } catch {
+            return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
+          }
+        },
+      };
+    },
+    async remove(_item: string): Promise<CommitResult> {
       return { status: 'noop', ack: 'Noted.' };
     },
     async clear(): Promise<CommitResult> {

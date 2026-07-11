@@ -228,3 +228,27 @@ export function detectDiagnosisCapture(text: string): IntentRecord[] {
 
   return [];
 }
+
+// ─── Doctor-intro capture ("Dr X is my Y") ────────────────────────────────────
+// A doctor-relationship statement is NOT a medication and NOT a visit — deterministic,
+// runs BEFORE medication detection so "Dr Sarver is my General practitioner" can
+// never misfire as a medication (MEDICAL_SURFACING_DESIGN_SPEC §2.2d). Name via
+// extractDoctorName (verbatim "Dr. X"), specialty captured verbatim from the
+// matched group. Confirm-gated per medical policy.
+const DOCTOR_INTRO_CUE = /\bdr\.?\s+\w+\s+is\s+my\s+([a-z ]{3,40})\b/i;
+
+export function detectDoctorIntroCapture(text: string): IntentRecord[] {
+  const raw = text.trim();
+  if (!raw) return [];
+  if (LIST_CONTEXT.test(raw)) return [];
+
+  const name = extractDoctorName(raw);
+  const cue = raw.match(DOCTOR_INTRO_CUE);
+  if (name && cue?.[1]) {
+    const specialty = cue[1].trim().replace(/[.!?]+$/, '').trim();
+    if (specialty.length >= 3) {
+      return [{ type: 'doctor_intro_capture', name, specialty, raw }];
+    }
+  }
+  return [];
+}
