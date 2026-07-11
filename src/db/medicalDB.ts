@@ -105,7 +105,7 @@ export function writeMedicalRecord(
       record.diagnosis ?? null,
       record.follow_up ?? null,
       record.notes ?? null,
-      record.status ?? null,
+      record.status ?? 'noted',
       now,
     ]
   );
@@ -117,6 +117,36 @@ export function getMedicalRecords(): MedicalRecord[] {
   return db.getAllSync<MedicalRecord>(
     "SELECT * FROM medical_records ORDER BY visit_date DESC, created_at DESC;"
   );
+}
+
+/**
+ * Most recent NOTED visit, optionally filtered by doctor name (substring
+ * match, case-insensitive). Verbatim date + notes read-back — never the
+ * generative phrasing path (Spine §3). Honest miss when none exist.
+ */
+export function getLastVisit(doctorHint?: string): {
+  doctorName?: string;
+  visitDate: string;
+  notes?: string;
+} | null {
+  const records = getMedicalRecords().filter(
+    (r) => r.status !== 'upcoming' && r.visit_date
+  );
+  const filtered = doctorHint
+    ? records.filter(
+        (r) => r.doctor_name?.toLowerCase().includes(doctorHint.toLowerCase())
+      )
+    : records;
+  if (filtered.length === 0) return null;
+  const sorted = [...filtered].sort((a, b) =>
+    (b.visit_date! > a.visit_date! ? 1 : -1)
+  );
+  const latest = sorted[0];
+  return {
+    doctorName: latest.doctor_name,
+    visitDate: latest.visit_date!,
+    notes: latest.notes,
+  };
 }
 
 // ─── Diagnoses (Spine §3 verbatim, §4a single writer/reader) ──────────────────

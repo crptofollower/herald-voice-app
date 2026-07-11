@@ -163,6 +163,12 @@ const DOCTOR_READ_SIGNALS = [
   /\bmy\s+doctors?\b.*\bname/i,
 ];
 
+const VISIT_HISTORY_READ = [
+  /\bwhen did i (?:last )?see\b/i,
+  /\bwhen was my (?:last )?(?:appointment|visit)\b/i,
+  /\bwhat was (?:it|that) for\b/i,
+];
+
 const TIER2_SIGNALS = [
   /what do you know (about me|about my life)/i,
   /what have i told you/i,
@@ -928,6 +934,36 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   if (TIER1_SIGNALS.visit_read.some((p) => p.test(msg))) {
     const response = getVisitSummary();
     return { tier: 1, tier1Response: response, isMedical: true, reason: "medical:visit_read" };
+  }
+
+  if (VISIT_HISTORY_READ.some((p) => p.test(msg))) {
+    const { getLastVisit } = await import('../db/medicalDB');
+    const { formatSpokenDate } = await import('../utils/parseTime');
+    const nameMatch = msg.match(/\bsee\s+(dr\.?\s+\w+)/i);
+    const doctorHint = nameMatch?.[1];
+    const SPECIALTY_REFERENCE = /\bmy\s+(dentist|cardiologist|neurologist|oncologist|psychiatrist|therapist|specialist)\b/i;
+    const specialtyMatch = msg.match(SPECIALTY_REFERENCE);
+    if (!doctorHint && specialtyMatch) {
+      return {
+        tier: 1,
+        tier1Response: `Help me out — when you say "${specialtyMatch[1]}," who do you mean? Tell me their name and I'll look it up.`,
+        isMedical: true,
+        reason: "medical:visit_history_unresolved_specialty",
+      };
+    }
+    const visit = getLastVisit(doctorHint);
+    let response: string;
+    if (!visit) {
+      response = doctorHint
+        ? `I don't have a visit with ${doctorHint} yet — tell me and I'll remember.`
+        : "I don't have any visits yet — tell me and I'll remember.";
+    } else {
+      const who = visit.doctorName ?? 'your doctor';
+      const spoken = formatSpokenDate(visit.visitDate);
+      const reasonPart = visit.notes ? ` — ${visit.notes}` : '';
+      response = `You last saw ${who} on ${spoken}${reasonPart}.`;
+    }
+    return { tier: 1, tier1Response: response, isMedical: true, reason: "medical:visit_history_read" };
   }
 
   // Tier 1: calendar this week
