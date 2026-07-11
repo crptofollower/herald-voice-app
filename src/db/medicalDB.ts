@@ -50,6 +50,7 @@ export interface MedicalContact {
   is_primary: number; // 1 = primary, 0 = other
   notes?: string;
   created_at: string;
+  removed_at?: string;
 }
 
 // ─── Substring Gate (Spine §3 verbatim rule, mechanically enforced) ───────────
@@ -264,8 +265,26 @@ export function writeMedicalContact(
 export function getMedicalContacts(): MedicalContact[] {
   const db = getDB();
   return db.getAllSync<MedicalContact>(
-    "SELECT * FROM medical_contacts ORDER BY is_primary DESC, name ASC;"
+    "SELECT * FROM medical_contacts WHERE removed_at IS NULL ORDER BY is_primary DESC, name ASC;"
   );
+}
+
+// ─── Doctors read authority (§4a one-reader; MEDICAL_SURFACING_DESIGN_SPEC §2.4a) ──
+// "Who are my doctors" must NEVER return medication rows. Reads medical_contacts
+// only — name + specialty, fixed template, honest miss when empty.
+export function getDoctorsSummary(): string {
+  try {
+    const contacts = getMedicalContacts();
+    if (contacts.length === 0) {
+      return "I don't have your doctors yet — tell me and I'll remember.";
+    }
+    const lines = contacts.map((c) =>
+      c.specialty ? `${c.name}, your ${c.specialty}.` : `${c.name}.`
+    );
+    return lines.join(' ');
+  } catch {
+    return "I'm having trouble pulling that up right now — let's try again in a moment.";
+  }
 }
 
 // ─── writeMedicalFact ─────────────────────────────────────────────────────────

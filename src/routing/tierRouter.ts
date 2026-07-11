@@ -8,7 +8,7 @@ import { calendarWriteIsRecent } from "../db/calendarState";
 import { getFactsSummary } from "../db/factDB";
 import { normalizeInput } from "../utils/normalizeInput";
 import { getProfileSummary } from "../db/profileDB";
-import { getMedicalSummary, getMedicalRecords, getDiagnosisSummary } from "../db/medicalDB";
+import { getMedicalSummary, getMedicalRecords, getDiagnosisSummary, getDoctorsSummary } from "../db/medicalDB";
 import { getRecentMentions, formatRecentMentions } from "../db/recallDB";
 import { detectMedicalEvent } from "../utils/detectMedicalEvent";
 import type { MedicalEvent } from "../utils/detectMedicalEvent";
@@ -973,7 +973,7 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
 
   // Tier 1: doctor read — BEFORE the general medical summary (§4a one-reader).
   if (DOCTOR_READ_SIGNALS.some((p) => p.test(msg))) {
-    return { tier: 1, tier1Response: getDoctorSummary(), isMedical: true, reason: "medical:doctor_read" };
+    return { tier: 1, tier1Response: getDoctorsSummary(), isMedical: true, reason: "medical:doctor_read" };
   }
 
   // Tier 1: medical

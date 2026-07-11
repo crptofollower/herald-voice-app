@@ -68,7 +68,8 @@ const SCHEMA_SQL = `
     address TEXT,
     is_primary INTEGER DEFAULT 0,
     notes TEXT,
-    created_at TEXT
+    created_at TEXT,
+    removed_at TEXT
   );
   CREATE TABLE IF NOT EXISTS pending_clarifications (
     id TEXT PRIMARY KEY,

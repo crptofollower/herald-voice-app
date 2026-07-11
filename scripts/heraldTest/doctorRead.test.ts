@@ -10,7 +10,7 @@
 
 import Database from 'better-sqlite3';
 import { setDB } from '../../src/db/schema.ts';
-import { writeMedicalRecord } from '../../src/db/medicalDB.ts';
+import { writeMedicalContact } from '../../src/db/medicalDB.ts';
 import { classifyQuery } from '../../src/routing/tierRouter.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
@@ -51,7 +51,8 @@ const SCHEMA_SQL = `
     address TEXT,
     is_primary INTEGER DEFAULT 0,
     notes TEXT,
-    created_at TEXT
+    created_at TEXT,
+    removed_at TEXT
   );
 `;
 
@@ -98,7 +99,7 @@ export async function runDoctorReadTests() {
         const r = v as { reason?: string; response?: string };
         return r.reason === 'medical:doctor_read'
           && typeof r.response === 'string'
-          && /don't have a doctor/i.test(r.response)
+          && /don't have your doctors/i.test(r.response)
           && !/medication/i.test(r.response);
       },
       'reason medical:doctor_read; contains "don\'t have a doctor"; no "medication"',
@@ -108,7 +109,7 @@ export async function runDoctorReadTests() {
   // ── DR2: seeded doctor_name — verbatim in the spoken reply ────────────────
   {
     freshDB();
-    writeMedicalRecord({ doctor_name: 'Dr. Sarver' });
+    writeMedicalContact({ name: 'Dr. Sarver', is_primary: 0 });
     const d = await classifyQuery('who are my doctors');
     assert('DR2 seeded Dr. Sarver appears in response', d.tier1Response,
       (v) => typeof v === 'string' && v.includes('Dr. Sarver'),
