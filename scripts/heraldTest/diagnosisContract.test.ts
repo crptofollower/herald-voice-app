@@ -16,7 +16,8 @@ const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', R
 const SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS medical_records (
     id TEXT PRIMARY KEY, visit_date TEXT, doctor_name TEXT, facility TEXT,
-    reason TEXT, diagnosis TEXT, follow_up TEXT, notes TEXT, created_at TEXT,
+    reason TEXT, diagnosis TEXT, follow_up TEXT, notes TEXT,
+    status TEXT DEFAULT 'noted', surfaced_at TEXT, created_at TEXT,
     removed_at TEXT
   );
 `;

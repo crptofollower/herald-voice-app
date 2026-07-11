@@ -206,6 +206,23 @@ export function parseDatePhrase(text: string, referenceDate?: Date): string | nu
   return null;
 }
 
+/**
+ * Formats a 'YYYY-MM-DD' string for confirm read-back — "Tuesday, July 14th".
+ * Pure calendar math on an already-resolved date; not a normalizer of
+ * user speech, so it carries no Substring Gate obligation.
+ */
+export function formatSpokenDate(isoDate: string): string {
+  const [y, m, d] = isoDate.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  const weekday = date.toLocaleDateString('en-US', { weekday: 'long' });
+  const month = date.toLocaleDateString('en-US', { month: 'long' });
+  const day = date.getDate();
+  const suffix = (day % 10 === 1 && day !== 11) ? 'st'
+    : (day % 10 === 2 && day !== 12) ? 'nd'
+    : (day % 10 === 3 && day !== 13) ? 'rd' : 'th';
+  return `${weekday}, ${month} ${day}${suffix}`;
+}
+
 /** Returns handleCalendarAction value string: title|YYYY-MM-DD|HH:MM */
 export function parseCalendarWriteIntent(text: string): string | null {
   const hasCalendar = /\b(calendar|schedule)\b/i.test(text);

@@ -423,7 +423,7 @@ function calendarSpeech(
 // NOTE: no removed_at filter — medical_records gains soft-delete in the v17
 // migration; until then nothing can be removed, so there are no rows to exclude.
 function getVisitSummary(): string {
-  const records = getMedicalRecords().filter((r) => r.doctor_name && r.doctor_name.trim());
+  const records = getMedicalRecords().filter((r) => r.doctor_name && r.doctor_name.trim() && r.status !== 'upcoming');
   if (records.length === 0) {
     return "I don't have anyone you've told me you've seen yet.";
   }
@@ -865,7 +865,7 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
 
   // Device: medical capture — past-tense medical events only
   const medEvent = detectMedicalEvent(msg);
-  if (medEvent && medEvent.tense === 'past') {
+  if (medEvent && (medEvent.tense === 'past' || (medEvent.type === 'visit' && medEvent.tense === 'future'))) {
     return {
       tier: 1,
       actionIntent: { type: 'medical_capture', event: medEvent },

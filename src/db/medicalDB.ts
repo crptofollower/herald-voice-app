@@ -25,6 +25,7 @@ export interface MedicalRecord {
   diagnosis?: string;
   follow_up?: string;
   notes?: string;
+  status?: 'upcoming' | 'noted';
   created_at: string;
 }
 
@@ -93,8 +94,8 @@ export function writeMedicalRecord(
   const now = new Date().toISOString();
   db.runSync(
     `INSERT INTO medical_records
-       (id, visit_date, doctor_name, facility, reason, diagnosis, follow_up, notes, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+       (id, visit_date, doctor_name, facility, reason, diagnosis, follow_up, notes, status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
     [
       id,
       record.visit_date ?? null,
@@ -104,6 +105,7 @@ export function writeMedicalRecord(
       record.diagnosis ?? null,
       record.follow_up ?? null,
       record.notes ?? null,
+      record.status ?? null,
       now,
     ]
   );

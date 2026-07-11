@@ -653,6 +653,71 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       return { status: 'noop', ack: 'Noted.' };
     },
   },
+  medical_visit_upcoming: {
+    async add(intent: IntentRecord, rawPhrase: string): Promise<CommitResult> {
+      if (intent.type !== 'medical_visit_upcoming') {
+        return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
+      }
+      const { writeMedicalRecord, passesSubstringGate } = await import('../db/medicalDB');
+      const { parseDatePhrase, formatSpokenDate } = await import('../utils/parseTime');
+      const raw = intent.raw ?? rawPhrase;
+      const doctorNameRaw = intent.doctor_name?.trim();
+      const doctorName = (doctorNameRaw && passesSubstringGate(doctorNameRaw, raw)) ? doctorNameRaw : undefined;
+
+      const YES = /^(yes|yeah|yep|yup|correct|right|that'?s right|sure|ok|okay|sounds good|that'?s it|exactly|y)\b/i;
+      const NO = /^(no|nope|nah|wrong|not right|that'?s wrong|incorrect|cancel|nevermind|never mind)\b/i;
+
+      const commitUpcoming = (resolvedDate: string): CommitResult => {
+        writeMedicalRecord({
+          doctor_name: doctorName,
+          notes: raw,
+          visit_date: resolvedDate,
+          status: 'upcoming',
+        });
+        return { status: 'committed', ack: "Got it — I'll remind you." };
+      };
+
+      const confirmStage = (resolvedDate: string): CommitResult => {
+        const spoken = formatSpokenDate(resolvedDate);
+        const who = doctorName ? ` with ${doctorName}` : '';
+        return {
+          status: 'pending',
+          prompt: `Say yes and I'll remember — appointment${who} ${spoken}.`,
+          pendingKey: 'medical_visit_upcoming',
+          resume: async (userText: string): Promise<CommitResult> => {
+            if (NO.test(userText.trim())) {
+              return { status: 'noop', ack: "No problem — tell me again and I'll get it right." };
+            }
+            if (!YES.test(userText.trim())) return { status: 'noop', ack: '' };
+            return commitUpcoming(resolvedDate);
+          },
+        };
+      };
+
+      const parsedDate = parseDatePhrase(raw);
+      if (parsedDate) return confirmStage(parsedDate);
+
+      // No parseable date — one Graceful Confusion question. Never commit a
+      // dateless 'upcoming' row (it could never surface and would rot).
+      const who = doctorName ? ` with ${doctorName}` : '';
+      return {
+        status: 'pending',
+        prompt: `I want to get this right — when is your appointment${who}?`,
+        pendingKey: 'medical_visit_upcoming_date',
+        resume: async (userText: string): Promise<CommitResult> => {
+          const retryDate = parseDatePhrase(userText);
+          if (!retryDate) return { status: 'noop', ack: '' };
+          return confirmStage(retryDate);
+        },
+      };
+    },
+    async remove(_item: string): Promise<CommitResult> {
+      return { status: 'noop', ack: 'Noted.' };
+    },
+    async clear(): Promise<CommitResult> {
+      return { status: 'noop', ack: 'Noted.' };
+    },
+  },
   diagnosis_capture: {
     async add(intent: IntentRecord, rawPhrase: string): Promise<CommitResult> {
       if (intent.type !== 'diagnosis_capture') {
@@ -707,9 +772,9 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       if (intent.type !== 'doctor_intro_capture') {
         return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
       }
-      const name = (intent as any).name?.trim();
-      const specialty = (intent as any).specialty?.trim();
-      const raw = (intent as any).raw ?? rawPhrase;
+      const name = intent.name?.trim();
+      const specialty = intent.specialty?.trim();
+      const raw = intent.raw ?? rawPhrase;
       if (!name || !specialty) {
         return { status: 'failed', ack: "I didn't catch that — who's your doctor and what's their specialty?" };
       }
@@ -1102,6 +1167,14 @@ export async function routeIntent(
         intents: [{ type: 'medical_capture', drug: ev.drug_name, dosage: ev.dosage, raw: ev.raw }],
         source: 'deterministic',
         reason: 'tier1:medication_intercept',
+      };
+    }
+    if (ev.type === 'visit' && ev.tense === 'future') {
+      return {
+        kind: 'capture',
+        intents: [{ type: 'medical_visit_upcoming', doctor_name: ev.doctor_name, specialty: ev.specialty, raw: ev.raw }],
+        source: 'deterministic',
+        reason: 'tier1:visit_upcoming_intercept',
       };
     }
     // visit | advice → medical_visit (heard "Dr. X" writes; nameless asks who).

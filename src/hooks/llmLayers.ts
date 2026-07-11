@@ -17,6 +17,8 @@ export type IntentRecord =
   | { type: 'insurance_capture'; insType: string; carrier: string; agent?: string; phone?: string }
   | { type: 'medical_capture'; drug?: string; dosage?: string; frequency?: string; raw: string }
   | { type: 'medical_visit'; doctor_name?: string; specialty?: string; advice?: string; raw: string }
+  | { type: 'medical_visit_upcoming'; doctor_name?: string; specialty?: string; raw: string }
+  | { type: 'doctor_intro_capture'; name: string; specialty: string; raw: string }
   | { type: 'service_capture'; category: string; name: string; phone?: string }
   | { type: 'family_capture'; relation: string; name: string; location?: string; phone?: string }
   | { type: 'phone_capture'; name: string; phone: string; relationship?: string }

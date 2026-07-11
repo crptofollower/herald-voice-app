@@ -41,6 +41,9 @@ const SCHEMA_SQL = `
     diagnosis TEXT,
     follow_up TEXT,
     notes TEXT,
+    status TEXT DEFAULT 'noted',
+    surfaced_at TEXT,
+    removed_at TEXT,
     created_at TEXT
   );
   CREATE TABLE IF NOT EXISTS medical_contacts (
