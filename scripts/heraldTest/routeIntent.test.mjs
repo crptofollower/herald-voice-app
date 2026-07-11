@@ -234,6 +234,24 @@ const CASES = [
     },
   ],
   [
+    // Locks hasNamedWeekday && isCalendarIntent: must not fall through to
+    // calendar:today speech ("Your calendar is clear today" / "You have … today").
+    // Honest-miss copy mentions "today" as a supported window — assert against
+    // the today-listing shape, not a raw substring ban on the word "today".
+    "named weekday + calendar for next Tuesday → unresolved (not today listing)",
+    "what's on my calendar for next Tuesday",
+    {
+      kind: "device_read",
+      reason: "calendar:unresolved_weekday",
+      responseNotMatching: /\b(Your calendar is clear today|You have .+ today)\b/i,
+    },
+    {
+      kind: "device_read",
+      reason: "calendar:unresolved_weekday",
+      responseNotMatching: /\b(Your calendar is clear today|You have .+ today)\b/i,
+    },
+  ],
+  [
     "named weekday + scheduled → unresolved (not next week)",
     "do I have anything scheduled next Tuesday",
     {
@@ -297,6 +315,9 @@ function matches(decision, expect) {
   }
   if (expect.reason && decision.reason !== expect.reason) return false;
   if (expect.responseEquals && decision.response !== expect.responseEquals) return false;
+  if (expect.responseNotMatching && expect.responseNotMatching.test(decision.response || "")) {
+    return false;
+  }
   return true;
 }
 

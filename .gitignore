@@ -36,6 +36,7 @@ scripts/**
 !scripts/heraldTest/llmLayers.test.ts
 !scripts/heraldTest/wall1.test.ts
 !scripts/heraldTest/parseSmsIntent.test.ts
+!scripts/heraldTest/parseDatePhrase.test.ts
 # keep derived/installed files out — mirrors are copies of tracked src/, node_modules is installed
 scripts/heraldTest/node_modules/
 scripts/heraldTest/src/

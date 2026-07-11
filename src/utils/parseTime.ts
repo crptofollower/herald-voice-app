@@ -153,6 +153,59 @@ export function parseTimerIntent(text: string): { minutes: number; label: string
   return { minutes, label: 'Herald Timer' };
 }
 
+/**
+ * Standalone deterministic date-phrase parser (MEDICAL_SURFACING_DESIGN_SPEC
+ * §2.2b). Grammar: today / tomorrow / next <weekday> / this <weekday> /
+ * on <weekday> / <month> <day>. Anything else returns null — never guess.
+ * Weekday resolution is today-inclusive EXCEPT "next <weekday>" said on
+ * that same weekday, which means a week out, not today (matches natural
+ * speech: "next Tuesday" on a Tuesday is not today).
+ * Returns UTC-safe local ISO date string 'YYYY-MM-DD', or null.
+ */
+export function parseDatePhrase(text: string, referenceDate?: Date): string | null {
+  const t = text.toLowerCase();
+  const ref = referenceDate ?? new Date();
+
+  if (/\btomorrow\b/i.test(t)) {
+    const d = new Date(ref);
+    d.setDate(d.getDate() + 1);
+    return d.toLocaleDateString('en-CA');
+  }
+  if (/\btoday\b/i.test(t)) {
+    return ref.toLocaleDateString('en-CA');
+  }
+
+  const names = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+  const weekdayMatch = t.match(/\b(next|this|on)?\s*(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i);
+  if (weekdayMatch) {
+    const qualifier = weekdayMatch[1]?.toLowerCase();
+    const targetDay = names.indexOf(weekdayMatch[2].toLowerCase());
+    const d = new Date(ref);
+    let diff = (targetDay - d.getDay() + 7) % 7;
+    if (qualifier === 'next' && diff === 0) diff = 7;
+    d.setDate(d.getDate() + diff);
+    return d.toLocaleDateString('en-CA');
+  }
+
+  const MONTHS = ['january','february','march','april','may','june','july',
+    'august','september','october','november','december'];
+  const monthMatch = t.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(?:st|nd|rd|th)?\b/i);
+  if (monthMatch) {
+    const monthIdx = MONTHS.indexOf(monthMatch[1].toLowerCase());
+    const day = parseInt(monthMatch[2], 10);
+    if (day >= 1 && day <= 31) {
+      const year = ref.getFullYear();
+      let candidate = new Date(year, monthIdx, day);
+      if (candidate < new Date(ref.getFullYear(), ref.getMonth(), ref.getDate())) {
+        candidate = new Date(year + 1, monthIdx, day);
+      }
+      return candidate.toLocaleDateString('en-CA');
+    }
+  }
+
+  return null;
+}
+
 /** Returns handleCalendarAction value string: title|YYYY-MM-DD|HH:MM */
 export function parseCalendarWriteIntent(text: string): string | null {
   const hasCalendar = /\b(calendar|schedule)\b/i.test(text);
@@ -186,34 +239,8 @@ export function parseCalendarWriteIntent(text: string): string | null {
     ? `${String(parsed.hour).padStart(2, '0')}:${String(parsed.minute).padStart(2, '0')}`
     : '';
 
-  let date = '';
-  if (/\btomorrow\b/i.test(text)) {
-    const d = new Date();
-    d.setDate(d.getDate() + 1);
-    date = d.toLocaleDateString('en-CA');
-  } else if (/\btoday\b/i.test(text)) {
-    date = new Date().toLocaleDateString('en-CA');
-  } else {
-    const weekdayMatch = text.match(
-      /\b(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i
-    );
-    if (weekdayMatch) {
-      const names = [
-        'sunday',
-        'monday',
-        'tuesday',
-        'wednesday',
-        'thursday',
-        'friday',
-        'saturday',
-      ];
-      const targetDay = names.indexOf(weekdayMatch[1].toLowerCase());
-      const d = new Date();
-      const diff = (targetDay - d.getDay() + 7) % 7;
-      d.setDate(d.getDate() + diff);
-      date = d.toLocaleDateString('en-CA');
-    }
-  }
+  const date = parseDatePhrase(text) ?? '';
+
   return `${title}|${date}|${time}`;
 }
 
