@@ -44,7 +44,10 @@ const DOSAGE = /(\d+(?:\.\d+)?\s*(?:mg|mcg|ml|milligrams?|micrograms?)|\b(?:one|
 
 export function extractDoctorName(text: string): string | undefined {
   const dr = text.match(DR_NAME);
-  if (dr?.[1]) return `Dr. ${dr[1]}`;
+  if (dr?.[1]) {
+    const hasPeriod = /^dr\./i.test(dr[0]);
+    return `Dr${hasPeriod ? '.' : ''} ${dr[1]}`;
+  }
   return undefined;
 }
 
