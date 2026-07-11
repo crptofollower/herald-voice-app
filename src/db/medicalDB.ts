@@ -149,6 +149,52 @@ export function getLastVisit(doctorHint?: string): {
   };
 }
 
+/**
+ * Beat 1 surfacing sweep (MEDICAL_SURFACING_DESIGN_SPEC §2.3). Silently
+ * supersedes any 'upcoming' row whose date has passed to 'noted' — no
+ * spoken output, Herald never says "you missed your appointment"
+ * (Elder Safety: offers, never corrects/alarms).
+ */
+export function supersedeStaleUpcomingAppointments(): void {
+  const db = getDB();
+  db.runSync(
+    `UPDATE medical_records SET status = 'noted'
+     WHERE status = 'upcoming' AND removed_at IS NULL
+       AND date(visit_date) < date('now', 'localtime');`
+  );
+}
+
+/**
+ * Today's unsurfaced upcoming appointment, if any (expected 0 or 1 per
+ * spec §2.3's own query). Structurally cannot return a past appointment —
+ * equality on today's date, not <=.
+ */
+export function getTodaysUpcomingAppointment(): { id: string; doctorName?: string } | null {
+  const db = getDB();
+  const row = db.getFirstSync<{ id: string; doctor_name: string | null }>(
+    `SELECT id, doctor_name FROM medical_records
+     WHERE status = 'upcoming' AND removed_at IS NULL AND surfaced_at IS NULL
+       AND date(visit_date) = date('now', 'localtime')
+     LIMIT 1;`
+  );
+  if (!row) return null;
+  return { id: row.id, doctorName: row.doctor_name ?? undefined };
+}
+
+/**
+ * Marks a row surfaced immediately after the read that found it — the
+ * once-only latch. Called back-to-back with getTodaysUpcomingAppointment
+ * by the sweep orchestrator to keep the read-then-write window minimal;
+ * SQLite commits each statement atomically on its own.
+ */
+export function markAppointmentSurfaced(id: string): void {
+  const db = getDB();
+  db.runSync(
+    `UPDATE medical_records SET surfaced_at = ? WHERE id = ?;`,
+    [new Date().toISOString(), id]
+  );
+}
+
 // ─── Diagnoses (Spine §3 verbatim, §4a single writer/reader) ──────────────────
 // Additive, never superseding — a person can hold several diagnoses at once
 // (unlike a same-name medication). Correction is an explicit separate path, never

@@ -216,7 +216,7 @@ const RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", BOLD = "\x1b[1m",
 let passed = 0;
 const failures = [];
 const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length;
-const EXPECTED_TOTAL = 376;   // was 366; +10 parseDatePhrase contract (Commit D)
+const EXPECTED_TOTAL = 383;   // was 376; +7 medical surfacing sweep asserts M24-M28 (Commit G)
 
 console.log(`\n${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  HERALD ROUTER + PHONE TEST SUITE — ${TOTAL} tests${RESET}`);

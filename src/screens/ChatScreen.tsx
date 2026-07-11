@@ -593,6 +593,37 @@ export default function ChatScreen() {
     });
     speak(localGreeting);
 
+    // ── Proactive medical surfacing (Beat 1, MEDICAL_SURFACING_DESIGN_SPEC §2.3) ──
+    // Runs once per cold mount, alongside the greeting. A failure here must
+    // never block the greeting above or crash the mount.
+    try {
+      const { PROACTIVE_SURFACING_ENABLED } = require('../constants/features');
+      if (PROACTIVE_SURFACING_ENABLED) {
+        const {
+          supersedeStaleUpcomingAppointments,
+          getTodaysUpcomingAppointment,
+          markAppointmentSurfaced,
+        } = require('../db/medicalDB');
+        supersedeStaleUpcomingAppointments();
+        const surfaced = getTodaysUpcomingAppointment();
+        if (surfaced) {
+          markAppointmentSurfaced(surfaced.id);
+          const line = surfaced.doctorName
+            ? `You have an appointment with ${surfaced.doctorName} today.`
+            : "You have a doctor's appointment today.";
+          addMessage({
+            id: generateId("msg"),
+            role: "assistant",
+            content: line,
+            timestamp: Date.now() + 1,
+          });
+          speak(line);
+        }
+      }
+    } catch {
+      // Surfacing failure must never block the greeting or crash the mount.
+    }
+
     // ── BACKGROUND LIVE ENHANCEMENT ──────────────────────────────────────────
     if (lat != null && lng != null) {
       upgradeLiveGreeting(lat, lng, locationLabel ?? undefined);

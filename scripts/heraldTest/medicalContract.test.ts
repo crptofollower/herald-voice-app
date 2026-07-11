@@ -19,11 +19,15 @@ import {
   writeMedication,
   confirmMedicationCapture,
   writeDiagnosis,
+  writeMedicalRecord,
   SubstringGateRejection,
   getActiveMedications,
   getMedicalSummary,
   deactivateMedicationByName,
   getMedicalRecords,
+  supersedeStaleUpcomingAppointments,
+  getTodaysUpcomingAppointment,
+  markAppointmentSurfaced,
 } from '../../src/db/medicalDB.ts';
 
 const BOLD  = '\x1b[1m';
@@ -355,6 +359,80 @@ export async function runMedicalContractTests() {
     }
     assert('M23 Substring Gate rejects mismatched dosage', threw23,
       v => v === true, true);
+  }
+
+  // ── M24–M28: Beat 1 surfacing sweep (MEDICAL_SURFACING_DESIGN_SPEC §2.3) ───
+  {
+    freshDB();
+    const today = new Date().toLocaleDateString('en-CA');
+    const idToday = writeMedicalRecord({
+      doctor_name: 'Dr. Sarver',
+      visit_date: today,
+      status: 'upcoming',
+    });
+    const got24 = getTodaysUpcomingAppointment();
+    assert('M24 today upcoming unsurfaced → getTodaysUpcomingAppointment returns it',
+      got24, v => v !== null && (v as { id: string }).id === idToday && (v as { doctorName?: string }).doctorName === 'Dr. Sarver',
+      `id=${idToday}, doctorName=Dr. Sarver`);
+  }
+
+  {
+    freshDB();
+    const y = new Date();
+    y.setDate(y.getDate() - 1);
+    const yesterday = y.toLocaleDateString('en-CA');
+    const idY = writeMedicalRecord({
+      doctor_name: 'Dr. Past',
+      visit_date: yesterday,
+      status: 'upcoming',
+    });
+    supersedeStaleUpcomingAppointments();
+    const rows = getMedicalRecords().filter(r => r.id === idY);
+    assert('M25 yesterday upcoming → supersede sets status noted',
+      rows[0]?.status, v => v === 'noted', '"noted"');
+    assert('M25 after supersede, getTodaysUpcomingAppointment returns null',
+      getTodaysUpcomingAppointment(), v => v === null, 'null');
+  }
+
+  {
+    freshDB();
+    const today = new Date().toLocaleDateString('en-CA');
+    const idLatched = writeMedicalRecord({
+      doctor_name: 'Dr. Already',
+      visit_date: today,
+      status: 'upcoming',
+    });
+    markAppointmentSurfaced(idLatched);
+    assert('M26 today upcoming already surfaced → getTodays returns null',
+      getTodaysUpcomingAppointment(), v => v === null, 'null');
+  }
+
+  {
+    freshDB();
+    const today = new Date().toLocaleDateString('en-CA');
+    writeMedicalRecord({
+      visit_date: today,
+      status: 'upcoming',
+    });
+    const got27 = getTodaysUpcomingAppointment();
+    assert('M27 today upcoming with no doctor_name → doctorName undefined',
+      got27, v => v !== null && (v as { doctorName?: string }).doctorName === undefined,
+      'doctorName undefined');
+  }
+
+  {
+    freshDB();
+    const today = new Date().toLocaleDateString('en-CA');
+    const idLatch = writeMedicalRecord({
+      doctor_name: 'Dr. Latch',
+      visit_date: today,
+      status: 'upcoming',
+    });
+    const first = getTodaysUpcomingAppointment();
+    assert('M28a first read finds the row', first, v => v !== null && (v as { id: string }).id === idLatch, idLatch);
+    markAppointmentSurfaced(idLatch);
+    assert('M28b after markAppointmentSurfaced, second getTodays returns null',
+      getTodaysUpcomingAppointment(), v => v === null, 'null');
   }
 
   const total = passed + failures.length;

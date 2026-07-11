@@ -13,3 +13,9 @@
 //   Changes to this flag require a ratified session + state-doc FLAG
 //   REGISTRY entry in the same session (LLM_LIVE_DESIGN_SPEC P7).
 export const LOCAL_LLM_ENABLED = true;
+
+// PROACTIVE_SURFACING_ENABLED:
+//   Gates Beat 1 medical appointment surfacing on cold mount
+//   (MEDICAL_SURFACING_DESIGN_SPEC §2.3). Flip false to silence
+//   proactive offers without removing the sweep/read path.
+export const PROACTIVE_SURFACING_ENABLED = true;
