@@ -284,6 +284,51 @@ export async function runMedicalContractTests() {
   assert('M17 doctor_name stored verbatim', recs17[0]?.doctor_name,
     v => v === 'Dr. Sarver', '"Dr. Sarver"');
 
+  // ── M17b: medical_visit.add() uses parseDatePhrase when a date is present ──
+  // NOTE: parseDatePhrase has no "last week" grammar yet — use "next Tuesday"
+  // (always ≠ today under current rules: next+same-weekday → +7). Writer has no
+  // referenceDate injection; expected is computed the same wall-clock way.
+  {
+    freshDB();
+    const raw = 'I saw Dr. Sarver next Tuesday';
+    await DOMAIN_WRITERS.medical_visit!.add({
+      type: 'medical_visit',
+      doctor_name: 'Dr. Sarver',
+      raw,
+    }, raw);
+    const { parseDatePhrase } = await import('../../src/utils/parseTime.ts');
+    const expected = parseDatePhrase(raw);
+    const today = new Date().toLocaleDateString('en-CA');
+    const got = getMedicalRecords()[0]?.visit_date;
+    assert(
+      'M17b dated phrase → visit_date from parseDatePhrase, not capture-day today',
+      { got, expected, today },
+      (v) => {
+        const x = v as { got?: string; expected: string | null; today: string };
+        return !!x.expected && x.got === x.expected && x.got !== x.today;
+      },
+      `visit_date === parseDatePhrase(raw) && !== today (got parseable relative date)`,
+    );
+  }
+
+  // ── M17c: medical_visit.add() undated phrase still falls back to today ─────
+  {
+    freshDB();
+    const raw = 'I saw Dr. Sarver';
+    await DOMAIN_WRITERS.medical_visit!.add({
+      type: 'medical_visit',
+      doctor_name: 'Dr. Sarver',
+      raw,
+    }, raw);
+    const today = new Date().toLocaleDateString('en-CA');
+    assert(
+      'M17c undated phrase → visit_date falls back to today',
+      getMedicalRecords()[0]?.visit_date,
+      (v) => v === today,
+      today,
+    );
+  }
+
   // ── M18: specialty-only (NO clean name) → ZERO records written ─────────────
   // "I saw my cardiologist" has no "Dr. X". A specialty resolves to multiple
   // people over time; writing it as doctor_name is a confident-wrong write (§5)

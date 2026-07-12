@@ -604,9 +604,10 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       }
       const { writeMedicalRecord } = await import('../db/medicalDB');
       const { extractDoctorName } = await import('../utils/detectMedicalEvent');
+      const { parseDatePhrase } = await import('../utils/parseTime');
       const raw = intent.raw ?? rawPhrase;
       const advice = intent.advice?.trim();
-      const visitDate = new Date().toLocaleDateString('en-CA');
+      const visitDate = parseDatePhrase(raw) ?? new Date().toLocaleDateString('en-CA');
 
       const commitVisit = (doctorName: string): CommitResult => {
         writeMedicalRecord({
