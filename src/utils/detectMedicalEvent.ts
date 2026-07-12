@@ -19,7 +19,7 @@ export type MedicalEvent = {
   raw: string;
 };
 
-const PAST_VISIT = /\b(saw|visited|went to|met with|had an appointment with)\b/i;
+const PAST_VISIT = /\b(saw|visited|visiting|went to|met with|meeting with|had an appointment with|was seeing|were seeing|'ve been seeing|have been seeing|had been seeing)\b/i;
 const FUTURE_VISIT = /\b(have (?:a |an )?(?:doctor'?s?|dentist|dental|follow-?up)?\s?appointment|appointment with|going to see|scheduled with|seeing my|seeing (?:dr\.?|the doctor)|see (?:dr\.?|the doctor))\b/i;
 const MEDICATION = /\b(take|taking|i'm on|prescribed|started|using|use)\b/i;
 const ADVICE = /\b(says i need to|told me to|advised me to|wants me to)\b/i;

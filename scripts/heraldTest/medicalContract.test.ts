@@ -292,6 +292,42 @@ export async function runMedicalContractTests() {
     );
   }
 
+  // ── M16f–i: PAST_VISIT gerunds / past-progressive seeing (no bare "seeing") ─
+  {
+    const { detectMedicalEvent } = await import('../../src/utils/detectMedicalEvent.ts');
+    const pastVisit = (v: unknown) => {
+      const e = v as { type?: string; tense?: string } | null;
+      return e?.type === 'visit' && e?.tense === 'past';
+    };
+    assert(
+      'M16f detectMedicalEvent: "I was visiting Dr Sarver last week" → past visit',
+      detectMedicalEvent('I was visiting Dr Sarver last week'),
+      pastVisit,
+      '{ type: "visit", tense: "past" }',
+    );
+    assert(
+      'M16g detectMedicalEvent: "I\'ve been seeing Dr Cather" → past visit',
+      detectMedicalEvent("I've been seeing Dr Cather"),
+      pastVisit,
+      '{ type: "visit", tense: "past" }',
+    );
+    assert(
+      'M16h detectMedicalEvent: "I met with my therapist yesterday" → past visit',
+      detectMedicalEvent('I met with my therapist yesterday'),
+      pastVisit,
+      '{ type: "visit", tense: "past" }',
+    );
+    assert(
+      'M16i detectMedicalEvent: "I\'m seeing Dr Sarver next Tuesday" stays future (not past)',
+      detectMedicalEvent("I'm seeing Dr Sarver next Tuesday"),
+      (v) => {
+        const e = v as { type?: string; tense?: string } | null;
+        return e?.type === 'visit' && e?.tense === 'future';
+      },
+      '{ type: "visit", tense: "future" }',
+    );
+  }
+
   // ── M17: clean doctor name → exactly one visit record, doctor_name verbatim ─
   // "I saw Dr. Sarver today" — a clean "Dr. X" name is HEARD, not guessed.
   // Visit policy + Spine §5: write immediately, verbatim. This case SHOULD write.
