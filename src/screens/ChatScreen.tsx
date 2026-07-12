@@ -620,9 +620,8 @@ export default function ChatScreen() {
           speak(line);
         }
       }
-    } catch (e) {
+    } catch {
       // Surfacing failure must never block the greeting or crash the mount.
-      console.warn('[surfacing-debug]', e); // TEMP — remove before EAS build
     }
 
     // ── BACKGROUND LIVE ENHANCEMENT ──────────────────────────────────────────
