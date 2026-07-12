@@ -59,3 +59,5 @@ tsc_out.txt
 
 herald_crash_log.txt
 herald_incident_log.txt
+
+android/app/src/main/assets/
