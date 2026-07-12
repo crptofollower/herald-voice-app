@@ -164,6 +164,7 @@ export function formatCachedEventsForSpeech(
   events: CachedEvent[],
   window: CalendarWindow
 ): string {
+  const TITLE_HAS_WEEKDAY = /\b(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i;
   const dayLabel =
     window === "tomorrow"
       ? "tomorrow"
@@ -180,8 +181,9 @@ export function formatCachedEventsForSpeech(
   const lines = events.map((e) => {
     // start_ms is now a number — no string parsing needed
     const start = new Date(e.start_ms);
+    const titleHasWeekday = TITLE_HAS_WEEKDAY.test(e.title);
     if (e.all_day) {
-      return window === "this week" || window === "next week"
+      return (window === "this week" || window === "next week") && !titleHasWeekday
         ? `${e.title} on ${start.toLocaleDateString([], { weekday: "long" })}`
         : e.title;
     }
@@ -189,12 +191,15 @@ export function formatCachedEventsForSpeech(
       hour: "numeric",
       minute: "2-digit",
     });
-    return window === "this week" || window === "next week"
+    return (window === "this week" || window === "next week") && !titleHasWeekday
       ? `${e.title} on ${start.toLocaleDateString([], { weekday: "long" })} at ${timeStr}`
       : `${e.title} at ${timeStr}`;
   });
 
   if (lines.length === 1) {
+    if (TITLE_HAS_WEEKDAY.test(events[0].title)) {
+      return `You have ${lines[0]}.`;
+    }
     return `You have ${lines[0]} ${dayLabel}.`;
   }
 
