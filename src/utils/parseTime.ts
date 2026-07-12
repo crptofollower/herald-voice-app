@@ -163,6 +163,9 @@ export function parseTimerIntent(text: string): { minutes: number; label: string
  * speech: "next Tuesday" on a Tuesday is not today).
  * Returns UTC-safe local ISO date string 'YYYY-MM-DD', or null.
  */
+export const MONTHS = ['january','february','march','april','may','june','july',
+  'august','september','october','november','december'];
+
 export function parseDatePhrase(text: string, referenceDate?: Date): string | null {
   const t = text.toLowerCase();
   const ref = referenceDate ?? new Date();
@@ -188,8 +191,6 @@ export function parseDatePhrase(text: string, referenceDate?: Date): string | nu
     return d.toLocaleDateString('en-CA');
   }
 
-  const MONTHS = ['january','february','march','april','may','june','july',
-    'august','september','october','november','december'];
   const monthMatch = t.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(?:st|nd|rd|th)?\b/i);
   if (monthMatch) {
     const monthIdx = MONTHS.indexOf(monthMatch[1].toLowerCase());

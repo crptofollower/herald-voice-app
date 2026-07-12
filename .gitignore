@@ -39,6 +39,7 @@ scripts/**
 !scripts/heraldTest/parseDatePhrase.test.ts
 !scripts/heraldTest/parseTimeFromText.test.ts
 !scripts/heraldTest/calendarCacheSpeech.test.ts
+!scripts/heraldTest/calendarUnresolvableDate.test.ts
 # keep derived/installed files out — mirrors are copies of tracked src/, node_modules is installed
 scripts/heraldTest/node_modules/
 scripts/heraldTest/src/

@@ -12,6 +12,7 @@ import { getMedicalSummary, getMedicalRecords, getDiagnosisSummary, getDoctorsSu
 import { getRecentMentions, formatRecentMentions } from "../db/recallDB";
 import { detectMedicalEvent } from "../utils/detectMedicalEvent";
 import type { MedicalEvent } from "../utils/detectMedicalEvent";
+import { MONTHS } from "../utils/parseTime";
 import { detectHouseholdRead, type HouseholdReadIntent } from "../utils/householdRead";
 import { detectServiceRemove } from "../utils/householdCapture";
 import { detectFamilyRead, answerFamilyRead } from "../utils/familyRead";
@@ -880,14 +881,23 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   }
 
   const NAMED_WEEKDAY = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
-  const hasNamedWeekday = NAMED_WEEKDAY.test(msg);
+  const MONTH_DAY = new RegExp(
+    `\\b(${MONTHS.join('|')})\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b`,
+    'i',
+  );
+  const FUZZY_FUTURE =
+    /\b(couple weeks|few weeks|next month|a month|couple months)\b/i;
+  const hasUnresolvableDate =
+    NAMED_WEEKDAY.test(msg) ||
+    MONTH_DAY.test(msg) ||
+    FUZZY_FUTURE.test(msg);
   const isCalendarIntent =
     TIER1_SIGNALS.calendar_today.some((p) => p.test(msg)) ||
     TIER1_SIGNALS.calendar_tomorrow.some((p) => p.test(msg)) ||
     TIER1_SIGNALS.calendar_week.some((p) => p.test(msg)) ||
     TIER1_SIGNALS.calendar_next_week.some((p) => p.test(msg));
 
-  if (hasNamedWeekday && isCalendarIntent) {
+  if (hasUnresolvableDate && isCalendarIntent) {
     return {
       tier: 1,
       tier1Response: "I can only tell you about today, tomorrow, this week, or next week right now.",
