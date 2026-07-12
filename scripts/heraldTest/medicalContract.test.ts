@@ -269,6 +269,29 @@ export async function runMedicalContractTests() {
     );
   }
 
+  // ── M16c–e: MEDICATION using/use gap (Known Issue #18) + LIST_CONTEXT guard ─
+  {
+    const { detectMedicalEvent } = await import('../../src/utils/detectMedicalEvent.ts');
+    assert(
+      "M16c detectMedicalEvent: \"I'm using metformin\" returns medication event",
+      detectMedicalEvent("I'm using metformin")?.type,
+      (v) => v === 'medication',
+      'medication',
+    );
+    assert(
+      'M16d detectMedicalEvent: "I use metformin" returns medication event',
+      detectMedicalEvent('I use metformin')?.type,
+      (v) => v === 'medication',
+      'medication',
+    );
+    assert(
+      'M16e detectMedicalEvent: list phrasing still returns null (LIST_CONTEXT)',
+      detectMedicalEvent('take chocolate milk off my grocery list'),
+      (v) => v === null,
+      null,
+    );
+  }
+
   // ── M17: clean doctor name → exactly one visit record, doctor_name verbatim ─
   // "I saw Dr. Sarver today" — a clean "Dr. X" name is HEARD, not guessed.
   // Visit policy + Spine §5: write immediately, verbatim. This case SHOULD write.

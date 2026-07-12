@@ -21,7 +21,7 @@ export type MedicalEvent = {
 
 const PAST_VISIT = /\b(saw|visited|went to|met with|had an appointment with)\b/i;
 const FUTURE_VISIT = /\b(have (?:a |an )?(?:doctor'?s?|dentist|dental|follow-?up)?\s?appointment|appointment with|going to see|scheduled with|seeing my|seeing (?:dr\.?|the doctor)|see (?:dr\.?|the doctor))\b/i;
-const MEDICATION = /\b(take|taking|i'm on|prescribed|started)\b/i;
+const MEDICATION = /\b(take|taking|i'm on|prescribed|started|using|use)\b/i;
 const ADVICE = /\b(says i need to|told me to|advised me to|wants me to)\b/i;
 const CALENDAR_READ_START = /^\s*\b(what|when|do i have|show me)\b/i;
 const REMINDER_START = /\b(remind me|don't let me forget|set a reminder|reminder to)\b/i;
