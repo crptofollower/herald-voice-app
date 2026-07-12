@@ -226,9 +226,13 @@ export function formatSpokenDate(isoDate: string): string {
 }
 
 /** Returns handleCalendarAction value string: title|YYYY-MM-DD|HH:MM */
+export const CALENDAR_WRITE_TRIGGER = /\b(calendar|schedule)\b/i;
+export const CALENDAR_WRITE_NAMED_APPOINTMENT = /\b(?:appointment|checkup|visit)\s+(?:called|named)\b/i;
+export const CALENDAR_WRITE_VERB = /\b(put|add|schedule|create|book|make)\b/i;
+
 export function parseCalendarWriteIntent(text: string): string | null {
-  const hasCalendar = /\b(calendar|schedule)\b/i.test(text);
-  const hasWriteVerb = /\b(put|add|schedule|create|book|make)\b/i.test(text);
+  const hasCalendar = CALENDAR_WRITE_TRIGGER.test(text) || CALENDAR_WRITE_NAMED_APPOINTMENT.test(text);
+  const hasWriteVerb = CALENDAR_WRITE_VERB.test(text);
   if (!hasCalendar || !hasWriteVerb) return null;
 
   const isRead =
@@ -245,7 +249,8 @@ export function parseCalendarWriteIntent(text: string): string | null {
     // Inverted order: verb + calendar first, title after
     text.match(/\badd (?:to|on) (?:my )?calendar\s+(.+)/i) ??
     text.match(/\bput (?:to|on) (?:my )?calendar\s+(.+)/i) ??
-    text.match(/\bschedule (?:to|on) (?:my )?calendar\s+(.+)/i);
+    text.match(/\bschedule (?:to|on) (?:my )?calendar\s+(.+)/i) ??
+    text.match(/\b(?:appointment|checkup|visit) (?:called|named|for|about)\s+(.+)/i);
   if (titleMatch?.[1]) {
     const raw = titleMatch[1].trim();
     if (raw && !/^(that|this|it)$/i.test(raw)) {

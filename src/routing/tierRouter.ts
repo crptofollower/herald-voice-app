@@ -12,7 +12,7 @@ import { getMedicalSummary, getMedicalRecords, getDiagnosisSummary, getDoctorsSu
 import { getRecentMentions, formatRecentMentions } from "../db/recallDB";
 import { detectMedicalEvent } from "../utils/detectMedicalEvent";
 import type { MedicalEvent } from "../utils/detectMedicalEvent";
-import { MONTHS } from "../utils/parseTime";
+import { MONTHS, CALENDAR_WRITE_TRIGGER, CALENDAR_WRITE_NAMED_APPOINTMENT, CALENDAR_WRITE_VERB } from "../utils/parseTime";
 import { detectHouseholdRead, type HouseholdReadIntent } from "../utils/householdRead";
 import { detectServiceRemove } from "../utils/householdCapture";
 import { detectFamilyRead, answerFamilyRead } from "../utils/familyRead";
@@ -729,7 +729,7 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   }
 
   // Device: calendar write — local CalendarProvider, works offline (Bug 3)
-  if (/\b(calendar|schedule)\b/i.test(msg) && /\b(put|add|schedule|create|book|make)\b/i.test(msg)) {
+  if ((CALENDAR_WRITE_TRIGGER.test(msg) || CALENDAR_WRITE_NAMED_APPOINTMENT.test(msg)) && CALENDAR_WRITE_VERB.test(msg)) {
     const isRead =
       /\b(what('s| is)|what do i have|do i have anything|anything on my|show me my)\b/i.test(msg) &&
       !/\b(put|add|schedule|create|book|make)\b/i.test(msg);
