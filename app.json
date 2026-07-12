@@ -61,7 +61,9 @@
           "microphonePermission": "Herald uses your microphone to hear your voice.",
           "speechRecognitionPermission": "Herald uses speech recognition to understand you.",
           "requiresOnDeviceRecognition": true,
-          "androidSpeechServicePackages": ["com.google.android.as"]
+          "androidSpeechServicePackages": [
+            "com.google.android.as"
+          ]
         }
       ],
       [
@@ -154,7 +156,8 @@
           "forceCxx20": true,
           "enableOpenCLAndHexagon": true
         }
-      ]
+      ],
+      "expo-asset"
     ],
     "scheme": "herald",
     "extra": {
