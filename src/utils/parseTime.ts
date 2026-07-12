@@ -42,6 +42,7 @@ export function parseTimeFromText(text: string): { hour: number; minute: number 
     return applySmartAmPm(h);
   };
 
+  // Known gap (pre-existing): space-separated minutes + spoken am/pm (e.g. "at 3 30 pm") still miss absolute.
   // "7am", "7 am", "7:00am", "7:00 am", "7:30 pm"
   const absolute = t.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
   if (absolute) {
@@ -54,7 +55,7 @@ export function parseTimeFromText(text: string): { hour: number; minute: number 
   }
 
   // "at 7", "at 9", "wake me at 10" — no AM/PM
-  const plainHour = t.match(/\bat\s+(\d{1,2})(?::(\d{2}))?\b(?!\s*[ap]m)/i);
+  const plainHour = t.match(/\bat\s+(\d{1,2})(?:(?::|\s+)([0-5]?\d)\b)?\b(?!\s*[ap]m)/i);
   if (plainHour) {
     const h = applyPeriodOrSmartAmPm(parseInt(plainHour[1]));
     const m = parseInt(plainHour[2] ?? '0');
@@ -74,7 +75,7 @@ export function parseTimeFromText(text: string): { hour: number; minute: number 
 
   // Bare "HH:MM" or "HH" — before named buckets so an explicit number always wins.
   // Period-of-day word (if any) resolves AM/PM; minutes are always preserved.
-  const bare = t.match(/\b(\d{1,2})(?::(\d{2}))?\b(?!\s*[ap]m)/i);
+  const bare = t.match(/\b(\d{1,2})(?:(?::|\s+)([0-5]?\d)\b)?\b(?!\s*[ap]m)/i);
   if (bare) {
     const h = applyPeriodOrSmartAmPm(parseInt(bare[1]));
     const m = parseInt(bare[2] ?? '0');

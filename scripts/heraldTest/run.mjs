@@ -216,7 +216,7 @@ const RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", BOLD = "\x1b[1m",
 let passed = 0;
 const failures = [];
 const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length;
-const EXPECTED_TOTAL = 393;   // was 389; +4 PAST_VISIT gerunds / past-seeing + future regression (M16f-i)
+const EXPECTED_TOTAL = 401;   // was 393; +8 parseTimeFromText space-separated minutes (PT1–8)
 
 console.log(`\n${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  HERALD ROUTER + PHONE TEST SUITE — ${TOTAL} tests${RESET}`);
@@ -301,6 +301,7 @@ const { runMedicalContractTests }   = await import('./medicalContract.test.ts');
 const { runFamilyContractTests }    = await import('./familyContract.test.ts');
 const { runDiagnosisContractTests } = await import('./diagnosisContract.test.ts');
 const { runParseDatePhraseTests } = await import('./parseDatePhrase.test.ts');
+const { runParseTimeFromTextTests } = await import('./parseTimeFromText.test.ts');
 const { runPipelineTests } = await import('./pipeline.test.ts');
 const { runConfirmPrimitiveTests } = await import('./confirmPrimitive.test.ts');
 const { runLawZeroTests } = await import('./lawZero.test.ts');
@@ -320,6 +321,7 @@ const fResult = await runFamilyContractTests();
 const dResult = await runDispatchContractTests();
 const dxResult = await runDiagnosisContractTests();
 const pdpResult = await runParseDatePhraseTests();
+const ptResult = await runParseTimeFromTextTests();
 const pResult = await runPipelineTests();
 const cpResult = await runConfirmPrimitiveTests();
 const lzResult = await runLawZeroTests();
@@ -333,9 +335,9 @@ const drResult = await runDoctorReadTests();
 const smResult = await runSchemaMigrationContractTests();
 const llResult = await runLlmLayersContractTests();
 const w1Result = await runWall1ContractTests();
-const contractPassed = hResult.passed + mResult.passed + fResult.passed + dResult.passed + dxResult.passed + pResult.passed + cpResult.passed + lzResult.passed + mcResult.passed + tcResult.passed + insResult.passed + cdbResult.passed + ctResult.passed + rceResult.passed + drResult.passed + smResult.passed + llResult.passed + w1Result.passed + pdpResult.passed;
-const contractFailed = hResult.failed + mResult.failed + fResult.failed + dResult.failed + dxResult.failed + pResult.failed + cpResult.failed + lzResult.failed + mcResult.failed + tcResult.failed + insResult.failed + cdbResult.failed + ctResult.failed + rceResult.failed + drResult.failed + smResult.failed + llResult.failed + w1Result.failed + pdpResult.failed;
-const contractTotal = hResult.total + mResult.total + fResult.total + dResult.total + dxResult.total + pResult.total + cpResult.total + lzResult.total + mcResult.total + tcResult.total + insResult.total + cdbResult.total + ctResult.total + rceResult.total + drResult.total + smResult.total + llResult.total + w1Result.total + pdpResult.total;
+const contractPassed = hResult.passed + mResult.passed + fResult.passed + dResult.passed + dxResult.passed + pResult.passed + cpResult.passed + lzResult.passed + mcResult.passed + tcResult.passed + insResult.passed + cdbResult.passed + ctResult.passed + rceResult.passed + drResult.passed + smResult.passed + llResult.passed + w1Result.passed + pdpResult.passed + ptResult.passed;
+const contractFailed = hResult.failed + mResult.failed + fResult.failed + dResult.failed + dxResult.failed + pResult.failed + cpResult.failed + lzResult.failed + mcResult.failed + tcResult.failed + insResult.failed + cdbResult.failed + ctResult.failed + rceResult.failed + drResult.failed + smResult.failed + llResult.failed + w1Result.failed + pdpResult.failed + ptResult.failed;
+const contractTotal = hResult.total + mResult.total + fResult.total + dResult.total + dxResult.total + pResult.total + cpResult.total + lzResult.total + mcResult.total + tcResult.total + insResult.total + cdbResult.total + ctResult.total + rceResult.total + drResult.total + smResult.total + llResult.total + w1Result.total + pdpResult.total + ptResult.total;
 
 console.log(`${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  RESULTS: ${GREEN}${passed + contractPassed} passed${RESET}${BOLD} / ${failures.length + contractFailed > 0 ? RED : GREEN}${failures.length + contractFailed} failed${RESET}${BOLD} / ${TOTAL + contractTotal} total${RESET}`);
