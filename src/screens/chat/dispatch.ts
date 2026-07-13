@@ -317,31 +317,23 @@ export async function dispatchAction(
           return;
         }
 
-        // Call — resolve contact on device, fire tel: intent
+        // Call — routes through the one contact_call authority (DD-2,
+        // PENDING_UNIFICATION Commit C1). No legacy ref: applyIntents arms the
+        // session if the writer returns a collect/confirm pending.
         if (actionIntent.type === 'call') {
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          const { resolveContactCallIntent } = await import('../../routing/routeIntent');
+          const { applyIntents } = await import('../../routing/processUtterance');
           const rawContact = actionIntent.contact ?? '';
-          const contactName = rawContact
-            .replace(/\s+(?:at|on|using|with|via)\b.*/i, '')
-            .trim();
-          const resolved = await resolveContactPhone(contactName);
-          if (resolved?.phone && resolved.source === 'herald') {
-            await openURL(`tel:${resolved.phone.replace(/\D/g, '')}`);
-            const reply = `Calling ${resolved.name}.`;
-            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-            speak(reply);
-          } else if (resolved?.phone && resolved.source === 'device') {
-            const reply = `I found ${resolved.name} in your contacts — want me to call them?`;
-            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-            speak(reply);
-            pendingContactCollectRef.current = { action: 'confirm_call', name: resolved.name, phone: resolved.phone };
-          } else {
-            // No number — ask to collect it, then call immediately after
-            const reply = `I don't have a number for ${contactName}. What's their number?`;
-            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-            speak(reply);
-            // Store pending call so next message resolves it
-            pendingContactCollectRef.current = { action: 'call', name: contactName };
+          const callIntent = await resolveContactCallIntent(rawContact, text, { resolveContact: resolveContactPhone });
+          const { responseText, commits } = await applyIntents([callIntent], text, session);
+          addMessage({ id: generateId('msg'), role: 'assistant', content: responseText, timestamp: Date.now() });
+          speak(responseText);
+          for (const c of commits) {
+            if (c.status === 'committed' && c.effect?.kind === 'dial') {
+              try { await openURL(`tel:${c.effect.phone}`); }
+              catch { /* effect failAck already composed into responseText path */ }
+            }
           }
           return;
         }

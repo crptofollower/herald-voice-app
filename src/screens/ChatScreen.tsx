@@ -993,8 +993,17 @@ export default function ChatScreen() {
         return;
       }
 
-      // Looks like they changed their mind or said something unrelated
+      // Reply didn't match the expected number/address AND wasn't caught above.
+      // Release the collect and fall through so an unrelated request still gets
+      // answered (never trap the user). PARKED: navigate/text still arm this ref;
+      // full migration into ConversationSession's re-ask ladder is Commit C2
+      // (PENDING_UNIFICATION spec) — until then this is the honest release, not
+      // a silent abandon.
+      const _abandonedAction = pendingContactCollectRef.current?.action;
       pendingContactCollectRef.current = null;
+      if (_abandonedAction === 'navigate' || _abandonedAction === 'text') {
+        addMessage({ id: generateId('msg'), role: 'assistant', content: "Okay — let's come back to that. What can I help you with?", timestamp: Date.now() });
+      }
       // Fall through to normal routing
     }
 
