@@ -105,6 +105,28 @@ export async function resolveContactCallIntent(
   return { type: 'contact_call', contact: contactName, raw };
 }
 
+// DD-2 (PENDING_UNIFICATION spec): LLM 'call' intents map to contact_call
+// BEFORE any allConverted check — one call-confirm authority (§4a).
+export async function mapCallIntents(
+  intents: IntentRecord[],
+  rawText: string,
+  deps: { resolveContact?: Parameters<typeof resolveContactCallIntent>[2]['resolveContact'] },
+): Promise<IntentRecord[]> {
+  const out: IntentRecord[] = [];
+  for (const i of intents) {
+    if (i.type === 'call' && typeof (i as any).contact === 'string') {
+      const contactName = ((i as any).contact as string)
+        .replace(/\s+(?:at|on|using|with|via)\b.*/i, '').trim();
+      if (contactName) {
+        out.push(await resolveContactCallIntent(contactName, rawText, deps));
+        continue;
+      }
+    }
+    out.push(i);
+  }
+  return out;
+}
+
 // Registry: empty now. One domain added per conversion commit.
 export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
   service_capture: {
@@ -1188,7 +1210,7 @@ export async function routeIntent(
   }
 
   if (deps.llmReady && deps.classifyLLM) {
-    const llmResult = await deps.classifyLLM(text);
+    const llmResult = await mapCallIntents(await deps.classifyLLM(text), text, deps);
     if (llmResult.length > 0) {
       return { kind: 'capture', intents: llmResult, source: 'llm', reason: 'llm:capture' };
     }

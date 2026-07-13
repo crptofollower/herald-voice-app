@@ -75,7 +75,7 @@ import { parseTimeFromText } from '../utils/parseTime';
 import { detectFamilyRead, answerFamilyRead } from '../utils/familyRead';
 import { writeTurnObservation } from '../utils/personaContext';
 import { classifyQuery, scanResidualIntent } from "../routing/tierRouter";
-import { allConverted } from '../routing/routeIntent';
+import { allConverted, mapCallIntents, resolveContactCallIntent } from '../routing/routeIntent';
 import { runCommitEffects } from '../utils/commitEffects';
 import { ConversationSession } from '../routing/conversationSession';
 import { processUtterance, applyIntents } from '../routing/processUtterance';
@@ -720,27 +720,6 @@ export default function ChatScreen() {
           }
           return true;
         }
-        case 'call': {
-          const rawContact = intent.contact ?? '';
-          const contactName = rawContact
-            .replace(/\s+(?:at|on|using|with|via)\b.*/i, '')
-            .trim();
-          const resolved = await resolveContactPhoneRef.current?.(contactName);
-          if (resolved?.phone && resolved.source === 'herald') {
-            await Linking.openURL(`tel:${resolved.phone.replace(/\D/g, '')}`);
-            replyAndReset(`Calling ${resolved.name}.`);
-          } else if (resolved?.phone && resolved.source === 'device') {
-            addMessage({ id: generateId('msg'), role: 'assistant', content: `I found ${resolved.name} in your contacts — want me to call them?`, timestamp: Date.now() });
-            pendingContactCollectRef.current = { action: 'confirm_call', name: resolved.name, phone: resolved.phone };
-            speak(`I found ${resolved.name} in your contacts — want me to call them?`);
-            setInputText('');
-            // sendingRef stays true — pending confirm keeps the gate locked
-          } else {
-            replyAndReset(`I don't have ${contactName} in my contacts yet — or there may be a few people with that name. Can you be more specific, or tell me their number?`);
-            pendingContactCollectRef.current = { action: 'call', name: contactName };
-          }
-          return true;
-        }
         case 'household_read': {
           const householdIntent = detectHouseholdRead(originalText);
           if (householdIntent) {
@@ -1128,11 +1107,15 @@ export default function ChatScreen() {
     // LLM capture — fallback classifier for the ambiguous tier-3 gap ONLY.
     if (llmStatus === 'ready' && rdTier === 3) {
       try {
-        const llmCaptures = await classifyWithLLM(text, getCtx(), {
-          contacts: getKnownContactNames(),
-          lists: getKnownListNames(),
-          name: undefined,
-        });
+        const llmCaptures = await mapCallIntents(
+          await classifyWithLLM(text, getCtx(), {
+            contacts: getKnownContactNames(),
+            lists: getKnownListNames(),
+            name: undefined,
+          }),
+          text,
+          { resolveContact: resolveContactPhoneRef.current ?? undefined },
+        );
                 if (llmCaptures.length > 0) {
           if (allConverted(llmCaptures)) {
             const { responseText, commits } = await applyIntents(llmCaptures, text, sessionRef.current);
@@ -1364,11 +1347,15 @@ export default function ChatScreen() {
           try {
             const contacts = getKnownContactNames();
             const lists = getKnownListNames();
-            const results = await classifyWithLLM(text, getCtx(), {
-              contacts,
-              lists,
-              name: undefined,
-            });
+            const results = await mapCallIntents(
+              await classifyWithLLM(text, getCtx(), {
+                contacts,
+                lists,
+                name: undefined,
+              }),
+              text,
+              { resolveContact: resolveContactPhoneRef.current ?? undefined },
+            );
                         if (results.length > 0) {
               if (allConverted(results)) {
                 const { responseText, commits } = await applyIntents(results, text, sessionRef.current);
@@ -1836,36 +1823,31 @@ export default function ChatScreen() {
           if (looksLikeNumber) {
             await Linking.openURL(`tel:${rawVal.replace(/\D/g, '')}`);
           } else {
-            // Resolve name/relationship to phone number
-            const resolved = await resolveContactPhone(rawVal);
-            if (resolved?.phone && resolved.source === 'herald') {
-              updateLastContact(resolved.contactId ?? '');
-              await Linking.openURL(`tel:${resolved.phone}`);
-              addMessage({
-                id: generateId("msg"),
-                role: "assistant",
-                content: `Calling ${resolved.name} now.`,
-                timestamp: Date.now(),
-              });
-            } else if (resolved?.phone && resolved.source === 'device') {
-              pendingContactCollectRef.current = { action: 'confirm_call', name: resolved.name, phone: resolved.phone };
-              addMessage({
-                id: generateId("msg"),
-                role: "assistant",
-                content: `I found ${resolved.name} in your contacts — want me to call them?`,
-                timestamp: Date.now(),
-              });
-              speak(`I found ${resolved.name} in your contacts — want me to call them?`);
-            } else {
-              // Can't resolve — open dialer so user can dial manually
-              await Linking.openURL(`tel:`);
-              addMessage({
-                id: generateId("msg"),
-                role: "assistant",
-                content: `I couldn't find a number for ${rawVal}. The dialer is open — or tell me their number and I'll remember it.`,
-                timestamp: Date.now(),
-              });
-            }
+            // DD-2: name/relationship resolution routes through the one call
+            // authority (contact_call writer) via the session — no legacy ref.
+            const callIntent = await resolveContactCallIntent(rawVal, rawVal, {
+              resolveContact: resolveContactPhone,
+            });
+            const { responseText, commits } = await applyIntents(
+              [callIntent],
+              rawVal,
+              sessionRef.current,
+            );
+            addMessage({
+              id: generateId("msg"),
+              role: "assistant",
+              content: responseText,
+              timestamp: Date.now(),
+            });
+            speak(responseText);
+            await runCommitEffects(commits, {
+              openURL: (url) => Linking.openURL(url),
+              handleMapsAction,
+              onEffectFailure: (failAck) => {
+                addMessage({ id: generateId('msg'), role: 'assistant', content: failAck, timestamp: Date.now() });
+                speak(failAck);
+              },
+            });
           }
           break;
         }

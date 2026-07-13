@@ -5,7 +5,7 @@
 
 import Database from 'better-sqlite3';
 import { setDB } from '../../src/db/schema.ts';
-import { DOMAIN_WRITERS, routeIntent, resolveContactCallIntent } from '../../src/routing/routeIntent.ts';
+import { DOMAIN_WRITERS, routeIntent, resolveContactCallIntent, mapCallIntents } from '../../src/routing/routeIntent.ts';
 import type { CommitResult } from '../../src/routing/routeIntent.ts';
 import { ConversationSession } from '../../src/routing/conversationSession.ts';
 import type { IntentRecord } from '../../src/hooks/llmLayers.ts';
@@ -329,6 +329,56 @@ export async function runContactCallTests() {
         && /10-digit/i.test(v.reask)
         && v.rows === 0,
       'noop empty, reask mentions 10-digit, 0 rows');
+  }
+
+  // ── T-CT-12: mapCallIntents — the Commit A mechanism (DD-2) ────────────────
+  // Raw LLM 'call' intents map to contact_call BEFORE allConverted; contact is
+  // cleaned of trailing "at/on/with…" phrasing; non-call intents pass through
+  // untouched; an empty-contact call is NOT force-mapped (falls through).
+  {
+    freshDB();
+    const noResolve = { resolveContact: async () => null };
+
+    const mappedPlain = await mapCallIntents(
+      [{ type: 'call', contact: 'Shannon' } as unknown as IntentRecord],
+      'call Shannon',
+      noResolve,
+    );
+    assert('T-CT-12a {type:call, contact:Shannon} → contact_call for Shannon',
+      mappedPlain,
+      v => Array.isArray(v) && v.length === 1
+        && v[0].type === 'contact_call'
+        && (v[0] as { contact: string }).contact === 'Shannon',
+      'one contact_call intent, contact Shannon');
+
+    const mappedTrailing = await mapCallIntents(
+      [{ type: 'call', contact: 'Mom at 5pm' } as unknown as IntentRecord],
+      'call Mom at 5pm',
+      noResolve,
+    );
+    assert('T-CT-12b trailing phrase stripped → contact_call for Mom',
+      mappedTrailing,
+      v => v.length === 1
+        && v[0].type === 'contact_call'
+        && (v[0] as { contact: string }).contact === 'Mom',
+      'contact_call, contact cleaned to Mom');
+
+    const passthrough = { type: 'list_add', items: ['milk'], listName: 'grocery' } as unknown as IntentRecord;
+    const mappedOther = await mapCallIntents([passthrough], 'add milk', noResolve);
+    assert('T-CT-12c non-call intent passes through untouched',
+      mappedOther,
+      v => v.length === 1 && v[0] === passthrough,
+      'same list_add reference, unmodified');
+
+    const emptyContact = await mapCallIntents(
+      [{ type: 'call', contact: '' } as unknown as IntentRecord],
+      'call',
+      noResolve,
+    );
+    assert('T-CT-12d empty-contact call is NOT force-mapped (falls through as-is)',
+      emptyContact,
+      v => v.length === 1 && v[0].type === 'call',
+      'unmapped, still type call — no fabricated contact_call');
   }
 
   const total = passed + failures.length;
