@@ -39,7 +39,6 @@ import {
   AppState,
   AppStateStatus,
 } from "react-native";
-import * as Calendar from "expo-calendar";
 import * as Network from "expo-network";
 import * as Haptics from 'expo-haptics';
 import * as IntentLauncher from 'expo-intent-launcher';
@@ -76,6 +75,7 @@ import { detectFamilyRead, answerFamilyRead } from '../utils/familyRead';
 import { writeTurnObservation } from '../utils/personaContext';
 import { classifyQuery, scanResidualIntent } from "../routing/tierRouter";
 import { allConverted, mapCallIntents, resolveContactCallIntent } from '../routing/routeIntent';
+import { writeCalendarCore, buildCalendarCollectSlot } from '../routing/calendarWrite';
 import { runCommitEffects } from '../utils/commitEffects';
 import { ConversationSession } from '../routing/conversationSession';
 import { processUtterance, applyIntents } from '../routing/processUtterance';
@@ -85,11 +85,9 @@ import { dispatchRead, dispatchAction } from './chat/dispatch';
 import type { DispatchDeps } from './chat/dispatch';
 import { handleTier1, buildTier2DeviceContext, buildAmbientDeviceContext, writeProfileFromOnboarding } from "../routing/tier1Responses";
 import { refreshCalendarCache } from "../db/calendarCacheDB";
-import { markCalendarWrite } from "../db/calendarState";
 import { initDB, isDBReady } from "../db/useDeviceDB";
 import { getDB } from "../db/schema";
 import { setProfileField, setProfileFields } from "../db/profileDB";
-import { addAppointment } from "../db/appointmentsDB";
 import {
   writeContact,
   resolvePhoneNumber,
@@ -256,13 +254,6 @@ export default function ChatScreen() {
   // Pending contact collection — when Herald asks "what's their number/address?"
   // the next user message resolves this and executes the original intent.
   const pendingContactCollectRef = useRef<{ action: 'call' | 'navigate' | 'text' | 'confirm_phone' | 'confirm_call'; name: string; body?: string; phone?: string } | null>(null);
-  // Pending calendar field collection — one missing field at a time (title or time).
-  const pendingCalendarCollectRef = useRef<{
-    title: string;
-    dateStr: string;
-    timeStr: string;
-    missing: 'title' | 'time';
-  } | null>(null);
   const sessionRef = useRef<ConversationSession>(new ConversationSession());
 
   // ── Scroll snap prevention ────────────────────────────────────────────────
@@ -398,7 +389,7 @@ export default function ChatScreen() {
             drainPendingWrites(async (write) => {
               const payload = JSON.parse(write.payload);
               if (write.type === 'calendar') {
-                await handleCalendarAction(payload.value);
+                await handleCalendarAction(payload.value, true);
               }
             }).catch(() => {});
           }).catch(() => {});
@@ -488,7 +479,7 @@ export default function ChatScreen() {
           drainPendingWrites(async (write) => {
             const payload = JSON.parse(write.payload);
             if (write.type === 'calendar') {
-              await handleCalendarAction(payload.value);
+              await handleCalendarAction(payload.value, true);
             }
             // SMS drain: open native messages — non-blocking best effort
             if (write.type === 'sms') {
@@ -828,7 +819,6 @@ export default function ChatScreen() {
     // consumer, as specced.
     if (detectEmergency(text)) {
       pendingContactCollectRef.current = null;
-      pendingCalendarCollectRef.current = null;
       if (sessionRef.current.hasPending()) sessionRef.current.clearPending();
       await dispatchEmergency(text);
       setInputText('');
@@ -1006,47 +996,6 @@ export default function ChatScreen() {
       // Looks like they changed their mind or said something unrelated
       pendingContactCollectRef.current = null;
       // Fall through to normal routing
-    }
-
-    // ── Pending calendar field collection — title or time answer ─────────────
-    if (pendingCalendarCollectRef.current) {
-      const pending = pendingCalendarCollectRef.current;
-      addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-
-      if (pending.missing === 'title') {
-        // Verbatim title — no reformatting, no time parsing on this turn.
-        const newTitle = text.trim();
-        pendingCalendarCollectRef.current = null;
-        // If a time was already parsed this write, skip the redundant time ask.
-        const timePart = pending.timeStr && /^\d{1,2}:\d{2}$/.test(pending.timeStr)
-          ? pending.timeStr
-          : '';
-        await handleCalendarAction(`${newTitle}|${pending.dateStr}|${timePart}`);
-        sendingRef.current = false;
-        setInputText('');
-        return;
-      }
-
-      // missing === 'time'
-      const parsed = parseTimeFromText(text);
-      if (parsed) {
-        pendingCalendarCollectRef.current = null;
-        const hh = String(parsed.hour).padStart(2, '0');
-        const mm = String(parsed.minute).padStart(2, '0');
-        await handleCalendarAction(`${pending.title}|${pending.dateStr}|${hh}:${mm}`);
-        sendingRef.current = false;
-        setInputText('');
-        return;
-      }
-      // Graceful Confusion: offer a best guess + ask once more — do not repeat
-      // the static first question, and do not fall through to generic GC below.
-      const heard = text.trim();
-      const reply = `I didn't catch a time in that — I heard "${heard}". Did you mean noon for "${pending.title}", or can you say the time again?`;
-      addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-      speak(reply);
-      sendingRef.current = false;
-      setInputText('');
-      return;
     }
 
     // Deterministic-first routing: the regex/SQL classifier runs FIRST and always wins.
@@ -1950,150 +1899,24 @@ export default function ChatScreen() {
 
   // ── Calendar action ───────────────────────────────────────────────────────
 
-  const handleCalendarAction = async (value: string) => {
+  const handleCalendarAction = async (value: string, silent: boolean = false) => {
     const parts = value.split("|");
     const title = parts[0]?.trim() ?? "";
     const dateStr = parts[1]?.trim() || "";
     const timeStr = parts[2]?.trim() || "";
 
-    // One question per turn — title before time. "Appointment" is the old
-    // parseTime fallback (fabricated) — treat as no real title.
-    if (!title || title === "Appointment") {
-      pendingCalendarCollectRef.current = {
-        title: '',
-        dateStr,
-        timeStr, // preserve whatever was already parsed this call, even if empty
-        missing: 'title',
-      };
-      addMessage({
-        id: generateId("msg"),
-        role: "assistant",
-        content: "What would you like me to call this?",
-        timestamp: Date.now(),
-      });
+    const plan = buildCalendarCollectSlot(title, dateStr, timeStr);
+    if (plan) {
+      if (silent) return; // background drain has no live turn to collect against
+      addMessage({ id: generateId("msg"), role: "assistant", content: plan.prompt, timestamp: Date.now() });
+      speak(plan.prompt);
       setActionStatus("confirming");
+      sessionRef.current.setPending(plan.slot);
       return;
     }
-
-    if (!timeStr || !/^\d{1,2}:\d{2}$/.test(timeStr)) {
-      pendingCalendarCollectRef.current = {
-        title,
-        dateStr,
-        timeStr: '',
-        missing: 'time',
-      };
-      addMessage({
-        id: generateId("msg"),
-        role: "assistant",
-        content: `What time should I put "${title}" on your calendar?`,
-        timestamp: Date.now(),
-      });
-      setActionStatus("confirming");
-      return;
-    }
-
-    // Calendar writes use device CalendarProvider — no network required (Bug 3)
-    const { status } = await Calendar.requestCalendarPermissionsAsync();
-    if (status !== "granted") {
-      addMessage({
-        id: generateId("msg"),
-        role: "assistant",
-        content:
-          "I need calendar access to do that. Open your phone Settings, find Herald, and turn on Calendar. Then ask me again.",
-        timestamp: Date.now(),
-      });
-      throw new Error("calendar permission denied");
-    }
-
-    const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
-    const writable = calendars.filter((c) => c.allowsModifications);
-    if (!writable.length) {
-      addMessage({
-        id: generateId("msg"),
-        role: "assistant",
-        content:
-          "I couldn't find a calendar I can write to. Make sure Google Calendar or Samsung Calendar is set up, then try again.",
-        timestamp: Date.now(),
-      });
-      throw new Error("no writable calendar");
-    }
-
-    const targetCal =
-      writable.find((c) => c.isPrimary) ||
-      writable.find((c) => c.source?.type === "com.google") ||
-      writable[0];
-
-    let startDate: Date;
-    try {
-      const [h, m] = timeStr.split(":").map(Number);
-      if (dateStr && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
-        const [year, month, day] = dateStr.split("-").map(Number);
-        startDate = new Date();
-        startDate.setFullYear(year, month - 1, day);
-        startDate.setHours(h, m, 0, 0);
-      } else {
-        // No safe date guess — Graceful Confusion, never silent tomorrow substitution.
-        const reply = "I'm not sure I'm following you — can you help me understand?";
-        addMessage({
-          id: generateId("msg"),
-          role: "assistant",
-          content: reply,
-          timestamp: Date.now(),
-        });
-        speak(reply);
-        setActionStatus("confirming");
-        return;
-      }
-      if (isNaN(startDate.getTime())) throw new Error("invalid date");
-    } catch {
-      startDate = new Date();
-      startDate.setDate(startDate.getDate() + 1);
-      startDate.setHours(9, 0, 0, 0);
-    }
-
-    const endDate = new Date(startDate.getTime() + 60 * 60 * 1000);
-
-    await Calendar.createEventAsync(targetCal.id, {
-      title,
-      startDate,
-      endDate,
-      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      notes: "Added by Herald",
-    });
-
-    try {
-      addAppointment({
-        title,
-        apptDateISO: startDate.toISOString(),
-        apptDatePrecision: "exact",
-        endDateISO: endDate.toISOString(),
-        source: "user_told",
-        rawPhrase: `${title}|${dateStr}|${timeStr}`,
-      });
-      console.log("[HERALD] appointment saved (user_told):", title);
-    } catch {
-      // Non-fatal — OS calendar write already succeeded; Herald's own
-      // memory of it is best-effort, never blocks the user-facing ACK.
-    }
-
-    const timeDisplay = startDate.toLocaleTimeString("en-US", {
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-    });
-    const dateDisplay = startDate.toLocaleDateString("en-US", {
-      weekday: "long",
-      month: "long",
-      day: "numeric",
-    });
-    addMessage({
-      id: generateId("msg"),
-      role: "assistant",
-      content: `Done — "${title}" is on your calendar for ${dateDisplay} at ${timeDisplay}.`,
-      timestamp: Date.now(),
-    });
-    markCalendarWrite();
-    await refreshCalendarCache().catch(() => {}); // await so post-write queries hit fresh cache
+    const result = await writeCalendarCore(title, dateStr, timeStr);
+    addMessage({ id: generateId("msg"), role: "assistant", content: result.ack, timestamp: Date.now() });
+    if (!silent) speak(result.ack);
   };
 
   const handleMapsAction = async (query: string) => {

@@ -11,6 +11,9 @@ design_handoff_persona_system/
 .do-commit.mjs
 # scripts/ is local-only by default (build artifacts, mirrors, node_modules)
 scripts/**
+!scripts/heraldTest/
+!scripts/heraldTest/**
+scripts/heraldTest/node_modules/
 # ...but track the heraldTest harness so the routing gate travels with the repo
 !scripts/heraldTest/
 !scripts/heraldTest/run.mjs
