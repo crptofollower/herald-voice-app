@@ -971,13 +971,18 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       };
 
       const matchCandidate = (reply: string, list: CallCandidate[]): CallCandidate | null => {
-        const t = reply.trim().toLowerCase();
-        for (const c of list) {
-          const nameLower = c.name.toLowerCase();
-          if (t === nameLower || t.includes(nameLower) || nameLower.includes(t)) return c;
-          const rel = c.relationship?.trim().toLowerCase();
-          if (rel && (t === rel || t.includes(rel) || rel.includes(t))) return c;
+        let replyTokens = reply.trim().toLowerCase().replace(/\s+/g, ' ').split(' ').filter(Boolean);
+        if (replyTokens.length > 0 && ['the', 'my', 'a', 'an'].includes(replyTokens[0])) {
+          replyTokens = replyTokens.slice(1);
         }
+        if (replyTokens.length === 0) return null;
+        const hits = list.filter(c => {
+          const nameTokens = c.name.trim().toLowerCase().replace(/\s+/g, ' ').split(' ').filter(Boolean);
+          const relTokens = (c.relationship ?? '').trim().toLowerCase().replace(/\s+/g, ' ').split(' ').filter(Boolean);
+          const pool = [...nameTokens, ...relTokens];
+          return replyTokens.every(t => pool.includes(t));
+        });
+        if (hits.length === 1) return hits[0];
         return null;
       };
 
