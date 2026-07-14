@@ -1058,6 +1058,8 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
                 },
               };
             }
+            const named = matchCandidate(trimmed, list);
+            if (named) return commitDial(named.name, named.phone);
             return { status: 'noop', ack: '' };
           },
         };
