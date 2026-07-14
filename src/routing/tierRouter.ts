@@ -81,11 +81,18 @@ const TIER1_SIGNALS = {
     /do i have anything (today|scheduled)/i,
   ],
   calendar_tomorrow: [
-    /tomorrow/i,
+    // Read-shaped only — bare /tomorrow/i stole reminder/todo utterances
+    // ("Remember to call the plumber tomorrow"). Keep parity with calendar_today.
+    /what('s| is) on my calendar tomorrow/i,
+    /anything on my calendar tomorrow/i,
+    /is there anything on my calendar (for )?tomorrow/i,
     /what do i have tomorrow/i,
+    /do i have (anything|something) tomorrow/i,
     /any (appointments|meetings|events) tomorrow/i,
+    /my schedule tomorrow/i,
+    /what('s| is) (scheduled|planned|happening|going on) tomorrow/i,
+    /anything (on|scheduled) tomorrow/i,
     /schedule (for )?tomorrow/i,
-    /do i have anything tomorrow/i,
     /is there anything tomorrow/i,
   ],
   calendar_week: [
@@ -240,9 +247,11 @@ const DATE_SIGNALS = [
 ];
 
 const CALL_SIGNALS = [
-  /\b(call|phone|dial|ring)\s+\w+/i,
-  /\bcan you (call|phone)\s+\w+/i,
-  /\bgive\s+\w+\s+a (call|ring)\b/i,
+  // Short natural commands — "Call Paul", "Please call David", "Can you call Mom"
+  /^\s*(?:please\s+)?(?:can you\s+)?(?:call|phone|dial|ring)[,:]?\s+[A-Za-z]/i,
+  /\b(?:please\s+)?(?:call|phone|dial|ring)[,:]?\s+(?:to\s+)?[A-Za-z]/i,
+  /\bcan you (?:please\s+)?(call|phone)\s+[A-Za-z]/i,
+  /\bgive\s+[A-Za-z][A-Za-z'-]*\s+a (call|ring)\b/i,
   /\b(call|ring|phone|dial)\s+(my\s+)?(wife|husband|mom|dad|mother|father|son|daughter|sister|brother)\b/i,
 ];
 
@@ -592,16 +601,21 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   const TODO_ADD_PREFIX = /^(I need to|I have to|I gotta|I've got to|don't let me forget|I should|I must)\s+/i;
   if (CALL_SIGNALS.some((p) => p.test(msg)) && !REMINDER_SIGNALS.some((p) => p.test(msg)) && !CALL_NUMBER_STATEMENT.test(msg) && !POSSESSIVE_CONTACT_STATEMENT.test(msg) && !TODO_ADD_PREFIX.test(msg) && !READ_QUERY_PREFIX.test(msg)) {
     const CALL_EXCLUDE = /^(me|you|back|again|later|now|soon|ahead|us|them|it|that|help|ambulance|backup|someone|anyone|911|emergency)$/i;
-    // "call for [the] X" / "schedule a call for [the] X" — try BEFORE bare
-    // "call <name>" so filler "for"/"for the" is never captured as the name.
+    // Name token: letters + optional hyphen/apostrophe (O'Brien, Anne-Marie).
+    const NAME = String.raw`(?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+|Ms\.?\s+)?[A-Za-z][A-Za-z'-]*(?:\s+[A-Za-z][A-Za-z'-]*)?`;
+    // "call for [the] X" — try BEFORE bare "call <name>" so filler "for"/"for the"
+    // is never captured as the name. Then whole-utterance bare names ("Call Paul"),
+    // then mid-sentence / relationship / "give X a call" forms.
     const contactMatch =
-      msg.match(/\b(?:call|phone|dial|ring)\s+for\s+(?:the\s+)?((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+)?\w+(?:\s+\w+)?)/i) ??
-      msg.match(/\b(?:call|phone|dial|ring)\s+(?:my\s+(?:son|daughter|wife|husband|mom|dad|mother|father|brother|sister|grandson|granddaughter)\s+)?((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+)?\w+(?:\s+\w+)?)/i) ??
-      msg.match(/\bgive\s+(?:my\s+(?:son|daughter|wife|husband|mom|dad|mother|father|brother|sister|grandson|granddaughter)\s+)?((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+)?\w+(?:\s+\w+)?)\s+a\s+(?:call|ring)\b/i);
+      msg.match(new RegExp(String.raw`\b(?:call|phone|dial|ring)\s+for\s+(?:the\s+)?(${NAME})`, 'i')) ??
+      msg.match(new RegExp(String.raw`^\s*(?:please\s+)?(?:can you\s+)?(?:call|phone|dial|ring)[,:]?\s+(?:to\s+)?(?:my\s+)?(${NAME})\s*[.!]?\s*$`, 'i')) ??
+      msg.match(new RegExp(String.raw`\b(?:call|phone|dial|ring)[,:]?\s+(?:to\s+)?(?:my\s+(?:son|daughter|wife|husband|mom|dad|mother|father|brother|sister|grandson|granddaughter)\s+)?(${NAME})`, 'i')) ??
+      msg.match(new RegExp(String.raw`\bgive\s+(?:my\s+(?:son|daughter|wife|husband|mom|dad|mother|father|brother|sister|grandson|granddaughter)\s+)?(${NAME})\s+a\s+(?:call|ring)\b`, 'i'));
     const rawContact = contactMatch?.[1]?.trim() ?? '';
     const strippedContact = rawContact
       .replace(/^(a\s+)?number\s+for\s+/i, '')
       .replace(/^the\s+number\s+for\s+/i, '')
+      .replace(/\s+(please|now|thanks|thank you)$/i, '')
       .trim();
     // Drop leading a/an/the so "an ambulance" excludes on "ambulance", not "an".
     const excludeHead = strippedContact.replace(/^(a|an|the)\s+/i, '').split(/\s+/)[0] ?? '';

@@ -1103,6 +1103,7 @@ export async function routeIntent(
   },
 ): Promise<RouteDecision> {
   const decision = await deps.classifyQuery(text);
+  console.log('[classifyQuery]', JSON.stringify({ tier: decision.tier, actionIntent: decision.actionIntent, reason: decision.reason }));
 
   if (decision.tier === 1 && typeof decision.tier1Response === 'string') {
     return {
