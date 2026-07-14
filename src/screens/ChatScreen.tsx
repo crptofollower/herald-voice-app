@@ -214,8 +214,85 @@ export default function ChatScreen() {
   const { status: llmStatus, activeModel, getCtx } = useLocalLLM();
   void activeModel;
 
-  type ResolveContactFn = (nameOrRelation: string) => Promise<{ phone: string; name: string; contactId?: string; source: 'herald' | 'device' } | { phone: null; name: string; source: 'device'; candidateNames: string[] } | null>;
+  type ResolveContactFn = (nameOrRelation: string) => Promise<{ phone: string; name: string; contactId?: string; source: 'herald' | 'device' } | { phone: null; name: string; source: 'device'; candidateNames: string[]; deviceCandidates: { name: string; phone: string }[] } | null>;
   const resolveContactPhoneRef = useRef<ResolveContactFn | null>(null);
+
+  // ── resolveContactPhone ──────────────────────────────────────────────────────
+  // Resolves a name or relationship to a phone number.
+  // Pass 1: Herald contacts table (contactsDB) — fastest, device SQLite
+  // Pass 2: OS device contacts via expo-contacts — broader coverage
+  // Returns null if not found — caller handles graceful fallback.
+
+  const resolveContactPhone = async (nameOrRelation: string): Promise<{ phone: string; name: string; contactId?: string; source: 'herald' | 'device' } | { phone: null; name: string; source: 'device'; candidateNames: string[]; deviceCandidates: { name: string; phone: string }[] } | null> => {
+    const clean = nameOrRelation.trim().toLowerCase().replace(/^(?:my|the|a)\s+/, '');
+
+    // Pass 1: Herald contacts table
+    const byRelation = findContactByRelationship(clean);
+    if (byRelation?.phone) {
+      return { phone: byRelation.phone, name: byRelation.name, contactId: byRelation.id, source: 'herald' as const };
+    }
+    const byName = findContactByName(clean);
+    if (byName?.phone) {
+      return { phone: byName.phone, name: byName.name, contactId: byName.id, source: 'herald' as const };
+    }
+
+    // Pass 2: OS device contacts
+    try {
+      const Contacts = await import('expo-contacts');
+      const { status } = await Contacts.requestPermissionsAsync();
+      if (status !== 'granted') return null;
+
+      const { data } = await Contacts.getContactsAsync({
+        fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name],
+      });
+
+      if (!data?.length) return null;
+
+      // Find best match — prioritize exact name match, then partial
+      const exactMatches = data.filter(c =>
+        c.name?.toLowerCase() === clean ||
+        c.firstName?.toLowerCase() === clean ||
+        c.lastName?.toLowerCase() === clean
+      );
+      const partialMatches = data.filter(c =>
+        c.name?.toLowerCase().includes(clean) ||
+        c.firstName?.toLowerCase().includes(clean)
+      );
+
+      const candidates = exactMatches.length > 0 ? exactMatches : partialMatches;
+
+      // Multiple matches — honest ambiguity, never a silent guess or a silent
+      // "not found." Surface the real names so the caller can ask which one
+      // (Graceful Confusion Rule, CLAUDE.md) instead of claiming no number exists.
+      if (candidates.length > 1) {
+        const candidateNames = candidates
+          .map(c => c.name)
+          .filter((n): n is string => !!n)
+          .slice(0, 5);
+        const deviceCandidates = candidates
+          .filter(c => !!c.phoneNumbers?.[0]?.number)
+          .map(c => ({
+            name: c.name ?? nameOrRelation,
+            phone: c.phoneNumbers![0].number!.replace(/\D/g, ''),
+          }))
+          .slice(0, 5);
+        return { phone: null, name: nameOrRelation, source: 'device' as const, candidateNames, deviceCandidates };
+      }
+
+      const match = candidates[0];
+      if (match?.phoneNumbers?.[0]?.number) {
+        const phone = match.phoneNumbers[0].number.replace(/\D/g, '');
+        const name = match.name ?? nameOrRelation;
+        return { phone, name, source: 'device' as const };
+      }
+    } catch (e) {
+      console.warn('[resolveContactPhone] expo-contacts failed:', e);
+    }
+
+    return null;
+  };
+  resolveContactPhoneRef.current = resolveContactPhone;
+
   const handleLaunchActionRef = useRef<((appName: string) => Promise<void>) | null>(null);
 
   const [inputText, setInputText] = useState("");
@@ -1995,75 +2072,6 @@ export default function ChatScreen() {
       await Linking.openURL(googleWeb);
     }
   };
-
-  // ── resolveContactPhone ──────────────────────────────────────────────────────
-  // Resolves a name or relationship to a phone number.
-  // Pass 1: Herald contacts table (contactsDB) — fastest, device SQLite
-  // Pass 2: OS device contacts via expo-contacts — broader coverage
-  // Returns null if not found — caller handles graceful fallback.
-
-  const resolveContactPhone = async (nameOrRelation: string): Promise<{ phone: string; name: string; contactId?: string; source: 'herald' | 'device' } | { phone: null; name: string; source: 'device'; candidateNames: string[] } | null> => {
-    const clean = nameOrRelation.trim().toLowerCase().replace(/^(?:my|the|a)\s+/, '');
-
-    // Pass 1: Herald contacts table
-    const byRelation = findContactByRelationship(clean);
-    if (byRelation?.phone) {
-      return { phone: byRelation.phone, name: byRelation.name, contactId: byRelation.id, source: 'herald' as const };
-    }
-    const byName = findContactByName(clean);
-    if (byName?.phone) {
-      return { phone: byName.phone, name: byName.name, contactId: byName.id, source: 'herald' as const };
-    }
-
-    // Pass 2: OS device contacts
-    try {
-      const Contacts = await import('expo-contacts');
-      const { status } = await Contacts.requestPermissionsAsync();
-      if (status !== 'granted') return null;
-
-      const { data } = await Contacts.getContactsAsync({
-        fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name],
-      });
-
-      if (!data?.length) return null;
-
-      // Find best match — prioritize exact name match, then partial
-      const exactMatches = data.filter(c =>
-        c.name?.toLowerCase() === clean ||
-        c.firstName?.toLowerCase() === clean ||
-        c.lastName?.toLowerCase() === clean
-      );
-      const partialMatches = data.filter(c =>
-        c.name?.toLowerCase().includes(clean) ||
-        c.firstName?.toLowerCase().includes(clean)
-      );
-
-      const candidates = exactMatches.length > 0 ? exactMatches : partialMatches;
-
-      // Multiple matches — honest ambiguity, never a silent guess or a silent
-      // "not found." Surface the real names so the caller can ask which one
-      // (Graceful Confusion Rule, CLAUDE.md) instead of claiming no number exists.
-      if (candidates.length > 1) {
-        const candidateNames = candidates
-          .map(c => c.name)
-          .filter((n): n is string => !!n)
-          .slice(0, 5);
-        return { phone: null, name: nameOrRelation, source: 'device' as const, candidateNames };
-      }
-
-      const match = candidates[0];
-      if (match?.phoneNumbers?.[0]?.number) {
-        const phone = match.phoneNumbers[0].number.replace(/\D/g, '');
-        const name = match.name ?? nameOrRelation;
-        return { phone, name, source: 'device' as const };
-      }
-    } catch (e) {
-      console.warn('[resolveContactPhone] expo-contacts failed:', e);
-    }
-
-    return null;
-  };
-  resolveContactPhoneRef.current = resolveContactPhone;
 
   const handleSMSAction = async (value: string) => {
     const pipeIdx = value.indexOf("|");

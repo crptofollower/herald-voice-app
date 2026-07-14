@@ -63,7 +63,7 @@ const DETERMINISTIC_CAPTURERS: DeterministicCapturer[] = [
 export async function resolveContactCallIntent(
   contactName: string,
   raw: string,
-  deps: { resolveContact?: (n: string) => Promise<{phone:string;name:string;contactId?:string;source:'herald'|'device'}|{phone:null;name:string;source:'device';candidateNames:string[]}|null> },
+  deps: { resolveContact?: (n: string) => Promise<{phone:string;name:string;contactId?:string;source:'herald'|'device'}|{phone:null;name:string;source:'device';candidateNames:string[];deviceCandidates:{name:string;phone:string}[]}|null> },
 ): Promise<IntentRecord> {
   const clean = contactName.trim().toLowerCase().replace(/^(?:my|the|a)\s+/, '');
   const allMatches = findAllContactMatches(clean);
@@ -101,6 +101,14 @@ export async function resolveContactCallIntent(
   const device = deps.resolveContact ? await deps.resolveContact(deviceQuery) : null;
   if (device && device.phone) {
     return { type: 'contact_call', contact: contactName, devicePhone: device.phone, deviceName: device.name, raw };
+  }
+  if (device && !device.phone && 'deviceCandidates' in device && device.deviceCandidates.length > 0) {
+    const candidates = device.deviceCandidates.map(c => ({
+      name: c.name,
+      phone: c.phone,
+      importance: 5,
+    }));
+    return { type: 'contact_call', contact: contactName, candidates, raw };
   }
   return { type: 'contact_call', contact: contactName, raw };
 }
@@ -1099,7 +1107,7 @@ export async function routeIntent(
     classifyLLM: ((text: string) => Promise<IntentRecord[]>) | null;
     llmReady: boolean;
     captureContext?: CaptureContext;
-    resolveContact?: (nameOrRelation: string) => Promise<{phone:string;name:string;contactId?:string;source:'herald'|'device'}|{phone:null;name:string;source:'device';candidateNames:string[]}|null>;
+    resolveContact?: (nameOrRelation: string) => Promise<{phone:string;name:string;contactId?:string;source:'herald'|'device'}|{phone:null;name:string;source:'device';candidateNames:string[];deviceCandidates:{name:string;phone:string}[]}|null>;
   },
 ): Promise<RouteDecision> {
   const decision = await deps.classifyQuery(text);
