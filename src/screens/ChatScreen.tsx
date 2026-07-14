@@ -847,7 +847,8 @@ export default function ChatScreen() {
     addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
     const emergencyContact = getEmergencyContact();
     if (!emergencyContact?.phone) {
-      const reply = `I want to help — but I don't have an emergency contact set up yet. Tell me who to reach and their number.`;
+      const reply = `I don't have an emergency contact set up yet — do you want me to call 911?`;
+      pendingContactCollectRef.current = { action: 'confirm_call', name: '911', phone: '911' };
       addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
       speak(reply);
       return;
@@ -967,7 +968,9 @@ export default function ChatScreen() {
         if (isYes) {
           pendingContactCollectRef.current = null;
           try {
-            writeContact({ name: pending.name, phone: pending.phone!, importance: 5 });
+            if (pending.phone !== '911') {
+              writeContact({ name: pending.name, phone: pending.phone!, importance: 5 });
+            }
             await Linking.openURL(`tel:${pending.phone!.replace(/\D/g, '')}`);
             const reply = `Calling ${pending.name}.`;
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
