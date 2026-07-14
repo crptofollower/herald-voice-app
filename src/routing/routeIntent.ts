@@ -214,10 +214,10 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       return commit(name);
     },
     async remove(item: string): Promise<CommitResult> {
-      return { status: 'noop', ack: `Noted.` };
+      return { status: 'noop', ack: `I can't take that off just yet — but I've still got it, and I won't lose it.` };
     },
     async clear(): Promise<CommitResult> {
-      return { status: 'noop', ack: `Noted.` };
+      return { status: 'noop', ack: `I can't take that off just yet — but I've still got it, and I won't lose it.` };
     },
   },
   list_add: {
@@ -263,10 +263,10 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       return { status: 'committed', ack: `Got it — added ${addedCount} items to your ${listName} list.` };
     },
     async remove(item: string): Promise<CommitResult> {
-      return { status: 'noop', ack: 'Noted.' };
+      return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
     },
     async clear(): Promise<CommitResult> {
-      return { status: 'noop', ack: 'Noted.' };
+      return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
     },
   },
   todo_add: {
@@ -343,7 +343,7 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       };
     },
     async clear(): Promise<CommitResult> {
-      return { status: 'noop', ack: 'Noted.' };
+      return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
     },
   },
   phone_capture: {
@@ -376,10 +376,10 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       }
     },
     async remove(item: string): Promise<CommitResult> {
-      return { status: 'noop', ack: 'Noted.' };
+      return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
     },
     async clear(): Promise<CommitResult> {
-      return { status: 'noop', ack: 'Noted.' };
+      return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
     },
   },
   address_capture: {
@@ -407,10 +407,10 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       }
     },
     async remove(item: string): Promise<CommitResult> {
-      return { status: 'noop', ack: 'Noted.' };
+      return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
     },
     async clear(): Promise<CommitResult> {
-      return { status: 'noop', ack: 'Noted.' };
+      return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
     },
   },
   family_capture: {
@@ -494,10 +494,10 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       };
     },
     async remove(item: string): Promise<CommitResult> {
-      return { status: 'noop', ack: 'Noted.' };
+      return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
     },
     async clear(): Promise<CommitResult> {
-      return { status: 'noop', ack: 'Noted.' };
+      return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
     },
   },
   emergency_contact: {
@@ -525,10 +525,10 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       }
     },
     async remove(item: string): Promise<CommitResult> {
-      return { status: 'noop', ack: 'Noted.' };
+      return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
     },
     async clear(): Promise<CommitResult> {
-      return { status: 'noop', ack: 'Noted.' };
+      return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
     },
   },
   medical_capture: {
@@ -678,10 +678,10 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       // medical_records.removed_at landed in schema v18. A visit-remove path can
       // now soft-delete; left as a deliberate noop until a visit-remove utterance
       // is actually wired. Never a hard delete.
-      return { status: 'noop', ack: 'Noted.' };
+      return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
     },
     async clear(): Promise<CommitResult> {
-      return { status: 'noop', ack: 'Noted.' };
+      return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
     },
   },
   medical_visit_upcoming: {
@@ -743,10 +743,10 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       };
     },
     async remove(_item: string): Promise<CommitResult> {
-      return { status: 'noop', ack: 'Noted.' };
+      return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
     },
     async clear(): Promise<CommitResult> {
-      return { status: 'noop', ack: 'Noted.' };
+      return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
     },
   },
   diagnosis_capture: {
@@ -792,10 +792,10 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       };
     },
     async remove(item: string): Promise<CommitResult> {
-      return { status: 'noop', ack: 'Noted.' };
+      return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
     },
     async clear(): Promise<CommitResult> {
-      return { status: 'noop', ack: 'Noted.' };
+      return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
     },
   },
   doctor_intro_capture: {
@@ -843,10 +843,10 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       };
     },
     async remove(_item: string): Promise<CommitResult> {
-      return { status: 'noop', ack: 'Noted.' };
+      return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
     },
     async clear(): Promise<CommitResult> {
-      return { status: 'noop', ack: 'Noted.' };
+      return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
     },
   },
   insurance_capture: {
@@ -933,10 +933,10 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       return confirmStage(cleanCarrier, spokenType);
     },
     async remove(_item: string): Promise<CommitResult> {
-      return { status: 'noop', ack: 'Noted.' };
+      return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
     },
     async clear(): Promise<CommitResult> {
-      return { status: 'noop', ack: 'Noted.' };
+      return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
     },
   },
   contact_call: {
@@ -1075,10 +1075,10 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       return collectStage(contact);
     },
     async remove(_item: string): Promise<CommitResult> {
-      return { status: 'noop', ack: 'Noted.' };
+      return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
     },
     async clear(): Promise<CommitResult> {
-      return { status: 'noop', ack: 'Noted.' };
+      return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
     },
   },
 };
