@@ -400,12 +400,8 @@ User: "${trimmed.replace(/"/g, '\\"')}"`;
 
     const raw = result?.text?.trim();
     if (!raw) return [];
-    const jsonStr = extractJsonObject(raw);
-    if (!jsonStr) return [];
-    const parsed = JSON.parse(jsonStr) as IntentRecord;
-    if (parsed.type === 'pass') return [];
-    if (!isCaptureComplete(parsed)) return [];
-    return [parsed];
+    const vocab = buildClassifierVocab(hints.lists);
+    return parseClassifierOutput(raw, trimmed, vocab);
   } catch {
     return [];
   }
