@@ -195,6 +195,46 @@ export async function runFamilyContractTests() {
       (v) => v === 2, 'count === 2');
   }
 
+  // ── In-law read-back (compound must not truncate to root; overview includes) ──
+  {
+    const db = freshDB();
+    addContact(db, 'Robert', 'father');
+    addContact(db, 'David Clevenger', 'father-in-law');
+    const intent = detectFamilyRead('who is my father-in-law');
+    assert('F10a detect keeps father-in-law compound (not truncated to father)',
+      intent,
+      (v) => v !== null && v.relation === 'father-in-law',
+      'relation === father-in-law');
+    const answer = intent ? answerFamilyRead(intent) : '';
+    assert('F10b father-in-law read returns Clevenger, not plain father Robert',
+      answer,
+      (v) => v.includes('David Clevenger') && !v.includes('Robert'),
+      'includes Clevenger, excludes Robert');
+  }
+  {
+    const db = freshDB();
+    addContact(db, 'David Clevenger', 'father-in-law');
+    const overview = answerFamilyRead(detectFamilyRead('tell me about my family')!);
+    assert('F11 overview includes father-in-law',
+      overview,
+      (v) => v.includes('David Clevenger') && /father-in-law/i.test(v),
+      'names Clevenger as father-in-law');
+  }
+  {
+    const db = freshDB();
+    addContact(db, 'David Clevenger', 'father-in-law');
+    const intent = detectFamilyRead('who is my father');
+    assert('F12a plain father detect stays father (not father-in-law)',
+      intent,
+      (v) => v !== null && v.relation === 'father',
+      'relation === father');
+    const answer = intent ? answerFamilyRead(intent) : '';
+    assert('F12b plain father does not match father-in-law contact',
+      answer,
+      (v) => !v.includes('David Clevenger') && /don't have your father/i.test(v),
+      'honest miss — FIL is a distinct relation');
+  }
+
   const total = passed + failures.length;
   console.log(`\n${BOLD}Contract: ${passed}/${total} passed${failures.length > 0 ? ` — ${RED}${failures.length} FAILED${RESET}` : ` — ${GREEN}all green${RESET}`}${RESET}\n`);
   return { passed, failed: failures.length, total, failures };

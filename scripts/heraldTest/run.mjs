@@ -216,7 +216,7 @@ const RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", BOLD = "\x1b[1m",
 let passed = 0;
 const failures = [];
 const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length;
-const EXPECTED_TOTAL = 438;   // was 437; +1 name-hop no-relationship-inherit test (T-CT-13)
+const EXPECTED_TOTAL = 443;   // was 438; +5 family in-law read tests (F10a/b, F11, F12a/b)
 
 console.log(`\n${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  HERALD ROUTER + PHONE TEST SUITE — ${TOTAL} tests${RESET}`);

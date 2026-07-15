@@ -38,10 +38,19 @@ const FAMILY_SYNONYMS: Record<string, string[]> = {
   sister: ['sister'],
   grandson: ['grandson'],
   granddaughter: ['granddaughter'],
+  'father-in-law': ['father-in-law'],
+  'mother-in-law': ['mother-in-law'],
+  'brother-in-law': ['brother-in-law'],
+  'sister-in-law': ['sister-in-law'],
+  'son-in-law': ['son-in-law'],
+  'daughter-in-law': ['daughter-in-law'],
 };
 
+// Alternation order is intentional: JS | is left-first, so longer compounds MUST
+// precede their roots. Otherwise "father" matches at the hyphen boundary inside
+// "father-in-law" and "who is my father-in-law" is mis-read as plain "father".
 const FAMILY_RELATION_WORD =
-  '(wife|husband|spouse|partner|son|daughter|child|children|kids?|kid|mom|mother|dad|father|brother|sister|grandson|granddaughter)';
+  '(father-in-law|mother-in-law|brother-in-law|sister-in-law|son-in-law|daughter-in-law|wife|husband|spouse|partner|grandson|granddaughter|son|daughter|child|children|kids?|kid|mom|mother|dad|father|brother|sister)';
 
 // Detect a family READ. Returns null for declarative statements ("my son is X"),
 // mirroring householdRead's statement guard (lines 165–167) so writes fall through
@@ -85,7 +94,9 @@ export function answerFamilyRead(intent: FamilyReadIntent): string {
         `SELECT name, relationship, location FROM contacts
          WHERE relationship IN
            ('wife','husband','spouse','partner','son','daughter','child',
-            'mom','mother','dad','father','brother','sister','grandson','granddaughter')
+            'mom','mother','dad','father','brother','sister','grandson','granddaughter',
+            'father-in-law','mother-in-law','brother-in-law','sister-in-law',
+            'son-in-law','daughter-in-law')
            AND removed_at IS NULL
          ORDER BY importance DESC, name ASC;`,
       );
