@@ -2,7 +2,7 @@
 // On-device intent classification for Herald.
 //
 // Layer 1 — classifyWithLLM: messy speech → structured IntentRecord JSON
-//   Temperature 0, n_predict 120, 5s timeout.
+//   Temperature 0, n_predict 256, 5s timeout.
 //   Falls back to null on any failure — caller uses tierRouter regex as fallback.
 //
 // MedicalEvent import kept minimal — type only, no runtime dependency.
@@ -289,7 +289,9 @@ export async function classifyWithLLM(
   if (!trimmed) return [];
 
   const prompt = `You are Herald's on-device intent classifier.
-Respond with ONE JSON object only. No prose. No markdown. No explanation.
+Respond with a JSON ARRAY of 1-4 intent objects: [{...}]. Always an array,
+even for a single intent. Output the array on ONE LINE. No prose. No
+markdown. No explanation.
 
 INTENT SCHEMAS with EXAMPLES:
 
@@ -368,7 +370,15 @@ TODO COMPLETE:
 PASS — use when live data needed, unclear, or none of the above:
 {"type":"pass"}
 
+COMPOUND UTTERANCES — one sentence can carry MORE THAN ONE intent. Emit one
+object per intent, in the order spoken:
+"I'm taking lisinopril 5mg and I need apples" → [{"type":"medical_capture","drug":"lisinopril","dosage":"5mg","raw":"I'm taking lisinopril 5mg and I need apples"},{"type":"list_add","items":["apples"],"listName":"grocery"}]
+"my plumber is Joe and remind me to call the dentist" → [{"type":"service_capture","category":"plumber","name":"Joe"},{"type":"todo_add","body":"call the dentist"}]
+"I saw Dr. Reyes today and I need milk and eggs" → [{"type":"medical_visit","doctor_name":"Dr. Reyes","raw":"I saw Dr. Reyes today and I need milk and eggs"},{"type":"list_add","items":["milk","eggs"],"listName":"grocery"}]
+A single intent is still an array: "I need apples" → [{"type":"list_add","items":["apples"],"listName":"grocery"}]
+
 CRITICAL RULES:
+- ALWAYS respond with an array, on one line. Maximum 4 objects. Never more.
 - ALWAYS split list items into array — "apples oranges milk" = ["apples","oranges","milk"], NEVER one string
 - Drug names and dosages: copy VERBATIM from speech, never guess or correct spelling
 - A visit specialty (cardiologist, dentist, doctor) is NEVER a doctor_name — put it in the specialty field, never invent a "Dr." name
@@ -379,7 +389,7 @@ CRITICAL RULES:
 - Known contacts: ${hints.contacts.slice(0, 15).join(', ') || 'none'}
 - Known lists: ${hints.lists.join(', ') || 'grocery, todo'}
 - User name: ${hints.name ?? 'unknown'}
-- When genuinely unclear → {"type":"pass"}
+- When genuinely unclear → [{"type":"pass"}]
 
 User: "${trimmed.replace(/"/g, '\\"')}"`;
 
@@ -387,7 +397,7 @@ User: "${trimmed.replace(/"/g, '\\"')}"`;
     const result = await Promise.race([
       ctx.completion({
         messages: [{ role: 'user', content: prompt }],
-        n_predict: 120,
+        n_predict: 256,
         temperature: 0,
         top_k: 1,
         seed: 0,
