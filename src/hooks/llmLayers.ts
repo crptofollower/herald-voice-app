@@ -151,9 +151,13 @@ export function verifyVerbatim(
     out.items = grounded;
   }
 
+  // W3d: raw_phrase remains the full original utterance, unconditionally.
+  if ('raw' in out) out.raw = rawUtterance;
+
   for (const [key, val] of Object.entries(out)) {
     if (ROUTING_FIELDS.has(key)) continue;
     if (key === 'items') continue;
+    if (key === 'raw') continue; // W3d: grounded above, never model-authored.
     if (typeof val !== 'string') continue;
     if (!val.trim()) continue;
     if (key === 'phone') {

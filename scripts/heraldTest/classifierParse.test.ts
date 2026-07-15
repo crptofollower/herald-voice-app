@@ -219,6 +219,16 @@ export async function runClassifierParseTests() {
     check('56. malformed element throws → dropped, sibling survives',
       out.length === 1 && out[0].type === 'list_add' && out[0].items[0] === 'apples');
   }
+  {
+    const got = vv(
+      { type: 'medical_capture', drug: 'lisinopril', dosage: '10 mg', raw: 'I take Lisinopril 10mg.' },
+      'i take lisinopril 10 mg',
+    );
+    check('57. raw grounded to utterance, not model echo (W3d)',
+      !!got && got.type === 'medical_capture'
+      && got.raw === 'i take lisinopril 10 mg'
+      && got.drug === 'lisinopril');
+  }
 
   const total = passed + failures.length;
   if (failures.length) {
