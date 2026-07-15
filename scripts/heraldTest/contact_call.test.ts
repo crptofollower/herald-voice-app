@@ -381,6 +381,31 @@ export async function runContactCallTests() {
       'unmapped, still type call — no fabricated contact_call');
   }
 
+  // ── T-CT-13: name-hop bridge must NOT inherit relationship onto namesakes ──
+  // Phoneless "father-in-law" row + two phoneable Davids with no relationship of
+  // their own. Bridge finds the Davids by name; must not paint FIL onto them.
+  {
+    const db = freshDB();
+    insertContact(db, { id: 'c_fil', name: 'David', relationship: 'father-in-law', importance: 7 });
+    insertContact(db, { id: 'c_moss', name: 'David Mossholder', phone: '555-111-1111', importance: 9 });
+    insertContact(db, { id: 'c_clev', name: 'David Clevenger', phone: '555-222-2222', importance: 5 });
+    const intent = await resolveContactCallIntent('father-in-law', 'call my father-in-law', { resolveContact: async () => null });
+    const cands = (intent as { candidates?: Array<{ name: string; relationship?: string | null }> }).candidates ?? [];
+    const pending = await DOMAIN_WRITERS['contact_call']!.add(intent, '');
+    assert('T-CT-13 bridged namesakes keep no inherited relationship in prompt',
+      { cands, pending },
+      v => {
+        if (v.pending.status !== 'pending') return false;
+        const p = v.pending.prompt as string;
+        // relPrefix already omits when relationship empty — no "your father-in-law NAME"
+        if (/your\s+father-in-law/i.test(p)) return false;
+        if (!/Mossholder/i.test(p)) return false;
+        // Candidates themselves must not carry the FIL label from the phoneless row
+        return v.cands.length >= 2 && v.cands.every(c => !c.relationship?.trim());
+      },
+      'pending prompt names Mossholder without claiming father-in-law; candidates have no relationship');
+  }
+
   const total = passed + failures.length;
   console.log(`\n${BOLD}ContactCall: ${passed}/${total} passed${failures.length > 0 ? ` — ${RED}${failures.length} FAILED${RESET}` : ` — ${GREEN}all green${RESET}`}${RESET}\n`);
   return { passed, failed: failures.length, total, failures };

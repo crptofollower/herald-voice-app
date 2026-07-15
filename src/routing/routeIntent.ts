@@ -84,8 +84,10 @@ export async function resolveContactCallIntent(
       for (const b of findAllContactMatches(m.name)) {
         if (!b.phone?.trim() || seen.has(b.id)) continue;
         seen.add(b.id);
-        // Carry the relationship label forward so read-back can say "your son Hunter".
-        bridged.push({ ...b, relationship: b.relationship ?? m.relationship });
+        // Keep b's own relationship only — never inherit m's. Name-hop has no
+        // join key proving b and m are the same person; painting m.relationship
+        // onto an unrelated namesake fabricates a family claim (Elder Safety).
+        bridged.push({ ...b, relationship: b.relationship ?? undefined });
       }
     }
     withPhone = bridged;
