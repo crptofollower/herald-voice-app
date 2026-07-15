@@ -103,7 +103,7 @@ export const SERVICE_SYNONYMS: Record<string, string[]> = {
 };
 
 // Insurance spoken → stored type
-const INSURANCE_SYNONYMS: Record<string, string[]> = {
+export const INSURANCE_SYNONYMS: Record<string, string[]> = {
   home: ['home', 'homeowners', 'homeowner', 'house'],
   homeowners: ['home', 'homeowners', 'homeowner', 'house'],
   house: ['home', 'homeowners', 'homeowner', 'house'],

@@ -8,6 +8,8 @@
 // MedicalEvent import kept minimal — type only, no runtime dependency.
 
 import type { LlamaContext } from 'llama.rn';
+import { SERVICE_SYNONYMS, INSURANCE_SYNONYMS } from '../utils/householdRead';
+import { FAMILY_SYNONYMS } from '../utils/familyRead';
 
 // ─── Intent types ─────────────────────────────────────────────────────────────
 
@@ -33,11 +35,197 @@ export type IntentRecord =
   | { type: 'todo_complete'; hint: string }
   | { type: 'pass' };
 
+// Keep in sync with every type literal in IntentRecord above — cannot drift apart.
+const KNOWN_TYPES = new Set<IntentRecord['type']>([
+  'list_add', 'list_remove', 'insurance_capture', 'medical_capture',
+  'medical_visit', 'medical_visit_upcoming', 'doctor_intro_capture',
+  'service_capture', 'family_capture', 'phone_capture', 'address_capture',
+  'emergency_contact', 'diagnosis_capture', 'contact_call',
+  'todo_add', 'todo_complete', 'pass',
+]);
+
+const STEP_FORMS = [
+  'stepson', 'stepdaughter', 'stepmother', 'stepfather',
+  'stepbrother', 'stepsister',
+]; // SESSION_W W3c: FAMILY_SYNONYMS ∪ step forms
+
 const CLASSIFY_TIMEOUT_MS = 5_000;
 
 function extractJsonObject(raw: string): string | null {
   const m = raw.match(/\{[\s\S]*\}/);
   return m?.[0] ?? null;
+}
+
+export function extractJsonArray(raw: string): string | null {
+  // Prefer a top-level / prose array of objects. Nested arrays inside a bare
+  // object (e.g. items:["apples"]) must not win over W2b object-wrap.
+  const arr = raw.match(/\[[\s\S]*\]/);
+  if (arr?.[0]) {
+    try {
+      const parsed = JSON.parse(arr[0]);
+      if (
+        Array.isArray(parsed)
+        && (parsed.length === 0
+          || parsed.some(el => el !== null && typeof el === 'object' && !Array.isArray(el)))
+      ) {
+        return arr[0];
+      }
+    } catch {
+      // fall through to bare-object wrap
+    }
+  }
+  const obj = raw.match(/\{[\s\S]*\}/);
+  if (obj?.[0]) return `[${obj[0]}]`;
+  return null;
+}
+
+export type ClassifierVocab = {
+  knownLists: string[];      // caller passes hints.lists
+  categories: Set<string>;   // will compile from SERVICE_SYNONYMS values
+  insTypes: Set<string>;     // will compile from INSURANCE_SYNONYMS values
+  relations: Set<string>;    // will compile from FAMILY_SYNONYMS keys+values + step forms
+};
+
+export function buildClassifierVocab(knownLists: string[]): ClassifierVocab {
+  const categories = new Set<string>();
+  for (const vals of Object.values(SERVICE_SYNONYMS)) {
+    for (const v of vals) categories.add(v.toLowerCase());
+  }
+  const insTypes = new Set<string>();
+  for (const vals of Object.values(INSURANCE_SYNONYMS)) {
+    for (const v of vals) insTypes.add(v.toLowerCase());
+  }
+  const relations = new Set<string>();
+  for (const [k, vals] of Object.entries(FAMILY_SYNONYMS)) {
+    relations.add(k.toLowerCase());
+    for (const v of vals) relations.add(v.toLowerCase());
+  }
+  for (const s of STEP_FORMS) relations.add(s.toLowerCase());
+  return { knownLists, categories, insTypes, relations };
+}
+
+const ROUTING_FIELDS = new Set(['type', 'listName', 'category', 'insType', 'relation']);
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Standard verbatim span: whitespace-flexible word join; raw span wins (W3d). */
+function findStandardSpan(rawUtterance: string, value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parts = trimmed.split(/\s+/).filter(Boolean).map(escapeRegExp);
+  const re = new RegExp(parts.join('\\s+'), 'i');
+  const hit = rawUtterance.match(re);
+  if (hit) return hit[0];
+  // Model may collapse whitespace ("10mg" vs "10 mg") — still ground to utterance span.
+  const collapsed = trimmed.replace(/\s+/g, '');
+  if (collapsed.length === 0) return null;
+  const soft = new RegExp(collapsed.split('').map(escapeRegExp).join('\\s*'), 'i');
+  const softHit = rawUtterance.match(soft);
+  return softHit ? softHit[0] : null;
+}
+
+function findPhoneSpan(rawUtterance: string, value: string): string | null {
+  const digits = value.replace(/\D/g, '');
+  if (!digits) return null;
+  const re = new RegExp(digits.split('').map(escapeRegExp).join('[\\s\\-().+]*'), 'i');
+  const hit = rawUtterance.match(re);
+  return hit ? hit[0] : null;
+}
+
+export function verifyVerbatim(
+  rec: IntentRecord, rawUtterance: string,
+): IntentRecord | null {
+  const out: Record<string, unknown> = { ...rec };
+
+  if ('items' in out && Array.isArray(out.items)) {
+    const grounded: string[] = [];
+    for (const it of out.items as unknown[]) {
+      if (typeof it !== 'string') continue;
+      if (!it.trim()) continue;
+      const span = findStandardSpan(rawUtterance, it);
+      if (!span) return null;
+      grounded.push(span);
+    }
+    out.items = grounded;
+  }
+
+  for (const [key, val] of Object.entries(out)) {
+    if (ROUTING_FIELDS.has(key)) continue;
+    if (key === 'items') continue;
+    if (typeof val !== 'string') continue;
+    if (!val.trim()) continue;
+    if (key === 'phone') {
+      const span = findPhoneSpan(rawUtterance, val);
+      if (!span) return null;
+      out[key] = span;
+      continue;
+    }
+    const span = findStandardSpan(rawUtterance, val);
+    if (!span) return null;
+    out[key] = span;
+  }
+
+  return out as unknown as IntentRecord;
+}
+
+function passesRoutingVocab(rec: IntentRecord, vocab: ClassifierVocab): boolean {
+  const r = rec as Record<string, unknown>;
+  if (typeof r.listName === 'string' && r.listName.trim()) {
+    const ln = r.listName.trim().toLowerCase();
+    const allowed = new Set([
+      ...vocab.knownLists.map(l => l.toLowerCase()),
+      'grocery',
+      'todo',
+    ]);
+    if (!allowed.has(ln)) return false;
+  }
+  if (typeof r.category === 'string' && r.category.trim()) {
+    if (!vocab.categories.has(r.category.trim().toLowerCase())) return false;
+  }
+  if (typeof r.insType === 'string' && r.insType.trim()) {
+    if (!vocab.insTypes.has(r.insType.trim().toLowerCase())) return false;
+  }
+  if (typeof r.relation === 'string' && r.relation.trim()) {
+    if (!vocab.relations.has(r.relation.trim().toLowerCase())) return false;
+  }
+  return true;
+}
+
+export function parseClassifierOutput(
+  rawText: string, rawUtterance: string, vocab: ClassifierVocab,
+): IntentRecord[] {
+  const arrStr = extractJsonArray(rawText);
+  if (!arrStr) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(arrStr);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  const objects = parsed.filter(
+    (el): el is Record<string, unknown> => !!el && typeof el === 'object' && !Array.isArray(el),
+  );
+  // W2c — first 4 elements kept, before validation
+  const capped = objects.slice(0, 4);
+  const survivors: IntentRecord[] = [];
+  for (const el of capped) {
+    try {
+      const rec = el as unknown as IntentRecord;
+      if (!rec.type || rec.type === 'pass') continue;
+      if (!KNOWN_TYPES.has(rec.type)) continue;
+      if (!isCaptureComplete(rec)) continue;
+      if (!passesRoutingVocab(rec, vocab)) continue;
+      const verified = verifyVerbatim(rec, rawUtterance);
+      if (!verified) continue;
+      survivors.push(verified);
+    } catch {
+      continue;   // malformed element — drop it, siblings unaffected
+    }
+  }
+  return survivors;
 }
 
 // Names that are placeholders, pronouns, or STT noise — not real captures.

@@ -19,7 +19,7 @@ export type FamilyReadIntent = { relation: string | null; spoken: string };
 
 // Spoken relation word → canonical contacts.relationship values (person-as-entity:
 // a person may match a relation; we return ALL who match, never one).
-const FAMILY_SYNONYMS: Record<string, string[]> = {
+export const FAMILY_SYNONYMS: Record<string, string[]> = {
   wife: ['wife', 'spouse', 'partner'],
   husband: ['husband', 'spouse', 'partner'],
   spouse: ['spouse', 'wife', 'husband', 'partner'],
