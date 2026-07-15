@@ -1157,8 +1157,15 @@ export function composeAck(results: CommitResult[]): string {
     ? results[0].prompt
     : results[0].ack;
   const pending = results.find(r => r.status === 'pending');
-  if (pending) return pending.prompt;
-  return results.map(r => r.status !== 'pending' ? r.ack : '').filter(Boolean).join(' ');
+  const settled = results
+    .filter(r => r.status !== 'pending')
+    .map(r => r.ack)
+    .filter(Boolean)
+    .join(' ');
+  if (pending && pending.status === 'pending') {
+    return settled ? `${settled} ${pending.prompt}` : pending.prompt;
+  }
+  return settled;
 }
 
 export async function routeIntent(

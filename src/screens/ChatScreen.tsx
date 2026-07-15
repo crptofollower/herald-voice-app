@@ -1176,6 +1176,11 @@ export default function ChatScreen() {
             llmCaptures[0] as Record<string, string | undefined>,
             text,
           );
+          if (handled && llmCaptures.length > 1) {
+            const tailReply = "I got the first part — say the rest once more and I'll get that too?";
+            addMessage({ id: generateId('msg'), role: 'assistant', content: tailReply, timestamp: Date.now() });
+            speak(tailReply);
+          }
           if (handled) {
             sendingRef.current = false;
             setInputText('');
@@ -1415,6 +1420,11 @@ export default function ChatScreen() {
               addMessage({ id: generateId('msg'), role: 'user',
                 content: text, timestamp: Date.now() });
               await dispatchLocalIntent(results[0] as Record<string, string | undefined>, text);
+              if (results.length > 1) {
+                const tailReply = "I got the first part — say the rest once more and I'll get that too?";
+                addMessage({ id: generateId('msg'), role: 'assistant', content: tailReply, timestamp: Date.now() });
+                speak(tailReply);
+              }
               return;
             }
           } catch {
