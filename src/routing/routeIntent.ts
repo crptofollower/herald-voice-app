@@ -94,7 +94,30 @@ export async function resolveContactCallIntent(
   }
 
   if (withPhone.length > 0) {
-    return { type: 'contact_call', contact: contactName, candidates: withPhone, raw };
+    // Names that matched the query but still have no phone after filtering +
+    // bridge rescue — carried for honest disclosure when we dial the one
+    // (or few) callable hits. Not dial candidates (no phone).
+    const dialableIds = new Set(withPhone.map(c => c.id));
+    const phonelessNames = allMatches
+      .filter(c => !dialableIds.has(c.id) && !c.phone?.trim())
+      .map(c => c.name.trim())
+      .filter(Boolean);
+    // De-dupe preserving order
+    const seenName = new Set<string>();
+    const uniquePhoneless: string[] = [];
+    for (const n of phonelessNames) {
+      const k = n.toLowerCase();
+      if (seenName.has(k)) continue;
+      seenName.add(k);
+      uniquePhoneless.push(n);
+    }
+    return {
+      type: 'contact_call',
+      contact: contactName,
+      candidates: withPhone,
+      ...(uniquePhoneless.length > 0 ? { phonelessNames: uniquePhoneless } : {}),
+      raw,
+    };
   }
 
   // Device fallback resolves the PERSON'S NAME (e.g. "Hunter"), never the bare
@@ -946,7 +969,7 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       if (intent.type !== 'contact_call') {
         return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
       }
-      const { contact, candidates, devicePhone, deviceName } = intent;
+      const { contact, candidates, devicePhone, deviceName, phonelessNames } = intent;
       type CallCandidate = { name: string; relationship?: string; phone: string; importance: number };
 
       const herald = (candidates ?? []).filter((c): c is CallCandidate => !!c.phone?.trim());
@@ -956,20 +979,42 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
           ? `your ${c.relationship} ${c.name}`
           : `at ...${c.phone.replace(/\D/g, '').slice(-4)}`;
 
-      const commitDial = (name: string, phone: string): CommitResult => {
+      const joinNaturally = (items: string[]): string => {
+        if (items.length === 0) return '';
+        if (items.length === 1) return items[0];
+        if (items.length === 2) return `${items[0]} and ${items[1]}`;
+        return `${items.slice(0, -1).join(', ')}, and ${items[items.length - 1]}`;
+      };
+
+      const commitDial = (name: string, phone: string, ack?: string): CommitResult => {
         const digits = phone.replace(/\D/g, '');
         if (digits.length < 10) {
           return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
         }
         return {
           status: 'committed',
-          ack: `Calling ${name}.`,
+          ack: ack ?? `Calling ${name}.`,
           effect: {
             kind: 'dial',
             phone: digits,
             failAck: `I couldn't open the dialer — try calling ${name} manually.`,
           },
         };
+      };
+
+      const disclosureAck = (dialName: string, dropped: string[]): string => {
+        const rel = contact.trim().replace(/^(?:my|the|a)\s+/i, '');
+        const asRel = rel ? ` as your ${rel}` : '';
+        if (dropped.length === 1) {
+          return `Calling ${dialName}. I also know ${dropped[0]}${asRel}, but I don't have a number for ${dropped[0]} yet.`;
+        }
+        if (dropped.length === 2) {
+          return `Calling ${dialName}. I also know ${joinNaturally(dropped)}${asRel}, but I don't have their numbers yet.`;
+        }
+        // 3+: speak two names, then "and N others" — noise guard
+        const spoken = joinNaturally(dropped.slice(0, 2));
+        const others = dropped.length - 2;
+        return `Calling ${dialName}. I also know ${spoken}, and ${others} other${others === 1 ? '' : 's'}, but I don't have their numbers yet.`;
       };
 
       const matchCandidate = (reply: string, list: CallCandidate[]): CallCandidate | null => {
@@ -1073,7 +1118,14 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       }
 
       if (herald.length > 1) return disambiguateStage(herald, contact);
-      if (herald.length === 1) return commitDial(herald[0].name, herald[0].phone);
+      if (herald.length === 1) {
+        const only = herald[0];
+        const dropped = (phonelessNames ?? []).map(n => n.trim()).filter(Boolean);
+        if (dropped.length > 0) {
+          return commitDial(only.name, only.phone, disclosureAck(only.name, dropped));
+        }
+        return commitDial(only.name, only.phone);
+      }
       const phone = devicePhone?.trim();
       if (phone) {
         const name = deviceName?.trim() || contact;

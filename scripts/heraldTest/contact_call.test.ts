@@ -406,6 +406,88 @@ export async function runContactCallTests() {
       'pending prompt names Mossholder without claiming father-in-law; candidates have no relationship');
   }
 
+  // ── T-CT-14: phoneless sibling disclosure (cold-start silent-narrowing fix) ─
+  {
+    const db = freshDB();
+    insertContact(db, { id: 'c_hunter', name: 'Hunter', relationship: 'son', phone: '555-010-0101', importance: 9 });
+    insertContact(db, { id: 'c_grant', name: 'Grant', relationship: 'son', importance: 5 });
+    const intent = await resolveContactCallIntent('son', 'call my son', { resolveContact: async () => null });
+    const result = await DOMAIN_WRITERS['contact_call']!.add(intent, '');
+    assert('T-CT-14a one phoned + one phoneless → dials Hunter and ack names Grant',
+      { status: result.status, phone: dialPhone(result), ack: result.status === 'committed' ? result.ack : '' },
+      v => v.status === 'committed'
+        && v.phone === '5550100101'
+        && /Calling Hunter/i.test(v.ack)
+        && /Grant/i.test(v.ack)
+        && /don't have a number for Grant yet/i.test(v.ack)
+        && !/\b(his|her)\b/i.test(v.ack),
+      'committed dial Hunter; ack discloses Grant neutrally');
+  }
+  {
+    const db = freshDB();
+    insertContact(db, { id: 'c_emily', name: 'Emily', relationship: 'daughter', phone: '555-010-0101', importance: 9 });
+    insertContact(db, { id: 'c_anna', name: 'Anna', relationship: 'daughter', importance: 5 });
+    const intent = await resolveContactCallIntent('daughter', 'call my daughter', { resolveContact: async () => null });
+    const result = await DOMAIN_WRITERS['contact_call']!.add(intent, '');
+    assert('T-CT-14a2 phoneless daughter → ack names Anna with no his/her',
+      { status: result.status, phone: dialPhone(result), ack: result.status === 'committed' ? result.ack : '' },
+      v => v.status === 'committed'
+        && v.phone === '5550100101'
+        && /Calling Emily/i.test(v.ack)
+        && /don't have a number for Anna yet/i.test(v.ack)
+        && !/\b(his|her)\b/i.test(v.ack),
+      'committed dial Emily; Anna disclosed without gendered pronoun');
+  }
+  {
+    const db = freshDB();
+    insertContact(db, { id: 'c_high', name: 'Emily', relationship: 'daughter', phone: '555-010-0101', importance: 9 });
+    insertContact(db, { id: 'c_low', name: 'Anna', relationship: 'daughter', phone: '555-020-0202', importance: 3 });
+    const intent = await resolveContactCallIntent('daughter', 'call my daughter', { resolveContact: async () => null });
+    const pending = await DOMAIN_WRITERS['contact_call']!.add(intent, '');
+    assert('T-CT-14b both phoned → still disambiguateStage (no silent dial)',
+      pending,
+      v => v.status === 'pending' && /more than one daughter/i.test(v.prompt),
+      'pending disambiguation');
+  }
+  {
+    const db = freshDB();
+    insertContact(db, { id: 'c_one', name: 'Shannon', relationship: 'wife', phone: '555-030-0300', importance: 9 });
+    const intent = await resolveContactCallIntent('wife', 'call my wife', { resolveContact: async () => null });
+    const result = await DOMAIN_WRITERS['contact_call']!.add(intent, '');
+    assert('T-CT-14c single phoned match → plain Calling ack, no disclosure',
+      { status: result.status, ack: result.status === 'committed' ? result.ack : '' },
+      v => v.status === 'committed'
+        && v.ack === 'Calling Shannon.'
+        && !/I also know/i.test(v.ack),
+      'Calling Shannon. only');
+  }
+  {
+    const db = freshDB();
+    insertContact(db, { id: 'c_phoned', name: 'Hunter', relationship: 'son', phone: '555-010-0101', importance: 9 });
+    insertContact(db, { id: 'c_d1', name: 'Grant', relationship: 'son', importance: 5 });
+    insertContact(db, { id: 'c_d2', name: 'Emily', relationship: 'son', importance: 4 });
+    insertContact(db, { id: 'c_d3', name: 'Sam', relationship: 'son', importance: 3 });
+    insertContact(db, { id: 'c_d4', name: 'Alex', relationship: 'son', importance: 2 });
+    const intent = await resolveContactCallIntent('son', 'call my son', { resolveContact: async () => null });
+    const result = await DOMAIN_WRITERS['contact_call']!.add(intent, '');
+    assert('T-CT-14d 4+ phoneless → ack caps at 2 names + and N others',
+      { status: result.status, ack: result.status === 'committed' ? result.ack : '' },
+      v => v.status === 'committed'
+        && /Calling Hunter/i.test(v.ack)
+        && /and 2 others/i.test(v.ack)
+        && /don't have their numbers yet/i.test(v.ack),
+      'capped disclosure with and 2 others');
+  }
+  {
+    freshDB();
+    const intent = await resolveContactCallIntent('Alex', 'call Alex', { resolveContact: async () => null });
+    const pending = await DOMAIN_WRITERS['contact_call']!.add(intent, '');
+    assert('T-CT-14e withPhone===0 → collect stage unchanged (no phonelessNames dial)',
+      pending,
+      v => v.status === 'pending' && /don't have a number for Alex/i.test(v.prompt),
+      'collect pending');
+  }
+
   const total = passed + failures.length;
   console.log(`\n${BOLD}ContactCall: ${passed}/${total} passed${failures.length > 0 ? ` — ${RED}${failures.length} FAILED${RESET}` : ` — ${GREEN}all green${RESET}`}${RESET}\n`);
   return { passed, failed: failures.length, total, failures };
