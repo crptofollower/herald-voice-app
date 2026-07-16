@@ -1004,7 +1004,14 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
 
       const disclosureAck = (dialName: string, dropped: string[]): string => {
         const rel = contact.trim().replace(/^(?:my|the|a)\s+/i, '');
-        const asRel = rel ? ` as your ${rel}` : '';
+        const relIsNameEcho = (() => {
+          if (!rel) return true;
+          const r = rel.toLowerCase();
+          const tokensOf = (s: string) =>
+            s.trim().toLowerCase().replace(/\s+/g, ' ').split(' ').filter(Boolean);
+          return [dialName, ...dropped].some(n => tokensOf(n).includes(r));
+        })();
+        const asRel = relIsNameEcho ? '' : ` as your ${rel}`;
         if (dropped.length === 1) {
           return `Calling ${dialName}. I also know ${dropped[0]}${asRel}, but I don't have a number for ${dropped[0]} yet.`;
         }
@@ -1117,10 +1124,23 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
         };
       }
 
+      const sameName = (a: string, b: string): boolean => {
+        const tok = (s: string) => new Set(
+          s.trim().toLowerCase().replace(/\s+/g, ' ').split(' ').filter(Boolean)
+        );
+        const A = tok(a), B = tok(b);
+        if (A.size === 0 || B.size === 0) return false;
+        const [small, big] = A.size <= B.size ? [A, B] : [B, A];
+        return [...small].every(t => big.has(t));
+      };
+
       if (herald.length > 1) return disambiguateStage(herald, contact);
       if (herald.length === 1) {
         const only = herald[0];
-        const dropped = (phonelessNames ?? []).map(n => n.trim()).filter(Boolean);
+        const dropped = (phonelessNames ?? [])
+          .map(n => n.trim())
+          .filter(Boolean)
+          .filter(n => !sameName(n, only.name));
         if (dropped.length > 0) {
           return commitDial(only.name, only.phone, disclosureAck(only.name, dropped));
         }
