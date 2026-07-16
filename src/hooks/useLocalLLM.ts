@@ -12,7 +12,9 @@ import {
 import { LOCAL_LLM_ENABLED } from '../constants/features';
 import { warmupClassifier } from './llmLayers';
 
-let warmupDone = false;
+// Keyed on context identity, not a once-per-process boolean: every context
+// (initial load AND large-model upgrade) needs its own cold prefill warmed.
+let warmedCtx: LlamaContext | null = null;
 
 export type LocalLLMStatus =
   | 'unavailable'
@@ -94,11 +96,16 @@ export function useLocalLLM(): {
         }
 
         ctxRef.current = ctx;
-        setStatusSafe('ready');
-        if (!warmupDone) {
-          warmupDone = true;
+        // Warmup claims classifyInFlight synchronously (see llmLayers.ts), so it
+        // must be kicked BEFORE the context is announced ready. Otherwise a user
+        // utterance can win the race and own the ~26s cold prefill with nothing
+        // to bound it. With warmup holding the slot, that utterance gets an
+        // honest not_ready instead.
+        if (warmedCtx !== ctx) {
+          warmedCtx = ctx;
           void warmupClassifier(ctx);
         }
+        setStatusSafe('ready');
       } catch (err) {
         console.error('[Herald] useLocalLLM load failed:', err);
         ctxRef.current = null;
@@ -136,13 +143,27 @@ export function useLocalLLM(): {
               ctxRef.current = newCtx;
               activeModelRef.current = 'large';
               if (mountedRef.current) setActiveModel('large');
+              // Same rule as the initial load: warm the NEW context before
+              // announcing it ready. This path previously had no warmup at all.
+              if (warmedCtx !== newCtx) {
+                warmedCtx = newCtx;
+                void warmupClassifier(newCtx);
+              }
               statusRef.current = 'ready';
               if (mountedRef.current) setStatus('ready');
               console.log('[Herald LLM] Upgraded to large model');
             } catch (e) {
-              console.warn('[Herald LLM] Upgrade failed:', e);
-              statusRef.current = 'ready';
-              if (mountedRef.current) setStatus('ready');
+              // The old context was released and nulled before initLlama ran, so
+              // there is no context to fall back to. Announcing 'ready' here was
+              // a lie about state: getCtx() returns null, every classify comes
+              // back not_ready/no-ctx, and Herald would promise it is "still
+              // waking up" forever. 'error' is the honest state — callers treat
+              // it as flag-off, exactly as they do a failed initial load.
+              console.warn('[Herald LLM] Upgrade failed, no context available:', e);
+              ctxRef.current = null;
+              activeModelRef.current = null;
+              if (mountedRef.current) setActiveModel(null);
+              setStatusSafe('error');
             }
           }
         } catch (e) {
