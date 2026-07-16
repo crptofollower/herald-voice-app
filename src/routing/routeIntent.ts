@@ -2,7 +2,7 @@
 // Single routing authority — pure (text, deps) → one RouteDecision.
 // No dispatch, speak, React state, or device imports at module load.
 
-import type { IntentRecord } from '../hooks/llmLayers';
+import type { IntentRecord, ClassifyOutcome } from '../hooks/llmLayers';
 import type { TierDecision, LocalContext } from './tierRouter';
 import { writeServiceProvider, detectServiceCapture, detectPhoneCapture, detectInsuranceCapture, captureHouseholdInsurance, normalizeCarrier } from '../utils/householdCapture';
 import { detectDiagnosisCapture, detectDoctorIntroCapture, detectMedicalEvent } from '../utils/detectMedicalEvent';
@@ -17,6 +17,7 @@ export type RouteDecision =
   | { kind: 'device_read'; tier: 1; response: string; isMedical?: boolean; reason: string }
   | { kind: 'device_action'; tier: 1; actionIntent: ActionIntent; reason: string }
   | { kind: 'capture'; intents: IntentRecord[]; source: 'deterministic' | 'llm'; reason: string }
+  | { kind: 'not_ready'; reason: string }
   | { kind: 'memory_probe'; tier: 2; context: LocalContext; reason: string }
   | { kind: 'backend'; tier: 3; reason: string }
   | { kind: 'needs_clarification'; guess?: string; reason: string }
@@ -1192,7 +1193,7 @@ export async function routeIntent(
   text: string,
   deps: {
     classifyQuery: (msg: string) => Promise<TierDecision>;
-    classifyLLM: ((text: string) => Promise<IntentRecord[]>) | null;
+    classifyLLM: ((text: string) => Promise<ClassifyOutcome>) | null;
     llmReady: boolean;
     captureContext?: CaptureContext;
     resolveContact?: (nameOrRelation: string) => Promise<{phone:string;name:string;contactId?:string;source:'herald'|'device'}|{phone:null;name:string;source:'device';candidateNames:string[];deviceCandidates:{name:string;phone:string}[]}|null>;
@@ -1312,7 +1313,15 @@ export async function routeIntent(
   }
 
   if (deps.llmReady && deps.classifyLLM) {
-    const llmResult = await mapCallIntents(await deps.classifyLLM(text), text, deps);
+    const out = await deps.classifyLLM(text);
+    // A busy or absent classifier is NOT "found nothing" — it never ran. Returning
+    // [] here would fall through to the backend and ship the user's raw words to
+    // Railway because of a concurrency state, not because the utterance needed the
+    // network. not_ready is a distinct route: honest tail, no network.
+    if (out.status === 'not_ready') {
+      return { kind: 'not_ready', reason: `llm:not_ready:${out.reason}` };
+    }
+    const llmResult = await mapCallIntents(out.intents, text, deps);
     if (llmResult.length > 0) {
       return { kind: 'capture', intents: llmResult, source: 'llm', reason: 'llm:capture' };
     }

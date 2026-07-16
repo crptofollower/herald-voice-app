@@ -48,7 +48,7 @@ function freshPipeline() {
   const session = new ConversationSession();
   const deps = {
     classifyQuery,
-    classifyLLM: async () => [],   // Session W swaps this stub for the live classifier
+    classifyLLM: async () => ({ status: 'ok' as const, intents: [] }),   // Session W swaps this stub for the live classifier
     llmReady: false,
     captureContext: { contacts: [], lists: [] },
   };

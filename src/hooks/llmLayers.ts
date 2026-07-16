@@ -49,7 +49,20 @@ const STEP_FORMS = [
   'stepbrother', 'stepsister',
 ]; // SESSION_W W3c: FAMILY_SYNONYMS ∪ step forms
 
-const CLASSIFY_TIMEOUT_MS = 10_000;
+export type ClassifyOutcome =
+  | { status: 'ok'; intents: IntentRecord[] }
+  | { status: 'not_ready'; reason: 'in-flight' | 'no-ctx' };
+
+// classifyInFlight is claimed SYNCHRONOUSLY (before the first await in
+// classifyWithLLM). useLocalLLM relies on this: it kicks warmupClassifier
+// before marking a context ready, so warmup owns the cold prefill and any
+// user classify in that window gets not_ready. Do not introduce an await
+// above the classifyInFlight = true assignment.
+//
+// The timeout was deleted deliberately: stopCompletion is inert during
+// prefill (llama.cpp only checks its stop flag in the token-generation loop).
+// A timeout that cannot cancel only abandons the promise and strands
+// classifyInFlight = true, killing the classifier for the whole session.
 let classifyInFlight = false;
 
 function extractJsonObject(raw: string): string | null {
@@ -285,13 +298,13 @@ export async function classifyWithLLM(
   ctx: LlamaContext | null,
   hints: { contacts: string[]; lists: string[]; name?: string },
   opts?: { timeoutMs?: number | null },
-): Promise<IntentRecord[]> {
-  if (!ctx) return [];
+): Promise<ClassifyOutcome> {
+  if (!ctx) return { status: 'not_ready', reason: 'no-ctx' };
   const trimmed = userText.trim();
-  if (!trimmed) return [];
+  if (!trimmed) return { status: 'ok', intents: [] };
   if (classifyInFlight) {
     console.log('[classifyWithLLM] skipped', JSON.stringify({ reason: 'in-flight' }));
-    return [];
+    return { status: 'not_ready', reason: 'in-flight' };
   }
   classifyInFlight = true;
 
@@ -368,11 +381,8 @@ CRITICAL RULES:
 User: "${trimmed.replace(/"/g, '\\"')}"`;
 
   const __t0 = Date.now();
-  const timeoutMs = opts?.timeoutMs === undefined ? CLASSIFY_TIMEOUT_MS : opts.timeoutMs;
-  let holdForStop = false;
-  let completionPromise: ReturnType<LlamaContext['completion']> | undefined;
   try {
-    completionPromise = ctx.completion({
+    const result = await ctx.completion({
       messages: [{ role: 'user', content: prompt }],
       n_predict: 256,
       temperature: 0,
@@ -380,32 +390,17 @@ User: "${trimmed.replace(/"/g, '\\"')}"`;
       seed: 0,
       stop: ['\n\n', '<|end|>', '<|eot_id|>'],
     });
-    const result = timeoutMs === null
-      ? await completionPromise
-      : await Promise.race([
-          completionPromise,
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error('classify timeout')), timeoutMs),
-          ),
-        ]);
 
     const raw = result?.text?.trim();
     console.log('[classifyWithLLM]', JSON.stringify({ ms: Date.now() - __t0, rawLen: raw?.length ?? 0 }));
-    if (!raw) return [];
+    if (!raw) return { status: 'ok', intents: [] };
     const vocab = buildClassifierVocab(hints.lists);
-    return parseClassifierOutput(raw, trimmed, vocab);
+    return { status: 'ok', intents: parseClassifierOutput(raw, trimmed, vocab) };
   } catch (e) {
     console.log('[classifyWithLLM] failed', JSON.stringify({ ms: Date.now() - __t0, error: String(e) }));
-    if (e instanceof Error && e.message === 'classify timeout' && completionPromise) {
-      holdForStop = true;
-      ctx.stopCompletion().catch(() => {});
-      completionPromise
-        .catch(() => {})
-        .finally(() => { classifyInFlight = false; });
-    }
-    return [];
+    return { status: 'ok', intents: [] };
   } finally {
-    if (!holdForStop) classifyInFlight = false;
+    classifyInFlight = false;
   }
 }
 

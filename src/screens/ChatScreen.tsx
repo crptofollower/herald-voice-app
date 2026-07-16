@@ -1126,6 +1126,15 @@ export default function ChatScreen() {
       setInputText('');
       return;
     }
+    if (outcome.routeDecision.kind === 'not_ready') {
+      const notReadyReply = "Give me a moment — I'm still waking up. Say that again?";
+      addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+      addMessage({ id: generateId('msg'), role: 'assistant', content: notReadyReply, timestamp: Date.now() });
+      speak(notReadyReply);
+      sendingRef.current = false;
+      setInputText('');
+      return;
+    }
     const routeDecision = outcome.routeDecision;
     // Read the routing decision's signals directly off the RouteDecision union.
     // Replaces the flat TierDecision shadow + routeDecisionToTier (deleted).
@@ -1145,12 +1154,13 @@ export default function ChatScreen() {
     // LLM capture — fallback classifier for the ambiguous tier-3 gap ONLY.
     if (llmStatus === 'ready' && rdTier === 3) {
       try {
+        const llmOut = await classifyWithLLM(text, getCtx(), {
+          contacts: getKnownContactNames(),
+          lists: getKnownListNames(),
+          name: undefined,
+        });
         const llmCaptures = await mapCallIntents(
-          await classifyWithLLM(text, getCtx(), {
-            contacts: getKnownContactNames(),
-            lists: getKnownListNames(),
-            name: undefined,
-          }),
+          llmOut.status === 'ok' ? llmOut.intents : [],
           text,
           { resolveContact: resolveContactPhoneRef.current ?? undefined },
         );
@@ -1390,12 +1400,13 @@ export default function ChatScreen() {
           try {
             const contacts = getKnownContactNames();
             const lists = getKnownListNames();
+            const offlineOut = await classifyWithLLM(text, getCtx(), {
+              contacts,
+              lists,
+              name: undefined,
+            });
             const results = await mapCallIntents(
-              await classifyWithLLM(text, getCtx(), {
-                contacts,
-                lists,
-                name: undefined,
-              }),
+              offlineOut.status === 'ok' ? offlineOut.intents : [],
               text,
               { resolveContact: resolveContactPhoneRef.current ?? undefined },
             );
