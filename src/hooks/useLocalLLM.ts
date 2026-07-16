@@ -10,6 +10,9 @@ import {
   LARGE_MODEL,
 } from '../utils/modelManager';
 import { LOCAL_LLM_ENABLED } from '../constants/features';
+import { warmupClassifier } from './llmLayers';
+
+let warmupDone = false;
 
 export type LocalLLMStatus =
   | 'unavailable'
@@ -92,6 +95,10 @@ export function useLocalLLM(): {
 
         ctxRef.current = ctx;
         setStatusSafe('ready');
+        if (!warmupDone) {
+          warmupDone = true;
+          void warmupClassifier(ctx);
+        }
       } catch (err) {
         console.error('[Herald] useLocalLLM load failed:', err);
         ctxRef.current = null;

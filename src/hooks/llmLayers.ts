@@ -50,6 +50,7 @@ const STEP_FORMS = [
 ]; // SESSION_W W3c: FAMILY_SYNONYMS ∪ step forms
 
 const CLASSIFY_TIMEOUT_MS = 10_000;
+let classifyInFlight = false;
 
 function extractJsonObject(raw: string): string | null {
   const m = raw.match(/\{[\s\S]*\}/);
@@ -287,6 +288,11 @@ export async function classifyWithLLM(
   if (!ctx) return [];
   const trimmed = userText.trim();
   if (!trimmed) return [];
+  if (classifyInFlight) {
+    console.log('[classifyWithLLM] skipped', JSON.stringify({ reason: 'in-flight' }));
+    return [];
+  }
+  classifyInFlight = true;
 
   const prompt = `You are Herald's on-device intent classifier.
 Respond with a JSON ARRAY of 1-4 intent objects: [{...}]. Always an array,
@@ -361,20 +367,21 @@ CRITICAL RULES:
 User: "${trimmed.replace(/"/g, '\\"')}"`;
 
   const __t0 = Date.now();
+  let holdForStop = false;
+  let completionPromise: ReturnType<LlamaContext['completion']> | undefined;
   try {
-    const result = await Promise.race([
-      ctx.completion({
-        messages: [{ role: 'user', content: prompt }],
-        n_predict: 256,
-        temperature: 0,
-        top_k: 1,
-        seed: 0,
-        stop: ['\n\n', '<|end|>', '<|eot_id|>'],
-      }),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('classify timeout')), CLASSIFY_TIMEOUT_MS),
-      ),
-    ]);
+    completionPromise = ctx.completion({
+      messages: [{ role: 'user', content: prompt }],
+      n_predict: 256,
+      temperature: 0,
+      top_k: 1,
+      seed: 0,
+      stop: ['\n\n', '<|end|>', '<|eot_id|>'],
+    });
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('classify timeout')), CLASSIFY_TIMEOUT_MS),
+    );
+    const result = await Promise.race([completionPromise, timeoutPromise]);
 
     const raw = result?.text?.trim();
     console.log('[classifyWithLLM]', JSON.stringify({ ms: Date.now() - __t0, rawLen: raw?.length ?? 0 }));
@@ -383,6 +390,25 @@ User: "${trimmed.replace(/"/g, '\\"')}"`;
     return parseClassifierOutput(raw, trimmed, vocab);
   } catch (e) {
     console.log('[classifyWithLLM] failed', JSON.stringify({ ms: Date.now() - __t0, error: String(e) }));
+    if (e instanceof Error && e.message === 'classify timeout' && completionPromise) {
+      holdForStop = true;
+      ctx.stopCompletion().catch(() => {});
+      completionPromise
+        .catch(() => {})
+        .finally(() => { classifyInFlight = false; });
+    }
     return [];
+  } finally {
+    if (!holdForStop) classifyInFlight = false;
   }
+}
+
+export async function warmupClassifier(ctx: LlamaContext | null): Promise<void> {
+  const __t0 = Date.now();
+  try {
+    await classifyWithLLM('warmup ping', ctx, { contacts: [], lists: [] });
+  } catch {
+    // never throw — warmup is best-effort
+  }
+  console.log('[warmupClassifier] done', JSON.stringify({ ms: Date.now() - __t0 }));
 }
