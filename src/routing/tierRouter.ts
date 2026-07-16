@@ -120,6 +120,8 @@ const TIER1_SIGNALS = {
     /what did (my|the) doctor/i,
     /medical (history|records|info)/i,
     /what do you (have|know) about my (health|medical|medications|meds)/i,
+    /what (medication|medications|meds|pills|prescriptions) do you (have|know)/i,
+    /do you (have|know) (my|any of my) (medication|medications|meds|pills|prescriptions)/i,
     /\bwhat do i take\b/i,
     /\bwhat am i (taking|on)\b/i,
     /\bwhat (should i|do i) take\b/i,

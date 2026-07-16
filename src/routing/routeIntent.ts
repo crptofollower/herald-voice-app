@@ -5,7 +5,7 @@
 import type { IntentRecord } from '../hooks/llmLayers';
 import type { TierDecision, LocalContext } from './tierRouter';
 import { writeServiceProvider, detectServiceCapture, detectPhoneCapture, detectInsuranceCapture, captureHouseholdInsurance, normalizeCarrier } from '../utils/householdCapture';
-import { detectDiagnosisCapture, detectDoctorIntroCapture } from '../utils/detectMedicalEvent';
+import { detectDiagnosisCapture, detectDoctorIntroCapture, detectMedicalEvent } from '../utils/detectMedicalEvent';
 import { detectFamilyCapture } from '../utils/familyCapture';
 import { getDB } from '../db/schema';
 import { capturePerson } from '../db/capturePerson';
@@ -1247,12 +1247,17 @@ export async function routeIntent(
     decision.actionIntent?.type === 'list_add' ||
     decision.actionIntent?.type === 'todo_add'
   ) {
-    return {
-      kind: 'capture',
-      intents: [decision.actionIntent],
-      source: 'deterministic',
-      reason: 'tier1:list_todo_intercept',
-    };
+    const medEvent = detectMedicalEvent(text);
+    const intents: IntentRecord[] = [];
+    if (medEvent && medEvent.type === 'medication' && medEvent.tense === 'past') {
+      intents.push({ type: 'medical_capture', drug: medEvent.drug_name,
+                     dosage: medEvent.dosage, raw: medEvent.raw });
+    }
+    intents.push(decision.actionIntent);
+    return { kind: 'capture', intents, source: 'deterministic',
+             reason: intents.length > 1
+               ? 'tier1:list_todo_intercept+medical'
+               : 'tier1:list_todo_intercept' };
   }
 
   if (

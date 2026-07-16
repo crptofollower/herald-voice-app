@@ -14,6 +14,7 @@
 //   npx tsx run.mjs
 
 import { classifyQuery } from "../../src/routing/tierRouter.ts";
+import { routeIntent } from "../../src/routing/routeIntent.ts";
 import { normalizePhone } from "../../src/utils/phone.ts";
 import { normalizeInput } from "../../src/utils/normalizeInput.ts";
 import { extractDosage } from "../../src/utils/detectMedicalEvent.ts";
@@ -215,8 +216,8 @@ const DOSAGE_TESTS = [
 const RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", BOLD = "\x1b[1m", DIM = "\x1b[2m";
 let passed = 0;
 const failures = [];
-const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length;
-const EXPECTED_TOTAL = 506;   // was 505; +1 raw grounded to utterance (W3d)
+const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length + 1; // +1 list_todo+medical intercept
+const EXPECTED_TOTAL = 507;   // was 506; +1 list_todo_intercept + co-occurring medication
 
 console.log(`\n${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  HERALD ROUTER + PHONE TEST SUITE — ${TOTAL} tests${RESET}`);
@@ -292,6 +293,45 @@ for (const [label, input, expected] of DOSAGE_TESTS) {
   } else {
     failures.push({ label, phrase: input, expected: JSON.stringify(expected), got: JSON.stringify(got) });
     console.log(`${RED}❌ FAIL${RESET}  ${label}\n      ${DIM}${JSON.stringify(input)}${RESET}\n      ${RED}→ got ${JSON.stringify(got)}, expected ${JSON.stringify(expected)}${RESET}\n`);
+  }
+}
+
+// list_todo_intercept + co-occurring medication (stub classifyQuery → contextual list_add)
+{
+  const label = "list_todo_intercept + co-occurring medication";
+  const phrase = "I am taking lisinopril five milligrams and I need to get apples";
+  let decision;
+  try {
+    decision = await routeIntent(phrase, {
+      classifyQuery: async () => ({
+        tier: 1,
+        actionIntent: { type: "list_add", items: ["apples"], listName: "grocery" },
+        reason: "action:list_add:contextual",
+      }),
+      classifyLLM: null,
+      llmReady: false,
+    });
+  } catch (e) {
+    failures.push({ label, phrase, expected: "capture[medical_capture,list_add]", got: `THREW: ${e.message}` });
+    console.log(`${RED}❌ FAIL${RESET}  ${label}\n      ${DIM}"${phrase}"${RESET}\n      ${RED}→ THREW: ${e.message}${RESET}\n`);
+  }
+  if (decision !== undefined) {
+    const ok =
+      decision.kind === "capture" &&
+      decision.intents?.length === 2 &&
+      decision.intents[0]?.type === "medical_capture" &&
+      String(decision.intents[0]?.drug ?? "").toLowerCase().includes("lisinopril") &&
+      decision.intents[1]?.type === "list_add";
+    if (ok) {
+      passed++;
+      console.log(`${GREEN}✅ PASS${RESET}  ${label}\n      ${DIM}"${phrase}" → capture[medical_capture, list_add]${RESET}\n`);
+    } else {
+      const got = decision.kind === "capture"
+        ? `capture[${(decision.intents ?? []).map((i) => i?.type).join(",")}]`
+        : `${decision.kind}`;
+      failures.push({ label, phrase, expected: "capture[medical_capture,list_add]", got });
+      console.log(`${RED}❌ FAIL${RESET}  ${label}\n      ${DIM}"${phrase}"${RESET}\n      ${RED}→ got ${got}, expected capture[medical_capture,list_add]${RESET}\n`);
+    }
   }
 }
 
