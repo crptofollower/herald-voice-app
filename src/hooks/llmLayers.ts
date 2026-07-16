@@ -284,6 +284,7 @@ export async function classifyWithLLM(
   userText: string,
   ctx: LlamaContext | null,
   hints: { contacts: string[]; lists: string[]; name?: string },
+  opts?: { timeoutMs?: number | null },
 ): Promise<IntentRecord[]> {
   if (!ctx) return [];
   const trimmed = userText.trim();
@@ -367,6 +368,7 @@ CRITICAL RULES:
 User: "${trimmed.replace(/"/g, '\\"')}"`;
 
   const __t0 = Date.now();
+  const timeoutMs = opts?.timeoutMs === undefined ? CLASSIFY_TIMEOUT_MS : opts.timeoutMs;
   let holdForStop = false;
   let completionPromise: ReturnType<LlamaContext['completion']> | undefined;
   try {
@@ -378,10 +380,14 @@ User: "${trimmed.replace(/"/g, '\\"')}"`;
       seed: 0,
       stop: ['\n\n', '<|end|>', '<|eot_id|>'],
     });
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('classify timeout')), CLASSIFY_TIMEOUT_MS),
-    );
-    const result = await Promise.race([completionPromise, timeoutPromise]);
+    const result = timeoutMs === null
+      ? await completionPromise
+      : await Promise.race([
+          completionPromise,
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('classify timeout')), timeoutMs),
+          ),
+        ]);
 
     const raw = result?.text?.trim();
     console.log('[classifyWithLLM]', JSON.stringify({ ms: Date.now() - __t0, rawLen: raw?.length ?? 0 }));
@@ -406,7 +412,7 @@ User: "${trimmed.replace(/"/g, '\\"')}"`;
 export async function warmupClassifier(ctx: LlamaContext | null): Promise<void> {
   const __t0 = Date.now();
   try {
-    await classifyWithLLM('warmup ping', ctx, { contacts: [], lists: [] });
+    await classifyWithLLM('warmup ping', ctx, { contacts: [], lists: [] }, { timeoutMs: null });
   } catch {
     // never throw — warmup is best-effort
   }
