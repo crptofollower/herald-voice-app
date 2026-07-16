@@ -41,6 +41,29 @@ export async function runLlmLayersContractTests(): Promise<{ passed: number; fai
     );
   }
 
+  // classifyWithLLM sets classifyInFlight = true before its first await.
+  // useLocalLLM.ts relies on that: it kicks warmupClassifier before marking a
+  // context ready, so warmup owns the ~26s cold prefill and a user utterance in
+  // that window gets an honest not_ready. If this test fails, that ordering is
+  // broken and the blackout window is back.
+  {
+    let release;
+    const gate = new Promise((resolve) => { release = resolve; });
+    const slowCtx = {
+      completion: async () => { await gate; return { text: '{"type":"pass"}' }; },
+    };
+    const p1 = classifyWithLLM('first', slowCtx as any, { contacts: [], lists: [] });
+    const second = await classifyWithLLM('second', slowCtx as any, { contacts: [], lists: [] });
+    assert(
+      'classifyInFlight is claimed synchronously — useLocalLLM warmup ordering depends on this',
+      { status: second.status, reason: second.status === 'not_ready' ? second.reason : undefined },
+      (v) => v.status === 'not_ready' && v.reason === 'in-flight',
+      "{ status: 'not_ready', reason: 'in-flight' }",
+    );
+    release({ text: '{"type":"pass"}' });
+    await p1;
+  }
+
   const total = passed + failures.length;
   console.log(
     `\n${BOLD}LLM Layers Contract: ${passed}/${total} passed` +

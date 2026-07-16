@@ -216,8 +216,8 @@ const DOSAGE_TESTS = [
 const RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", BOLD = "\x1b[1m", DIM = "\x1b[2m";
 let passed = 0;
 const failures = [];
-const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length + 1; // +1 list_todo+medical intercept
-const EXPECTED_TOTAL = 507;   // was 506; +1 list_todo_intercept + co-occurring medication
+const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length + 4; // +1 list_todo+medical intercept, +3 classifier tri-state
+const EXPECTED_TOTAL = 511;   // was 507; +3 classifier tri-state (inline), +1 classifyInFlight sync claim (llmLayers.test.ts)
 
 console.log(`\n${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  HERALD ROUTER + PHONE TEST SUITE — ${TOTAL} tests${RESET}`);
@@ -331,6 +331,95 @@ for (const [label, input, expected] of DOSAGE_TESTS) {
         : `${decision.kind}`;
       failures.push({ label, phrase, expected: "capture[medical_capture,list_add]", got });
       console.log(`${RED}❌ FAIL${RESET}  ${label}\n      ${DIM}"${phrase}"${RESET}\n      ${RED}→ got ${got}, expected capture[medical_capture,list_add]${RESET}\n`);
+    }
+  }
+}
+
+// The regression fence for the boundary: a busy classifier must never
+// ship the user's raw words to Railway. not_ready is not "found nothing".
+{
+  const label = "not_ready → honest tail, never the backend";
+  const phrase = "I need bananas";
+  let decision;
+  try {
+    decision = await routeIntent(phrase, {
+      classifyQuery: async () => ({ tier: 3, reason: "default" }),
+      classifyLLM: async () => ({ status: "not_ready", reason: "in-flight" }),
+      llmReady: true,
+    });
+  } catch (e) {
+    failures.push({ label, phrase, expected: "not_ready", got: `THREW: ${e.message}` });
+    console.log(`${RED}❌ FAIL${RESET}  ${label}\n      ${DIM}"${phrase}"${RESET}\n      ${RED}→ THREW: ${e.message}${RESET}\n`);
+  }
+  if (decision !== undefined) {
+    const ok = decision.kind === "not_ready" && decision.kind !== "backend";
+    if (ok) {
+      passed++;
+      console.log(`${GREEN}✅ PASS${RESET}  ${label}\n      ${DIM}"${phrase}" → not_ready${RESET}\n`);
+    } else {
+      failures.push({ label, phrase, expected: "not_ready", got: `${decision.kind}` });
+      console.log(`${RED}❌ FAIL${RESET}  ${label}\n      ${DIM}"${phrase}"${RESET}\n      ${RED}→ got ${decision.kind}, expected not_ready${RESET}\n`);
+    }
+  }
+}
+
+{
+  const label = "ok + empty intents → backend (a real pass still routes out)";
+  const phrase = "I need bananas";
+  let decision;
+  try {
+    decision = await routeIntent(phrase, {
+      classifyQuery: async () => ({ tier: 3, reason: "default" }),
+      classifyLLM: async () => ({ status: "ok", intents: [] }),
+      llmReady: true,
+    });
+  } catch (e) {
+    failures.push({ label, phrase, expected: "backend", got: `THREW: ${e.message}` });
+    console.log(`${RED}❌ FAIL${RESET}  ${label}\n      ${DIM}"${phrase}"${RESET}\n      ${RED}→ THREW: ${e.message}${RESET}\n`);
+  }
+  if (decision !== undefined) {
+    const ok = decision.kind === "backend";
+    if (ok) {
+      passed++;
+      console.log(`${GREEN}✅ PASS${RESET}  ${label}\n      ${DIM}"${phrase}" → backend${RESET}\n`);
+    } else {
+      failures.push({ label, phrase, expected: "backend", got: `${decision.kind}` });
+      console.log(`${RED}❌ FAIL${RESET}  ${label}\n      ${DIM}"${phrase}"${RESET}\n      ${RED}→ got ${decision.kind}, expected backend${RESET}\n`);
+    }
+  }
+}
+
+{
+  const label = "ok + intents → capture";
+  const phrase = "I need bananas";
+  let decision;
+  try {
+    decision = await routeIntent(phrase, {
+      classifyQuery: async () => ({ tier: 3, reason: "default" }),
+      classifyLLM: async () => ({
+        status: "ok",
+        intents: [{ type: "list_add", items: ["bananas"], listName: "grocery" }],
+      }),
+      llmReady: true,
+    });
+  } catch (e) {
+    failures.push({ label, phrase, expected: "capture[list_add]", got: `THREW: ${e.message}` });
+    console.log(`${RED}❌ FAIL${RESET}  ${label}\n      ${DIM}"${phrase}"${RESET}\n      ${RED}→ THREW: ${e.message}${RESET}\n`);
+  }
+  if (decision !== undefined) {
+    const ok =
+      decision.kind === "capture" &&
+      decision.intents?.length === 1 &&
+      decision.intents[0]?.type === "list_add";
+    if (ok) {
+      passed++;
+      console.log(`${GREEN}✅ PASS${RESET}  ${label}\n      ${DIM}"${phrase}" → capture[list_add]${RESET}\n`);
+    } else {
+      const got = decision.kind === "capture"
+        ? `capture[${(decision.intents ?? []).map((i) => i?.type).join(",")}]`
+        : `${decision.kind}`;
+      failures.push({ label, phrase, expected: "capture[list_add]", got });
+      console.log(`${RED}❌ FAIL${RESET}  ${label}\n      ${DIM}"${phrase}"${RESET}\n      ${RED}→ got ${got}, expected capture[list_add]${RESET}\n`);
     }
   }
 }
