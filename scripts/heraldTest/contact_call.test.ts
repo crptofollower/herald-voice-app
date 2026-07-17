@@ -10,6 +10,7 @@ import type { CommitResult } from '../../src/routing/routeIntent.ts';
 import { ConversationSession } from '../../src/routing/conversationSession.ts';
 import type { IntentRecord } from '../../src/hooks/llmLayers.ts';
 import type { Contact } from '../../src/db/contactsDB.ts';
+import { findContactByName, findContactByRelationship } from '../../src/db/contactsDB.ts';
 
 const BOLD='\x1b[1m',RED='\x1b[31m',GREEN='\x1b[32m',DIM='\x1b[2m',RESET='\x1b[0m';
 
@@ -31,6 +32,19 @@ const SCHEMA_SQL = `
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     removed_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS facts (
+    id TEXT PRIMARY KEY,
+    fact TEXT NOT NULL,
+    category TEXT NOT NULL,
+    confidence TEXT NOT NULL DEFAULT 'stated',
+    source_date TEXT NOT NULL,
+    last_used TEXT,
+    use_count INTEGER DEFAULT 0,
+    entity_id TEXT,
+    importance_score INTEGER DEFAULT 50,
+    valid_until TEXT,
+    context_type TEXT DEFAULT 'historical'
   );
 `;
 
@@ -572,6 +586,53 @@ export async function runContactCallTests() {
       { prompt: alt.prompt, phone: dialPhone(result) },
       v => typeof v.prompt === 'string' && /Anna/i.test(v.prompt) && v.phone === '5550200202',
       'prompt names Anna, dial 5550200202');
+  }
+
+  // ── T-CT-20: successful name-match resolution persists the relationship ───
+  {
+    freshDB();
+    const pending = await addPending(filBridgeIntent());
+    const result = await pending.resume('Clevenger');
+    const stored = findContactByName('David Clevenger');
+    assert('T-CT-20 name-match resolution persists father-in-law on David Clevenger',
+      { phone: dialPhone(result), stored },
+      v => v.phone === '2145553434'
+        && !!v.stored
+        && v.stored.name === 'David Clevenger'
+        && v.stored.relationship === 'father-in-law',
+      'dial 2145553434; contact row has relationship father-in-law');
+  }
+
+  // ── T-CT-21: plain-name lookup must NOT fabricate a relationship ──────────
+  {
+    freshDB();
+    const intent: IntentRecord = {
+      type: 'contact_call',
+      contact: 'sarah',
+      candidates: [
+        { name: 'Sarah Miller', phone: '2145551111', importance: 5 },
+        { name: 'Sarah Jones', phone: '2145552222', importance: 5 },
+      ],
+      raw: 'call sarah',
+    };
+    const pending = await addPending(intent);
+    const result = await pending.resume('Miller');
+    const fabricated = findContactByRelationship('sarah');
+    assert('T-CT-21 plain-name lookup does not fabricate relationship sarah',
+      { phone: dialPhone(result), fabricated },
+      v => v.phone === '2145551111' && v.fabricated === null,
+      'dial Sarah Miller; no contact with relationship sarah');
+  }
+
+  // ── T-CT-22: hyphenated label matches natural three-word speech ───────────
+  {
+    freshDB();
+    const pending = await addPending(filBridgeIntent());
+    const result = await pending.resume('My father in law is David Clevenger');
+    assert('T-CT-22 natural three-word father in law → dial David Clevenger',
+      dialPhone(result),
+      v => v === '2145553434',
+      'dial 2145553434');
   }
 
   const total = passed + failures.length;

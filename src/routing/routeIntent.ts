@@ -39,6 +39,8 @@ export type CommitResult =
   | { status: 'noop';      ack: string }
   | { status: 'failed';    ack: string };
 
+const RELATIONSHIP_WORDS = /^(wife|husband|son|daughter|mom|dad|father(?:-in-law)?|mother(?:-in-law)?|brother|sister)$/i;
+
 export interface DomainWriter {
   add(intent: IntentRecord, rawPhrase: string): Promise<CommitResult>;
   remove(item: string): Promise<CommitResult>;
@@ -1037,9 +1039,10 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
         contactLabel?: string,
       ): CallCandidate | null => {
         const labelTokens = new Set(
-          (contactLabel ?? '').trim().toLowerCase().replace(/\s+/g, ' ').split(' ').filter(Boolean)
+          (contactLabel ?? '').trim().toLowerCase().replace(/[\s-]+/g, ' ').split(' ').filter(Boolean)
         );
-        const replyTokens = reply.trim().toLowerCase().replace(/\s+/g, ' ').split(' ').filter(Boolean)
+        // Hyphen-split reply like labelTokens; rarer hyphenated surnames in replies may miss.
+        const replyTokens = reply.trim().toLowerCase().replace(/[\s-]+/g, ' ').split(' ').filter(Boolean)
           .filter(t => !CORRECTION_STOPWORDS.has(t) && !labelTokens.has(t));
         if (replyTokens.length === 0) return null;
         const hits = list.filter(c => {
@@ -1115,7 +1118,17 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
                 return commitDial(contactLabel, phone);
               }
               const matched = matchCandidate(reply, list, contactLabel);
-              if (matched) return commitDial(matched.name, matched.phone);
+              if (matched) {
+                // Persist the correction — contactLabel is only a real relationship
+                // word sometimes (e.g. "father-in-law"); other times this same branch
+                // fires for a plain-name lookup (e.g. "call sarah" with several device
+                // matches), where contactLabel is a name, not a relationship, and must
+                // NOT be written into the relationship field.
+                if (RELATIONSHIP_WORDS.test(contactLabel.trim())) {
+                  capturePerson({ name: matched.name, relationship: contactLabel, phone: matched.phone, importance: 7 });
+                }
+                return commitDial(matched.name, matched.phone);
+              }
               return { status: 'noop', ack: '' };
             },
           };
