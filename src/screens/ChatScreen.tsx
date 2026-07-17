@@ -97,6 +97,7 @@ import {
   findContactByName,
   getEmergencyContact,
   setEmergencyContact,
+  nameMatchesQuery,
 } from "../db/contactsDB";
 import { writeMedicalFact, writeMedicalRecord, writeMedication, writeMedicalContact, guessMedicationName, confirmMedicationCapture, deactivateMedicationByName } from "../db/medicalDB";
 import { extractDosage } from "../utils/detectMedicalEvent";
@@ -254,10 +255,13 @@ export default function ChatScreen() {
         c.firstName?.toLowerCase() === clean ||
         c.lastName?.toLowerCase() === clean
       );
-      const partialMatches = data.filter(c =>
-        c.name?.toLowerCase().includes(clean) ||
-        c.firstName?.toLowerCase().includes(clean)
-      );
+      // Token-based, order-independent — same distinguishing-word rule as
+      // Herald's own contacts table (contactsDB.ts), so OS-contact matching
+      // and Herald-contact matching can never disagree on what counts as a
+      // match. Fixes S_CONTACT §9 K2: reversed word order ("Clevenger David"
+      // vs stored "David Clevenger") previously returned zero candidates —
+      // a silent miss — instead of even offering ambiguity.
+      const partialMatches = data.filter(c => nameMatchesQuery(c.name, clean));
 
       const candidates = exactMatches.length > 0 ? exactMatches : partialMatches;
 

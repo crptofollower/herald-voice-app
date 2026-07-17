@@ -6,7 +6,7 @@
 
 import Database from 'better-sqlite3';
 import { setDB } from '../../src/db/schema.ts';
-import { findAllContactMatches } from '../../src/db/contactsDB.ts';
+import { findAllContactMatches, nameMatchesQuery } from '../../src/db/contactsDB.ts';
 import type { Contact } from '../../src/db/contactsDB.ts';
 
 const BOLD='\x1b[1m',RED='\x1b[31m',GREEN='\x1b[32m',DIM='\x1b[2m',RESET='\x1b[0m';
@@ -151,6 +151,51 @@ export async function runContactsDBTests() {
       matches,
       v => Array.isArray(v) && v.length === 1 && v[0].id === 'c_doc',
       'one match Dr. Smith');
+  }
+
+  // ── T-NMQ-1: reversed word order still matches ──────────────────────────────
+  {
+    const result = nameMatchesQuery('David Clevenger', 'clevenger david');
+    assert('T-NMQ-1 reversed order matches',
+      result,
+      v => v === true,
+      'true (S_CONTACT K2 fix)');
+  }
+
+  // ── T-NMQ-2: single token still matches ──────────────────────────────────────
+  {
+    const result = nameMatchesQuery('David Clevenger', 'david');
+    assert('T-NMQ-2 single token matches',
+      result,
+      v => v === true,
+      'true');
+  }
+
+  // ── T-NMQ-3: substring-of-different-word does not false-positive ────────────
+  {
+    const result = nameMatchesQuery('David Clevenger', 'davidson');
+    assert('T-NMQ-3 no false positive on partial word',
+      result,
+      v => v === false,
+      'false');
+  }
+
+  // ── T-NMQ-4: null name never matches, never throws ───────────────────────────
+  {
+    const result = nameMatchesQuery(null, 'david');
+    assert('T-NMQ-4 null name returns false',
+      result,
+      v => v === false,
+      'false');
+  }
+
+  // ── T-NMQ-5: empty query never matches-all ───────────────────────────────────
+  {
+    const result = nameMatchesQuery('David Clevenger', '');
+    assert('T-NMQ-5 empty query returns false',
+      result,
+      v => v === false,
+      'false');
   }
 
   const total = passed + failures.length;

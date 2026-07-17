@@ -161,11 +161,26 @@ const CONTACT_NAME_STOPWORDS = new Set([
 ]);
 
 /** Distinctive tokens for name match; null = stopword-only / empty → no name hit. */
-function distinctiveNameTokens(raw: string): string[] | null {
+export function distinctiveNameTokens(raw: string): string[] | null {
   const words = raw.trim().toLowerCase().split(/\s+/).filter(Boolean);
   if (words.length === 0) return null;
   const distinctive = words.filter((w) => !CONTACT_NAME_STOPWORDS.has(w));
   return distinctive.length > 0 ? distinctive : null;
+}
+
+/**
+ * Order-independent, token-based match test. Same distinguishing-word
+ * rule as findAllContactMatches, so the Herald-contacts table and the
+ * OS/device-contacts fallback (ChatScreen.resolveContactPhone) can never
+ * disagree about what counts as a match. Pure — no DB, no expo-contacts —
+ * headless-testable (Engineering Principles: trust-critical logic must
+ * live outside the React layer).
+ */
+export function nameMatchesQuery(name: string | null | undefined, query: string): boolean {
+  const distinctive = distinctiveNameTokens(query);
+  if (!distinctive) return false;
+  const nameLower = (name ?? '').toLowerCase();
+  return distinctive.every(w => nameLower.includes(w));
 }
 
 export function findContactByName(name: string): Contact | null {
