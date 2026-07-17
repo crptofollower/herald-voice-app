@@ -5396,7 +5396,7 @@ def startup():
     print(f"[HERALD API] WeatherAPI:    {'YES (backup)' if WEATHER_KEY else 'not set'}")
     print(f"[HERALD API] Database:      {DB_FILE}")
     print(f"[HERALD API] Owner code:    {'SET' if OWNER_CODE else 'NOT SET'}")
-    print(f"[HERALD API] v8.92: S3B Commit C — removed personal-data writers/endpoints, retired medical-intake, trimmed /user/export")
+    print(f"[HERALD API] v8.93: S3B Commit E phase 1 — killed live morning_briefing leak (life_moments/life_tracker/medication_log reads removed)")
     print(f"[HERALD API] FIX v8.8: GPS city caching -- confirmed_city in profile, 20mi tolerance")
     print(f"[HERALD API] FIX v8.8: Memory rules -- no 'I remember', no raw GPS coords spoken")
     print(f"[HERALD API] FIX v8.8: Seed question for new users -- makes first session feel alive")
