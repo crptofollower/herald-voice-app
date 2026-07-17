@@ -1,5 +1,8 @@
 # herald_api.py
 # Herald Backend -- Railway Cloud Server
+# v8.93 -- S3B Commit E (phase 1): killed live morning_briefing leak --
+#          removed life_moments/life_tracker/medication_log reads from
+#          the scheduled job. Full table purge still outstanding.
 # v8.92 -- S3B Commit C: removed personal-data writers and endpoints
 #          (/memory, /calendar/sync, /health/sync, /user/sync_facts,
 #          /medical/summary), retired medical-intake corpse, removed
@@ -89,7 +92,7 @@ logging.getLogger("uvicorn.error").addFilter(_SuppressSocketSend())
 
 # ── APP ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Herald API", version="8.92")
+app = FastAPI(title="Herald API", version="8.93")
 
 app.add_middleware(
     CORSMiddleware,
@@ -3491,35 +3494,17 @@ def morning_briefing_job():
 
         moments_line = ""
         try:
-            conn = _db_conn()
-            c    = conn.cursor()
-            c.execute("""
-                SELECT summary FROM life_moments
-                WHERE user_id = ? AND active = 1
-                ORDER BY weight DESC, created_at DESC LIMIT 2
-            """, (owner_id,))
-            rows = c.fetchall()
-            conn.close()
-            if rows:
-                moments_line = " Also on my mind: " + ". ".join(r[0] for r in rows) + "."
+            moments_line = ""
+            # S3B Commit E (phase 1): life_moments is personal data and must
+            # never be read server-side. Removed 2026-07-17.
         except Exception as e:
             print(f"[HERALD] Briefing moments failed: {e}")
 
         tracker_line = ""
         try:
-            conn = _db_conn()
-            c    = conn.cursor()
-            c.execute("""
-                SELECT item_name, next_due_date FROM life_tracker
-                WHERE user_id = ? AND active = 1
-                  AND date(next_due_date) <= date('now', '+7 days')
-                ORDER BY next_due_date ASC LIMIT 2
-            """, (owner_id,))
-            trows = c.fetchall()
-            conn.close()
-            if trows:
-                items = ", ".join(f"{n} on {d}" for n, d in trows)
-                tracker_line = f" Coming up: {items}."
+            tracker_line = ""
+            # S3B Commit E (phase 1): life_tracker is personal data and must
+            # never be read server-side. Removed 2026-07-17.
         except Exception as e:
             print(f"[HERALD] Briefing tracker failed: {e}")
 
@@ -3555,18 +3540,9 @@ def morning_briefing_job():
         medication_line = ""
         if prefs.get("include_medication", True):
             try:
-                conn = _db_conn()
-                c = conn.cursor()
-                c.execute(
-                    "SELECT med_name FROM medication_log "
-                    "WHERE user_id=? AND active=1 AND end_date IS NULL LIMIT 3",
-                    (owner_id,)
-                )
-                meds = [r[0] for r in c.fetchall()]
-                conn.close()
-                if meds:
-                    med_str = ", ".join(meds)
-                    medication_line = f" Medication reminder: {med_str}."
+                medication_line = ""
+                # S3B Commit E (phase 1): medication_log is personal data and must
+                # never be read server-side. Removed 2026-07-17.
             except Exception as e:
                 print(f"[HERALD] Briefing medication check failed: {e}")
 
@@ -3764,7 +3740,7 @@ async def health_head():
 @app.get("/health")
 def health():
     return {
-        "status": "ok", "server": "herald-api", "version": "8.92",
+        "status": "ok", "server": "herald-api", "version": "8.93",
         "proactive_loop": "enabled (/proactive/{user_id})",
         "watcher_cron": "enabled (/cron/watchers)",
         "learning_loop": "disabled -- device owns memory capture (§3a)",
@@ -5113,7 +5089,7 @@ async def user_export(user_id: str, request: Request, secret: str = ""):
     print(f"[HERALD] /user/export: exported profile for {user_id}")
     return {
         "ok": True,
-        "version": "8.92",
+        "version": "8.93",
         "user_id": user_id,
         "exported_at": datetime.now().isoformat(),
         "profile": profile,
@@ -5214,7 +5190,7 @@ async def admin_dashboard(secret: str = ""):
 
         return {
             "ok": True,
-            "version": "8.92",
+            "version": "8.93",
             "user_count": len(users),
             "users": sorted(users, key=lambda x: x["msg_count"], reverse=True),
             "waitlist_count": waitlist_count,
