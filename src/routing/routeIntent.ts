@@ -1025,11 +1025,22 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
         return `Calling ${dialName}. I also know ${spoken}, and ${others} other${others === 1 ? '' : 's'}, but I don't have their numbers yet.`;
       };
 
-      const matchCandidate = (reply: string, list: CallCandidate[]): CallCandidate | null => {
-        let replyTokens = reply.trim().toLowerCase().replace(/\s+/g, ' ').split(' ').filter(Boolean);
-        if (replyTokens.length > 0 && ['the', 'my', 'a', 'an'].includes(replyTokens[0])) {
-          replyTokens = replyTokens.slice(1);
-        }
+      const CORRECTION_STOPWORDS = new Set([
+        'no', 'nope', 'not', 'yes', 'yeah', 'my', 'the', 'a', 'an', 'is', 'was',
+        'it', "it's", 'its', 'that', "that's", 'thats', 'his', 'her', 'their',
+        'actually', 'i', 'mean', 'think',
+      ]);
+
+      const matchCandidate = (
+        reply: string,
+        list: CallCandidate[],
+        contactLabel?: string,
+      ): CallCandidate | null => {
+        const labelTokens = new Set(
+          (contactLabel ?? '').trim().toLowerCase().replace(/\s+/g, ' ').split(' ').filter(Boolean)
+        );
+        const replyTokens = reply.trim().toLowerCase().replace(/\s+/g, ' ').split(' ').filter(Boolean)
+          .filter(t => !CORRECTION_STOPWORDS.has(t) && !labelTokens.has(t));
         if (replyTokens.length === 0) return null;
         const hits = list.filter(c => {
           const nameTokens = c.name.trim().toLowerCase().replace(/\s+/g, ' ').split(' ').filter(Boolean);
@@ -1089,6 +1100,27 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       }
 
       function disambiguateStage(list: CallCandidate[], contactLabel: string): CommitResult {
+        const hasRelationshipEvidence = list.some(c => c.relationship?.trim());
+        if (!hasRelationshipEvidence) {
+          return {
+            status: 'pending',
+            prompt: `I've got a few people who might match, but none of them are marked as your ${contactLabel} — what's their last name, or you can just give me the number?`,
+            pendingKey: 'contact_call',
+            kind: 'standard',
+            reaskPrompt: `I'm not sure I'm following — what's ${contactLabel}'s last name, or their number?`,
+            resume: async (reply: string): Promise<CommitResult> => {
+              const phone = extractPhone10(reply);
+              if (phone) {
+                capturePerson({ name: contactLabel, phone, importance: 7 });
+                return commitDial(contactLabel, phone);
+              }
+              const matched = matchCandidate(reply, list, contactLabel);
+              if (matched) return commitDial(matched.name, matched.phone);
+              return { status: 'noop', ack: '' };
+            },
+          };
+        }
+
         const guess = list[0];
         const relPrefix = guess.relationship?.trim() ? `your ${guess.relationship} ` : '';
         return {
@@ -1112,13 +1144,13 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
                 kind: 'standard',
                 reaskPrompt: `I'm not sure I'm following — which one did you mean?`,
                 resume: async (pick: string): Promise<CommitResult> => {
-                  const matched = matchCandidate(pick, remaining);
+                  const matched = matchCandidate(pick, remaining, contactLabel);
                   if (!matched) return { status: 'noop', ack: '' };
                   return commitDial(matched.name, matched.phone);
                 },
               };
             }
-            const named = matchCandidate(trimmed, list);
+            const named = matchCandidate(trimmed, list, contactLabel);
             if (named) return commitDial(named.name, named.phone);
             return { status: 'noop', ack: '' };
           },

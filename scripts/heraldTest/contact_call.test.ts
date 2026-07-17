@@ -392,18 +392,22 @@ export async function runContactCallTests() {
     const intent = await resolveContactCallIntent('father-in-law', 'call my father-in-law', { resolveContact: async () => null });
     const cands = (intent as { candidates?: Array<{ name: string; relationship?: string | null }> }).candidates ?? [];
     const pending = await DOMAIN_WRITERS['contact_call']!.add(intent, '');
-    assert('T-CT-13 bridged namesakes keep no inherited relationship in prompt',
+    assert('T-CT-13 bridged namesakes keep no inherited relationship',
       { cands, pending },
       v => {
         if (v.pending.status !== 'pending') return false;
-        const p = v.pending.prompt as string;
-        // relPrefix already omits when relationship empty — no "your father-in-law NAME"
-        if (/your\s+father-in-law/i.test(p)) return false;
-        if (!/Mossholder/i.test(p)) return false;
-        // Candidates themselves must not carry the FIL label from the phoneless row
+        // Candidates themselves must never carry the FIL label from the
+        // phoneless row — this is the law this case guards (name-hop bridge
+        // must not paint m.relationship onto an unrelated namesake). The
+        // PROMPT'S wording for this scenario is asserted separately in
+        // T-CT-15 (no-relationship-evidence honest ask, added 2026-07-17
+        // alongside the false-confidence-guess fix — a version of this test
+        // used to also assert the old Mossholder-guess prompt shape here;
+        // that assertion was locking in the bug, not guarding against it,
+        // and has been removed).
         return v.cands.length >= 2 && v.cands.every(c => !c.relationship?.trim());
       },
-      'pending prompt names Mossholder without claiming father-in-law; candidates have no relationship');
+      'candidates carry no inherited relationship; prompt shape covered by T-CT-15');
   }
 
   // ── T-CT-14: phoneless sibling disclosure (cold-start silent-narrowing fix) ─
@@ -486,6 +490,88 @@ export async function runContactCallTests() {
       pending,
       v => v.status === 'pending' && /don't have a number for Alex/i.test(v.prompt),
       'collect pending');
+  }
+
+  // ── T-CT-15..19: no-relationship-evidence disambiguation + natural corrections ─
+  // OS-device bridge shape: multi-candidate, no relationship on any row. Must not
+  // guess a name; must accept last name / sentence correction / phone.
+  function filBridgeIntent(): IntentRecord {
+    return {
+      type: 'contact_call',
+      contact: 'father-in-law',
+      candidates: [
+        { name: 'David Mossholder', phone: '2145551212', importance: 5 },
+        { name: 'David Clevenger', phone: '2145553434', importance: 5 },
+      ],
+      raw: 'call my father-in-law',
+    };
+  }
+
+  // ── T-CT-15: no-relationship-evidence pending never guesses a name ──────────
+  {
+    freshDB();
+    const pending = await addPending(filBridgeIntent());
+    assert('T-CT-15 no-relationship-evidence pending never guesses a name',
+      pending,
+      v => v.status === 'pending'
+        && !/Mossholder/i.test(v.prompt)
+        && !/Clevenger/i.test(v.prompt)
+        && /last name|give me the number/i.test(v.prompt),
+      'pending asks last name/number; does not name Mossholder or Clevenger');
+  }
+
+  // ── T-CT-16: bare last-name reply resolves via matchCandidate ─────────────
+  {
+    freshDB();
+    const pending = await addPending(filBridgeIntent());
+    const result = await pending.resume('Clevenger');
+    assert('T-CT-16 bare last-name reply → dial David Clevenger',
+      dialPhone(result),
+      v => v === '2145553434',
+      'dial 2145553434');
+  }
+
+  // ── T-CT-17: natural-sentence correction resolves (production field bug) ──
+  {
+    freshDB();
+    const pending = await addPending(filBridgeIntent());
+    const result = await pending.resume('no my father-in-law is David clevenger');
+    assert('T-CT-17 natural-sentence correction → dial David Clevenger',
+      dialPhone(result),
+      v => v === '2145553434',
+      'dial 2145553434');
+  }
+
+  // ── T-CT-18: bare phone number reply commits directly ─────────────────────
+  {
+    const db = freshDB();
+    const pending = await addPending(filBridgeIntent());
+    const before = contactCount(db);
+    const result = await pending.resume('214 555 9999');
+    const after = contactCount(db);
+    assert('T-CT-18 bare phone reply → row written + committed dial effect',
+      { result, before, after, phone: dialPhone(result) },
+      v => v.before === 0
+        && v.after === 1
+        && v.result.status === 'committed'
+        && v.phone === '2145559999',
+      'row count 0→1, committed, dial phone 2145559999');
+  }
+
+  // ── T-CT-19: natural-sentence correction on relationship-evidence path ────
+  {
+    const db = freshDB();
+    insertContact(db, { id: 'c_high', name: 'Emily', relationship: 'daughter', phone: '555-010-0101', importance: 9 });
+    insertContact(db, { id: 'c_low', name: 'Anna', relationship: 'daughter', phone: '555-020-0202', importance: 3 });
+    const intent = await resolveContactCallIntent('daughter', 'call my daughter', { resolveContact: async () => null });
+    const pending = await addPending(intent);
+    const alt = await pending.resume('no');
+    if (alt.status !== 'pending') throw new Error('T-CT-19 setup: expected alternate pick pending');
+    const result = await alt.resume("no it's Anna");
+    assert('T-CT-19 relationship-evidence path: natural-sentence pick → Anna dial',
+      { prompt: alt.prompt, phone: dialPhone(result) },
+      v => typeof v.prompt === 'string' && /Anna/i.test(v.prompt) && v.phone === '5550200202',
+      'prompt names Anna, dial 5550200202');
   }
 
   const total = passed + failures.length;
