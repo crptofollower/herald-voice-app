@@ -1162,6 +1162,29 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
                 }
                 return commitDial(matched.name, matched.phone);
               }
+              // The reply named someone NOT in this pre-built candidate list —
+              // a genuinely new name. Same fallback ladder as collectStage: try
+              // Herald's own contacts fresh, then the OS contact book.
+              const freshMatch = findAllContactMatches(reply).filter(c => !!c.phone?.trim());
+              if (freshMatch.length === 1) {
+                const fresh = freshMatch[0];
+                if (!fresh.phone) return { status: 'noop', ack: '' };
+                if (RELATIONSHIP_WORDS.test(contactLabel.trim())) {
+                  retireRelationshipHolder(contactLabel, fresh.name);
+                  capturePerson({ name: fresh.name, relationship: contactLabel, phone: fresh.phone, importance: 7 });
+                }
+                return commitDial(fresh.name, fresh.phone);
+              }
+              if (ctx?.resolveContact) {
+                const device = await ctx.resolveContact(reply);
+                if (device && device.phone) {
+                  if (RELATIONSHIP_WORDS.test(contactLabel.trim())) {
+                    retireRelationshipHolder(contactLabel, device.name);
+                    capturePerson({ name: device.name, relationship: contactLabel, phone: device.phone, importance: 7 });
+                  }
+                  return commitDial(device.name, device.phone);
+                }
+              }
               return { status: 'noop', ack: '' };
             },
           };

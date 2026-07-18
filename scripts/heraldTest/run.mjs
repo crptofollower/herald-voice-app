@@ -217,7 +217,7 @@ const RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", BOLD = "\x1b[1m",
 let passed = 0;
 const failures = [];
 const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length + 4; // +1 list_todo+medical intercept, +3 classifier tri-state
-const EXPECTED_TOTAL = 526;   // was 525; +1 collectStage OS-contact fallback (T-CT-24)
+const EXPECTED_TOTAL = 528;   // was 526; +2 disambiguateStage fresh-DB + OS-contact fallback (T-CT-25, T-CT-26)
 
 console.log(`\n${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  HERALD ROUTER + PHONE TEST SUITE — ${TOTAL} tests${RESET}`);

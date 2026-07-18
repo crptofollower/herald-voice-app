@@ -689,6 +689,38 @@ export async function runContactCallTests() {
       'dials David Clevenger; writes 1 relationship-tagged row');
   }
 
+  // ── T-CT-25: disambiguateStage falls back to a fresh Herald-DB search ────
+  // when the reply names someone NOT in the original two-candidate list.
+  {
+    const db = freshDB();
+    insertContact(db, { id: 'c_shane', name: 'Shane Clevenger', phone: '2145559999', importance: 5 });
+    const pending = await addPending(filBridgeIntent());
+    const result = await pending.resume('Shane Clevenger');
+    const holder = findContactByRelationship('father-in-law');
+    assert('T-CT-25 disambiguateStage fresh Herald-DB fallback dials and persists relationship',
+      { phone: dialPhone(result), holder },
+      v => v.phone === '2145559999' && !!v.holder && v.holder.name === 'Shane Clevenger',
+      'dials Shane Clevenger; writes relationship-tagged row');
+  }
+
+  // ── T-CT-26: disambiguateStage falls back to the OS contact book when ────
+  // the reply matches neither the original list nor Herald's own DB.
+  {
+    const db = freshDB();
+    const pending = await addPending(filBridgeIntent(), {
+      resolveContact: async (n: string) =>
+        n.toLowerCase().includes('sanchez')
+          ? { phone: '5557778888', name: 'Maria Sanchez', source: 'device' as const }
+          : null,
+    });
+    const result = await pending.resume('Maria Sanchez');
+    const holder = findContactByRelationship('father-in-law');
+    assert('T-CT-26 disambiguateStage OS-contact fallback dials and persists relationship',
+      { phone: dialPhone(result), holder },
+      v => v.phone === '5557778888' && !!v.holder && v.holder.name === 'Maria Sanchez',
+      'dials Maria Sanchez; writes relationship-tagged row');
+  }
+
   const total = passed + failures.length;
   console.log(`\n${BOLD}ContactCall: ${passed}/${total} passed${failures.length > 0 ? ` — ${RED}${failures.length} FAILED${RESET}` : ` — ${GREEN}all green${RESET}`}${RESET}\n`);
   return { passed, failed: failures.length, total, failures };
