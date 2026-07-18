@@ -635,6 +635,31 @@ export async function runContactCallTests() {
       'dial 2145553434');
   }
 
+  // ── T-CT-23: persisting a resolution retires the stale placeholder's tag ──
+  {
+    const db = freshDB();
+    insertContact(db, { id: 'c_fil', name: 'David', relationship: 'father-in-law', importance: 7 });
+    const pending = await addPending(filBridgeIntent());
+    const result = await pending.resume('Clevenger');
+    const holder = findContactByRelationship('father-in-law');
+    const filCount = (db.prepare(
+      `SELECT COUNT(*) AS n FROM contacts WHERE LOWER(relationship) = 'father-in-law' AND removed_at IS NULL`,
+    ).get() as { n: number }).n;
+    const placeholder = db.prepare(
+      `SELECT name, relationship, removed_at FROM contacts WHERE id = 'c_fil'`,
+    ).get() as { name: string; relationship: string | null; removed_at: string | null };
+    assert('T-CT-23 resolution retires stale placeholder relationship tag',
+      { phone: dialPhone(result), holder, filCount, placeholder },
+      v => v.phone === '2145553434'
+        && v.filCount === 1
+        && !!v.holder
+        && v.holder.name === 'David Clevenger'
+        && v.placeholder?.name === 'David'
+        && v.placeholder.relationship == null
+        && v.placeholder.removed_at == null,
+      'one FIL holder David Clevenger; placeholder David still live with relationship cleared');
+  }
+
   const total = passed + failures.length;
   console.log(`\n${BOLD}ContactCall: ${passed}/${total} passed${failures.length > 0 ? ` — ${RED}${failures.length} FAILED${RESET}` : ` — ${GREEN}all green${RESET}`}${RESET}\n`);
   return { passed, failed: failures.length, total, failures };

@@ -392,6 +392,30 @@ export function removeContactByName(name: string): number {
   }
 }
 
+// ─── retireRelationshipHolder ──────────────────────────────────────────────
+// Relationship tags with current-value semantics (father-in-law, spouse,
+// primary doctor, etc.) must have exactly one live holder (Spine §6
+// principle 3: current truth ≠ historical truth). Called ONLY from an
+// explicit-confirmation flow (Spine §4a: inferred identity merges require
+// explicit user confirmation) — never a background/inferred merge. Clears
+// the relationship field on any OTHER live contact holding it; does not
+// delete the contact itself, since it may still be a legitimate contact
+// under a different or no relationship.
+export function retireRelationshipHolder(relationship: string, exceptName: string): number {
+  const db = getDB();
+  const now = new Date().toISOString();
+  try {
+    const result = db.runSync(
+      `UPDATE contacts SET relationship = NULL, updated_at = ?
+       WHERE LOWER(relationship) = ? AND LOWER(name) != ? AND removed_at IS NULL;`,
+      [now, relationship.trim().toLowerCase(), exceptName.trim().toLowerCase()]
+    );
+    return result?.changes ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
 // ─── clearContacts ─────────────────────────────────────────────────────────────
 // Soft-delete ALL live contacts (the §4a clear op). Never a hard delete.
 export function clearContacts(): number {

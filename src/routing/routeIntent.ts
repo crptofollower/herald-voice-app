@@ -9,7 +9,7 @@ import { detectDiagnosisCapture, detectDoctorIntroCapture, detectMedicalEvent } 
 import { detectFamilyCapture } from '../utils/familyCapture';
 import { getDB } from '../db/schema';
 import { capturePerson } from '../db/capturePerson';
-import { findContactByName, findAllContactMatches, setEmergencyContact, getEmergencyContact } from '../db/contactsDB';
+import { findContactByName, findAllContactMatches, setEmergencyContact, getEmergencyContact, retireRelationshipHolder } from '../db/contactsDB';
 
 type ActionIntent = NonNullable<TierDecision['actionIntent']>;
 
@@ -1125,6 +1125,12 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
                 // matches), where contactLabel is a name, not a relationship, and must
                 // NOT be written into the relationship field.
                 if (RELATIONSHIP_WORDS.test(contactLabel.trim())) {
+                  // The user just explicitly confirmed matched.name holds this
+                  // relationship — retire any other live holder before writing the new
+                  // one, so a current-value relationship never has two active answers
+                  // (Spine §6 principle 3). This is the explicit-confirmation case Spine
+                  // §4a permits; writeContact's own identity-key logic stays untouched.
+                  retireRelationshipHolder(contactLabel, matched.name);
                   capturePerson({ name: matched.name, relationship: contactLabel, phone: matched.phone, importance: 7 });
                 }
                 return commitDial(matched.name, matched.phone);
