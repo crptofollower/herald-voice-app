@@ -721,6 +721,58 @@ export async function runContactCallTests() {
       'dials Maria Sanchez; writes relationship-tagged row');
   }
 
+  // ── T-CT-27: collectStage OS multi-match → pending pick, then unique name ─
+  // Ambiguous surname must not dial; unique given name resolves, persists
+  // relationship, and retires any prior live holder of that relationship.
+  {
+    const db = freshDB();
+    insertContact(db, { id: 'c_old_son', name: 'Prior Holder', relationship: 'son', importance: 7 });
+    const intent = await resolveContactCallIntent('son', 'call my son', { resolveContact: async () => null });
+    const pending = await addPending(intent, {
+      resolveContact: async (n: string) =>
+        n.toLowerCase().includes('durand')
+          ? {
+              phone: null,
+              name: 'son',
+              source: 'device' as const,
+              candidateNames: ['Josh Durand', 'Grant Durand'],
+              deviceCandidates: [
+                { name: 'Josh Durand', phone: '9725550101' },
+                { name: 'Grant Durand', phone: '9725550102' },
+              ],
+            }
+          : null,
+    });
+    const mid = await pending.resume('Durand');
+    const result = mid.status === 'pending' ? await mid.resume('Josh') : mid;
+    const holder = findContactByRelationship('son');
+    const prior = db.prepare(
+      `SELECT name, relationship, removed_at FROM contacts WHERE id = 'c_old_son'`,
+    ).get() as { name: string; relationship: string | null; removed_at: string | null };
+    const sonCount = (db.prepare(
+      `SELECT COUNT(*) AS n FROM contacts WHERE LOWER(relationship) = 'son' AND removed_at IS NULL`,
+    ).get() as { n: number }).n;
+    assert('T-CT-27 collectStage OS multi-match: Durand pending, Josh dials and retires prior son',
+      {
+        midStatus: mid.status,
+        midPhone: dialPhone(mid),
+        phone: dialPhone(result),
+        holder,
+        prior,
+        sonCount,
+      },
+      v => v.midStatus === 'pending'
+        && v.midPhone === undefined
+        && v.phone === '9725550101'
+        && !!v.holder
+        && v.holder.name === 'Josh Durand'
+        && v.sonCount === 1
+        && v.prior?.name === 'Prior Holder'
+        && v.prior.relationship == null
+        && v.prior.removed_at == null,
+      'Durand → pending no dial; Josh → dials 9725550101; one son holder; prior tag cleared');
+  }
+
   const total = passed + failures.length;
   console.log(`\n${BOLD}ContactCall: ${passed}/${total} passed${failures.length > 0 ? ` — ${RED}${failures.length} FAILED${RESET}` : ` — ${GREEN}all green${RESET}`}${RESET}\n`);
   return { passed, failed: failures.length, total, failures };

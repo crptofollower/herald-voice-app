@@ -1071,7 +1071,7 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
           prompt: `I don't have a number for ${contactLabel} yet — what's their name, or you can give me the number?`,
           pendingKey: 'contact_call',
           kind: 'standard',
-          reaskPrompt: `I'm not sure I'm following — what's ${contactLabel}'s name, or their number?`,
+          reaskPrompt: `I'm not sure I'm following — what's your ${contactLabel}'s name, or their number?`,
           resume: async (reply: string): Promise<CommitResult> => {
             const phone = extractPhone10(reply);
             if (phone) {
@@ -1099,6 +1099,30 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
                   capturePerson({ name: device.name, relationship: contactLabel, phone: device.phone, importance: 7 });
                 }
                 return commitDial(device.name, device.phone);
+              }
+              if (device && !device.phone && 'deviceCandidates' in device && device.deviceCandidates.length > 0) {
+                const osCandidates: CallCandidate[] = device.deviceCandidates.map(c => ({
+                  name: c.name,
+                  phone: c.phone,
+                  importance: 5,
+                }));
+                const names = joinNaturally(osCandidates.map(c => c.name));
+                return {
+                  status: 'pending',
+                  prompt: `I found a few in your contacts — ${names} — which one?`,
+                  pendingKey: 'contact_call',
+                  kind: 'standard',
+                  reaskPrompt: `I'm not sure I'm following — which one did you mean?`,
+                  resume: async (pick: string): Promise<CommitResult> => {
+                    const matched = matchCandidate(pick, osCandidates, contactLabel);
+                    if (!matched) return { status: 'noop', ack: '' };
+                    if (RELATIONSHIP_WORDS.test(contactLabel.trim())) {
+                      retireRelationshipHolder(contactLabel, matched.name);
+                      capturePerson({ name: matched.name, relationship: contactLabel, phone: matched.phone, importance: 7 });
+                    }
+                    return commitDial(matched.name, matched.phone);
+                  },
+                };
               }
             }
             return { status: 'noop', ack: '' };
@@ -1134,10 +1158,10 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
         if (!hasRelationshipEvidence) {
           return {
             status: 'pending',
-            prompt: `I've got a few people who might match, but none of them are marked as your ${contactLabel} — what's their last name, or you can just give me the number?`,
+            prompt: `I don't know who your ${contactLabel} is yet — what's their last name, or you can just give me the number?`,
             pendingKey: 'contact_call',
             kind: 'standard',
-            reaskPrompt: `I'm not sure I'm following — what's ${contactLabel}'s last name, or their number?`,
+            reaskPrompt: `I'm not sure I'm following — what's your ${contactLabel}'s last name, or their number?`,
             resume: async (reply: string): Promise<CommitResult> => {
               const phone = extractPhone10(reply);
               if (phone) {
@@ -1183,6 +1207,30 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
                     capturePerson({ name: device.name, relationship: contactLabel, phone: device.phone, importance: 7 });
                   }
                   return commitDial(device.name, device.phone);
+                }
+                if (device && !device.phone && 'deviceCandidates' in device && device.deviceCandidates.length > 0) {
+                  const osCandidates: CallCandidate[] = device.deviceCandidates.map(c => ({
+                    name: c.name,
+                    phone: c.phone,
+                    importance: 5,
+                  }));
+                  const names = joinNaturally(osCandidates.map(c => c.name));
+                  return {
+                    status: 'pending',
+                    prompt: `I found a few in your contacts — ${names} — which one?`,
+                    pendingKey: 'contact_call',
+                    kind: 'standard',
+                    reaskPrompt: `I'm not sure I'm following — which one did you mean?`,
+                    resume: async (pick: string): Promise<CommitResult> => {
+                      const matchedOs = matchCandidate(pick, osCandidates, contactLabel);
+                      if (!matchedOs) return { status: 'noop', ack: '' };
+                      if (RELATIONSHIP_WORDS.test(contactLabel.trim())) {
+                        retireRelationshipHolder(contactLabel, matchedOs.name);
+                        capturePerson({ name: matchedOs.name, relationship: contactLabel, phone: matchedOs.phone, importance: 7 });
+                      }
+                      return commitDial(matchedOs.name, matchedOs.phone);
+                    },
+                  };
                 }
               }
               return { status: 'noop', ack: '' };
