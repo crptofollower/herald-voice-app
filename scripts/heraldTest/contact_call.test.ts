@@ -92,8 +92,11 @@ function dialPhone(result: CommitResult): string | undefined {
   return result.status === 'committed' && result.effect?.kind === 'dial' ? result.effect.phone : undefined;
 }
 
-async function addPending(intent: IntentRecord): Promise<Extract<CommitResult, { status: 'pending' }>> {
-  const result = await DOMAIN_WRITERS['contact_call']!.add(intent, '');
+async function addPending(
+  intent: IntentRecord,
+  ctx?: { resolveContact?: (n: string) => Promise<{phone:string;name:string;contactId?:string;source:'herald'|'device'}|{phone:null;name:string;source:'device';candidateNames:string[];deviceCandidates:{name:string;phone:string}[]}|null> },
+): Promise<Extract<CommitResult, { status: 'pending' }>> {
+  const result = await DOMAIN_WRITERS['contact_call']!.add(intent, '', ctx);
   if (result.status !== 'pending') throw new Error(`expected pending, got ${result.status}`);
   return result;
 }
@@ -658,6 +661,32 @@ export async function runContactCallTests() {
         && v.placeholder.relationship == null
         && v.placeholder.removed_at == null,
       'one FIL holder David Clevenger; placeholder David still live with relationship cleared');
+  }
+
+  // ── T-CT-24: collectStage falls back to the OS contact book when Herald ──
+  // has zero candidates of either kind (the "brand-new contact, fresh
+  // install" case — never previously captured by Herald at all).
+  {
+    const db = freshDB();
+    const intent = await resolveContactCallIntent('father-in-law', 'call my father-in-law', { resolveContact: async () => null });
+    const before = contactCount(db);
+    const pending = await addPending(intent, {
+      resolveContact: async (n: string) =>
+        n.toLowerCase().includes('clevenger')
+          ? { phone: '5551234567', name: 'David Clevenger', source: 'device' as const }
+          : null,
+    });
+    const result = await pending.resume('David Clevenger');
+    const after = contactCount(db);
+    const holder = findContactByRelationship('father-in-law');
+    assert('T-CT-24 collectStage OS-contact fallback dials and persists relationship',
+      { phone: dialPhone(result), before, after, holder },
+      v => v.phone === '5551234567'
+        && v.before === 0
+        && v.after === 1
+        && !!v.holder
+        && v.holder.name === 'David Clevenger',
+      'dials David Clevenger; writes 1 relationship-tagged row');
   }
 
   const total = passed + failures.length;

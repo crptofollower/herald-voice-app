@@ -1170,7 +1170,7 @@ export default function ChatScreen() {
         );
                 if (llmCaptures.length > 0) {
           if (allConverted(llmCaptures)) {
-            const { responseText, commits } = await applyIntents(llmCaptures, text, sessionRef.current);
+            const { responseText, commits } = await applyIntents(llmCaptures, text, sessionRef.current, { resolveContact: resolveContactPhoneRef.current ?? undefined });
             addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
             addMessage({ id: generateId('msg'), role: 'assistant', content: responseText, timestamp: Date.now() });
             speak(responseText);
@@ -1895,6 +1895,7 @@ export default function ChatScreen() {
               [callIntent],
               rawVal,
               sessionRef.current,
+              { resolveContact: resolveContactPhone },
             );
             addMessage({
               id: generateId("msg"),

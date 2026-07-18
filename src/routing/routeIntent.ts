@@ -41,8 +41,10 @@ export type CommitResult =
 
 const RELATIONSHIP_WORDS = /^(wife|husband|son|daughter|mom|dad|father(?:-in-law)?|mother(?:-in-law)?|brother|sister)$/i;
 
+export type ResolveContactFn = (n: string) => Promise<{phone:string;name:string;contactId?:string;source:'herald'|'device'}|{phone:null;name:string;source:'device';candidateNames:string[];deviceCandidates:{name:string;phone:string}[]}|null>;
+
 export interface DomainWriter {
-  add(intent: IntentRecord, rawPhrase: string): Promise<CommitResult>;
+  add(intent: IntentRecord, rawPhrase: string, ctx?: { resolveContact?: ResolveContactFn }): Promise<CommitResult>;
   remove(item: string): Promise<CommitResult>;
   clear(): Promise<CommitResult>;
 }
@@ -968,7 +970,7 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
     },
   },
   contact_call: {
-    async add(intent: IntentRecord, _rawPhrase: string): Promise<CommitResult> {
+    async add(intent: IntentRecord, _rawPhrase: string, ctx?: { resolveContact?: ResolveContactFn }): Promise<CommitResult> {
       if (intent.type !== 'contact_call') {
         return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
       }
@@ -1084,6 +1086,20 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
                 capturePerson({ name: match.name, relationship: contactLabel, phone: match.phone, importance: 7 });
               }
               return commitDial(match.name, match.phone);
+            }
+            // Herald doesn't know this name yet — try the OS contact book,
+            // the same fallback resolveContactCallIntent already uses at
+            // initial routing. Reached here because the first ask had zero
+            // candidates of either kind.
+            if (ctx?.resolveContact) {
+              const device = await ctx.resolveContact(reply);
+              if (device && device.phone) {
+                if (RELATIONSHIP_WORDS.test(contactLabel.trim())) {
+                  retireRelationshipHolder(contactLabel, device.name);
+                  capturePerson({ name: device.name, relationship: contactLabel, phone: device.phone, importance: 7 });
+                }
+                return commitDial(device.name, device.phone);
+              }
             }
             return { status: 'noop', ack: '' };
           },

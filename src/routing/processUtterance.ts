@@ -1,5 +1,5 @@
 import { routeIntent, DOMAIN_WRITERS, composeAck, allConverted } from './routeIntent';
-import type { RouteDecision, CommitResult } from './routeIntent';
+import type { RouteDecision, CommitResult, ResolveContactFn } from './routeIntent';
 import type { IntentRecord } from '../hooks/llmLayers';
 import { ConversationSession } from './conversationSession';
 import { detectEmergency } from './emergencySignals';
@@ -24,11 +24,12 @@ export async function applyIntents(
   intents: IntentRecord[],
   rawText: string,
   session: ConversationSession,
+  ctx?: { resolveContact?: ResolveContactFn },
 ): Promise<{ responseText: string; commits: CommitResult[] }> {
   const results: CommitResult[] = [];
   for (const intent of intents) {
     const writer = DOMAIN_WRITERS[intent.type];
-    if (writer) results.push(await writer.add(intent, rawText));
+    if (writer) results.push(await writer.add(intent, rawText, ctx));
   }
   const responseText = composeAck(results);
   const pending = results.find(r => r.status === 'pending');
@@ -64,7 +65,7 @@ export async function processUtterance(
   const routeDecision = await routeIntent(text, deps);
   // 3) Converted-domain capture → commit loop.
   if (routeDecision.kind === 'capture' && allConverted(routeDecision.intents)) {
-    const { responseText, commits } = await applyIntents(routeDecision.intents, text, session);
+    const { responseText, commits } = await applyIntents(routeDecision.intents, text, session, { resolveContact: deps.resolveContact });
     return { handled: true, source: 'capture', responseText, commits };
   }
   return { handled: false, routeDecision };
