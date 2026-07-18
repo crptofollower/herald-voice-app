@@ -1066,15 +1066,26 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       function collectStage(contactLabel: string): CommitResult {
         return {
           status: 'pending',
-          prompt: `I don't have a number for ${contactLabel}. What's their number?`,
+          prompt: `I don't have a number for ${contactLabel} yet — what's their name, or you can give me the number?`,
           pendingKey: 'contact_call',
           kind: 'standard',
-          reaskPrompt: `I still didn't catch a full 10-digit number — can you say ${contactLabel}'s number again, slowly?`,
+          reaskPrompt: `I'm not sure I'm following — what's ${contactLabel}'s name, or their number?`,
           resume: async (reply: string): Promise<CommitResult> => {
             const phone = extractPhone10(reply);
-            if (!phone) return { status: 'noop', ack: '' };
-            capturePerson({ name: contactLabel, phone, importance: 7 });
-            return commitDial(contactLabel, phone);
+            if (phone) {
+              capturePerson({ name: contactLabel, phone, importance: 7 });
+              return commitDial(contactLabel, phone);
+            }
+            const named = findAllContactMatches(reply).filter(c => !!c.phone?.trim());
+            if (named.length === 1) {
+              const match = named[0];
+              if (RELATIONSHIP_WORDS.test(contactLabel.trim())) {
+                retireRelationshipHolder(contactLabel, match.name);
+                capturePerson({ name: match.name, relationship: contactLabel, phone: match.phone, importance: 7 });
+              }
+              return commitDial(match.name, match.phone);
+            }
+            return { status: 'noop', ack: '' };
           },
         };
       }
