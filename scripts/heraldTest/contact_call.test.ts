@@ -334,15 +334,15 @@ export async function runContactCallTests() {
     const armed = await armSession(session, intent);
     const domain = await armed.resume('123');
     const ladder = await session.resolvePending('123');
-    assert('T-CT-11 invalid phone → domain noop empty; session reasks with 10-digit prompt; no row',
+    assert('T-CT-11 invalid phone → domain noop empty; session reasks inviting name or number; no row',
       { domain, ladder, rows: contactCount(db), reask: armed.reaskPrompt },
       v => v.domain.status === 'noop' && v.domain.ack === ''
         && v.ladder.status === 'pending'
         && typeof v.ladder.prompt === 'string'
-        && /10-digit/i.test(v.ladder.prompt)
-        && /10-digit/i.test(v.reask)
+        && /name/i.test(v.ladder.prompt) && /number/i.test(v.ladder.prompt)
+        && /name/i.test(v.reask) && /number/i.test(v.reask)
         && v.rows === 0,
-      'noop empty, reask mentions 10-digit, 0 rows');
+      'noop empty, reask mentions name or number, 0 rows');
   }
 
   // ── T-CT-12: mapCallIntents — the Commit A mechanism (DD-2) ────────────────
