@@ -817,6 +817,28 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     }
   }
 
+  // Bare "I need X" grocery shorthand — NOT "I need to …" (todo) and not help cries.
+  {
+    const bareNeed = msg.match(/^\s*I\s+need\s+(?!to\b)(.+?)\s*$/i);
+    const needTail = bareNeed?.[1]?.trim() ?? '';
+    if (
+      needTail.length > 0 &&
+      !/\b(help|assistance|ambulance|doctor|911)\b/i.test(needTail)
+    ) {
+      const items = needTail
+        .split(/\s*,\s*|\s+and\s+/i)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+      if (items.length > 0) {
+        return {
+          tier: 1,
+          actionIntent: { type: 'list_add', items, listName: 'grocery' },
+          reason: 'action:list_add:bare_need',
+        };
+      }
+    }
+  }
+
   // Device: contextual list add
   if (
     LIST_ADD_CONTEXTUAL_SIGNALS.some((p) => p.test(msg)) &&
