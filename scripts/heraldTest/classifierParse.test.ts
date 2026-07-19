@@ -195,13 +195,19 @@ export async function runClassifierParseTests() {
       'Sam is my roommate',
       vocab,
     ).length === 0);
-  check('54. listName costco (known) accepted',
+  check('54. same-relation split: two sons',
+    parseClassifierOutput(
+      '[{"type":"family_capture","relation":"son","name":"Grant"},{"type":"family_capture","relation":"son","name":"Hunter"}]',
+      'I have two sons, one named Grant and one named Hunter',
+      vocab,
+    ).length === 2);
+  check('55. listName costco (known) accepted',
     parseClassifierOutput(
       '{"type":"list_add","items":["milk"],"listName":"costco"}',
       'add milk to costco',
       vocab,
     ).length === 1);
-  check('55. listName medications dropped (finding-5)',
+  check('56. listName medications dropped (finding-5)',
     parseClassifierOutput(
       '{"type":"list_add","items":["metformin"],"listName":"medications"}',
       'add metformin to medications',
@@ -216,7 +222,7 @@ export async function runClassifierParseTests() {
       'I need apples',
       vocab,
     );
-    check('56. malformed element throws → dropped, sibling survives',
+    check('57. malformed element throws → dropped, sibling survives',
       out.length === 1 && out[0].type === 'list_add' && out[0].items[0] === 'apples');
   }
   {
@@ -224,7 +230,7 @@ export async function runClassifierParseTests() {
       { type: 'medical_capture', drug: 'lisinopril', dosage: '10 mg', raw: 'I take Lisinopril 10mg.' },
       'i take lisinopril 10 mg',
     );
-    check('57. raw grounded to utterance, not model echo (W3d)',
+    check('58. raw grounded to utterance, not model echo (W3d)',
       !!got && got.type === 'medical_capture'
       && got.raw === 'i take lisinopril 10 mg'
       && got.drug === 'lisinopril');

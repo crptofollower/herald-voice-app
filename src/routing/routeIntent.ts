@@ -263,26 +263,35 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       }
       const db = getDB();
       let list = db.getFirstSync<{ id: string }>(`SELECT id FROM lists WHERE name = ?`, [listName]);
-      if (!list) {
-        const listId = `list_${Date.now()}`;
-        db.runSync(`INSERT INTO lists (id, name, created_at) VALUES (?, ?, ?)`, [listId, listName, new Date().toISOString()]);
-        list = { id: listId };
-      }
       const now = new Date().toISOString();
       let addedCount = 0;
-      for (const item of itemList) {
-        const exists = db.getFirstSync<{ id: string }>(
-          `SELECT li.id FROM list_items li JOIN lists l ON l.id = li.list_id
-           WHERE l.name = ? AND lower(li.body) = lower(?) AND li.checked = 0`,
-          [listName, item],
-        );
-        if (!exists) {
-          db.runSync(
-            `INSERT INTO list_items (id, list_id, body, checked, created_at) VALUES (?, ?, ?, 0, ?)`,
-            [`item_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, list.id, item, now],
-          );
-          addedCount++;
+      // Same transaction pattern as calendarCacheDB: BEGIN IMMEDIATE / COMMIT / ROLLBACK
+      // so list creation + item inserts are atomic (no partial multi-item write).
+      db.execSync('BEGIN IMMEDIATE;');
+      try {
+        if (!list) {
+          const listId = `list_${Date.now()}`;
+          db.runSync(`INSERT INTO lists (id, name, created_at) VALUES (?, ?, ?)`, [listId, listName, now]);
+          list = { id: listId };
         }
+        for (const item of itemList) {
+          const exists = db.getFirstSync<{ id: string }>(
+            `SELECT li.id FROM list_items li JOIN lists l ON l.id = li.list_id
+             WHERE l.name = ? AND lower(li.body) = lower(?) AND li.checked = 0`,
+            [listName, item],
+          );
+          if (!exists) {
+            db.runSync(
+              `INSERT INTO list_items (id, list_id, body, checked, created_at) VALUES (?, ?, ?, 0, ?)`,
+              [`item_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, list.id, item, now],
+            );
+            addedCount++;
+          }
+        }
+        db.execSync('COMMIT;');
+      } catch {
+        db.execSync('ROLLBACK;');
+        return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
       }
       if (addedCount === 0) {
         return { status: 'noop', ack: `${itemList.length === 1 ? `${itemList[0]} was` : 'Those were'} already on your ${listName} list.` };

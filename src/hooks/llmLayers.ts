@@ -346,6 +346,11 @@ FAMILY CAPTURE — relationships and family members:
 {"type":"family_capture","relation":"father-in-law","name":"David","location":"Little Elm Texas"}
 "my son lives in New York City his name is Michael" → {"type":"family_capture","relation":"son","name":"Michael","location":"New York City"}
 
+SAME-RELATION FAMILY CAPTURE — split into separate objects, one per person,
+when multiple people share one stated relation:
+"I have two sons, one named Grant and one named Hunter" →
+[{"type":"family_capture","relation":"son","name":"Grant"},{"type":"family_capture","relation":"son","name":"Hunter"}]
+
 TODO ADD:
 {"type":"todo_add","body":"call the dentist"}
 "remind me to call the dentist" → {"type":"todo_add","body":"call the dentist"}
