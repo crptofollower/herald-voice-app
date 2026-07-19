@@ -1485,5 +1485,8 @@ export async function routeIntent(
     }
   }
 
-  return { kind: 'backend', tier: 3, reason: decision.reason };
+  if (decision.reason === 'live:data') {
+    return { kind: 'backend', tier: 3, reason: decision.reason };
+  }
+  return { kind: 'needs_clarification', reason: decision.reason };
 }

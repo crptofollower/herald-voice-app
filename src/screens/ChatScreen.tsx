@@ -1165,6 +1165,15 @@ export default function ChatScreen() {
       setInputText('');
       return;
     }
+    if (outcome.routeDecision.kind === 'needs_clarification') {
+      const reply = "I'm not sure I'm following you — can you help me understand?";
+      addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+      addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+      speak(reply);
+      sendingRef.current = false;
+      setInputText('');
+      return;
+    }
     const routeDecision = outcome.routeDecision;
     // Read the routing decision's signals directly off the RouteDecision union.
     // Replaces the flat TierDecision shadow + routeDecisionToTier (deleted).

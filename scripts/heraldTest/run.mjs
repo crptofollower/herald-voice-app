@@ -364,8 +364,13 @@ for (const [label, input, expected] of DOSAGE_TESTS) {
   }
 }
 
+// Build D (LLM_LIVE P3, ratified 2026-07-19): tier-3 default no longer
+// routes to backend by default. Only decision.reason === 'live:data'
+// (positively allowlisted) reaches backend; everything else resolves
+// locally via needs_clarification. This test's mock (reason: "default")
+// exercises exactly the case Law 5 targets.
 {
-  const label = "ok + empty intents → backend (a real pass still routes out)";
+  const label = "ok + empty intents → needs_clarification (Law 5: tier-3 default never crosses to backend)";
   const phrase = "I need bananas";
   let decision;
   try {
@@ -375,17 +380,17 @@ for (const [label, input, expected] of DOSAGE_TESTS) {
       llmReady: true,
     });
   } catch (e) {
-    failures.push({ label, phrase, expected: "backend", got: `THREW: ${e.message}` });
+    failures.push({ label, phrase, expected: "needs_clarification", got: `THREW: ${e.message}` });
     console.log(`${RED}❌ FAIL${RESET}  ${label}\n      ${DIM}"${phrase}"${RESET}\n      ${RED}→ THREW: ${e.message}${RESET}\n`);
   }
   if (decision !== undefined) {
-    const ok = decision.kind === "backend";
+    const ok = decision.kind === "needs_clarification";
     if (ok) {
       passed++;
-      console.log(`${GREEN}✅ PASS${RESET}  ${label}\n      ${DIM}"${phrase}" → backend${RESET}\n`);
+      console.log(`${GREEN}✅ PASS${RESET}  ${label}\n      ${DIM}"${phrase}" → needs_clarification${RESET}\n`);
     } else {
-      failures.push({ label, phrase, expected: "backend", got: `${decision.kind}` });
-      console.log(`${RED}❌ FAIL${RESET}  ${label}\n      ${DIM}"${phrase}"${RESET}\n      ${RED}→ got ${decision.kind}, expected backend${RESET}\n`);
+      failures.push({ label, phrase, expected: "needs_clarification", got: `${decision.kind}` });
+      console.log(`${RED}❌ FAIL${RESET}  ${label}\n      ${DIM}"${phrase}"${RESET}\n      ${RED}→ got ${decision.kind}, expected needs_clarification${RESET}\n`);
     }
   }
 }
