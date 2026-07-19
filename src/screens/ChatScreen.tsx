@@ -774,21 +774,47 @@ export default function ChatScreen() {
       const db = getDB();
       switch (intent.type) {
         case 'list_remove': {
-          const matches = db.getAllSync<{ id: string; body: string }>(
-            `SELECT li.id, li.body FROM list_items li
-             JOIN lists l ON l.id = li.list_id
-             WHERE l.name = ? AND li.checked = 0
-             AND lower(li.body) LIKE lower(?)`,
-            [intent.listName ?? 'grocery', `%${intent.item ?? ''}%`],
-          );
-          if (matches.length === 0) {
-            replyAndReset(`I don't see ${intent.item} on your list.`);
-          } else if (matches.length === 1) {
-            db.runSync(`UPDATE list_items SET checked = 1 WHERE id = ?`,
-              [matches[0].id]);
-            replyAndReset(`Removed ${matches[0].body} from your ${intent.listName ?? 'grocery'} list.`);
+          // Split on comma / " and " (same as list_add / dispatch list_remove).
+          const listName = intent.listName ?? 'grocery';
+          const rawItem = intent.item ?? '';
+          const pieces = rawItem
+            .split(/\s*,\s*|\s+and\s+/i)
+            .map((s) => s.trim())
+            .filter((s) => s.length > 0);
+          const targets = pieces.length > 0 ? pieces : [rawItem];
+          const removed: string[] = [];
+          const missing: string[] = [];
+          let ambiguousPiece: string | null = null;
+          for (const piece of targets) {
+            const matches = db.getAllSync<{ id: string; body: string }>(
+              `SELECT li.id, li.body FROM list_items li
+               JOIN lists l ON l.id = li.list_id
+               WHERE l.name = ? AND li.checked = 0
+               AND lower(li.body) LIKE lower(?)`,
+              [listName, `%${piece}%`],
+            );
+            if (matches.length === 0) {
+              missing.push(piece);
+            } else if (matches.length === 1) {
+              db.runSync(`UPDATE list_items SET checked = 1 WHERE id = ?`,
+                [matches[0].id]);
+              removed.push(matches[0].body);
+            } else {
+              ambiguousPiece = piece;
+              break;
+            }
+          }
+          if (ambiguousPiece) {
+            replyAndReset(`I see a few matches for ${ambiguousPiece} — which one did you mean?`);
+          } else if (removed.length === 0) {
+            replyAndReset(`I don't see ${targets.join(' or ')} on your list.`);
           } else {
-            replyAndReset(`I see a few matches — which one did you mean?`);
+            const removedPhrase = removed.length === 1 ? removed[0] : removed.join(', ');
+            let msg = `Removed ${removedPhrase} from your ${listName} list.`;
+            if (missing.length > 0) {
+              msg += ` I didn't see ${missing.join(' or ')}.`;
+            }
+            replyAndReset(msg);
           }
           return true;
         }

@@ -507,28 +507,55 @@ export async function dispatchAction(
           return;
         }
 
-        // List remove — soft-delete via checked=1, zero network
+        // List remove — soft-delete via checked=1, zero network.
+        // Split on comma / " and " (same as list_add) so "I got milk and bread"
+        // checks each piece individually instead of one literal blob.
         if (actionIntent.type === 'list_remove') {
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
           try {
             const db = getDB();
             const { item, listName } = actionIntent;
-            const matches = db.getAllSync<{ id: string; body: string }>(
-              `SELECT li.id, li.body FROM list_items li
-               JOIN lists l ON l.id = li.list_id
-               WHERE l.name = ? AND li.checked = 0
-               AND lower(li.body) LIKE lower(?)`,
-              [listName, `%${item}%`],
-            );
+            const pieces = item
+              .split(/\s*,\s*|\s+and\s+/i)
+              .map((s) => s.trim())
+              .filter((s) => s.length > 0);
+            const targets = pieces.length > 0 ? pieces : [item];
+            const removed: string[] = [];
+            const missing: string[] = [];
+            let ambiguous: { piece: string; matches: { id: string; body: string }[] } | null = null;
+            for (const piece of targets) {
+              const matches = db.getAllSync<{ id: string; body: string }>(
+                `SELECT li.id, li.body FROM list_items li
+                 JOIN lists l ON l.id = li.list_id
+                 WHERE l.name = ? AND li.checked = 0
+                 AND lower(li.body) LIKE lower(?)`,
+                [listName, `%${piece}%`],
+              );
+              if (matches.length === 0) {
+                missing.push(piece);
+              } else if (matches.length === 1) {
+                db.runSync(
+                  `UPDATE list_items SET checked = 1, removed_at = ? WHERE id = ?;`,
+                  [new Date().toISOString(), matches[0].id],
+                );
+                removed.push(matches[0].body);
+              } else {
+                ambiguous = { piece, matches };
+                break;
+              }
+            }
             let reply: string;
             let armPending = false;
-            if (matches.length === 0) {
-              reply = `I don't see ${item} on your ${listName} list.`;
-            } else if (matches.length === 1) {
-              db.runSync(
-                `UPDATE list_items SET checked = 1, removed_at = ? WHERE id = ?;`,
-                [new Date().toISOString(), matches[0].id],
-              );
+            let pendingMatches: { id: string; body: string }[] = [];
+            if (ambiguous) {
+              // Pending Disambiguation Commit 1: arm a candidates pending
+              // instead of asking and dropping the answer (Law 2 leak fix).
+              pendingMatches = ambiguous.matches;
+              reply = `I see a few matches for ${ambiguous.piece} — which one did you mean: ${ambiguous.matches.map(m => m.body).join(', ')}?`;
+              armPending = true;
+            } else if (removed.length === 0) {
+              reply = `I don't see ${targets.join(' or ')} on your ${listName} list.`;
+            } else {
               const remaining = db.getAllSync<{ body: string }>(
                 `SELECT li.body FROM list_items li JOIN lists l ON l.id = li.list_id
                  WHERE l.name = ? AND li.checked = 0 ORDER BY li.created_at ASC;`,
@@ -541,23 +568,23 @@ export async function dispatchAction(
                 seenLeft.add(k);
                 return true;
               });
+              const removedPhrase = removed.length === 1 ? removed[0] : removed.join(', ');
+              const verb = removed.length === 1 ? 'is' : 'are';
               reply = left.length === 0
-                ? `Done — ${matches[0].body} is off your ${listName} list. That clears it.`
-                : `Done — ${matches[0].body} is off. Still on your ${listName} list: ${left.join(', ')}.`;
-            } else {
-              // Pending Disambiguation Commit 1: arm a candidates pending
-              // instead of asking and dropping the answer (Law 2 leak fix).
-              reply = `I see a few matches for ${item} — which one did you mean: ${matches.map(m => m.body).join(', ')}?`;
-              armPending = true;
+                ? `Done — ${removedPhrase} ${verb} off your ${listName} list. That clears it.`
+                : `Done — ${removedPhrase} ${verb} off. Still on your ${listName} list: ${left.join(', ')}.`;
+              if (missing.length > 0) {
+                reply += ` I didn't see ${missing.join(' or ')}.`;
+              }
             }
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
             if (armPending) {
-              const removeCandidates = matches.map(m => ({ label: m.body, ref: m.id }));
+              const removeCandidates = pendingMatches.map(m => ({ label: m.body, ref: m.id }));
               session.setPending({
                 pendingKey: 'list_remove_disambiguate',
                 kind: 'standard',
-                reaskPrompt: `I'm not sure which one you meant — ${matches.map(m => m.body).join(', ')}?`,
+                reaskPrompt: `I'm not sure which one you meant — ${pendingMatches.map(m => m.body).join(', ')}?`,
                 resume: async (replyText: string): Promise<CommitResult> => {
                   const match = matchCandidateToken(replyText, removeCandidates);
                   if (match === 'ambiguous' || match === 'none') return { status: 'noop', ack: '' };
