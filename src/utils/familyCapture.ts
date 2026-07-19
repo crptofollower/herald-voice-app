@@ -77,15 +77,18 @@ export function detectFamilyCapture(text: string): IntentRecord[] {
   // half-capture (Spine §5: a recoverable miss, never a silent drop).
   const haveCompound = new RegExp(`\\bI\\s+have\\b[^.?]*\\b(?:${REL})\\b[^.?]*\\band\\b[^.?]*\\b(?:${REL})\\b`, 'i');
   // Same-relation named list: "I have two sons named Grant and Hunter"
-  // (and space-separated STT forms). Capture all names; do not half-capture.
+  // and "I have two sons, one named Grant and one named Hunter".
   const haveNamedMany = raw.match(
-    new RegExp(`\\bI\\s+have\\s+(?:(?:a|another|two|three|four|five|both|couple of|a couple of)\\s+)?(${REL})s?\\s+named\\s+(.+)`, 'i'),
+    new RegExp(
+      `\\bI\\s+have\\s+(?:(?:a|another|two|three|four|five|both|couple of|a couple of)\\s+)?(${REL})s?(?:\\s*,\\s*one\\s+named\\s+|\\s+named\\s+)(.+)`,
+      'i',
+    ),
   );
   if (haveNamedMany) {
     const relation = haveNamedMany[1].trim().toLowerCase();
     const names = haveNamedMany[2]
       .split(/\s*,\s*|\s+and\s+/i)
-      .map((s) => s.trim())
+      .map((s) => s.replace(/^(?:one\s+named\s+)/i, '').trim())
       .filter((s) => isRealName(s) && !FAMILY_RELATIONS.includes(s.toLowerCase()));
     if (names.length >= 2) {
       return names.map((name) => ({ type: 'family_capture' as const, relation, name }));

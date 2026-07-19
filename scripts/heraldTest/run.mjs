@@ -90,6 +90,7 @@ const TESTS = [
   // List add
   ["list add",             "add chocolate milk to my grocery list",          1, "list_add"],
   ["list add shorthand",   "put eggs on my list",                            1, "list_add"],
+  ["list add bare need",   "I need milk eggs and bread",                     1, "list_add"],
 
   // List read
   ["list whats on",        "what's on my grocery list",                      1, "list_read"],
@@ -217,7 +218,7 @@ const RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", BOLD = "\x1b[1m",
 let passed = 0;
 const failures = [];
 const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length + 4; // +1 list_todo+medical intercept, +3 classifier tri-state
-const EXPECTED_TOTAL = 530;   // was 529; +1 same-relation family_capture split parse (check 54)
+const EXPECTED_TOTAL = 532;   // was 530; +1 bare-need list_add +1 same-relation detectFamilyCapture
 
 console.log(`\n${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  HERALD ROUTER + PHONE TEST SUITE — ${TOTAL} tests${RESET}`);

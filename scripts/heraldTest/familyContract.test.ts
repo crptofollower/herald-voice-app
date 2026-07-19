@@ -162,6 +162,16 @@ export async function runFamilyContractTests() {
   // same deferral as C10/C11).
   assert('C19 compound named-form defers', detectFamilyCapture('I have a son named Hunter and another son named Grant'), capNone, '[]');
 
+  // Same-relation named list — both sons captured (not deferred to empty []).
+  assert('C20 same-relation named list: Grant and Hunter',
+    detectFamilyCapture('I have two sons, one named Grant and one named Hunter'),
+    (v) => Array.isArray(v)
+      && v.length === 2
+      && v.every((i) => i.type === 'family_capture' && i.relation === 'son')
+      && v.some((i) => i.name === 'Grant')
+      && v.some((i) => i.name === 'Hunter'),
+    'two family_capture records: Grant + Hunter');
+
   // ── Writer collision (BUG B — same name, two relationships) ──
   {
     freshDB();
