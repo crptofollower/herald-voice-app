@@ -34,16 +34,17 @@
 // implicit default inference is a different mechanism, its own constitutional
 // review. Carry Item C5 / spec §9.
 //
-// specialty is IN SCOPE per D3/D7 but its vocabulary source is not yet
-// located (see session note). Registered with zero surface forms — fails
-// closed, the safe default — until that source is audited.
+// specialty is OUT OF SCOPE (D7 superseded by the Commit-1 execution
+// audit — no closed classifier vocabulary exists for it anywhere in the
+// codebase; it remains a VALUE field, grounded via the existing substring
+// gate, unchanged by this module).
 
 import { FAMILY_SYNONYMS } from './familyRead';
 import { SERVICE_SYNONYMS, INSURANCE_SYNONYMS } from './householdRead';
 
-export type RoutingFieldName = 'relation' | 'category' | 'insType' | 'specialty';
+export type RoutingFieldName = 'relation' | 'category' | 'insType';
 
-export const IN_SCOPE_FIELDS: RoutingFieldName[] = ['relation', 'category', 'insType', 'specialty'];
+export const IN_SCOPE_FIELDS: RoutingFieldName[] = ['relation', 'category', 'insType'];
 
 // canonical value (lowercased) → set of registered surface forms (lowercased)
 type EvidenceMap = Map<string, Set<string>>;
@@ -52,7 +53,6 @@ const registry: Record<RoutingFieldName, EvidenceMap> = {
   relation: new Map(),
   category: new Map(),
   insType: new Map(),
-  specialty: new Map(), // deliberately empty — see header
 };
 
 function register(field: RoutingFieldName, canonical: string, surfaceForm: string): void {
@@ -94,6 +94,16 @@ for (const [k, vals] of Object.entries(FAMILY_SYNONYMS)) {
   FAMILY_CANONICAL_VALUES.add(k.toLowerCase());
   for (const v of vals) FAMILY_CANONICAL_VALUES.add(v.toLowerCase());
 }
+// STEP_FORMS mirror (llmLayers.ts:48-51, SESSION_W W3c: FAMILY_SYNONYMS ∪
+// step forms). Duplicated here rather than imported to avoid a circular
+// module dependency (llmLayers.ts already imports this file). Keep in sync
+// by hand if llmLayers.ts's STEP_FORMS ever changes — it is a locked,
+// six-word, low-churn list.
+const STEP_FORMS_MIRROR = [
+  'stepson', 'stepdaughter', 'stepmother', 'stepfather',
+  'stepbrother', 'stepsister',
+];
+for (const s of STEP_FORMS_MIRROR) FAMILY_CANONICAL_VALUES.add(s.toLowerCase());
 for (const v of FAMILY_CANONICAL_VALUES) register('relation', v, v);
 
 // ─── Explicitly reviewed compositional family forms (founder-ratified) ────
@@ -146,5 +156,5 @@ export function getExpectedCanonicalValues(field: RoutingFieldName): Set<string>
     for (const vals of Object.values(INSURANCE_SYNONYMS)) for (const v of vals) s.add(v.toLowerCase());
     return s;
   }
-  return new Set(); // specialty — expected universe unknown until its source is audited
+  return new Set(); // field out of registry scope (not an unaudited vocabulary)
 }

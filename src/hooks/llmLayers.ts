@@ -10,6 +10,7 @@
 import type { LlamaContext } from 'llama.rn';
 import { SERVICE_SYNONYMS, INSURANCE_SYNONYMS } from '../utils/householdRead';
 import { FAMILY_SYNONYMS } from '../utils/familyRead';
+import { getSurfaceForms, IN_SCOPE_FIELDS, type RoutingFieldName } from '../utils/evidenceRegistry';
 
 // ─── Intent types ─────────────────────────────────────────────────────────────
 
@@ -169,7 +170,30 @@ export function verifyVerbatim(
   if ('raw' in out) out.raw = rawUtterance;
 
   for (const [key, val] of Object.entries(out)) {
-    if (ROUTING_FIELDS.has(key)) continue;
+    if (ROUTING_FIELDS.has(key)) {
+      // ROUTING_FIELD_GROUNDING_DESIGN_SPEC.md D1/D2/D3 (amended):
+      // relation/category/insType are evidence-gated here, not skipped.
+      // type and listName remain skip-only (type grounded transitively via
+      // required slots per D3; listName out of scope per C5). specialty is
+      // not in ROUTING_FIELDS at all — falls through to the standard
+      // substring gate below, unchanged (D7 superseded).
+      if (
+        IN_SCOPE_FIELDS.includes(key as RoutingFieldName) &&
+        typeof val === 'string' &&
+        val.trim()
+      ) {
+        const forms = getSurfaceForms(key as RoutingFieldName, val);
+        let evidenced = false;
+        for (const form of forms) {
+          if (findStandardSpan(rawUtterance, form)) {
+            evidenced = true;
+            break;
+          }
+        }
+        if (!evidenced) return null;
+      }
+      continue;
+    }
     if (key === 'items') continue;
     if (key === 'raw') continue; // W3d: grounded above, never model-authored.
     if (typeof val !== 'string') continue;

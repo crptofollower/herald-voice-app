@@ -48,12 +48,6 @@ export async function runEvidenceRegistryTests() {
       keys.length === new Set(keys).size);
   }
 
-  // ── specialty fails closed (D7) — zero registered, zero expected, intentional ──
-  check('specialty registers zero surface forms (fails closed until source audited)',
-    getRegisteredCanonicalValues('specialty').length === 0);
-  check('specialty expected-universe is empty (unknown until audited, not an oversight)',
-    getExpectedCanonicalValues('specialty').size === 0);
-
   // ── Fan-out regression (founder-ratified 2026-07-20) ──
   // Ambiguous family keys must NEVER appear as evidence for a specific
   // gender-distinct value they fan out to.
