@@ -12,7 +12,7 @@ import { getMedicalSummary, getMedicalRecords, getDiagnosisSummary, getDoctorsSu
 import { getRecentMentions, formatRecentMentions } from "../db/recallDB";
 import { detectMedicalEvent } from "../utils/detectMedicalEvent";
 import type { MedicalEvent } from "../utils/detectMedicalEvent";
-import { MONTHS, CALENDAR_WRITE_TRIGGER, CALENDAR_WRITE_NAMED_APPOINTMENT, CALENDAR_WRITE_VERB } from "../utils/parseTime";
+import { MONTHS, CALENDAR_WRITE_TRIGGER, CALENDAR_WRITE_NAMED_APPOINTMENT } from "../utils/parseTime";
 import { detectHouseholdRead, type HouseholdReadIntent } from "../utils/householdRead";
 import { detectServiceRemove } from "../utils/householdCapture";
 import { detectFamilyRead, answerFamilyRead } from "../utils/familyRead";
@@ -64,56 +64,165 @@ export interface LocalContext {
   intent?: string;
 }
 
+// ─── Calendar composable authorities ─────────────────────────────────────────
+// Free contiguous cores: calendar-specific AND self-contained request shape →
+//   substring OK (the fragment itself is the calendar request).
+// Whole-utterance shapes: everything else that can authorize a read — weak NPs,
+//   shape-less calendar NPs, and topic-generic request openers — must be the
+//   utterance's own request shape (^…$), not an embedded fragment.
+// C = positive calendar-write evidence
+// Auth: calendar read = (free ∨ whole-utterance ∨ travel) AND scope/today-default.
+// Bare temporal ≠ auth. Embedded narrative/reported-speech fragments ≠ auth.
+
+/**
+ * Free contiguous request cores — both calendar-domain and self-contained
+ * interrogative in one fragment. Safe as substrings.
+ * Only "on my calendar" / "my schedule" pass both axes; generics are TERSE-only.
+ */
+const CALENDAR_READ_FREE: RegExp[] = [
+  /\bwhat(?:'s| is) (?:on my calendar|my schedule)\b/i,
+];
+
+/** Temporal tail allowed in a whole-utterance calendar read shape. */
+const CALENDAR_TERSE_TEMPORAL =
+  '(?:today|tomorrow|this(?:\\s+coming)?\\s+week|coming\\s+week|next\\s+week|next\\s+(?:7|seven)\\s+days)';
+
+/**
+ * Whole-utterance calendar-read shapes (same anchoring technique throughout).
+ * Covers weak NPs, shape-less calendar vocabulary, and topic-generic openers
+ * that only become calendar requests when the utterance is that request.
+ * "what's happening/going on" deliberately omitted — not calendar-specific.
+ */
+const CALENDAR_READ_TERSE: RegExp[] = [
+  // "My schedule next week." / "What's my schedule for tomorrow?"
+  new RegExp(
+    `^(?:what(?:'s| is)\\s+)?my\\s+schedule(?:\\s+(?:for\\s+)?${CALENDAR_TERSE_TEMPORAL})?\\s*[?.!]*$`,
+    'i',
+  ),
+  // "On my calendar next week." / "On my schedule for this week."
+  new RegExp(
+    `^(?:what(?:'s| is)\\s+)?on\\s+my\\s+(?:calendar|schedule)(?:\\s+(?:for\\s+)?${CALENDAR_TERSE_TEMPORAL})?\\s*[?.!]*$`,
+    'i',
+  ),
+  // "Week's schedule?" / "My week's schedule." / "What's my week's schedule?"
+  /^(?:what(?:'s| is)\s+)?(?:my\s+)?week(?:'s| is)\s+schedule\s*[?.!]*$/i,
+  // "Calendar next week."
+  new RegExp(
+    `^calendar(?:\\s+(?:for\\s+)?${CALENDAR_TERSE_TEMPORAL})?\\s*[?.!]*$`,
+    'i',
+  ),
+  // "What do I have next week?" / "What do I have scheduled next week?"
+  // Not: "What do I have to pack for the trip next week?"
+  new RegExp(
+    `^what\\s+do\\s+i\\s+have(?:\\s+scheduled)?(?:\\s+(?:for\\s+)?${CALENDAR_TERSE_TEMPORAL})?\\s*[?.!]*$`,
+    'i',
+  ),
+  // "Do I have anything scheduled next week?" / "Do I have anything on my calendar?"
+  // Not: "Do I have anything else to bring before next week?"
+  new RegExp(
+    `^do\\s+i\\s+have\\s+(?:anything|something)(?:\\s+scheduled)?(?:\\s+on\\s+(?:my\\s+)?(?:calendar|schedule))?(?:\\s+(?:for\\s+)?${CALENDAR_TERSE_TEMPORAL})?\\s*[?.!]*$`,
+    'i',
+  ),
+  // "What's scheduled next week?" / "What's planned for tomorrow?"
+  new RegExp(
+    `^what(?:'s| is)\\s+(?:scheduled|planned)(?:\\s+(?:for\\s+)?${CALENDAR_TERSE_TEMPORAL})?\\s*[?.!]*$`,
+    'i',
+  ),
+  // Shape-less calendar NP: "Any appointments next week?" / "Any meetings today?"
+  new RegExp(
+    `^any\\s+(?:appointments|meetings|events)(?:\\s+(?:on\\s+my\\s+(?:calendar|schedule))?(?:\\s+(?:for\\s+)?${CALENDAR_TERSE_TEMPORAL})?|\\s+(?:for\\s+)?${CALENDAR_TERSE_TEMPORAL})?\\s*[?.!]*$`,
+    'i',
+  ),
+  // Shape-less: "Anything on my calendar today or this week?" / "Anything scheduled?"
+  new RegExp(
+    `^anything\\s+(?:on|scheduled)(?:\\s+my\\s+(?:calendar|schedule))?(?:\\s+(?:for\\s+)?${CALENDAR_TERSE_TEMPORAL})?(?:\\s+or\\s+(?:for\\s+)?${CALENDAR_TERSE_TEMPORAL})?\\s*[?.!]*$`,
+    'i',
+  ),
+  // Topic-generic opener + calendar object/scope: "Is there anything on my calendar for next week?"
+  new RegExp(
+    `^is\\s+there\\s+anything(?:\\s+(?:on|scheduled)(?:\\s+(?:on\\s+)?my\\s+(?:calendar|schedule))?|\\s+(?:for\\s+)?${CALENDAR_TERSE_TEMPORAL})(?:\\s+(?:for\\s+)?${CALENDAR_TERSE_TEMPORAL})?\\s*[?.!]*$`,
+    'i',
+  ),
+  // Topic-generic opener + calendar object/scope: "Show me this week." / "Show me my schedule…"
+  new RegExp(
+    `^show\\s+me\\s+(?:(?:my\\s+)?(?:schedule|calendar)|(?:my\\s+)?week(?:'s| is)\\s+schedule|(?:for\\s+)?${CALENDAR_TERSE_TEMPORAL})(?:\\s+(?:for\\s+)?${CALENDAR_TERSE_TEMPORAL})?\\s*[?.!]*$`,
+    'i',
+  ),
+];
+
+// Travel/agenda probes historically route to the week window (unchanged behavior).
+const CALENDAR_TRAVEL_READ: RegExp[] = [
+  /\bany (flights?|hotels?|stays?|trips?|travel|reservations?)\b/i,
+  /\bdo i have any (flights?|hotels?|stays?|trips?|travel|appointments?|meetings?|events?|reservations?)\b/i,
+  /\bam i (traveling|flying|staying|booked)\b/i,
+  /\bwhat (flights?|hotels?|trips?|reservations?) do i have\b/i,
+  /\bis there (a |any )?.*(hotel|flight|stay|trip|reservation)/i,
+  /\bany (upcoming|scheduled) (travel|trips?|flights?)\b/i,
+];
+
+/** Phrases that default to the today window when no other temporal scope is present. */
+const CALENDAR_TODAY_DEFAULT_READ: RegExp[] = [
+  /\bwhat(?:'s| is) on my calendar\b/i,
+  /\banything on my calendar\b/i,
+  /\bdo i have anything scheduled\b/i,
+];
+
+function hasCalendarReadEvidence(msg: string): boolean {
+  const trimmed = msg.trim();
+  return (
+    CALENDAR_READ_FREE.some((p) => p.test(trimmed)) ||
+    CALENDAR_READ_TERSE.some((p) => p.test(trimmed))
+  );
+}
+
+function hasCalendarTravelRead(msg: string): boolean {
+  return CALENDAR_TRAVEL_READ.some((p) => p.test(msg));
+}
+
+function hasTodayScope(msg: string): boolean {
+  return /\btoday\b/i.test(msg);
+}
+function hasTomorrowScope(msg: string): boolean {
+  return /\btomorrow\b/i.test(msg);
+}
+/**
+ * Bare this-week / coming-week / next-7-days — exclusion + scope, never sole auth.
+ * Approved "week's schedule" / "week is schedule" also establishes week scope
+ * (no separate "this week" token required).
+ */
+function hasThisWeekScope(msg: string): boolean {
+  return (
+    /\bthis(?:\s+coming)?\s+week\b/i.test(msg) ||
+    /\bcoming week\b/i.test(msg) ||
+    /\bnext seven days\b/i.test(msg) ||
+    /\bnext 7 days\b/i.test(msg) ||
+    /\b(?:my\s+)?week(?:'s| is)\s+schedule\b/i.test(msg)
+  );
+}
+function hasNextWeekScope(msg: string): boolean {
+  return /\bnext week\b/i.test(msg);
+}
+
+/**
+ * Positive write evidence only. Clear write verbs always count.
+ * "schedule" counts as a verb only when the utterance is not read-shaped and
+ * not the noun phrase "my schedule" — never via broad "schedule for" negation.
+ */
+function hasPositiveCalendarWriteEvidence(msg: string): boolean {
+  if (/\b(put|add|create|book|make)\b/i.test(msg)) return true;
+  if (/\bmy schedule\b/i.test(msg)) return false;
+  if (hasCalendarReadEvidence(msg)) return false;
+  // Transitive / article forms: "schedule lunch", "schedule a dentist"
+  return /\bschedule\s+(?:a|an|[a-z])/i.test(msg);
+}
+
+function isCalendarReadIntent(msg: string): boolean {
+  return hasCalendarReadEvidence(msg) || hasCalendarTravelRead(msg);
+}
+
 // ─── Signal groups ────────────────────────────────────────────────────────────
 
 const TIER1_SIGNALS = {
-  calendar_today: [
-    /what('s| is) on my calendar/i,
-    /do i have (anything|something) today/i,
-    /what do i have today/i,
-    /any (appointments|meetings|events) today/i,
-    /my schedule today/i,
-    /what('s| is) (scheduled|planned) today/i,
-    /anything (on|scheduled) today/i,
-    /is there anything on my calendar (for )?today/i,
-    /anything on my calendar/i,
-    /what('s| is) (happening|going on) today/i,
-    /do i have anything (today|scheduled)/i,
-  ],
-  calendar_tomorrow: [
-    // Read-shaped only — bare /tomorrow/i stole reminder/todo utterances
-    // ("Remember to call the plumber tomorrow"). Keep parity with calendar_today.
-    /what('s| is) on my calendar tomorrow/i,
-    /anything on my calendar tomorrow/i,
-    /is there anything on my calendar (for )?tomorrow/i,
-    /what do i have tomorrow/i,
-    /do i have (anything|something) tomorrow/i,
-    /any (appointments|meetings|events) tomorrow/i,
-    /my schedule tomorrow/i,
-    /what('s| is) (scheduled|planned|happening|going on) tomorrow/i,
-    /anything (on|scheduled) tomorrow/i,
-    /schedule (for )?tomorrow/i,
-    /is there anything tomorrow/i,
-  ],
-  calendar_week: [
-    /this (coming )?week/i,
-    /coming week/i,
-    /next seven days/i,
-    /next 7 days/i,
-    /what do i have this week/i,
-    /week('s| is) schedule/i,
-    /what('s| is) (on|scheduled) this week/i,
-    /any (flights?|hotels?|stays?|trips?|travel|reservations?)/i,
-    /do i have any (flights?|hotels?|stays?|trips?|travel|appointments?|meetings?|events?|reservations?)/i,
-    /am i (traveling|flying|staying|booked)/i,
-    /what (flights?|hotels?|trips?|reservations?) do i have/i,
-    /is there (a |any )?.*(hotel|flight|stay|trip|reservation)/i,
-    /any (upcoming|scheduled) (travel|trips?|flights?)/i,
-  ],
-  calendar_next_week: [
-    /next week/i,
-    /do i have (anything|something).*(on my calendar|on my schedule|scheduled)/i,
-  ],
   medical: [
     /what (medication|medications|meds|pills) am i (on|taking)/i,
     /my (medication|medications|meds|prescriptions)/i,
@@ -745,16 +854,15 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   }
 
   // Device: calendar write — local CalendarProvider, works offline (Bug 3)
-  if ((CALENDAR_WRITE_TRIGGER.test(msg) || CALENDAR_WRITE_NAMED_APPOINTMENT.test(msg)) && CALENDAR_WRITE_VERB.test(msg)) {
-    const isRead =
-      /\b(what('s| is)|what do i have|do i have anything|anything on my|show me my)\b/i.test(msg) &&
-      !/\b(put|add|schedule|create|book|make)\b/i.test(msg);
-    if (!isRead) {
-      const { parseCalendarWriteIntent } = await import('../utils/parseTime');
-      const value = parseCalendarWriteIntent(msg);
-      if (value) {
-        return { tier: 1, actionIntent: { type: 'calendar_write', value }, reason: 'action:calendar_write' };
-      }
+  // Enter only on positive write evidence. Read evidence wins for ambiguous "schedule".
+  if (
+    (CALENDAR_WRITE_TRIGGER.test(msg) || CALENDAR_WRITE_NAMED_APPOINTMENT.test(msg)) &&
+    hasPositiveCalendarWriteEvidence(msg)
+  ) {
+    const { parseCalendarWriteIntent } = await import('../utils/parseTime');
+    const value = parseCalendarWriteIntent(msg);
+    if (value) {
+      return { tier: 1, actionIntent: { type: 'calendar_write', value }, reason: 'action:calendar_write' };
     }
   }
 
@@ -929,11 +1037,7 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     NAMED_WEEKDAY.test(msg) ||
     MONTH_DAY.test(msg) ||
     FUZZY_FUTURE.test(msg);
-  const isCalendarIntent =
-    TIER1_SIGNALS.calendar_today.some((p) => p.test(msg)) ||
-    TIER1_SIGNALS.calendar_tomorrow.some((p) => p.test(msg)) ||
-    TIER1_SIGNALS.calendar_week.some((p) => p.test(msg)) ||
-    TIER1_SIGNALS.calendar_next_week.some((p) => p.test(msg));
+  const isCalendarIntent = isCalendarReadIntent(msg);
 
   if (hasUnresolvableDate && isCalendarIntent) {
     return {
@@ -943,12 +1047,27 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     };
   }
 
-  // Tier 1: calendar today — exclude if tomorrow, this week, or next week is present
-  const hasNextWeek = /\bnext week\b/i.test(msg);
+  // Temporal scope markers — exclusion + window selection. Never sole auth.
+  const hasNextWeek = hasNextWeekScope(msg);
+  const hasThisWeek = hasThisWeekScope(msg);
+  const hasTomorrow = hasTomorrowScope(msg);
+  const hasToday = hasTodayScope(msg);
+  const calendarRead = hasCalendarReadEvidence(msg);
+  const calendarTravel = hasCalendarTravelRead(msg);
+  const hasNearMe = /\b(near me|near here|nearest|closest|close to me)\b/i.test(msg);
+  const hasWeatherTomorrow = /\bweather\b/i.test(msg);
+  const todayDefault =
+    CALENDAR_TODAY_DEFAULT_READ.some((p) => p.test(msg)) &&
+    !hasToday && !hasTomorrow && !hasThisWeek && !hasNextWeek;
+
+  // Tier 1: calendar today — bare this-week/next-week markers exclude (not only
+  // authorized week-read phrases), so "today … this week is packed" cannot
+  // silently collapse to today-only.
   if (
-    TIER1_SIGNALS.calendar_today.some((p) => p.test(msg)) &&
-    !TIER1_SIGNALS.calendar_tomorrow.some((p) => p.test(msg)) &&
-    !TIER1_SIGNALS.calendar_week.some((p) => p.test(msg)) &&
+    calendarRead &&
+    (hasToday || todayDefault) &&
+    !hasTomorrow &&
+    !hasThisWeek &&
     !hasNextWeek
   ) {
     const events = await getTier1CalendarEvents("today");
@@ -957,20 +1076,20 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   }
 
   // Tier 1: calendar tomorrow
-  const hasWeatherTomorrow = /\bweather\b/i.test(msg);
-  if (TIER1_SIGNALS.calendar_tomorrow.some((p) => p.test(msg)) && !hasWeatherTomorrow && !hasNextWeek) {
+  if (calendarRead && hasTomorrow && !hasWeatherTomorrow && !hasNextWeek) {
     const events = await getTier1CalendarEvents("tomorrow");
     const response = calendarSpeech("tomorrow", events);
     return { tier: 1, tier1Response: response, reason: "calendar:tomorrow" };
   }
 
-  // Tier 1: calendar next week (before this week — "next week" must not fall through to today)
-  const hasNearMe = /\b(near me|near here|nearest|closest|close to me)\b/i.test(msg);
+  // Tier 1: calendar next week (before this week — "next week" must not fall through).
+  // Requires read evidence — bare hasNextWeek is never an independent grant.
   if (
-    (hasNextWeek || TIER1_SIGNALS.calendar_next_week.some((p) => p.test(msg))) &&
+    calendarRead &&
+    hasNextWeek &&
     !hasNearMe &&
-    !/\btoday\b/i.test(msg) &&
-    !/\btomorrow\b/i.test(msg)
+    !hasToday &&
+    !hasTomorrow
   ) {
     const events = await getTier1CalendarEvents("next week");
     const response = calendarSpeech("next week", events);
@@ -1014,8 +1133,8 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     return { tier: 1, tier1Response: response, isMedical: true, reason: "medical:visit_history_read" };
   }
 
-  // Tier 1: calendar this week
-  if (TIER1_SIGNALS.calendar_week.some((p) => p.test(msg)) && !hasNearMe && !hasNextWeek) {
+  // Tier 1: calendar this week — read evidence + this-week scope, or travel probe.
+  if (((calendarRead && hasThisWeek) || calendarTravel) && !hasNearMe && !hasNextWeek) {
     const events = await getTier1CalendarEvents("this week");
     const response = calendarSpeech("this week", events);
     return { tier: 1, tier1Response: response, reason: "calendar:week" };
