@@ -5,7 +5,7 @@
 import * as Calendar from 'expo-calendar';
 import type { CommitResult } from './routeIntent';
 import type { ConversationSession } from './conversationSession';
-import { parseTimeFromText } from '../utils/parseTime';
+import { parseTimeFromText, parseDatePhrase } from '../utils/parseTime';
 import { refreshCalendarCache } from '../db/calendarCacheDB';
 import { markCalendarWrite } from '../db/calendarState';
 import { addAppointment } from '../db/appointmentsDB';
@@ -106,34 +106,60 @@ export type CalendarCollectPlan = {
   slot: SetPendingSlot;
 } | null;
 
-// Pure decision logic: null = nothing missing, write directly. Otherwise the
-// prompt to speak + the slot to arm. `write` is injectable so tests can
-// assert the D-2 fence: cancel/ambiguity during collect NEVER calls it.
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Pure decision logic: null = nothing missing, write directly. Otherwise the
+ * prompt to speak + the slot to arm. `write` is injectable so tests can
+ * assert the D-2 fence: cancel/ambiguity during collect NEVER calls it.
+ *
+ * Chains forward through whichever fields are still missing — title, then
+ * date, then time — until all three are known, then writes exactly once.
+ * A date is NEVER defaulted or inferred silently (Trust First / no
+ * fabrication): if the original utterance carried no date phrase, this asks
+ * for one explicitly, the same way it already asks for a missing title or
+ * time. Previously, a missing date was never collected at all and
+ * writeCalendarCore failed silently at write time with a generic-sounding
+ * message that misrepresented a specific, knowable gap as confusion.
+ */
 export function buildCalendarCollectSlot(
   title: string,
   dateStr: string,
   timeStr: string,
   write: CalendarWriteFn = writeCalendarCore,
 ): CalendarCollectPlan {
-  const needsTitle = !title || title === 'Appointment';
-  const needsTime = !timeStr || !TIME_RE.test(timeStr);
-  if (!needsTitle && !needsTime) return null;
+  return nextCalendarStage(title, dateStr, timeStr, write);
+}
 
-  const timePendingSlot = (knownTitle: string): SetPendingSlot => ({
-    pendingKey: 'calendar_collect_time',
-    kind: 'standard',
-    reaskPrompt: `I didn't catch a time — what time should I put "${knownTitle}" on your calendar?`,
-    resume: async (reply: string): Promise<CommitResult> => {
-      if (COLLECT_CANCEL_RE.test(reply.trim())) {
-        return { status: 'noop', ack: COLLECT_CANCEL_ACK };
-      }
-      const parsed = parseTimeFromText(reply);
-      if (!parsed) return { status: 'noop', ack: '' };
-      const hh = String(parsed.hour).padStart(2, '0');
-      const mm = String(parsed.minute).padStart(2, '0');
-      return await write(knownTitle, dateStr, `${hh}:${mm}`);
-    },
-  });
+function nextCalendarStage(
+  knownTitle: string,
+  knownDate: string,
+  knownTimeStr: string,
+  write: CalendarWriteFn,
+): CalendarCollectPlan {
+  const needsTitle = !knownTitle || knownTitle === 'Appointment';
+  const needsDate = !knownDate || !ISO_DATE_RE.test(knownDate);
+  const needsTime = !knownTimeStr || !TIME_RE.test(knownTimeStr);
+  if (!needsTitle && !needsDate && !needsTime) return null;
+
+  // Advances to whatever's still missing after this reply, or writes once
+  // nothing is. Shared by every stage below so the chain never duplicates
+  // the write-vs-advance decision.
+  const advance = async (
+    resolvedTitle: string,
+    resolvedDate: string,
+    resolvedTimeStr: string,
+  ): Promise<CommitResult> => {
+    const next = nextCalendarStage(resolvedTitle, resolvedDate, resolvedTimeStr, write);
+    if (!next) return await write(resolvedTitle, resolvedDate, resolvedTimeStr);
+    return {
+      status: 'pending',
+      pendingKey: next.slot.pendingKey,
+      prompt: next.prompt,
+      reaskPrompt: next.slot.reaskPrompt,
+      resume: next.slot.resume,
+    };
+  };
 
   if (needsTitle) {
     return {
@@ -148,23 +174,48 @@ export function buildCalendarCollectSlot(
             return { status: 'noop', ack: COLLECT_CANCEL_ACK };
           }
           if (!newTitle) return { status: 'noop', ack: '' };
-          const timePart = timeStr && TIME_RE.test(timeStr) ? timeStr : '';
-          if (timePart) return await write(newTitle, dateStr, timePart);
-          const t = timePendingSlot(newTitle);
-          return {
-            status: 'pending',
-            pendingKey: 'calendar_collect_time',
-            prompt: `What time should I put "${newTitle}" on your calendar?`,
-            reaskPrompt: t.reaskPrompt,
-            resume: t.resume,
-          };
+          return await advance(newTitle, knownDate, knownTimeStr);
         },
       },
     };
   }
 
+  if (needsDate) {
+    return {
+      prompt: `What day should I put "${knownTitle}" on your calendar?`,
+      slot: {
+        pendingKey: 'calendar_collect_date',
+        kind: 'standard',
+        reaskPrompt: `I didn't catch a day — what day should I put "${knownTitle}" on your calendar?`,
+        resume: async (reply: string): Promise<CommitResult> => {
+          if (COLLECT_CANCEL_RE.test(reply.trim())) {
+            return { status: 'noop', ack: COLLECT_CANCEL_ACK };
+          }
+          const parsedDate = parseDatePhrase(reply);
+          if (!parsedDate) return { status: 'noop', ack: '' };
+          return await advance(knownTitle, parsedDate, knownTimeStr);
+        },
+      },
+    };
+  }
+
+  // needsTime only
   return {
-    prompt: `What time should I put "${title}" on your calendar?`,
-    slot: timePendingSlot(title),
+    prompt: `What time should I put "${knownTitle}" on your calendar?`,
+    slot: {
+      pendingKey: 'calendar_collect_time',
+      kind: 'standard',
+      reaskPrompt: `I didn't catch a time — what time should I put "${knownTitle}" on your calendar?`,
+      resume: async (reply: string): Promise<CommitResult> => {
+        if (COLLECT_CANCEL_RE.test(reply.trim())) {
+          return { status: 'noop', ack: COLLECT_CANCEL_ACK };
+        }
+        const parsed = parseTimeFromText(reply);
+        if (!parsed) return { status: 'noop', ack: '' };
+        const hh = String(parsed.hour).padStart(2, '0');
+        const mm = String(parsed.minute).padStart(2, '0');
+        return await advance(knownTitle, knownDate, `${hh}:${mm}`);
+      },
+    },
   };
 }
