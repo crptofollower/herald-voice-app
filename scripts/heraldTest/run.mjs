@@ -218,7 +218,7 @@ const RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", BOLD = "\x1b[1m",
 let passed = 0;
 const failures = [];
 const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length + 4; // +1 list_todo+medical intercept, +3 classifier tri-state
-const EXPECTED_TOTAL = 596;   // was 590; +6 FREE-axis shrink (CUD38–39 anchored positives, CUD40–43 competing-topic negatives)
+const EXPECTED_TOTAL = 600;   // was 596; +4 parseTimeFromText absolute space+am/pm (PT11–14)
 
 console.log(`\n${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  HERALD ROUTER + PHONE TEST SUITE — ${TOTAL} tests${RESET}`);

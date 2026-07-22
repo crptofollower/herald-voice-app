@@ -99,6 +99,66 @@ export async function runParseTimeFromTextTests() {
     '"15:15"',
   );
 
+  // Absolute AM/PM path: space-separated minutes (was colon-only; overflowed as hour=30)
+  assert(
+    'PT11 "10 30 a.m." → hour 10, minute 30',
+    parseTimeFromText('10 30 a.m.'),
+    (v) => {
+      const t = v as { hour: number; minute: number } | null;
+      return t?.hour === 10 && t?.minute === 30;
+    },
+    '{ hour: 10, minute: 30 }',
+  );
+
+  assert(
+    'PT12 "Friday at 10 30 a.m." → hour 10, minute 30',
+    parseTimeFromText('Friday at 10 30 a.m.'),
+    (v) => {
+      const t = v as { hour: number; minute: number } | null;
+      return t?.hour === 10 && t?.minute === 30;
+    },
+    '{ hour: 10, minute: 30 }',
+  );
+
+  assert(
+    'PT13 "3 45 pm" → hour 15, minute 45',
+    parseTimeFromText('3 45 pm'),
+    (v) => {
+      const t = v as { hour: number; minute: number } | null;
+      return t?.hour === 15 && t?.minute === 45;
+    },
+    '{ hour: 15, minute: 45 }',
+  );
+
+  // Pre-fix absolute matched "30 a.m." as hour 30. Space minutes + guard: no matchable
+  // absolute input yields hour > 23; invalid minutes hit the guard (null).
+  assert(
+    'PT14 absolute overflow shapes never return hour > 23',
+    {
+      spaceAm: parseTimeFromText('10 30 a.m.'),
+      fridaySpaceAm: parseTimeFromText('Friday at 10 30 a.m.'),
+      spacePm: parseTimeFromText('3 45 pm'),
+      invalidMinutes: parseTimeFromText('3 75 pm'),
+    },
+    (v) => {
+      const x = v as {
+        spaceAm: { hour: number; minute: number } | null;
+        fridaySpaceAm: { hour: number; minute: number } | null;
+        spacePm: { hour: number; minute: number } | null;
+        invalidMinutes: { hour: number; minute: number } | null;
+      };
+      const ok = (t: { hour: number; minute: number } | null) =>
+        t != null && t.hour >= 0 && t.hour <= 23 && t.minute >= 0 && t.minute <= 59;
+      return (
+        ok(x.spaceAm) &&
+        ok(x.fridaySpaceAm) &&
+        ok(x.spacePm) &&
+        x.invalidMinutes === null
+      );
+    },
+    'valid space+am/pm → hour≤23; "3 75 pm" → null (guard)',
+  );
+
   // PT9: appointment-called title frame + must not fall through to calendar_tomorrow read
   {
     const { setDB } = await import('../../src/db/schema.ts');
