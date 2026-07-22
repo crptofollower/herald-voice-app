@@ -1353,6 +1353,17 @@ export function composeAck(results: CommitResult[]): string {
   return settled;
 }
 
+// Law 5 (Spine §3a) fail-closed classification helper. A 'capture' decision
+// that reached this point without a registered writer is PERSONAL by
+// construction — it only exists because a personal-domain utterance missed
+// every deterministic net. Any exception encountered while further
+// classifying such an utterance must terminate locally, never reach the
+// network. An explicit live-data authorization (kind: 'backend') is
+// unaffected by this check.
+export function isUnresolvedPersonalCapture(decision: RouteDecision): boolean {
+  return decision.kind === 'capture';
+}
+
 export async function routeIntent(
   text: string,
   deps: {
