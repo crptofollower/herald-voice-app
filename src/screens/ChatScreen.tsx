@@ -74,7 +74,7 @@ import { parseTimeFromText } from '../utils/parseTime';
 import { detectFamilyRead, answerFamilyRead } from '../utils/familyRead';
 import { writeTurnObservation } from '../utils/personaContext';
 import { classifyQuery, scanResidualIntent } from "../routing/tierRouter";
-import { allConverted, mapCallIntents, resolveContactCallIntent } from '../routing/routeIntent';
+import { allConverted, mapCallIntents, resolveContactCallIntent, isUnresolvedPersonalCapture } from '../routing/routeIntent';
 import { writeCalendarCore, buildCalendarCollectSlot } from '../routing/calendarWrite';
 import { runCommitEffects } from '../utils/commitEffects';
 import { ConversationSession } from '../routing/conversationSession';
@@ -1190,6 +1190,12 @@ export default function ChatScreen() {
     const rdLocalContext =
       routeDecision.kind === 'memory_probe' ? routeDecision.context : undefined;
 
+    // Law 5 fail-closed fence (LLM_LIVE Build D, Spine §3a). True only when
+    // this utterance reached tier 3 via an unresolved PERSONAL capture (no
+    // registered writer) — never true for an explicit live-data
+    // authorization (routeDecision.kind === 'backend').
+    const isPersonalCaptureRisk = isUnresolvedPersonalCapture(routeDecision);
+
     // LLM capture — fallback classifier for the ambiguous tier-3 gap ONLY.
     if (llmStatus === 'ready' && rdTier === 3) {
       try {
@@ -1237,7 +1243,22 @@ export default function ChatScreen() {
           }
         }
       } catch {
-        // LLM failed — fall through to regex classifyQuery
+        // Law 5 fail-closed fence: an exception while reclassifying an
+        // unresolved PERSONAL capture must terminate locally — never fall
+        // through toward askHeraldStream. Explicit live-data authorizations
+        // (routeDecision.kind === 'backend') are unaffected and continue to
+        // the existing online/offline path below, unchanged.
+        if (isPersonalCaptureRisk) {
+          const reply = "I'm not sure I'm following you — can you help me understand?";
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+          speak(reply);
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+        // Not a personal capture (e.g. live-data authorization) — fall
+        // through to the existing online/offline path unchanged.
       }
     }
 
