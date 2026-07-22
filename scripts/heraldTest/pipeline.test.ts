@@ -8,9 +8,10 @@
 
 import Database from 'better-sqlite3';
 import { setDB } from '../../src/db/schema.ts';
-import { processUtterance } from '../../src/routing/processUtterance.ts';
+import { applyIntents, processUtterance } from '../../src/routing/processUtterance.ts';
 import { ConversationSession } from '../../src/routing/conversationSession.ts';
 import { classifyQuery } from '../../src/routing/tierRouter.ts';
+import { DOMAIN_WRITERS } from '../../src/routing/routeIntent.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
 
@@ -127,6 +128,213 @@ export async function runPipelineTests() {
     await say('Karen');
     assert('P3e E3 FIXED: bare-name correction commits Karen under the original relation', rows(), (v) => v.length === 1 && v[0].name === 'Karen' && v[0].relationship === 'wife', '1 row, Karen/wife');
   }
+
+  // ── P4: LLM confirm gate (Build C) — RED pins; feature not implemented yet ──
+  // Domain resume detects yes/no (CONFIRM_YES_RE); resolvePending only invokes resume.
+  {
+    const { session, rows } = freshPipeline();
+    let addCalls = 0;
+    let lastAddIntent = null;
+    const originalAdd = DOMAIN_WRITERS.family_capture.add.bind(DOMAIN_WRITERS.family_capture);
+    DOMAIN_WRITERS.family_capture.add = async (intent, rawPhrase, ctx) => {
+      addCalls += 1;
+      lastAddIntent = intent;
+      return originalAdd(intent, rawPhrase, ctx);
+    };
+    try {
+      const llmIntent = {
+        type: 'family_capture',
+        relation: 'wife',
+        name: 'Shannon',
+      };
+      const t1 = await applyIntents([llmIntent], 'my wife is Shannon', session, undefined, 'llm');
+      const c0 = t1.commits[0];
+      assert(
+        'P4a llm family_capture first turn is status:pending (LLM confirm gate)',
+        c0,
+        (v) => !!v && v.status === 'pending',
+        "status: 'pending'",
+      );
+      assert(
+        "P4b llm confirm prompt is exactly \"Say yes and I'll remember that.\"",
+        c0 && c0.status === 'pending' ? c0.prompt : null,
+        (v) => v === "Say yes and I'll remember that.",
+        "Say yes and I'll remember that.",
+      );
+      assert(
+        'P4c llm confirm CommitResult carries a resume closure',
+        c0 && c0.status === 'pending' ? typeof c0.resume : null,
+        (v) => v === 'function',
+        'function',
+      );
+      assert(
+        'P4d writer.add NOT called on first turn for source:llm',
+        addCalls,
+        (v) => v === 0,
+        '0 add calls',
+      );
+      assert(
+        'P4e nothing written to DB before LLM confirm yes',
+        rows().length,
+        (v) => v === 0,
+        '0 rows',
+      );
+
+      // Case 2: yes is detected inside the resume closure (CONFIRM_YES_RE),
+      // not by resolvePending itself — then writer.add runs once verbatim.
+      const callsBeforeYes = addCalls;
+      await session.resolvePending('yes');
+      assert(
+        'P4f yes on LLM confirm invokes writer.add exactly once',
+        { addCalls, delta: addCalls - callsBeforeYes },
+        (v) => v.addCalls === 1 && v.delta === 1,
+        'addCalls 0→1 on the yes turn',
+      );
+      assert(
+        'P4g writer.add received the original intent verbatim',
+        lastAddIntent,
+        (v) => !!v && v.type === 'family_capture' && v.name === 'Shannon' && v.relation === 'wife',
+        'family_capture Shannon/wife',
+      );
+      // family_capture.add itself returns a domain confirm pending — finish it.
+      if (session.hasPending()) {
+        await session.resolvePending('yes');
+      }
+      assert(
+        'P4h after confirm chain, Shannon/wife is committed',
+        rows(),
+        (v) => v.length === 1 && v[0].name === 'Shannon' && v[0].relationship === 'wife',
+        '1 row, Shannon/wife',
+      );
+    } finally {
+      DOMAIN_WRITERS.family_capture.add = originalAdd;
+    }
+  }
+
+  // Case 3: source:deterministic — unchanged from today's writer-first path.
+  {
+    const { session, rows } = freshPipeline();
+    let addCalls = 0;
+    const originalAdd = DOMAIN_WRITERS.family_capture.add.bind(DOMAIN_WRITERS.family_capture);
+    DOMAIN_WRITERS.family_capture.add = async (intent, rawPhrase, ctx) => {
+      addCalls += 1;
+      return originalAdd(intent, rawPhrase, ctx);
+    };
+    try {
+      const detIntent = {
+        type: 'family_capture',
+        relation: 'daughter',
+        name: 'Emma',
+      };
+      const t1 = await applyIntents([detIntent], 'my daughter is Emma', session, undefined, 'deterministic');
+      const c0 = t1.commits[0];
+      assert(
+        'P4i deterministic family_capture calls writer.add on first turn',
+        addCalls,
+        (v) => v === 1,
+        '1 add call',
+      );
+      assert(
+        'P4j deterministic keeps domain confirm — no LLM gate prompt',
+        c0,
+        (v) =>
+          !!v &&
+          v.status === 'pending' &&
+          typeof v.prompt === 'string' &&
+          v.prompt.includes('Emma') &&
+          v.prompt.includes('daughter') &&
+          v.prompt !== "Say yes and I'll remember that.",
+        'domain confirm naming Emma/daughter',
+      );
+      await session.resolvePending('yes');
+      assert(
+        'P4k deterministic yes commits Emma/daughter (no Build C gate)',
+        rows(),
+        (v) => v.length === 1 && v[0].name === 'Emma' && v[0].relationship === 'daughter',
+        '1 row, Emma/daughter',
+      );
+    } finally {
+      DOMAIN_WRITERS.family_capture.add = originalAdd;
+    }
+  }
+
+  // Case 4: source:llm for a type with NO registered writer — silently dropped.
+  {
+    const { session, rows } = freshPipeline();
+    const t1 = await applyIntents(
+      [{ type: 'pass' }],
+      'can you hear me',
+      session,
+      undefined,
+      'llm',
+    );
+    assert(
+      'P4l llm intent with no DOMAIN_WRITER is silently dropped (empty commits)',
+      { commits: t1.commits.length, pending: session.hasPending(), rows: rows().length },
+      (v) => v.commits === 0 && v.pending === false && v.rows === 0,
+      '0 commits, no pending, 0 rows',
+    );
+  }
+
+  // ── P5: ChatScreen:1214 source:'llm' — FEATURE pins (was DEFECT when source omitted) ──
+  // Fixed call site passes 'llm' explicitly; Build C gate must arm before writer.add.
+  {
+    const { session, rows } = freshPipeline();
+    let addCalls = 0;
+    const originalAdd = DOMAIN_WRITERS.family_capture.add.bind(DOMAIN_WRITERS.family_capture);
+    DOMAIN_WRITERS.family_capture.add = async (intent, rawPhrase, ctx) => {
+      addCalls += 1;
+      return originalAdd(intent, rawPhrase, ctx);
+    };
+    try {
+      // Fixed ChatScreen.tsx:1214 shape — source:'llm' required 5th arg.
+      const llmShapedIntent = {
+        type: 'family_capture',
+        relation: 'son',
+        name: 'Hunter',
+      };
+      const t1 = await applyIntents(
+        [llmShapedIntent],
+        'my son is Hunter',
+        session,
+        { resolveContact: undefined },
+        'llm',
+      );
+      const c0 = t1.commits[0];
+      assert(
+        'P5a FEATURE-PIN ChatScreen:1214 source:llm → writer.add NOT called on first turn',
+        addCalls,
+        (v) => v === 0,
+        '0 add calls (Build C gate armed)',
+      );
+      assert(
+        'P5b FEATURE-PIN source:llm → LLM confirm gate prompt',
+        c0,
+        (v) =>
+          !!v &&
+          v.status === 'pending' &&
+          v.prompt === "Say yes and I'll remember that.",
+        "Say yes and I'll remember that.",
+      );
+      assert(
+        'P5c FEATURE-PIN source:llm → nothing written before confirm yes',
+        rows().length,
+        (v) => v === 0,
+        '0 rows',
+      );
+    } finally {
+      DOMAIN_WRITERS.family_capture.add = originalAdd;
+    }
+  }
+
+  // P5d: REQUIRED-source compile pin — NOT CHECKABLE in this harness.
+  // source is now required (no default). run.mjs is tsx-only and never runs
+  // tsc, so @ts-expect-error on an omitted 5th arg is still not validated here:
+  //   // @ts-expect-error source is required — omit 5th arg must error
+  //   applyIntents([], 'x', new ConversationSession(), undefined);
+  console.log(
+    `${DIM}P5d SKIP  REQUIRED-source @ts-expect-error — harness is tsx runtime, no tsc${RESET}`,
+  );
 
   const total = passed + failures.length;
   console.log(`\n${BOLD}Pipeline: ${passed}/${total} passed${failures.length > 0 ? ` — ${RED}${failures.length} FAILED${RESET}` : ` — ${GREEN}all green${RESET}`}${RESET}\n`);
