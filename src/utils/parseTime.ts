@@ -42,15 +42,17 @@ export function parseTimeFromText(text: string): { hour: number; minute: number 
     return applySmartAmPm(h);
   };
 
-  // Known gap (pre-existing): space-separated minutes + spoken am/pm (e.g. "at 3 30 pm") still miss absolute.
-  // "7am", "7 am", "7:00am", "7:00 am", "7:30 pm"
-  const absolute = t.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
+  // "7am", "7 am", "7:00am", "7:00 am", "7:30 pm", "10 30 a.m."
+  const absolute = t.match(/\b(\d{1,2})(?:(?::|\s+)(\d{2}))?\s*(am|pm)\b/i);
   if (absolute) {
     let h = parseInt(absolute[1]);
     const m = parseInt(absolute[2] ?? '0');
     const period = absolute[3].toLowerCase();
     if (period === 'pm' && h !== 12) h += 12;
     if (period === 'am' && h === 12) h = 0;
+    if (h < 0 || h > 23 || m < 0 || m > 59) {
+      return null;
+    }
     return { hour: h, minute: m };
   }
 
