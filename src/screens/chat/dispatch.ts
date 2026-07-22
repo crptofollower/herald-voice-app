@@ -326,7 +326,7 @@ export async function dispatchAction(
           const { applyIntents } = await import('../../routing/processUtterance');
           const rawContact = actionIntent.contact ?? '';
           const callIntent = await resolveContactCallIntent(rawContact, text, { resolveContact: resolveContactPhone });
-          const { responseText, commits } = await applyIntents([callIntent], text, session);
+          const { responseText, commits } = await applyIntents([callIntent], text, session, undefined, 'deterministic');
           addMessage({ id: generateId('msg'), role: 'assistant', content: responseText, timestamp: Date.now() });
           speak(responseText);
           for (const c of commits) {

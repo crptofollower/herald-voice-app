@@ -1211,7 +1211,7 @@ export default function ChatScreen() {
         );
                 if (llmCaptures.length > 0) {
           if (allConverted(llmCaptures)) {
-            const { responseText, commits } = await applyIntents(llmCaptures, text, sessionRef.current, { resolveContact: resolveContactPhoneRef.current ?? undefined });
+            const { responseText, commits } = await applyIntents(llmCaptures, text, sessionRef.current, { resolveContact: resolveContactPhoneRef.current ?? undefined }, 'llm');
             addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
             addMessage({ id: generateId('msg'), role: 'assistant', content: responseText, timestamp: Date.now() });
             speak(responseText);
@@ -1309,6 +1309,8 @@ export default function ChatScreen() {
               [{ type: 'medical_capture', drug: guessedName, dosage: extractDosage(text), raw: text }],
               text,
               sessionRef.current,
+              undefined,
+              'deterministic',
             );
             addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
             addMessage({ id: generateId('msg'), role: 'assistant', content: responseText, timestamp: Date.now() });
@@ -1333,6 +1335,8 @@ export default function ChatScreen() {
               [{ type: 'medical_visit', raw: text }],
               text,
               sessionRef.current,
+              undefined,
+              'deterministic',
             );
             addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
             addMessage({ id: generateId('msg'), role: 'assistant', content: responseText, timestamp: Date.now() });
@@ -1472,7 +1476,7 @@ export default function ChatScreen() {
             );
                         if (results.length > 0) {
               if (allConverted(results)) {
-                const { responseText, commits } = await applyIntents(results, text, sessionRef.current);
+                const { responseText, commits } = await applyIntents(results, text, sessionRef.current, undefined, 'llm');
                 addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
                 addMessage({ id: generateId('msg'), role: 'assistant', content: responseText, timestamp: Date.now() });
                 speak(responseText);
@@ -1952,6 +1956,7 @@ export default function ChatScreen() {
               rawVal,
               sessionRef.current,
               { resolveContact: resolveContactPhone },
+              'deterministic',
             );
             addMessage({
               id: generateId("msg"),
