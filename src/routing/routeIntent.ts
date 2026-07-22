@@ -267,7 +267,12 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       let addedCount = 0;
       // Same transaction pattern as calendarCacheDB: BEGIN IMMEDIATE / COMMIT / ROLLBACK
       // so list creation + item inserts are atomic (no partial multi-item write).
-      db.execSync('BEGIN IMMEDIATE;');
+      try {
+        db.execSync('BEGIN IMMEDIATE;');
+      } catch (beginErr) {
+        console.error('[LIST_ADD_BEGIN_FAILED]', beginErr);
+        throw beginErr;
+      }
       try {
         if (!list) {
           const listId = `list_${Date.now()}`;
@@ -289,7 +294,8 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
           }
         }
         db.execSync('COMMIT;');
-      } catch {
+      } catch (err) {
+        console.error('[LIST_ADD_CATCH]', err);
         db.execSync('ROLLBACK;');
         return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
       }
