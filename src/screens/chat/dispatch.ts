@@ -397,6 +397,7 @@ export async function dispatchAction(
 
           const cleaned = raw
             .replace(/^(my\s+|the\s+|our\s+)/i, '')
+            .replace(/'s\s+(house|home|place|address)\s*$/i, '')
             .replace(/'s\s*$/i, '')
             .trim();
 

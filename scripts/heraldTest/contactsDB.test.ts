@@ -332,6 +332,88 @@ export async function runContactsDBTests() {
     );
   }
 
+  // ── T-NAV-CLEAN: destination possessives + location fillers (dispatch mirror) ─
+  // Same two replaces as navigation arm cleaned= — cannot import dispatch (RN).
+  const cleanNavDestination = (raw: string) =>
+    raw
+      .replace(/^(my\s+|the\s+|our\s+)/i, '')
+      .replace(/'s\s+(house|home|place|address)\s*$/i, '')
+      .replace(/'s\s*$/i, '')
+      .trim();
+
+  {
+    const db = freshDB();
+    insertContact(db, {
+      id: 'c_david', name: 'David Clevenger', phone: '5551112222',
+      address: '123 Oak St', importance: 9,
+    });
+    insertContact(db, {
+      id: 'c_shannon', name: 'Shannon', phone: '5553334444',
+      address: '456 Pine Ave', importance: 8,
+    });
+    insertContact(db, {
+      id: 'c_plumb', name: 'Joe', relationship: 'plumber', phone: '5559990000', importance: 5,
+    });
+
+    const idsFor = (q: string) => findAllContactMatches(q).map(c => c.id).sort();
+
+    assert(
+      "T-NAV-CLEAN-1 David's house → same matches as David",
+      { cleaned: cleanNavDestination("David's house"), ids: idsFor(cleanNavDestination("David's house")) },
+      v =>
+        typeof v === 'object' && v !== null &&
+        (v as { cleaned: string }).cleaned === 'David' &&
+        JSON.stringify((v as { ids: string[] }).ids) === JSON.stringify(idsFor('David')),
+      "cleaned 'David', ids match David",
+    );
+
+    assert(
+      "T-NAV-CLEAN-2 Shannon's place → same matches as Shannon",
+      { cleaned: cleanNavDestination("Shannon's place"), ids: idsFor(cleanNavDestination("Shannon's place")) },
+      v =>
+        typeof v === 'object' && v !== null &&
+        (v as { cleaned: string }).cleaned === 'Shannon' &&
+        JSON.stringify((v as { ids: string[] }).ids) === JSON.stringify(idsFor('Shannon')),
+      "cleaned 'Shannon', ids match Shannon",
+    );
+
+    assert(
+      "T-NAV-CLEAN-3 David's (no suffix) → still strips trailing 's",
+      { cleaned: cleanNavDestination("David's"), ids: idsFor(cleanNavDestination("David's")) },
+      v =>
+        typeof v === 'object' && v !== null &&
+        (v as { cleaned: string }).cleaned === 'David' &&
+        JSON.stringify((v as { ids: string[] }).ids) === JSON.stringify(idsFor('David')),
+      "cleaned 'David', ids match David",
+    );
+
+    assert(
+      "T-NAV-CLEAN-4 the plumber's address → strips to plumber",
+      {
+        cleaned: cleanNavDestination("the plumber's address"),
+        ids: idsFor(cleanNavDestination("the plumber's address")),
+      },
+      v =>
+        typeof v === 'object' && v !== null &&
+        (v as { cleaned: string }).cleaned === 'plumber' &&
+        JSON.stringify((v as { ids: string[] }).ids) === JSON.stringify(idsFor('plumber')),
+      "cleaned 'plumber', ids match plumber",
+    );
+
+    assert(
+      "T-NAV-CLEAN-5 my David's house → leading my + trailing 's house",
+      {
+        cleaned: cleanNavDestination("my David's house"),
+        ids: idsFor(cleanNavDestination("my David's house")),
+      },
+      v =>
+        typeof v === 'object' && v !== null &&
+        (v as { cleaned: string }).cleaned === 'David' &&
+        JSON.stringify((v as { ids: string[] }).ids) === JSON.stringify(idsFor('David')),
+      "cleaned 'David', ids match David",
+    );
+  }
+
   const total = passed + failures.length;
   console.log(`\n${BOLD}ContactsDB: ${passed}/${total} passed${failures.length > 0 ? ` — ${RED}${failures.length} FAILED${RESET}` : ` — ${GREEN}all green${RESET}`}${RESET}\n`);
   return { passed, failed: failures.length, total, failures };
