@@ -70,7 +70,9 @@ export async function resolveContactCallIntent(
   raw: string,
   deps: { resolveContact?: (n: string) => Promise<{phone:string;name:string;contactId?:string;source:'herald'|'device'}|{phone:null;name:string;source:'device';candidateNames:string[];deviceCandidates:{name:string;phone:string}[]}|null> },
 ): Promise<IntentRecord> {
-  const clean = contactName.trim().toLowerCase().replace(/^(?:my|the|a)\s+/, '');
+  const clean = contactName.trim().toLowerCase()
+    .replace(/[\u2018\u2019\u02BC\u0060]/g, "'")
+    .replace(/^(?:my|the|a)\s+/, '');
   const allMatches = findAllContactMatches(clean);
   let withPhone = allMatches.filter(c => !!c.phone?.trim());
 

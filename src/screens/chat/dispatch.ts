@@ -145,7 +145,9 @@ export async function dispatchAction(
           try {
             // Herald multi-match fence (same finder as resolveContactCallIntent) —
             // ask before silently picking importance DESC LIMIT 1 via resolveContactPhone.
-            const cleaned = contact.trim().toLowerCase().replace(/^(?:my|the|a)\s+/, '');
+            const cleaned = contact.trim().toLowerCase()
+              .replace(/[\u2018\u2019\u02BC\u0060]/g, "'")
+              .replace(/^(?:my|the|a)\s+/, '');
             const heraldWithPhone = findAllContactMatches(cleaned).filter(c => !!c.phone?.trim());
 
             if (heraldWithPhone.length > 1) {
@@ -396,6 +398,7 @@ export async function dispatchAction(
           const raw = actionIntent.destination;
 
           const cleaned = raw
+            .replace(/[\u2018\u2019\u02BC\u0060]/g, "'")
             .replace(/^(my\s+|the\s+|our\s+)/i, '')
             .replace(/'s\s+(house|home|place|address)\s*$/i, '')
             .replace(/'s\s*$/i, '')
