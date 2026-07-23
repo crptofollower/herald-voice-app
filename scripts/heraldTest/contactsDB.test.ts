@@ -54,13 +54,14 @@ function insertContact(
 ) {
   const now = new Date().toISOString();
   db.prepare(
-    `INSERT INTO contacts (id, name, relationship, phone, importance, created_at, updated_at, removed_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO contacts (id, name, relationship, phone, address, importance, created_at, updated_at, removed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     row.id,
     row.name,
     row.relationship ?? null,
     row.phone ?? null,
+    row.address ?? null,
     row.importance ?? 5,
     row.created_at ?? now,
     row.updated_at ?? now,
@@ -196,6 +197,139 @@ export async function runContactsDBTests() {
       result,
       v => v === false,
       'false');
+  }
+
+  // ── SMS / nav Herald multi-match branch predicates (dispatch.ts mirrors) ──
+  // dispatch cannot be imported here (RN). These pin the same pools the arms
+  // branch on: sms → findAllContactMatches.filter(phone); nav → unfiltered.
+  const smsHeraldPool = (q: string) =>
+    findAllContactMatches(q).filter(c => !!c.phone?.trim());
+  const navHeraldPool = (q: string) => findAllContactMatches(q);
+
+  // ── T-SMS-H1: multi-Herald-match asks ─────────────────────────────────────
+  {
+    const db = freshDB();
+    insertContact(db, { id: 'c_s1', name: 'Sarah Smith', phone: '5551112222', importance: 9 });
+    insertContact(db, { id: 'c_s2', name: 'Sarah Jones', phone: '5553334444', importance: 5 });
+    const pool = smsHeraldPool('Sarah');
+    assert(
+      'T-SMS-H1a two Sarahs both phoned → smsHeraldPool length > 1 (ask which one)',
+      pool.map(c => c.id),
+      v => Array.isArray(v) && v.length === 2 && v.includes('c_s1') && v.includes('c_s2'),
+      'length 2 both phoned',
+    );
+  }
+
+  // ── T-SMS-H2: single Herald match executes ────────────────────────────────
+  {
+    const db = freshDB();
+    insertContact(db, { id: 'c_only', name: 'Sarah Smith', phone: '5551112222', importance: 9 });
+    insertContact(db, { id: 'c_other', name: 'Mike Jones', phone: '5559998888', importance: 5 });
+    const pool = smsHeraldPool('Sarah');
+    assert(
+      'T-SMS-H2a one phoned Sarah → smsHeraldPool length === 1 (execute openURL)',
+      pool.map(c => c.id),
+      v => Array.isArray(v) && v.length === 1 && v[0] === 'c_only',
+      'length 1 c_only',
+    );
+  }
+
+  // ── T-SMS-H3: zero phoned Herald matches → fall through ───────────────────
+  {
+    const db = freshDB();
+    insertContact(db, { id: 'c_bare1', name: 'Sarah Smith', phone: null, importance: 9 });
+    insertContact(db, { id: 'c_bare2', name: 'Sarah Jones', phone: null, importance: 5 });
+    const nameHits = findAllContactMatches('Sarah');
+    const pool = smsHeraldPool('Sarah');
+    assert(
+      'T-SMS-H3a two Sarahs phoneless → smsHeraldPool length 0 (fall through resolveContactPhone)',
+      { nameHits: nameHits.length, phonePool: pool.length },
+      v =>
+        typeof v === 'object' && v !== null &&
+        (v as { nameHits: number }).nameHits === 2 &&
+        (v as { phonePool: number }).phonePool === 0,
+      'name hits 2, phone pool 0',
+    );
+  }
+
+  // ── T-NAV-H1: plain name collision (both addressed) → ask ─────────────────
+  {
+    const db = freshDB();
+    insertContact(db, {
+      id: 'c_s1', name: 'Sarah Smith', phone: '5551112222',
+      address: '123 Oak St', importance: 9,
+    });
+    insertContact(db, {
+      id: 'c_s2', name: 'Sarah Jones', phone: '5553334444',
+      address: '456 Pine Ave', importance: 5,
+    });
+    const pool = navHeraldPool('Sarah');
+    assert(
+      'T-NAV-H1a two Sarahs both addressed → navHeraldPool length > 1 (ask which one)',
+      pool.map(c => c.id),
+      v => Array.isArray(v) && v.length === 2 && v.includes('c_s1') && v.includes('c_s2'),
+      'length 2 plain collision',
+    );
+  }
+
+  // ── T-FACM-8: address completeness must NOT stand in for confirmation ─────
+  // Second nav multi-ask instance: only ONE has an address. Pool stays length 2.
+  {
+    const db = freshDB();
+    insertContact(db, {
+      id: 'c_sarah_addr', name: 'Sarah Smith', phone: '5551112222',
+      address: '123 Oak St', importance: 9,
+    });
+    insertContact(db, {
+      id: 'c_sarah_bare', name: 'Sarah Jones', phone: '5553334444',
+      address: null, importance: 5,
+    });
+    const matches = navHeraldPool('Sarah');
+    const addressedOnly = matches.filter(c => !!c.address?.trim());
+    assert(
+      'T-FACM-8a two Sarahs (one addressed) → unfiltered pool length 2 (nav must ask)',
+      {
+        pool: matches.map(c => c.id),
+        addressedTrap: addressedOnly.map(c => c.id),
+      },
+      v =>
+        typeof v === 'object' && v !== null &&
+        Array.isArray((v as { pool: string[] }).pool) &&
+        (v as { pool: string[] }).pool.length === 2 &&
+        (v as { pool: string[] }).pool.includes('c_sarah_addr') &&
+        (v as { pool: string[] }).pool.includes('c_sarah_bare') &&
+        (v as { addressedTrap: string[] }).addressedTrap.length === 1 &&
+        (v as { addressedTrap: string[] }).addressedTrap[0] === 'c_sarah_addr',
+      'pool both Sarahs; addressed-only trap is Sarah Smith alone',
+    );
+  }
+
+  // ── T-NAV-H2: single Herald match executes ────────────────────────────────
+  {
+    const db = freshDB();
+    insertContact(db, {
+      id: 'c_only', name: 'Sarah Smith', phone: '5551112222',
+      address: '123 Oak St', importance: 9,
+    });
+    const pool = navHeraldPool('Sarah');
+    assert(
+      'T-NAV-H2a one Sarah → navHeraldPool length === 1 (execute openOrCollectAddress)',
+      pool.map(c => c.id),
+      v => Array.isArray(v) && v.length === 1 && v[0] === 'c_only',
+      'length 1 c_only',
+    );
+  }
+
+  // ── T-NAV-H3: zero Herald matches → fall through ──────────────────────────
+  {
+    freshDB();
+    const pool = navHeraldPool('Sarah');
+    assert(
+      'T-NAV-H3a no Sarah rows → navHeraldPool length 0 (fall through relationship/name/raw)',
+      pool.length,
+      v => v === 0,
+      'length 0',
+    );
   }
 
   const total = passed + failures.length;

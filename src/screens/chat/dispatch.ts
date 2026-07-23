@@ -16,6 +16,7 @@ import type { ConversationSession } from '../../routing/conversationSession';
 import * as IntentLauncher from 'expo-intent-launcher';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getDB } from '../../db/schema';
+import { findAllContactMatches, findContactByName, findContactByRelationship } from '../../db/contactsDB';
 import { answerHouseholdRead } from '../../utils/householdRead';
 import { guessMedicationName, deactivateMedicationByName } from '../../db/medicalDB';
 import { isMedicationCorroborated } from '../../db/factDB';
@@ -142,6 +143,57 @@ export async function dispatchAction(
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
           let resolvedSms;
           try {
+            // Herald multi-match fence (same finder as resolveContactCallIntent) —
+            // ask before silently picking importance DESC LIMIT 1 via resolveContactPhone.
+            const cleaned = contact.trim().toLowerCase().replace(/^(?:my|the|a)\s+/, '');
+            const heraldWithPhone = findAllContactMatches(cleaned).filter(c => !!c.phone?.trim());
+
+            if (heraldWithPhone.length > 1) {
+              const smsCandidates = heraldWithPhone.map(c => ({ label: c.name, ref: c.id }));
+              const byId = new Map(heraldWithPhone.map(c => [c.id, c]));
+              const names = heraldWithPhone.map(c => c.name).join(', ');
+              const reply = `I found more than one ${contact} in your contacts — ${names}. Which one did you mean?`;
+              addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+              speak(reply);
+              session.setPending({
+                pendingKey: 'sms_disambiguate_herald',
+                kind: 'standard',
+                reaskPrompt: `I'm not sure I caught that — which one did you mean: ${names}?`,
+                resume: async (replyText: string): Promise<CommitResult> => {
+                  const match = matchCandidateToken(replyText, smsCandidates);
+                  if (match === 'ambiguous' || match === 'none') return { status: 'noop', ack: '' };
+                  const picked = byId.get(match.ref);
+                  if (!picked?.phone) {
+                    return { status: 'failed', ack: `I don't have a number for ${match.label}. What's their number?` };
+                  }
+                  const smsUrl = `sms:${picked.phone.replace(/\D/g, '')}${message ? `?body=${encodeURIComponent(message)}` : ''}`;
+                  try {
+                    await openURL(smsUrl);
+                    const okReply = message
+                      ? `Opening a message to ${picked.name} with your note ready.`
+                      : `Opening a message to ${picked.name}.`;
+                    return { status: 'committed', ack: okReply };
+                  } catch {
+                    return { status: 'failed', ack: `I couldn't open a message to ${picked.name} — try again.` };
+                  }
+                },
+              });
+              return;
+            }
+
+            if (heraldWithPhone.length === 1) {
+              const only = heraldWithPhone[0];
+              const smsUrl = `sms:${only.phone!.replace(/\D/g, '')}${message ? `?body=${encodeURIComponent(message)}` : ''}`;
+              await openURL(smsUrl);
+              const reply = message
+                ? `Opening a message to ${only.name} with your note ready.`
+                : `Opening a message to ${only.name}.`;
+              addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+              speak(reply);
+              return;
+            }
+
+            // heraldWithPhone.length === 0 — existing path unchanged (Herald miss / OS fallback).
             resolvedSms = await resolveContactPhone(contact);
             if (resolvedSms?.phone) {
               const smsUrl = `sms:${resolvedSms.phone.replace(/\D/g, '')}${message ? `?body=${encodeURIComponent(message)}` : ''}`;
@@ -340,7 +392,6 @@ export async function dispatchAction(
 
         // Navigation — resolve contact/address on device, fire maps intent (zero-tap)
         if (actionIntent.type === 'navigation') {
-          const { findContactByRelationship, findContactByName } = await import('../../db/contactsDB');
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
           const raw = actionIntent.destination;
 
@@ -349,6 +400,78 @@ export async function dispatchAction(
             .replace(/'s\s*$/i, '')
             .trim();
 
+          // Herald multi-match fence (same finder as resolveContactCallIntent / SMS) —
+          // ask before silently picking importance DESC LIMIT 1. Pool is NOT
+          // filtered by address — completeness must not stand in for confirmation.
+          const heraldMatches = findAllContactMatches(cleaned);
+
+          // Returns CommitResult so the multi-match resume path can reuse it.
+          // announce (default true): length===1 speaks here; resume passes
+          // announce:false so ChatScreen's pending_resume speak owns the ack.
+          const openOrCollectAddress = async (
+            contact: { name: string; address?: string | null },
+            opts?: { announce?: boolean },
+          ): Promise<CommitResult> => {
+            const announce = opts?.announce !== false;
+            if (contact.address) {
+              try {
+                await handleMapsAction(contact.address);
+                const reply = `Opening directions to ${contact.name}.`;
+                if (announce) {
+                  addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+                  speak(reply);
+                }
+                return { status: 'committed', ack: reply };
+              } catch {
+                const fail = `I couldn't open directions to ${contact.name} — try again.`;
+                if (announce) {
+                  addMessage({ id: generateId('msg'), role: 'assistant', content: fail, timestamp: Date.now() });
+                  speak(fail);
+                }
+                return { status: 'failed', ack: fail };
+              }
+            }
+            const reply = `I know ${contact.name} but I don't have an address for them. What's their address?`;
+            if (announce) {
+              addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+              speak(reply);
+            }
+            pendingContactCollectRef.current = { action: 'navigate', name: contact.name };
+            return { status: 'noop', ack: reply };
+          };
+
+          if (heraldMatches.length > 1) {
+            const navCandidates = heraldMatches.map(c => ({ label: c.name, ref: c.id }));
+            const byId = new Map(heraldMatches.map(c => [c.id, c]));
+            const names = heraldMatches.map(c => c.name).join(', ');
+            const reply = `I found more than one ${cleaned} in your contacts — ${names}. Which one did you mean?`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+            session.setPending({
+              pendingKey: 'navigate_disambiguate_herald',
+              kind: 'standard',
+              reaskPrompt: `I'm not sure I caught that — which one did you mean: ${names}?`,
+              resume: async (replyText: string): Promise<CommitResult> => {
+                const match = matchCandidateToken(replyText, navCandidates);
+                if (match === 'ambiguous' || match === 'none') return { status: 'noop', ack: '' };
+                const picked = byId.get(match.ref);
+                if (!picked) {
+                  return { status: 'failed', ack: `I couldn't find that contact — try again?` };
+                }
+                // Same path as length===1 (maps try/catch + collect); announce:false
+                // so pending_resume speaks the ack once.
+                return openOrCollectAddress(picked, { announce: false });
+              },
+            });
+            return;
+          }
+
+          if (heraldMatches.length === 1) {
+            await openOrCollectAddress(heraldMatches[0]);
+            return;
+          }
+
+          // heraldMatches.length === 0 — existing path unchanged (top-1 helpers / raw destination).
           const contact = findContactByRelationship(cleaned) ?? findContactByName(cleaned);
 
           if (contact?.address) {
