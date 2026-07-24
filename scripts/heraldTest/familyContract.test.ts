@@ -9,7 +9,7 @@ import Database from 'better-sqlite3';
 import { setDB } from '../../src/db/schema.ts';
 import { detectFamilyRead, answerFamilyRead } from '../../src/utils/familyRead.ts';
 import { detectFamilyCapture } from '../../src/utils/familyCapture.ts';
-import { writeContact } from '../../src/db/contactsDB.ts';
+import { writeContactRaw } from '../../src/db/contactsDB.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
 const SCHEMA_SQL = `
@@ -175,8 +175,8 @@ export async function runFamilyContractTests() {
   // ── Writer collision (BUG B — same name, two relationships) ──
   {
     freshDB();
-    writeContact({ name: 'Shannon', relationship: 'wife', importance: 7 });
-    writeContact({ name: 'Shannon', relationship: 'daughter', importance: 7 });
+    writeContactRaw({ name: 'Shannon', relationship: 'wife', importance: 7 });
+    writeContactRaw({ name: 'Shannon', relationship: 'daughter', importance: 7 });
     const wife = answerFamilyRead(detectFamilyRead('who is my wife')!);
     const daughter = answerFamilyRead(detectFamilyRead('who is my daughter')!);
     assert('W1 wife survives same-name daughter', wife, (v) => v.includes('Shannon'), 'wife still Shannon');
@@ -184,8 +184,8 @@ export async function runFamilyContractTests() {
   }
   {
     freshDB();
-    writeContact({ name: 'Shannon', relationship: 'wife', importance: 7 });
-    writeContact({ name: 'Shannon', relationship: 'wife', importance: 7 });
+    writeContactRaw({ name: 'Shannon', relationship: 'wife', importance: 7 });
+    writeContactRaw({ name: 'Shannon', relationship: 'wife', importance: 7 });
     const wife = answerFamilyRead(detectFamilyRead('who is my wife')!);
     assert('W3 same rel twice = no dup', (wife.match(/Shannon/g) || []).length, (v) => v === 1, 'count === 1');
   }
@@ -194,8 +194,8 @@ export async function runFamilyContractTests() {
   //    typeless overview; reader keyed on name alone, writer keys name+rel) ──
   {
     freshDB();
-    writeContact({ name: 'Shannon', relationship: 'wife', importance: 7 });
-    writeContact({ name: 'Shannon', relationship: 'daughter', importance: 7 });
+    writeContactRaw({ name: 'Shannon', relationship: 'wife', importance: 7 });
+    writeContactRaw({ name: 'Shannon', relationship: 'daughter', importance: 7 });
     const overview = answerFamilyRead(detectFamilyRead('tell me about my family')!);
     assert('F9a overview shows both relationships', overview,
       (v) => v.includes('wife') && v.includes('daughter'),

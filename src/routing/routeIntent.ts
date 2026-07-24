@@ -9,7 +9,7 @@ import { detectDiagnosisCapture, detectDoctorIntroCapture, detectMedicalEvent } 
 import { detectFamilyCapture } from '../utils/familyCapture';
 import { getDB } from '../db/schema';
 import { capturePerson } from '../db/capturePerson';
-import { findContactByName, findAllContactMatches, setEmergencyContact, getEmergencyContact, retireRelationshipHolder } from '../db/contactsDB';
+import { findContactByName, findAllContactMatches, setEmergencyContact, getEmergencyContact, retireRelationshipHolder, RELATIONSHIP_WORDS } from '../db/contactsDB';
 
 type ActionIntent = NonNullable<TierDecision['actionIntent']>;
 
@@ -38,8 +38,6 @@ export type CommitResult =
       resume: (userText: string) => Promise<CommitResult> }
   | { status: 'noop';      ack: string }
   | { status: 'failed';    ack: string };
-
-const RELATIONSHIP_WORDS = /^(wife|husband|son|daughter|mom|dad|father(?:-in-law)?|mother(?:-in-law)?|brother|sister)$/i;
 
 export type ResolveContactFn = (n: string) => Promise<{phone:string;name:string;contactId?:string;source:'herald'|'device'}|{phone:null;name:string;source:'device';candidateNames:string[];deviceCandidates:{name:string;phone:string}[]}|null>;
 
@@ -1092,17 +1090,24 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
           resume: async (reply: string): Promise<CommitResult> => {
             const phone = extractPhone10(reply);
             if (phone) {
-              capturePerson({ name: contactLabel, phone, importance: 7 });
-              return commitDial(contactLabel, phone);
+              const writeResult = capturePerson({ name: contactLabel, phone, importance: 7 });
+              return commitDial(
+                contactLabel,
+                phone,
+                writeResult.ok
+                  ? undefined
+                  : `Calling your ${contactLabel} now. Tell me their name sometime and I'll remember them for next time.`,
+              );
             }
             const named = findAllContactMatches(reply).filter(c => !!c.phone?.trim());
             if (named.length === 1) {
               const match = named[0];
               if (RELATIONSHIP_WORDS.test(contactLabel.trim())) {
                 retireRelationshipHolder(contactLabel, match.name);
-                capturePerson({ name: match.name, relationship: contactLabel, phone: match.phone, importance: 7 });
+                capturePerson({ name: match.name, relationship: contactLabel, phone: match.phone!, importance: 7 });
+                return commitDial(match.name, match.phone!);
               }
-              return commitDial(match.name, match.phone);
+              return commitDial(match.name, match.phone!);
             }
             // Herald doesn't know this name yet — try the OS contact book,
             // the same fallback resolveContactCallIntent already uses at
@@ -1114,6 +1119,7 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
                 if (RELATIONSHIP_WORDS.test(contactLabel.trim())) {
                   retireRelationshipHolder(contactLabel, device.name);
                   capturePerson({ name: device.name, relationship: contactLabel, phone: device.phone, importance: 7 });
+                  return commitDial(device.name, device.phone);
                 }
                 return commitDial(device.name, device.phone);
               }
@@ -1136,6 +1142,7 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
                     if (RELATIONSHIP_WORDS.test(contactLabel.trim())) {
                       retireRelationshipHolder(contactLabel, matched.name);
                       capturePerson({ name: matched.name, relationship: contactLabel, phone: matched.phone, importance: 7 });
+                      return commitDial(matched.name, matched.phone);
                     }
                     return commitDial(matched.name, matched.phone);
                   },
@@ -1182,8 +1189,14 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
             resume: async (reply: string): Promise<CommitResult> => {
               const phone = extractPhone10(reply);
               if (phone) {
-                capturePerson({ name: contactLabel, phone, importance: 7 });
-                return commitDial(contactLabel, phone);
+                const writeResult = capturePerson({ name: contactLabel, phone, importance: 7 });
+                return commitDial(
+                  contactLabel,
+                  phone,
+                  writeResult.ok
+                    ? undefined
+                    : `Calling your ${contactLabel} now. Tell me their name sometime and I'll remember them for next time.`,
+                );
               }
               const matched = matchCandidate(reply, list, contactLabel);
               if (matched) {
@@ -1200,6 +1213,7 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
                   // §4a permits; writeContact's own identity-key logic stays untouched.
                   retireRelationshipHolder(contactLabel, matched.name);
                   capturePerson({ name: matched.name, relationship: contactLabel, phone: matched.phone, importance: 7 });
+                  return commitDial(matched.name, matched.phone);
                 }
                 return commitDial(matched.name, matched.phone);
               }
@@ -1213,6 +1227,7 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
                 if (RELATIONSHIP_WORDS.test(contactLabel.trim())) {
                   retireRelationshipHolder(contactLabel, fresh.name);
                   capturePerson({ name: fresh.name, relationship: contactLabel, phone: fresh.phone, importance: 7 });
+                  return commitDial(fresh.name, fresh.phone);
                 }
                 return commitDial(fresh.name, fresh.phone);
               }
@@ -1222,6 +1237,7 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
                   if (RELATIONSHIP_WORDS.test(contactLabel.trim())) {
                     retireRelationshipHolder(contactLabel, device.name);
                     capturePerson({ name: device.name, relationship: contactLabel, phone: device.phone, importance: 7 });
+                    return commitDial(device.name, device.phone);
                   }
                   return commitDial(device.name, device.phone);
                 }
@@ -1244,6 +1260,7 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
                       if (RELATIONSHIP_WORDS.test(contactLabel.trim())) {
                         retireRelationshipHolder(contactLabel, matchedOs.name);
                         capturePerson({ name: matchedOs.name, relationship: contactLabel, phone: matchedOs.phone, importance: 7 });
+                        return commitDial(matchedOs.name, matchedOs.phone);
                       }
                       return commitDial(matchedOs.name, matchedOs.phone);
                     },

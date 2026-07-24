@@ -6,7 +6,7 @@
 
 import Database from 'better-sqlite3';
 import { setDB } from '../../src/db/schema.ts';
-import { findAllContactMatches, nameMatchesQuery, isPersonalDestination, isRelationshipTerm, writeContact, findContactByName } from '../../src/db/contactsDB.ts';
+import { findAllContactMatches, nameMatchesQuery, isPersonalDestination, isRelationshipTerm, writeContactRaw, writeContactValidated, stripRelationshipLead, findContactByName } from '../../src/db/contactsDB.ts';
 import type { Contact } from '../../src/db/contactsDB.ts';
 
 const BOLD='\x1b[1m',RED='\x1b[31m',GREEN='\x1b[32m',DIM='\x1b[2m',RESET='\x1b[0m';
@@ -467,7 +467,7 @@ export async function runContactsDBTests() {
       phone: '5551112222', importance: 7,
     });
 
-    writeContact({ name: 'Shannon', address: '7112 Lancaster Ln', importance: 6 });
+    writeContactRaw({ name: 'Shannon', address: '7112 Lancaster Ln', importance: 6 });
     const afterAddr = findContactByName('Shannon');
 
     assert('T-WC-1 address written to an EXISTING contact is readable back',
@@ -485,11 +485,56 @@ export async function runContactsDBTests() {
       v => v === 'wife',
       "'wife'");
 
-    writeContact({ name: 'Shannon', phone: '5559998888', importance: 6 });
+    writeContactRaw({ name: 'Shannon', phone: '5559998888', importance: 6 });
     assert('T-WC-4 phone written to an EXISTING contact is readable back',
       findContactByName('Shannon')?.phone,
       v => v === '5559998888',
       "'5559998888'");
+  }
+
+  // ── T-SRL: stripRelationshipLead + writeContactValidated clean-name path ──
+  {
+    assert('T-SRL-1 stripRelationshipLead(wife Shannon) → Shannon',
+      stripRelationshipLead('wife Shannon'),
+      v => v === 'Shannon',
+      "'Shannon'");
+    assert('T-SRL-2 stripRelationshipLead(my Hunter) → Hunter',
+      stripRelationshipLead('my Hunter'),
+      v => v === 'Hunter',
+      "'Hunter'");
+    assert('T-SRL-3 stripRelationshipLead(my) → empty',
+      stripRelationshipLead('my'),
+      v => v === '',
+      "''");
+    assert('T-SRL-4 stripRelationshipLead(wife) → empty',
+      stripRelationshipLead('wife'),
+      v => v === '',
+      "''");
+    assert('T-SRL-5 stripRelationshipLead(Shannon) unchanged',
+      stripRelationshipLead('Shannon'),
+      v => v === 'Shannon',
+      "'Shannon'");
+    assert('T-SRL-6 stripRelationshipLead(Dr. Smith) unchanged',
+      stripRelationshipLead('Dr. Smith'),
+      v => v === 'Dr. Smith',
+      "'Dr. Smith'");
+
+    freshDB();
+    const wifeShannon = writeContactValidated({ name: 'wife Shannon', importance: 6 });
+    assert('T-SRL-7 writeContactValidated(wife Shannon) stores clean Shannon',
+      { ok: wifeShannon.ok, row: findContactByName('Shannon')?.name },
+      v => typeof v === 'object' && v !== null
+        && (v as { ok: boolean; row?: string }).ok === true
+        && (v as { ok: boolean; row?: string }).row === 'Shannon',
+      "{ ok: true, row: 'Shannon' }");
+
+    const bareMy = writeContactValidated({ name: 'my', importance: 6 });
+    assert("T-SRL-8 writeContactValidated(my) → missing_identity",
+      bareMy,
+      v => typeof v === 'object' && v !== null
+        && (v as { ok: boolean; reason?: string }).ok === false
+        && (v as { ok: boolean; reason?: string }).reason === 'missing_identity',
+      "{ ok: false, reason: 'missing_identity' }");
   }
 
   const total = passed + failures.length;

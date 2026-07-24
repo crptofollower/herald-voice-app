@@ -36,24 +36,31 @@ export interface Contact {
   updated_at: string;
 }
 
-// ─── writeContact ─────────────────────────────────────────────────────────────
-//
-// Upsert by name (case-insensitive). If a contact with the same name exists,
-// updates fields rather than creating a duplicate.
+export const RELATIONSHIP_WORDS =
+  /^(?:my |our |his |her |their )?(wife|husband|son|daughter|mom|dad|father(?:-in-law)?|mother(?:-in-law)?|brother|sister)$/i;
 
-export function writeContact(
+export function stripRelationshipLead(rawName: string): string {
+  let t = rawName.trim();
+  t = t.replace(/^(my|our|his|her|their|the|a)(?:\s+|$)/i, '').trim();
+  t = t.replace(/^(wife|husband|son|daughter|mom|dad|father(?:-in-law)?|mother(?:-in-law)?|brother|sister)(?:\s+|$)/i, '').trim();
+  return t;
+}
+
+const BLANK_OR_PUNCTUATION_ONLY = /^[\s.,!?'"-]*$/;
+
+const BAD_NAME = /^(unknown|none|null|n\/a|n\.a\.|someone|somebody)$/i;
+
+export type ContactWriteResult =
+  | { ok: true; action: 'inserted' | 'updated'; contactId: string }
+  | { ok: false; reason: 'invalid_name' | 'relationship_only' | 'missing_identity' | 'no_rows_updated' | 'db_error' };
+
+export function writeContactRaw(
   contact: Omit<Contact, "id" | "created_at" | "updated_at">
 ): string {
   const db = getDB();
   const now = new Date().toISOString();
 
   try {
-    // Identity key is (name, relationship) — NOT name alone. Two real people can
-    // share a name (a daughter named after her mother), and one person is never
-    // silently reassigned from one relationship to another (BUG B). A
-    // relationship-bearing write matches only a row with the SAME relationship;
-    // a relationship-less write (phone/emergency caching) falls back to name-only
-    // so reachability updates still land on the existing person.
     const rel = contact.relationship?.trim().toLowerCase() || null;
     const existing = rel
       ? db.getFirstSync<{ id: string }>(
@@ -66,7 +73,6 @@ export function writeContact(
         );
 
     if (existing) {
-      // Update fields that are provided — don't overwrite with nulls
       db.runSync(
         `UPDATE contacts SET
            relationship  = relationship,
@@ -80,15 +86,9 @@ export function writeContact(
            updated_at    = ?
          WHERE id = ?;`,
         [
-          contact.phone ?? null,
-          contact.address ?? null,
-          contact.email ?? null,
-          contact.birthday ?? null,
-          contact.importance ?? 5,
-          contact.notes ?? null,
-          contact.is_emergency ?? null,
-          now,
-          existing.id,
+          contact.phone ?? null, contact.address ?? null, contact.email ?? null,
+          contact.birthday ?? null, contact.importance ?? 5, contact.notes ?? null,
+          contact.is_emergency ?? null, now, existing.id,
         ]
       );
       return existing.id;
@@ -101,28 +101,105 @@ export function writeContact(
           entity_id, os_contact_id, notes, is_emergency, last_contact, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
       [
-        id,
-        contact.name.trim(),
-        contact.relationship ?? null,
-        contact.phone ?? null,
-        contact.address ?? null,
-        contact.email ?? null,
-        contact.birthday ?? null,
-        contact.importance ?? 5,
-        contact.entity_id ?? null,
-        contact.os_contact_id ?? null,
-        contact.notes ?? null,
-        contact.is_emergency ?? 0,
-        contact.last_contact ?? null,
-        now,
-        now,
+        id, contact.name.trim(), contact.relationship ?? null, contact.phone ?? null,
+        contact.address ?? null, contact.email ?? null, contact.birthday ?? null,
+        contact.importance ?? 5, contact.entity_id ?? null, contact.os_contact_id ?? null,
+        contact.notes ?? null, contact.is_emergency ?? 0, contact.last_contact ?? null,
+        now, now,
       ]
     );
     return id;
   } catch {
-    // contacts table not yet available (pre-V3) — return placeholder
     return "";
   }
+}
+
+export function writeContactValidated(
+  contact: Omit<Contact, "id" | "created_at" | "updated_at">
+): ContactWriteResult {
+  const name = stripRelationshipLead((contact.name ?? '').trim());
+
+  if (!name || name.length < 2 || BLANK_OR_PUNCTUATION_ONLY.test(name)) {
+    return { ok: false, reason: 'missing_identity' };
+  }
+  if (BAD_NAME.test(name)) {
+    return { ok: false, reason: 'invalid_name' };
+  }
+  if (RELATIONSHIP_WORDS.test(name)) {
+    return { ok: false, reason: 'relationship_only' };
+  }
+
+  const db = getDB();
+  const now = new Date().toISOString();
+
+  try {
+    const rel = contact.relationship?.trim().toLowerCase() || null;
+    const existing = rel
+      ? db.getFirstSync<{ id: string }>(
+          "SELECT id FROM contacts WHERE LOWER(name) = ? AND LOWER(relationship) = ? AND removed_at IS NULL LIMIT 1;",
+          [name.toLowerCase(), rel]
+        )
+      : db.getFirstSync<{ id: string }>(
+          "SELECT id FROM contacts WHERE LOWER(name) = ? AND removed_at IS NULL LIMIT 1;",
+          [name.toLowerCase()]
+        );
+
+    if (existing) {
+      const result = db.runSync(
+        `UPDATE contacts SET
+           relationship  = relationship,
+           phone         = COALESCE(?, phone),
+           address       = COALESCE(?, address),
+           email         = COALESCE(?, email),
+           birthday      = COALESCE(?, birthday),
+           importance    = MAX(importance, ?),
+           notes         = COALESCE(?, notes),
+           is_emergency  = COALESCE(?, is_emergency),
+           updated_at    = ?
+         WHERE id = ?;`,
+        [
+          contact.phone ?? null, contact.address ?? null, contact.email ?? null,
+          contact.birthday ?? null, contact.importance ?? 5, contact.notes ?? null,
+          contact.is_emergency ?? null, now, existing.id,
+        ]
+      );
+      if (result.changes === 0) {
+        return { ok: false, reason: 'no_rows_updated' };
+      }
+      return { ok: true, action: 'updated', contactId: existing.id };
+    }
+
+    const id = `c_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    db.runSync(
+      `INSERT INTO contacts
+         (id, name, relationship, phone, address, email, birthday, importance,
+          entity_id, os_contact_id, notes, is_emergency, last_contact, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+      [
+        id, name, contact.relationship ?? null, contact.phone ?? null,
+        contact.address ?? null, contact.email ?? null, contact.birthday ?? null,
+        contact.importance ?? 5, contact.entity_id ?? null, contact.os_contact_id ?? null,
+        contact.notes ?? null, contact.is_emergency ?? 0, contact.last_contact ?? null,
+        now, now,
+      ]
+    );
+    return { ok: true, action: 'inserted', contactId: id };
+  } catch {
+    return { ok: false, reason: 'db_error' };
+  }
+}
+
+export function resolveRelationshipOrNull(rawLabel: string): Contact | null {
+  const trimmed = rawLabel.trim();
+  if (!RELATIONSHIP_WORDS.test(trimmed)) return null;
+  const bare = trimmed.replace(/^(my|our|his|her|their)\s+/i, '');
+  return findContactByRelationship(bare);
+}
+
+const ADDRESS_PREFIX_STRIP = /^\s*(it'?s|it is|that'?s|that is|the address is|my address is|address is)\s*[:,-]?\s*/i;
+
+export function normalizeAddressInput(raw: string): string {
+  return raw.trim().replace(/[.!?]+$/, '').replace(ADDRESS_PREFIX_STRIP, '').trim();
 }
 
 // ─── findContactByRelationship ────────────────────────────────────────────────
@@ -361,7 +438,7 @@ export function extractContactFromFact(fact: string): void {
   }
 
   if (name && name.length >= 2 && name.length <= 30) {
-    writeContact({
+    writeContactValidated({
       name,
       relationship: relationship ?? undefined,
       importance: relationship ? 7 : 5,
@@ -376,7 +453,7 @@ export function extractContactFromFact(fact: string): void {
 export function importContacts(contacts: Partial<Contact>[]): void {
   for (const c of contacts) {
     if (c.name) {
-      writeContact({
+      writeContactRaw({
         name: c.name,
         relationship: c.relationship,
         phone: c.phone,
@@ -491,7 +568,7 @@ export function setEmergencyContact(name: string, phone?: string): void {
       db.runSync("UPDATE contacts SET is_emergency = 1, updated_at = ? WHERE id = ?;", [now, existing.id]);
       if (phone) db.runSync("UPDATE contacts SET phone = COALESCE(?, phone), updated_at = ? WHERE id = ?;", [phone, now, existing.id]);
     } else {
-      writeContact({ name, phone, importance: 10, is_emergency: 1 });
+      writeContactValidated({ name, phone, importance: 10, is_emergency: 1 });
     }
   } catch {}
 }
@@ -559,7 +636,7 @@ export async function resolvePhoneNumber(
     if (!phone) return null;
 
     // Write to Herald contacts so next lookup is instant
-    writeContact({
+    writeContactRaw({
       name: best.name ?? input,
       phone,
       importance: 5,

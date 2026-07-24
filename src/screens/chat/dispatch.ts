@@ -16,7 +16,7 @@ import type { ConversationSession } from '../../routing/conversationSession';
 import * as IntentLauncher from 'expo-intent-launcher';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getDB } from '../../db/schema';
-import { findAllContactMatches, findContactByName, findContactByRelationship, isPersonalDestination, isRelationshipTerm } from '../../db/contactsDB';
+import { findAllContactMatches, findContactByName, findContactByRelationship, isPersonalDestination, isRelationshipTerm, resolveRelationshipOrNull, RELATIONSHIP_WORDS } from '../../db/contactsDB';
 import { answerHouseholdRead } from '../../utils/householdRead';
 import { guessMedicationName, deactivateMedicationByName } from '../../db/medicalDB';
 import { isMedicationCorroborated } from '../../db/factDB';
@@ -238,10 +238,20 @@ export async function dispatchAction(
                 },
               });
             } else {
-              const reply = `I don't have a number for ${contact}. What's their number?`;
+              const relationshipMatch = resolveRelationshipOrNull(contact);
+              const isRelationshipWord = RELATIONSHIP_WORDS.test(contact.trim());
+              if (isRelationshipWord && !relationshipMatch) {
+                const bare = contact.trim().replace(/^(my|our|his|her|their)\s+/i, '');
+                const reply = `I don't know who your ${bare} is yet. Tell me their name and I'll remember them.`;
+                addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+                speak(reply);
+                return;
+              }
+              const resolvedName = relationshipMatch?.name ?? contact;
+              const reply = `I don't have a number for ${resolvedName}. What's their number?`;
               addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
               speak(reply);
-              pendingContactCollectRef.current = { action: 'text', name: contact, body: message };
+              pendingContactCollectRef.current = { action: 'text', name: resolvedName, body: message };
             }
           } catch (err) {
             console.error('[dispatch sms] openURL failed', resolvedSms?.phone, err);

@@ -559,20 +559,27 @@ export async function runContactCallTests() {
       'dial 2145553434');
   }
 
-  // ── T-CT-18: bare phone number reply commits directly ─────────────────────
+  // ── T-CT-18: bare phone on relationship-label collect — dial, do not store ─
   {
     const db = freshDB();
     const pending = await addPending(filBridgeIntent());
     const before = contactCount(db);
     const result = await pending.resume('214 555 9999');
     const after = contactCount(db);
-    assert('T-CT-18 bare phone reply → row written + committed dial effect',
-      { result, before, after, phone: dialPhone(result) },
+    const byName = findContactByName('father-in-law');
+    const byRel = findContactByRelationship('father-in-law');
+    assert('T-CT-18 bare phone reply → dial commits, no relationship-as-name row, warm ack',
+      { result, before, after, phone: dialPhone(result), byName, byRel },
       v => v.before === 0
-        && v.after === 1
+        && v.after === 0
         && v.result.status === 'committed'
-        && v.phone === '2145559999',
-      'row count 0→1, committed, dial phone 2145559999');
+        && v.phone === '2145559999'
+        && v.byName == null
+        && v.byRel == null
+        && typeof (v.result as { ack?: string }).ack === 'string'
+        && /Tell me their name sometime/i.test((v.result as { ack: string }).ack)
+        && !/couldn't hold onto/i.test((v.result as { ack: string }).ack),
+      "committed dial, no FIL row, warm invitation ack");
   }
 
   // ── T-CT-19: natural-sentence correction on relationship-evidence path ────

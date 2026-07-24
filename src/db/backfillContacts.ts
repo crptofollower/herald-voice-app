@@ -21,7 +21,7 @@
 
 import { getDB } from './schema';
 import { getFactsByCategory } from './factDB';
-import { writeContact } from './contactsDB';
+import { writeContactRaw } from './contactsDB';
 
 const BACKFILL_FLAG = 'contacts_backfill_v1_done';
 
@@ -59,7 +59,7 @@ export function backfillContactsFromFacts(): { written: number; skipped: number;
       if (!name || name.length < 2 || BAD_NAME.test(name)) { skipped++; continue; }
       // Reachability + identity row. Mirrors capturePerson's contact write, minus the
       // relationship fact (the fact already exists — that's what we're reading).
-      const id = writeContact({
+      const id = writeContactRaw({
         name,
         relationship: relation,
         importance: 7,

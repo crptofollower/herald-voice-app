@@ -89,7 +89,7 @@ import { initDB, isDBReady } from "../db/useDeviceDB";
 import { getDB } from "../db/schema";
 import { setProfileField, setProfileFields } from "../db/profileDB";
 import {
-  writeContact,
+  writeContactValidated,
   resolvePhoneNumber,
   updateLastContact,
   extractContactFromFact,
@@ -98,6 +98,7 @@ import {
   getEmergencyContact,
   setEmergencyContact,
   nameMatchesQuery,
+  normalizeAddressInput,
 } from "../db/contactsDB";
 import { writeMedicalFact, writeMedicalRecord, writeMedication, writeMedicalContact, guessMedicationName, confirmMedicationCapture, deactivateMedicationByName } from "../db/medicalDB";
 import { extractDosage } from "../utils/detectMedicalEvent";
@@ -970,8 +971,10 @@ export default function ChatScreen() {
             const existing = findContactByRelationship(pending.name) ?? findContactByName(pending.name);
             // Reachability only — no relationship passed (avoids fabricating
             // "name is my name"; COALESCE keeps any real relationship). [Spine §4a]
-            capturePerson({ name: existing?.name ?? pending.name, phone: reCheck.normalized, importance: existing?.importance ?? 7 });
-            const reply = `Perfect — I've got ${pending.name}'s number as ${reCheck.spoken}.`;
+            const writeResult = capturePerson({ name: existing?.name ?? pending.name, phone: reCheck.normalized, importance: existing?.importance ?? 7 });
+            const reply = writeResult.ok
+              ? `Perfect — I've got ${pending.name}'s number as ${reCheck.spoken}.`
+              : `I couldn't hold onto that number just now — mind saying ${pending.name}'s number once more?`;
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
           } catch {
@@ -997,10 +1000,14 @@ export default function ChatScreen() {
         const isNo = /^\s*(no|nope|cancel|never mind|nevermind|don't|dont|stop)\b/i.test(text.trim());
         if (isYes) {
           pendingContactCollectRef.current = null;
+          // Persistence — best-effort, isolated so it can NEVER block the dial.
+          // (§5: action authority is separate from persistence authority.)
+          // writeContactValidated does not throw today; isolate anyway so a
+          // future change can't couple the two. 911 skips the write entirely.
+          if (pending.phone !== '911') {
+            try { writeContactValidated({ name: pending.name, phone: pending.phone!, importance: 5 }); } catch {}
+          }
           try {
-            if (pending.phone !== '911') {
-              writeContact({ name: pending.name, phone: pending.phone!, importance: 5 });
-            }
             await Linking.openURL(`tel:${pending.phone!.replace(/\D/g, '')}`);
             const reply = `Calling ${pending.name}.`;
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
@@ -1033,9 +1040,13 @@ export default function ChatScreen() {
           const { capturePerson } = await import('../db/capturePerson');
           const existing = findContactByRelationship(pending.name) ?? findContactByName(pending.name);
           // Reachability only — no relationship passed. [Spine §4a]
-          capturePerson({ name: existing?.name ?? pending.name, phone, importance: existing?.importance ?? 7 });
+          // No live arming site sets action:'call' (only confirm_call / navigate / text) —
+          // likely unreachable; minimal ACK-gate only.
+          const writeResult = capturePerson({ name: existing?.name ?? pending.name, phone, importance: existing?.importance ?? 7 });
           await Linking.openURL(`tel:${phone}`);
-          const reply = `Got it — calling ${pending.name} now.`;
+          const reply = writeResult.ok
+            ? `Got it — calling ${pending.name} now.`
+            : `Calling ${pending.name} — I couldn't hold onto that number for next time.`;
           addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
           speak(reply);
         } catch {
@@ -1053,16 +1064,18 @@ export default function ChatScreen() {
       // "123 Oak" or "4500 Main" without a spelled-out suffix.
       const isLikelyAddressLoose = /\d/.test(text) && text.trim().length > 5;
       if (pending.action === 'navigate' && isLikelyAddressLoose) {
-        const address = text.trim().replace(/[.!?]+$/, '');
+        const address = normalizeAddressInput(text);
         addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
         pendingContactCollectRef.current = null;
         try {
           const { capturePerson } = await import('../db/capturePerson');
           const existing = findContactByRelationship(pending.name) ?? findContactByName(pending.name);
           // Reachability only — no relationship passed. [Spine §4a]
-          capturePerson({ name: existing?.name ?? pending.name, address, importance: existing?.importance ?? 6 });
+          const writeResult = capturePerson({ name: existing?.name ?? pending.name, address, importance: existing?.importance ?? 6 });
           await handleMapsAction(address);
-          const reply = `Got it — opening directions to ${pending.name}.`;
+          const reply = writeResult.ok
+            ? `Got it — opening directions to ${pending.name}.`
+            : `Opening directions to ${pending.name} — I couldn't save that address for next time, so I'll need it again later.`;
           addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
           speak(reply);
         } catch {
@@ -1083,14 +1096,16 @@ export default function ChatScreen() {
           const { capturePerson } = await import('../db/capturePerson');
           const existing = findContactByRelationship(pending.name) ?? findContactByName(pending.name);
           // Reachability only — no relationship passed. [Spine §4a]
-          capturePerson({ name: existing?.name ?? pending.name, phone, importance: existing?.importance ?? 7 });
+          const writeResult = capturePerson({ name: existing?.name ?? pending.name, phone, importance: existing?.importance ?? 7 });
           const smsUrl = pending.body
             ? `sms:${phone}?body=${encodeURIComponent(pending.body)}`
             : `sms:${phone}`;
           await Linking.openURL(smsUrl);
-          const reply = pending.body
-            ? `Got it — opening a message to ${pending.name} with your note ready.`
-            : `Got it — opening a message to ${pending.name}.`;
+          const reply = writeResult.ok
+            ? (pending.body
+              ? `Got it — opening a message to ${pending.name} with your note ready.`
+              : `Got it — opening a message to ${pending.name}.`)
+            : `Opening a message to ${pending.name} — I couldn't hold onto that number for next time.`;
           addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
           speak(reply);
         } catch {
