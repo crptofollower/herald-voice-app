@@ -16,7 +16,7 @@ import type { ConversationSession } from '../../routing/conversationSession';
 import * as IntentLauncher from 'expo-intent-launcher';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getDB } from '../../db/schema';
-import { findAllContactMatches, findContactByName, findContactByRelationship } from '../../db/contactsDB';
+import { findAllContactMatches, findContactByName, findContactByRelationship, isPersonalDestination, isRelationshipTerm } from '../../db/contactsDB';
 import { answerHouseholdRead } from '../../utils/householdRead';
 import { guessMedicationName, deactivateMedicationByName } from '../../db/medicalDB';
 import { isMedicationCorroborated } from '../../db/factDB';
@@ -488,6 +488,16 @@ export async function dispatchAction(
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
             pendingContactCollectRef.current = { action: 'navigate', name: contact.name };
+          } else if (isPersonalDestination(raw, cleaned)) {
+            // Unresolved PERSONAL destination. Never claim navigation started,
+            // never hand a personal phrase to a Maps text search. No pending,
+            // no contact row — a relationship word is not an identity.
+            // [Spine §4 ACK-matches-commit, §5, §3a Law 5; CLAUDE.md Graceful Confusion]
+            const reply = isRelationshipTerm(cleaned)
+              ? `I don't have your ${cleaned} saved yet. You can tell me anytime — just say "my ${cleaned} is ..." and I'll remember.`
+              : `I don't have an address for ${cleaned} yet.`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
           } else {
             await handleMapsAction(raw);
             const reply = `Opening directions to ${raw}.`;

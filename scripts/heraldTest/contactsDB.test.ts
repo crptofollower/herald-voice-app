@@ -6,7 +6,7 @@
 
 import Database from 'better-sqlite3';
 import { setDB } from '../../src/db/schema.ts';
-import { findAllContactMatches, nameMatchesQuery } from '../../src/db/contactsDB.ts';
+import { findAllContactMatches, nameMatchesQuery, isPersonalDestination, isRelationshipTerm } from '../../src/db/contactsDB.ts';
 import type { Contact } from '../../src/db/contactsDB.ts';
 
 const BOLD='\x1b[1m',RED='\x1b[31m',GREEN='\x1b[32m',DIM='\x1b[2m',RESET='\x1b[0m';
@@ -412,6 +412,47 @@ export async function runContactsDBTests() {
         JSON.stringify((v as { ids: string[] }).ids) === JSON.stringify(idsFor('David')),
       "cleaned 'David', ids match David",
     );
+  }
+
+  // ── T-PERSONAL: unresolved personal destination must never reach Maps ──────
+  // Mirrors the nav arm's cleaning chain (dispatch.ts cannot be imported — RN).
+  {
+    const cleanNav = (raw: string) =>
+      raw
+        .replace(/[\u2018\u2019\u02BC\u0060]/g, "'")
+        .replace(/^(my\s+|the\s+|our\s+)/i, '')
+        .replace(/'s\s+(house|home|place|address)\s*$/i, '')
+        .replace(/'s\s*$/i, '')
+        .trim();
+    const personal = (raw: string) => isPersonalDestination(raw, cleanNav(raw));
+
+    const MUST_HONEST_FAIL = [
+      "my wife's house", 'my wife', "my wife's",
+      "my husband's house", 'my husband',
+      "my mom's house", 'my mom',
+      "my dad's house", 'my dad',
+      "my son's house", 'my son',
+      "my daughter's house", 'my daughter',
+      "Shannon's house", "David's home", "the plumber's address",
+    ];
+    for (const raw of MUST_HONEST_FAIL) {
+      assert(`T-PERSONAL-A "${raw}" → personal (no Maps)`,
+        personal(raw), v => v === true, 'true');
+    }
+
+    const MUST_REACH_MAPS = [
+      "McDonald's", "Trader Joe's", "Lowe's", "Dave's", "Wendy's",
+      'Starbucks', '1600 Pennsylvania Avenue', 'the airport',
+    ];
+    for (const raw of MUST_REACH_MAPS) {
+      assert(`T-PERSONAL-B "${raw}" → not personal (Maps unchanged)`,
+        personal(raw), v => v === false, 'false');
+    }
+
+    assert('T-PERSONAL-C relationship term is case/space insensitive',
+      [isRelationshipTerm('  WIFE '), isRelationshipTerm('mother-in-law'), isRelationshipTerm('Shannon')],
+      v => Array.isArray(v) && v[0] === true && v[1] === true && v[2] === false,
+      '[true, true, false]');
   }
 
   const total = passed + failures.length;

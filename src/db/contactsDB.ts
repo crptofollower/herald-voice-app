@@ -183,6 +183,40 @@ export function nameMatchesQuery(name: string | null | undefined, query: string)
   return distinctive.every(w => nameLower.includes(w));
 }
 
+/**
+ * Relationship terms Herald recognizes as PERSONAL destination references.
+ * NOT a resolution mechanism — resolution stays with findAllContactMatches /
+ * findContactByRelationship. This set only decides honest-fail vs Maps search.
+ */
+const PERSONAL_RELATIONSHIP_TERMS = new Set([
+  'wife', 'husband', 'spouse', 'partner',
+  'mom', 'mother', 'dad', 'father',
+  'son', 'daughter', 'sister', 'brother',
+  'grandma', 'grandmother', 'grandpa', 'grandfather',
+  'aunt', 'uncle', 'cousin', 'nephew', 'niece',
+  'mother-in-law', 'father-in-law', 'sister-in-law', 'brother-in-law',
+  'son-in-law', 'daughter-in-law',
+]);
+
+export function isRelationshipTerm(cleaned: string): boolean {
+  return PERSONAL_RELATIONSHIP_TERMS.has(cleaned.trim().toLowerCase());
+}
+
+/**
+ * TRUE when an unresolved navigation destination refers to a PERSON, not a
+ * place. Deterministic, pure, no DB, no LLM. Two signals only:
+ *   1. possessive + dwelling noun ("Shannon's house", "my wife's place")
+ *   2. cleaned token is a known relationship term ("wife")
+ * Business names ending in a bare possessive (McDonald's, Trader Joe's,
+ * Dave's) match neither and keep their existing Maps behavior.
+ * [Spine §4 ACK-matches-commit, §5 confident-wrong-action, §3a Law 5]
+ */
+export function isPersonalDestination(raw: string, cleaned: string): boolean {
+  const normalized = raw.replace(/[\u2018\u2019\u02BC\u0060]/g, "'").trim();
+  const dwellingPossessive = /'s\s+(house|home|place|address)\s*$/i.test(normalized);
+  return dwellingPossessive || isRelationshipTerm(cleaned);
+}
+
 export function findContactByName(name: string): Contact | null {
   const db = getDB();
   const distinctive = distinctiveNameTokens(name);
