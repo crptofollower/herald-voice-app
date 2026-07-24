@@ -6,7 +6,7 @@
 
 import Database from 'better-sqlite3';
 import { setDB } from '../../src/db/schema.ts';
-import { findAllContactMatches, nameMatchesQuery, isPersonalDestination, isRelationshipTerm } from '../../src/db/contactsDB.ts';
+import { findAllContactMatches, nameMatchesQuery, isPersonalDestination, isRelationshipTerm, writeContact, findContactByName } from '../../src/db/contactsDB.ts';
 import type { Contact } from '../../src/db/contactsDB.ts';
 
 const BOLD='\x1b[1m',RED='\x1b[31m',GREEN='\x1b[32m',DIM='\x1b[2m',RESET='\x1b[0m';
@@ -453,6 +453,43 @@ export async function runContactsDBTests() {
       [isRelationshipTerm('  WIFE '), isRelationshipTerm('mother-in-law'), isRelationshipTerm('Shannon')],
       v => Array.isArray(v) && v[0] === true && v[1] === true && v[2] === false,
       '[true, true, false]');
+  }
+
+  // ── T-WC: writeContact UPDATE path — write-then-read verify ───────────────
+  // [Eng. Principles Rule 4 (verify by reading back), Rule 3 (ACK matches
+  // commit), Rule 8 (the contract is its tests). The UPDATE branch had 9 SQL
+  // placeholders and 10 bind params — every write to an EXISTING contact
+  // silently no-op'd while callers spoke "Got it."]
+  {
+    const db = freshDB();
+    insertContact(db, {
+      id: 'c_wc', name: 'Shannon', relationship: 'wife',
+      phone: '5551112222', importance: 7,
+    });
+
+    writeContact({ name: 'Shannon', address: '7112 Lancaster Ln', importance: 6 });
+    const afterAddr = findContactByName('Shannon');
+
+    assert('T-WC-1 address written to an EXISTING contact is readable back',
+      afterAddr?.address,
+      v => v === '7112 Lancaster Ln',
+      "'7112 Lancaster Ln'");
+
+    assert('T-WC-2 address update does not null the existing phone',
+      afterAddr?.phone,
+      v => v === '5551112222',
+      "'5551112222'");
+
+    assert('T-WC-3 name-only write never reassigns relationship (BUG B)',
+      afterAddr?.relationship,
+      v => v === 'wife',
+      "'wife'");
+
+    writeContact({ name: 'Shannon', phone: '5559998888', importance: 6 });
+    assert('T-WC-4 phone written to an EXISTING contact is readable back',
+      findContactByName('Shannon')?.phone,
+      v => v === '5559998888',
+      "'5559998888'");
   }
 
   const total = passed + failures.length;

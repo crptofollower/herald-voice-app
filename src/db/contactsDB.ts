@@ -80,7 +80,6 @@ export function writeContact(
            updated_at    = ?
          WHERE id = ?;`,
         [
-          contact.relationship ?? null,
           contact.phone ?? null,
           contact.address ?? null,
           contact.email ?? null,
