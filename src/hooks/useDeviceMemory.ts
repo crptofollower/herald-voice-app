@@ -24,6 +24,7 @@ import {
   getMedicalRecords,
 } from "../db/medicalDB";
 import { writeFact, getTopFacts } from "../db/factDB";
+import { getAllContacts } from '../db/contactsDB';
 
 // ─── Weight constants (locked) ────────────────────────────────────────────────
 
@@ -200,19 +201,36 @@ export function buildLocalGreeting(aiName: string): string {
     const profile = getLocalProfile();
     const name = profile.name;
     const city = profile.confirmed_city || profile.location;
-
     const hour = new Date().getHours();
     let salutation = "Good morning";
     if (hour >= 12 && hour < 17) salutation = "Good afternoon";
     else if (hour >= 17) salutation = "Good evening";
-
     const namePart = name ? `, ${name}` : "";
 
-    if (city) {
-      return `${salutation}${namePart}. What can I help you with today?`;
+    // Smile-moment: surface one real, verbatim relationship fact if known.
+    // Deterministic selection only -- no LLM, no inference (Spine §3 KITT wall).
+    let memoryLine = "";
+    try {
+      const contacts = getAllContacts();
+      const withRelationship = contacts
+        .filter(c => c.relationship && c.relationship.trim().length > 0)
+        .sort((a, b) => {
+          const impDiff = (b.importance ?? 0) - (a.importance ?? 0);
+          if (impDiff !== 0) return impDiff;
+          return a.name.localeCompare(b.name);
+        });
+      if (withRelationship.length > 0) {
+        const top = withRelationship[0];
+        memoryLine = ` I've still got ${top.name} down as your ${top.relationship}.`;
+      }
+    } catch (e) {
+      // Contact lookup failure must never block the greeting.
     }
 
-    return `${salutation}${namePart}. What's on your mind?`;
+    if (city) {
+      return `${salutation}${namePart}.${memoryLine} What can I help you with today?`;
+    }
+    return `${salutation}${namePart}.${memoryLine} What's on your mind?`;
   } catch (e) {
     return "Good morning. What can I help you with today?";
   }
