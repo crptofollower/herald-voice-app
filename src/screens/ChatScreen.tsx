@@ -1912,7 +1912,7 @@ export default function ChatScreen() {
     if (!isSpeaking && handsFreeRef.current && !isStreaming) {
       // Ref check AT FIRE TIME — state was true 700ms ago is not proof it's
       // true now; startRecording itself re-checks, this just avoids the call.
-      const timer = setTimeout(() => { if (!isSpeakingRef.current) startRecording(); }, 700);
+      const timer = setTimeout(() => { if (!isSpeakingRef.current) startRecording(); }, 1400);
       return () => clearTimeout(timer);
     }
   }, [isSpeaking, isStreaming, startRecording]);
