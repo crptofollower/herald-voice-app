@@ -2680,7 +2680,7 @@ export default function ChatScreen() {
           >
             <TextInput
               style={[styles.textInput, { color: "#FFFFFF" }]}
-              placeholder={isRecording ? "Listening..." : "Ask anything..."}
+              placeholder="Ask anything..."
               placeholderTextColor="rgba(255,255,255,0.45)"
               value={inputText}
               onChangeText={setInputText}

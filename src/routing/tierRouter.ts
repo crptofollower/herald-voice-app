@@ -646,10 +646,12 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
       };
     }
     const contactOnly =
-      msg.match(/\b(?:can\s+you\s+)?(?:text|message|msg)\s+to\s+((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+|Ms\.?\s+)?\w+)/i)?.[1] ??
+      msg.match(/\b(?:can\s+you\s+)?(?:text|message|msg)\s+to\s+(?:my\s+)?((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+|Ms\.?\s+)?\w+)/i)?.[1] ??
+      msg.match(/\b(?:can\s+you\s+)?(?:text|message|msg)\s+my\s+(wife|husband|son|daughter|mom|dad|mother|father|brother|sister|grandson|granddaughter)\b/i)?.[1] ??
       msg.match(/\b(?:can\s+you\s+)?(?:text|message|msg)\s+((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+|Ms\.?\s+)?\w+)/i)?.[1];
     const SMS_EXCLUDE = /^(me|you|us|them|it|myself|yourself)$/i;
-    if (contactOnly && !SMS_EXCLUDE.test(contactOnly.trim())) {
+    const SMS_POSSESSIVE_EXCLUDE = /^(my|our|his|her|their|the|a|an)$/i;
+    if (contactOnly && !SMS_EXCLUDE.test(contactOnly.trim()) && !SMS_POSSESSIVE_EXCLUDE.test(contactOnly.trim())) {
       return {
         tier: 1,
         actionIntent: { type: 'sms', contact: contactOnly.trim(), message: '' },
