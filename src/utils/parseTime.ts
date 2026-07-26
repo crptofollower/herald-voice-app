@@ -273,19 +273,99 @@ export function parseCalendarWriteIntent(text: string): string | null {
 // Common message-opener words — never the second word of a contact name.
 // Bounded stopgap for greedy name capture; durable fix is contact-anchored
 // splitting in the C-4 contact_text arc.
-const SMS_BODY_OPENERS = /^(?:how|what|when|where|why|that|to|about|i|i'm|im|hi|hey|hello|please|can|could|will|would|are|is|do|don't|dont|good|thanks|thank|the|a|your|you're|youre|happy|call|come|meet|see|be|we|let's|lets)$/i;
+const SMS_BODY_OPENERS = /^(?:how|what|when|where|why|that|to|about|i|i'm|im|i'll|ill|hi|hey|hello|please|can|could|will|would|are|is|do|don't|dont|good|thanks|thank|the|a|your|you're|youre|happy|call|come|meet|see|be|we|let's|lets|saying|tell)$/i;
+
+// Shared with tierRouter contactOnly (SMS no-body path) — keep one list so the
+// two extractors cannot drift on relationship vocabulary.
+export const SMS_RELATIONSHIP_ALTERNATION =
+  'wife|husband|son|daughter|mom|dad|mother|father|brother|sister|grandson|granddaughter';
+
+const SMS_REL_WORD = new RegExp(`^(?:${SMS_RELATIONSHIP_ALTERNATION})$`, 'i');
+
+/** Proper-name token after "my <rel>" — capitalized, not a sentence-starter/body opener. */
+function isSmsNameShapedToken(token: string): boolean {
+  if (!token || SMS_BODY_OPENERS.test(token)) return false;
+  return /^[A-Z][A-Za-z\-]*$/.test(token);
+}
+
+/**
+ * When the generic patterns leave contact="my" (or "my <rel>" as a two-token
+ * contact) and the message starts with a relationship word, lift the rel word
+ * (and an optional following proper name) into contact.
+ *
+ * Also recovers when optional `(?:my\s+<rel>\s+)?` stripped the rel but then
+ * captured a body-opener as the contact start (e.g. "text my brother tell
+ * him …" → contact "tell him") — rebuild as contact "my" + message
+ * "<rel> tell him …" so the same lift applies.
+ */
+function normalizeSmsMyRelContact(
+  parsed: { contact: string; message: string },
+  source: string,
+): { contact: string; message: string } {
+  let contact = parsed.contact;
+  let message = parsed.message;
+
+  // "my wife" / "my son" captured as a two-token contact — rebuild as contact
+  // "my" + message "<rel> <original message>" and fall through to the shared
+  // name-shape / empty-tail handling below (do not return early).
+  const myRelAsContact = contact.match(
+    new RegExp(`^my\\s+(${SMS_RELATIONSHIP_ALTERNATION})$`, 'i'),
+  );
+  if (myRelAsContact) {
+    contact = 'my';
+    message = `${myRelAsContact[1]} ${message}`.trim();
+  }
+
+  const contactFirst = contact.trim().split(/\s+/).filter(Boolean)[0] ?? '';
+  if (contact.toLowerCase() !== 'my' && SMS_BODY_OPENERS.test(contactFirst)) {
+    const esc = contactFirst.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const lift = source.match(
+      new RegExp(`\\bmy\\s+(${SMS_RELATIONSHIP_ALTERNATION})\\s+${esc}\\b`, 'i'),
+    );
+    if (lift) {
+      contact = 'my';
+      message = `${lift[1]} ${parsed.contact} ${parsed.message}`.trim();
+    }
+  }
+
+  if (contact.toLowerCase() !== 'my') return { contact, message };
+  const parts = message.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0 || !SMS_REL_WORD.test(parts[0])) return { contact, message };
+
+  const relWord = parts[0];
+  const tail = parts.slice(1).join(' ').trim();
+  if (!tail) {
+    return { contact: relWord, message: '' };
+  }
+  const tailParts = tail.split(/\s+/).filter(Boolean);
+  const first = tailParts[0];
+  if (isSmsNameShapedToken(first)) {
+    return {
+      contact: first,
+      message: tailParts.slice(1).join(' ').trim(),
+    };
+  }
+  return { contact: relWord, message: tail };
+}
 
 export function parseSmsIntent(text: string): { contact: string; message: string } | null {
+  // Existing patterns: optional `(?:my\s+<rel>\s+)?` strips the relationship
+  // prefix when a proper name follows (e.g. "text my son Hunter …" → Hunter).
+  // Order: send before bare message; text|message|msg before tell — so
+  // "text … tell him …" is not stolen by the tell-pattern mid-phrase.
   const patterns: RegExp[] = [
-    /\b(?:text|message|msg)\s+(?:my\s+(?:son|daughter|wife|husband|mom|dad|mother|father|brother|sister|grandson|granddaughter)\s+)?((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+|Ms\.?\s+)?\w+(?:\s+(?!(?:how|what|when|where|why|that|to|about|i|i'm|im|hi|hey|hello|please|can|could|will|would|are|is|do|don't|dont|good|thanks|thank|the|a|your|you're|youre|happy|call|come|meet|see|be|we|let's|lets)\b)\w+)?)\s+(.+)/i,
-    /\bsend\s+(?:a\s+)?(?:text|message)\s+to\s+(?:my\s+(?:son|daughter|wife|husband|mom|dad|mother|father|brother|sister|grandson|granddaughter)\s+)?((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+|Ms\.?\s+)?\w+(?:\s+(?!(?:how|what|when|where|why|that|to|about|i|i'm|im|hi|hey|hello|please|can|could|will|would|are|is|do|don't|dont|good|thanks|thank|the|a|your|you're|youre|happy|call|come|meet|see|be|we|let's|lets)\b)\w+)?)\s+(?:that\s+|saying\s+)?(.+)/i,
-    /\btell\s+(?:my\s+(?:son|daughter|wife|husband|mom|dad|mother|father|brother|sister|grandson|granddaughter)\s+)?((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+|Ms\.?\s+)?\w+(?:\s+(?!(?:how|what|when|where|why|that|to|about|i|i'm|im|hi|hey|hello|please|can|could|will|would|are|is|do|don't|dont|good|thanks|thank|the|a|your|you're|youre|happy|call|come|meet|see|be|we|let's|lets)\b)\w+)?)\s+(?:that\s+)?(.+)/i,
+    /\bsend\s+(?:a\s+)?(?:text|message)\s+to\s+(?:my\s+(?:son|daughter|wife|husband|mom|dad|mother|father|brother|sister|grandson|granddaughter)\s+)?((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+|Ms\.?\s+)?\w+(?:\s+(?!(?:how|what|when|where|why|that|to|about|i|i'm|im|hi|hey|hello|please|can|could|will|would|are|is|do|don't|dont|good|thanks|thank|the|a|your|you're|youre|happy|call|come|meet|see|be|we|let's|lets|saying)\b)\w+)?)\s+(?:that\s+|saying\s+)?(.+)/i,
+    /\b(?:text|message|msg)\s+(?:my\s+(?:son|daughter|wife|husband|mom|dad|mother|father|brother|sister|grandson|granddaughter)\s+)?((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+|Ms\.?\s+)?\w+(?:\s+(?!(?:how|what|when|where|why|that|to|about|i|i'm|im|hi|hey|hello|please|can|could|will|would|are|is|do|don't|dont|good|thanks|thank|the|a|your|you're|youre|happy|call|come|meet|see|be|we|let's|lets|saying)\b)\w+)?)\s+(.+)/i,
+    /\btell\s+(?:my\s+(?:son|daughter|wife|husband|mom|dad|mother|father|brother|sister|grandson|granddaughter)\s+)?((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+|Ms\.?\s+)?\w+(?:\s+(?!(?:how|what|when|where|why|that|to|about|i|i'm|im|hi|hey|hello|please|can|could|will|would|are|is|do|don't|dont|good|thanks|thank|the|a|your|you're|youre|happy|call|come|meet|see|be|we|let's|lets|saying)\b)\w+)?)\s+(?:that\s+)?(.+)/i,
   ];
   for (const p of patterns) {
     const m = text.match(p);
     const EXCLUDE = /^(me|you|us|them|it|myself|yourself)$/i;
     if (m?.[1] && m?.[2] && !EXCLUDE.test(m[1].trim())) {
-      return { contact: m[1].trim(), message: m[2].trim() };
+      return normalizeSmsMyRelContact(
+        { contact: m[1].trim(), message: m[2].trim() },
+        text,
+      );
     }
   }
   return null;

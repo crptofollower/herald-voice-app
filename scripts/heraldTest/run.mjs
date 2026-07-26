@@ -218,7 +218,7 @@ const RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", BOLD = "\x1b[1m",
 let passed = 0;
 const failures = [];
 const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length + 4; // +1 list_todo+medical intercept, +3 classifier tri-state
-const EXPECTED_TOTAL = 671;   // was 663; +8 T-SRL stripRelationshipLead + validated clean-name
+const EXPECTED_TOTAL = 690;   // was 687; +3 T-PSI-17..19 myRelAsContact name-only / name+body
 
 console.log(`\n${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  HERALD ROUTER + PHONE TEST SUITE — ${TOTAL} tests${RESET}`);
@@ -437,6 +437,7 @@ const { runFamilyContractTests }    = await import('./familyContract.test.ts');
 const { runDiagnosisContractTests } = await import('./diagnosisContract.test.ts');
 const { runParseDatePhraseTests } = await import('./parseDatePhrase.test.ts');
 const { runParseTimeFromTextTests } = await import('./parseTimeFromText.test.ts');
+const { runParseSmsIntentTests } = await import('./parseSmsIntent.test.ts');
 const { runCalendarCacheSpeechTests } = await import('./calendarCacheSpeech.test.ts');
 const { runCalendarUnresolvableDateTests } = await import('./calendarUnresolvableDate.test.ts');
 const { runCalendarCollectTests } = await import('./calendarCollect.test.ts');
@@ -465,6 +466,7 @@ const dResult = await runDispatchContractTests();
 const dxResult = await runDiagnosisContractTests();
 const pdpResult = await runParseDatePhraseTests();
 const ptResult = await runParseTimeFromTextTests();
+const psiResult = await runParseSmsIntentTests();
 const ccsResult = await runCalendarCacheSpeechTests();
 const cudResult = await runCalendarUnresolvableDateTests();
 const ccResult = await runCalendarCollectTests();
@@ -486,9 +488,9 @@ const w1Result = await runWall1ContractTests();
 const cpParseResult = await runClassifierParseTests();
 const evResult = await runEvidenceRegistryTests();
 const egResult = await runEvidenceGateTests();
-const contractPassed = hResult.passed + mResult.passed + fResult.passed + dResult.passed + dxResult.passed + pResult.passed + cpResult.passed + lzResult.passed + mcResult.passed + tcResult.passed + insResult.passed + cdbResult.passed + ctResult.passed + ipcResult.passed + mcandResult.passed + rceResult.passed + drResult.passed + smResult.passed + llResult.passed + w1Result.passed + cpParseResult.passed + pdpResult.passed + ptResult.passed + ccsResult.passed + cudResult.passed + ccResult.passed + evResult.passed + egResult.passed;
-const contractFailed = hResult.failed + mResult.failed + fResult.failed + dResult.failed + dxResult.failed + pResult.failed + cpResult.failed + lzResult.failed + mcResult.failed + tcResult.failed + insResult.failed + cdbResult.failed + ctResult.failed + ipcResult.failed + mcandResult.failed + rceResult.failed + drResult.failed + smResult.failed + llResult.failed + w1Result.failed + cpParseResult.failed + pdpResult.failed + ptResult.failed + ccsResult.failed + cudResult.failed + ccResult.failed + evResult.failed + egResult.failed;
-const contractTotal = hResult.total + mResult.total + fResult.total + dResult.total + dxResult.total + pResult.total + cpResult.total + lzResult.total + mcResult.total + tcResult.total + insResult.total + cdbResult.total + ctResult.total + ipcResult.total + mcandResult.total + rceResult.total + drResult.total + smResult.total + llResult.total + w1Result.total + cpParseResult.total + pdpResult.total + ptResult.total + ccsResult.total + cudResult.total + ccResult.total + evResult.total + egResult.total;
+const contractPassed = hResult.passed + mResult.passed + fResult.passed + dResult.passed + dxResult.passed + pResult.passed + cpResult.passed + lzResult.passed + mcResult.passed + tcResult.passed + insResult.passed + cdbResult.passed + ctResult.passed + ipcResult.passed + mcandResult.passed + rceResult.passed + drResult.passed + smResult.passed + llResult.passed + w1Result.passed + cpParseResult.passed + pdpResult.passed + ptResult.passed + psiResult.passed + ccsResult.passed + cudResult.passed + ccResult.passed + evResult.passed + egResult.passed;
+const contractFailed = hResult.failed + mResult.failed + fResult.failed + dResult.failed + dxResult.failed + pResult.failed + cpResult.failed + lzResult.failed + mcResult.failed + tcResult.failed + insResult.failed + cdbResult.failed + ctResult.failed + ipcResult.failed + mcandResult.failed + rceResult.failed + drResult.failed + smResult.failed + llResult.failed + w1Result.failed + cpParseResult.failed + pdpResult.failed + ptResult.failed + psiResult.failed + ccsResult.failed + cudResult.failed + ccResult.failed + evResult.failed + egResult.failed;
+const contractTotal = hResult.total + mResult.total + fResult.total + dResult.total + dxResult.total + pResult.total + cpResult.total + lzResult.total + mcResult.total + tcResult.total + insResult.total + cdbResult.total + ctResult.total + ipcResult.total + mcandResult.total + rceResult.total + drResult.total + smResult.total + llResult.total + w1Result.total + cpParseResult.total + pdpResult.total + ptResult.total + psiResult.total + ccsResult.total + cudResult.total + ccResult.total + evResult.total + egResult.total;
 
 console.log(`${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  RESULTS: ${GREEN}${passed + contractPassed} passed${RESET}${BOLD} / ${failures.length + contractFailed > 0 ? RED : GREEN}${failures.length + contractFailed} failed${RESET}${BOLD} / ${TOTAL + contractTotal} total${RESET}`);

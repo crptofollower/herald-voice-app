@@ -12,7 +12,7 @@ import { getMedicalSummary, getMedicalRecords, getDiagnosisSummary, getDoctorsSu
 import { getRecentMentions, formatRecentMentions } from "../db/recallDB";
 import { detectMedicalEvent } from "../utils/detectMedicalEvent";
 import type { MedicalEvent } from "../utils/detectMedicalEvent";
-import { MONTHS, CALENDAR_WRITE_TRIGGER, CALENDAR_WRITE_NAMED_APPOINTMENT } from "../utils/parseTime";
+import { MONTHS, CALENDAR_WRITE_TRIGGER, CALENDAR_WRITE_NAMED_APPOINTMENT, SMS_RELATIONSHIP_ALTERNATION } from "../utils/parseTime";
 import { detectHouseholdRead, type HouseholdReadIntent } from "../utils/householdRead";
 import { detectServiceRemove } from "../utils/householdCapture";
 import { detectFamilyRead, answerFamilyRead } from "../utils/familyRead";
@@ -647,7 +647,7 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     }
     const contactOnly =
       msg.match(/\b(?:can\s+you\s+)?(?:text|message|msg)\s+to\s+(?:my\s+)?((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+|Ms\.?\s+)?\w+)/i)?.[1] ??
-      msg.match(/\b(?:can\s+you\s+)?(?:text|message|msg)\s+my\s+(wife|husband|son|daughter|mom|dad|mother|father|brother|sister|grandson|granddaughter)\b/i)?.[1] ??
+      msg.match(new RegExp(`\\b(?:can\\s+you\\s+)?(?:text|message|msg)\\s+my\\s+(${SMS_RELATIONSHIP_ALTERNATION})\\b`, 'i'))?.[1] ??
       msg.match(/\b(?:can\s+you\s+)?(?:text|message|msg)\s+((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+|Ms\.?\s+)?\w+)/i)?.[1];
     const SMS_EXCLUDE = /^(me|you|us|them|it|myself|yourself)$/i;
     const SMS_POSSESSIVE_EXCLUDE = /^(my|our|his|her|their|the|a|an)$/i;
