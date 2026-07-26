@@ -3,6 +3,13 @@
 // No LLM. No network. Runs entirely on device.
 // Used by tierRouter.ts for alarm and SMS intents.
 
+import {
+  PERSON_RELATIONSHIP_ALTERNATION,
+  normalizePersonTarget,
+  isNameShapedToken,
+  SMS_BODY_OPENERS,
+} from './personReference';
+
 export function parseTimeFromText(text: string): { hour: number; minute: number } | null {
   let t = text.toLowerCase().replace(/\b(a)\.(m)\./gi, 'am').replace(/\b(p)\.(m)\./gi, 'pm');
 
@@ -270,23 +277,10 @@ export function parseCalendarWriteIntent(text: string): string | null {
   return `${title}|${date}|${time}`;
 }
 
-// Common message-opener words — never the second word of a contact name.
-// Bounded stopgap for greedy name capture; durable fix is contact-anchored
-// splitting in the C-4 contact_text arc.
-const SMS_BODY_OPENERS = /^(?:how|what|when|where|why|that|to|about|i|i'm|im|i'll|ill|hi|hey|hello|please|can|could|will|would|are|is|do|don't|dont|good|thanks|thank|the|a|your|you're|youre|happy|call|come|meet|see|be|we|let's|lets|saying|tell)$/i;
+/** @deprecated Prefer PERSON_RELATIONSHIP_ALTERNATION — alias kept for existing imports. */
+export const SMS_RELATIONSHIP_ALTERNATION = PERSON_RELATIONSHIP_ALTERNATION;
 
-// Shared with tierRouter contactOnly (SMS no-body path) — keep one list so the
-// two extractors cannot drift on relationship vocabulary.
-export const SMS_RELATIONSHIP_ALTERNATION =
-  'wife|husband|son|daughter|mom|dad|mother|father|brother|sister|grandson|granddaughter';
-
-const SMS_REL_WORD = new RegExp(`^(?:${SMS_RELATIONSHIP_ALTERNATION})$`, 'i');
-
-/** Proper-name token after "my <rel>" — capitalized, not a sentence-starter/body opener. */
-function isSmsNameShapedToken(token: string): boolean {
-  if (!token || SMS_BODY_OPENERS.test(token)) return false;
-  return /^[A-Z][A-Za-z\-]*$/.test(token);
-}
+const SMS_REL_WORD = new RegExp(`^(?:${PERSON_RELATIONSHIP_ALTERNATION})$`, 'i');
 
 /**
  * When the generic patterns leave contact="my" (or "my <rel>" as a two-token
@@ -309,7 +303,7 @@ function normalizeSmsMyRelContact(
   // "my" + message "<rel> <original message>" and fall through to the shared
   // name-shape / empty-tail handling below (do not return early).
   const myRelAsContact = contact.match(
-    new RegExp(`^my\\s+(${SMS_RELATIONSHIP_ALTERNATION})$`, 'i'),
+    new RegExp(`^my\\s+(${PERSON_RELATIONSHIP_ALTERNATION})$`, 'i'),
   );
   if (myRelAsContact) {
     contact = 'my';
@@ -320,7 +314,7 @@ function normalizeSmsMyRelContact(
   if (contact.toLowerCase() !== 'my' && SMS_BODY_OPENERS.test(contactFirst)) {
     const esc = contactFirst.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const lift = source.match(
-      new RegExp(`\\bmy\\s+(${SMS_RELATIONSHIP_ALTERNATION})\\s+${esc}\\b`, 'i'),
+      new RegExp(`\\bmy\\s+(${PERSON_RELATIONSHIP_ALTERNATION})\\s+${esc}\\b`, 'i'),
     );
     if (lift) {
       contact = 'my';
@@ -339,7 +333,7 @@ function normalizeSmsMyRelContact(
   }
   const tailParts = tail.split(/\s+/).filter(Boolean);
   const first = tailParts[0];
-  if (isSmsNameShapedToken(first)) {
+  if (isNameShapedToken(first)) {
     return {
       contact: first,
       message: tailParts.slice(1).join(' ').trim(),
@@ -362,10 +356,14 @@ export function parseSmsIntent(text: string): { contact: string; message: string
     const m = text.match(p);
     const EXCLUDE = /^(me|you|us|them|it|myself|yourself)$/i;
     if (m?.[1] && m?.[2] && !EXCLUDE.test(m[1].trim())) {
-      return normalizeSmsMyRelContact(
+      const normalized = normalizeSmsMyRelContact(
         { contact: m[1].trim(), message: m[2].trim() },
         text,
       );
+      return {
+        contact: normalizePersonTarget(normalized.contact),
+        message: normalized.message,
+      };
     }
   }
   return null;

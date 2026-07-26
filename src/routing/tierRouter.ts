@@ -12,7 +12,8 @@ import { getMedicalSummary, getMedicalRecords, getDiagnosisSummary, getDoctorsSu
 import { getRecentMentions, formatRecentMentions } from "../db/recallDB";
 import { detectMedicalEvent } from "../utils/detectMedicalEvent";
 import type { MedicalEvent } from "../utils/detectMedicalEvent";
-import { MONTHS, CALENDAR_WRITE_TRIGGER, CALENDAR_WRITE_NAMED_APPOINTMENT, SMS_RELATIONSHIP_ALTERNATION } from "../utils/parseTime";
+import { MONTHS, CALENDAR_WRITE_TRIGGER, CALENDAR_WRITE_NAMED_APPOINTMENT } from "../utils/parseTime";
+import { PERSON_RELATIONSHIP_ALTERNATION, normalizePersonTarget, liftRelationshipName } from "../utils/personReference";
 import { detectHouseholdRead, type HouseholdReadIntent } from "../utils/householdRead";
 import { detectServiceRemove } from "../utils/householdCapture";
 import { detectFamilyRead, answerFamilyRead } from "../utils/familyRead";
@@ -363,7 +364,8 @@ const CALL_SIGNALS = [
   /\b(?:please\s+)?(?:call|phone|dial|ring)[,:]?\s+(?:to\s+)?[A-Za-z]/i,
   /\bcan you (?:please\s+)?(call|phone)\s+[A-Za-z]/i,
   /\bgive\s+[A-Za-z][A-Za-z'-]*\s+a (call|ring)\b/i,
-  /\b(call|ring|phone|dial)\s+(my\s+)?(wife|husband|mom|dad|mother|father|son|daughter|sister|brother)\b/i,
+  // grandson/granddaughter added via shared PERSON_RELATIONSHIP_ALTERNATION (was missing here)
+  new RegExp(String.raw`\b(call|ring|phone|dial)\s+(my\s+)?(${PERSON_RELATIONSHIP_ALTERNATION})\b`, 'i'),
 ];
 
 const DIRECTIONS_SIGNALS = [
@@ -647,14 +649,17 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     }
     const contactOnly =
       msg.match(/\b(?:can\s+you\s+)?(?:text|message|msg)\s+to\s+(?:my\s+)?((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+|Ms\.?\s+)?\w+)/i)?.[1] ??
-      msg.match(new RegExp(`\\b(?:can\\s+you\\s+)?(?:text|message|msg)\\s+my\\s+(${SMS_RELATIONSHIP_ALTERNATION})\\b`, 'i'))?.[1] ??
+      msg.match(new RegExp(`\\b(?:can\\s+you\\s+)?(?:text|message|msg)\\s+my\\s+(${PERSON_RELATIONSHIP_ALTERNATION})\\b`, 'i'))?.[1] ??
       msg.match(/\b(?:can\s+you\s+)?(?:text|message|msg)\s+((?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+|Ms\.?\s+)?\w+)/i)?.[1];
     const SMS_EXCLUDE = /^(me|you|us|them|it|myself|yourself)$/i;
     const SMS_POSSESSIVE_EXCLUDE = /^(my|our|his|her|their|the|a|an)$/i;
-    if (contactOnly && !SMS_EXCLUDE.test(contactOnly.trim()) && !SMS_POSSESSIVE_EXCLUDE.test(contactOnly.trim())) {
+    // Normalize before exclude checks so "my wife"-shaped captures become "wife"
+    // and possessive/filler tokens still fail SMS_POSSESSIVE_EXCLUDE when bare.
+    const contactOnlyNorm = contactOnly ? normalizePersonTarget(contactOnly.trim()) : '';
+    if (contactOnlyNorm && !SMS_EXCLUDE.test(contactOnlyNorm) && !SMS_POSSESSIVE_EXCLUDE.test(contactOnlyNorm)) {
       return {
         tier: 1,
-        actionIntent: { type: 'sms', contact: contactOnly.trim(), message: '' },
+        actionIntent: { type: 'sms', contact: contactOnlyNorm, message: '' },
         reason: 'action:sms:no_body',
       };
     }
@@ -722,8 +727,8 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     const contactMatch =
       msg.match(new RegExp(String.raw`\b(?:call|phone|dial|ring)\s+for\s+(?:the\s+)?(${NAME})`, 'i')) ??
       msg.match(new RegExp(String.raw`^\s*(?:please\s+)?(?:can you\s+)?(?:call|phone|dial|ring)[,:]?\s+(?:to\s+)?(?:my\s+)?(${NAME})\s*[.!]?\s*$`, 'i')) ??
-      msg.match(new RegExp(String.raw`\b(?:call|phone|dial|ring)[,:]?\s+(?:to\s+)?(?:my\s+(?:son|daughter|wife|husband|mom|dad|mother|father|brother|sister|grandson|granddaughter)\s+)?(${NAME})`, 'i')) ??
-      msg.match(new RegExp(String.raw`\bgive\s+(?:my\s+(?:son|daughter|wife|husband|mom|dad|mother|father|brother|sister|grandson|granddaughter)\s+)?(${NAME})\s+a\s+(?:call|ring)\b`, 'i'));
+      msg.match(new RegExp(String.raw`\b(?:call|phone|dial|ring)[,:]?\s+(?:to\s+)?(?:my\s+(?:${PERSON_RELATIONSHIP_ALTERNATION})\s+)?(${NAME})`, 'i')) ??
+      msg.match(new RegExp(String.raw`\bgive\s+(?:my\s+(?:${PERSON_RELATIONSHIP_ALTERNATION})\s+)?(${NAME})\s+a\s+(?:call|ring)\b`, 'i'));
     const rawContact = contactMatch?.[1]?.trim() ?? '';
     const strippedContact = rawContact
       .replace(/^(a\s+)?number\s+for\s+/i, '')
@@ -732,7 +737,7 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
       .trim();
     // Drop leading a/an/the so "an ambulance" excludes on "ambulance", not "an".
     const excludeHead = strippedContact.replace(/^(a|an|the)\s+/i, '').split(/\s+/)[0] ?? '';
-    const contact = CALL_EXCLUDE.test(excludeHead) ? '' : strippedContact;
+    const contact = CALL_EXCLUDE.test(excludeHead) ? '' : liftRelationshipName(normalizePersonTarget(strippedContact));
     if (contact) {
       return {
         tier: 1,

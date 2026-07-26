@@ -17,6 +17,7 @@ import * as IntentLauncher from 'expo-intent-launcher';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getDB } from '../../db/schema';
 import { findAllContactMatches, findContactByName, findContactByRelationship, isPersonalDestination, isRelationshipTerm, resolveRelationshipOrNull, RELATIONSHIP_WORDS } from '../../db/contactsDB';
+import { normalizePersonTarget, liftRelationshipName } from '../../utils/personReference';
 import { answerHouseholdRead } from '../../utils/householdRead';
 import { guessMedicationName, deactivateMedicationByName } from '../../db/medicalDB';
 import { isMedicationCorroborated } from '../../db/factDB';
@@ -407,12 +408,7 @@ export async function dispatchAction(
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
           const raw = actionIntent.destination;
 
-          const cleaned = raw
-            .replace(/[\u2018\u2019\u02BC\u0060]/g, "'")
-            .replace(/^(my\s+|the\s+|our\s+)/i, '')
-            .replace(/'s\s+(house|home|place|address)\s*$/i, '')
-            .replace(/'s\s*$/i, '')
-            .trim();
+          const cleaned = liftRelationshipName(normalizePersonTarget(raw));
 
           // Herald multi-match fence (same finder as resolveContactCallIntent / SMS) —
           // ask before silently picking importance DESC LIMIT 1. Pool is NOT
