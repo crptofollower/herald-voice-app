@@ -401,22 +401,23 @@ export async function runContactCallTests() {
   // ── T-CT-13: identity-first — phoneless FIL does NOT bridge to namesakes ──
   // Phoneless "father-in-law" row + two phoneable Davids. Without the deleted
   // name-hop bridge, identity resolves to the single FIL row; missing phone →
-  // collect for that person (never silent OS/name-hop to the Davids).
+  // known-person collect for that person (never silent OS/name-hop to the Davids).
   {
     const db = freshDB();
     insertContact(db, { id: 'c_fil', name: 'David', relationship: 'father-in-law', importance: 7 });
     insertContact(db, { id: 'c_moss', name: 'David Mossholder', phone: '555-111-1111', importance: 9 });
     insertContact(db, { id: 'c_clev', name: 'David Clevenger', phone: '555-222-2222', importance: 5 });
     const intent = await resolveContactCallIntent('father-in-law', 'call my father-in-law', { resolveContact: async () => null });
-    const cands = (intent as { candidates?: Array<{ name: string; relationship?: string | null }> }).candidates ?? [];
+    const cands = (intent as { candidates?: Array<{ name: string; phone?: string; relationship?: string | null }> }).candidates ?? [];
     const pending = await DOMAIN_WRITERS['contact_call']!.add(intent, '');
-    assert('T-CT-13 phoneless FIL → collect for David; no bridged David candidates',
-      { cands, pending, contact: (intent as { contact?: string }).contact },
-      v => v.cands.length === 0
-        && v.contact === 'David'
+    assert('T-CT-13 phoneless FIL → known-person collect for David; no bridged David candidates',
+      { cands, pending },
+      v => v.cands.length === 1
+        && v.cands[0].name === 'David'
+        && !(v.cands[0].phone ?? '').trim()
         && v.pending.status === 'pending'
-        && /don't have a number for David/i.test(v.pending.prompt),
-      'no candidates; collect pending for David');
+        && /I know David but I don't have a phone number for them/i.test(v.pending.prompt),
+      'empty-phone David candidate; known-person collect');
   }
 
   // ── T-CT-14: identity-first — mixed phone among siblings asks, never silent dial ─

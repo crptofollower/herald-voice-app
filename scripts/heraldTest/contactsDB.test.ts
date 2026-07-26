@@ -6,7 +6,7 @@
 
 import Database from 'better-sqlite3';
 import { setDB } from '../../src/db/schema.ts';
-import { findAllContactMatches, nameMatchesQuery, isPersonalDestination, isRelationshipTerm, writeContactRaw, writeContactValidated, stripRelationshipLead, findContactByName, resolvePersonIdentity, contactHasCapability } from '../../src/db/contactsDB.ts';
+import { findAllContactMatches, nameMatchesQuery, isPersonalDestination, isRelationshipTerm, writeContactRaw, writeContactValidated, stripRelationshipLead, findContactByName, resolvePersonIdentity, contactHasCapability, resolvePersonCapability, setOsPersonCapabilitySearch } from '../../src/db/contactsDB.ts';
 import type { Contact } from '../../src/db/contactsDB.ts';
 
 const BOLD='\x1b[1m',RED='\x1b[31m',GREEN='\x1b[32m',DIM='\x1b[2m',RESET='\x1b[0m';
@@ -644,6 +644,143 @@ export async function runContactsDBTests() {
         && (v as { with: boolean; empty: boolean }).with === true
         && (v as { with: boolean; empty: boolean }).empty === true,
       '{ with: true, empty: true }');
+  }
+
+  // ── T-CAP: resolvePersonCapability (Herald-first, identity-constrained OS) ─
+  console.log(`\n${BOLD}-- resolvePersonCapability Contract Tests -----------------${RESET}\n`);
+
+  function phonelessWife(): Contact {
+    return {
+      id: 'c_wife',
+      name: 'Shannon',
+      relationship: 'wife',
+      importance: 9,
+      created_at: '',
+      updated_at: '',
+    };
+  }
+
+  // ── T-CAP-01: Herald phone present → available/herald; OS never touched ───
+  {
+    setOsPersonCapabilitySearch(async () => {
+      throw new Error('OS must not be called when Herald has capability');
+    });
+    const contact: Contact = {
+      ...phonelessWife(),
+      phone: '555-030-0300',
+    };
+    const r = await resolvePersonCapability(contact, 'phone');
+    assert('T-CAP-01 Herald phone → available/herald; OS unused',
+      r,
+      v => typeof v === 'object' && v !== null
+        && (v as { status: string }).status === 'available'
+        && (v as { source?: string }).source === 'herald'
+        && (v as { value?: string }).value === '555-030-0300',
+      "{ status: 'available', value: '555-030-0300', source: 'herald' }");
+    setOsPersonCapabilitySearch(null);
+  }
+
+  // ── T-CAP-02: Herald missing, exactly one OS match → available/os ─────────
+  {
+    setOsPersonCapabilitySearch(async (identity) => {
+      if (identity.name !== 'Shannon') return [];
+      return [{ name: 'Shannon Martys', phone: '5551112222' }];
+    });
+    const r = await resolvePersonCapability(phonelessWife(), 'phone');
+    assert('T-CAP-02 Herald miss + one OS → available/os',
+      r,
+      v => typeof v === 'object' && v !== null
+        && (v as { status: string }).status === 'available'
+        && (v as { source?: string }).source === 'os'
+        && (v as { value?: string }).value === '5551112222',
+      "{ status: 'available', value: '5551112222', source: 'os' }");
+    setOsPersonCapabilitySearch(null);
+  }
+
+  // ── T-CAP-03: Herald missing, multiple OS matches → ambiguous (no top-1) ──
+  {
+    setOsPersonCapabilitySearch(async () => ([
+      { name: 'Shannon A', phone: '5551111111' },
+      { name: 'Shannon B', phone: '5552222222' },
+    ]));
+    const r = await resolvePersonCapability(phonelessWife(), 'phone');
+    assert('T-CAP-03 Herald miss + multi OS → ambiguous with all candidates',
+      r,
+      v => typeof v === 'object' && v !== null
+        && (v as { status: string }).status === 'ambiguous'
+        && Array.isArray((v as { candidates?: Contact[] }).candidates)
+        && (v as { candidates: Contact[] }).candidates.length === 2
+        && (v as { candidates: Contact[] }).candidates.map(c => c.name).sort().join('|') === 'Shannon A|Shannon B',
+      "{ status: 'ambiguous', candidates: [Shannon A, Shannon B] }");
+    setOsPersonCapabilitySearch(null);
+  }
+
+  // ── T-CAP-04: Herald missing, OS none / no phones → missing ───────────────
+  {
+    setOsPersonCapabilitySearch(async () => ([{ name: 'Shannon', phone: '' }]));
+    const r = await resolvePersonCapability(phonelessWife(), 'phone');
+    assert('T-CAP-04 Herald miss + OS none with capability → missing',
+      r,
+      v => typeof v === 'object' && v !== null && (v as { status: string }).status === 'missing',
+      "{ status: 'missing' }");
+    setOsPersonCapabilitySearch(null);
+  }
+
+  // ── T-CAP-05: OS search receives resolved identity attrs, never utterance ─
+  {
+    const seen: Array<{ name: string; relationship?: string }> = [];
+    setOsPersonCapabilitySearch(async (identity) => {
+      seen.push({ name: identity.name, relationship: identity.relationship });
+      return [];
+    });
+    await resolvePersonCapability(phonelessWife(), 'phone');
+    assert('T-CAP-05 OS constrained to contact.name/relationship (not utterance)',
+      seen,
+      v => Array.isArray(v) && v.length === 1
+        && v[0].name === 'Shannon'
+        && v[0].relationship === 'wife'
+        && !JSON.stringify(v).toLowerCase().includes('my wife'),
+      "[{ name: 'Shannon', relationship: 'wife' }]");
+    setOsPersonCapabilitySearch(null);
+  }
+
+  // ── T-CAP-06: Herald address present → available/herald for address ───────
+  {
+    let osCalls = 0;
+    setOsPersonCapabilitySearch(async () => { osCalls++; return []; });
+    const contact: Contact = {
+      ...phonelessWife(),
+      address: '123 Main St',
+    };
+    const r = await resolvePersonCapability(contact, 'address');
+    assert('T-CAP-06 Herald address → available/herald; OS unused',
+      { r, osCalls },
+      v => typeof v === 'object' && v !== null
+        && (v as { r: { status: string; source?: string; value?: string }; osCalls: number }).r.status === 'available'
+        && (v as { r: { source?: string } }).r.source === 'herald'
+        && (v as { r: { value?: string } }).r.value === '123 Main St'
+        && (v as { osCalls: number }).osCalls === 0,
+      "{ status: 'available', value: '123 Main St', source: 'herald' }; osCalls=0");
+    setOsPersonCapabilitySearch(null);
+  }
+
+  // ── T-CAP-07: identity remains capability-agnostic (no coupling) ──────────
+  {
+    const db = freshDB();
+    insertContact(db, { id: 'c1', name: 'Shannon', relationship: 'wife', importance: 9 });
+    setOsPersonCapabilitySearch(null);
+    const identity = resolvePersonIdentity('my wife');
+    const cap = await resolvePersonCapability(
+      identity.status === 'single' ? identity.contact : phonelessWife(),
+      'phone',
+    );
+    assert('T-CAP-07 identity single despite missing phone; capability missing separately',
+      { identity, cap },
+      v => typeof v === 'object' && v !== null
+        && (v as { identity: { status: string; contact?: Contact } }).identity.status === 'single'
+        && (v as { identity: { contact?: Contact } }).identity.contact?.name === 'Shannon'
+        && (v as { cap: { status: string } }).cap.status === 'missing',
+      "identity single Shannon + capability missing");
   }
 
   const total = passed + failures.length;

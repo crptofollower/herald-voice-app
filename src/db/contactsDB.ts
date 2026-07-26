@@ -396,6 +396,98 @@ export function resolvePersonIdentity(rawTarget: string): PersonIdentityResoluti
   return { status: 'ambiguous', candidates };
 }
 
+export type PersonCapabilityResolution =
+  | { status: 'available'; value: string; source: 'herald' | 'os' }
+  | { status: 'missing' }
+  | { status: 'ambiguous'; candidates: Contact[] };
+
+/** Minimal OS row returned by the authorized OS capability search. */
+export type OsPersonCapabilityMatch = {
+  name: string;
+  phone?: string;
+  address?: string;
+  email?: string;
+};
+
+/**
+ * OS search constrained to an already-resolved person's identity attributes.
+ * Must never receive the original user utterance / rawTarget.
+ */
+export type OsPersonCapabilitySearch = (
+  identity: { name: string; relationship?: string },
+  capability: Exclude<PersonCapability, 'any'>,
+) => Promise<OsPersonCapabilityMatch[]>;
+
+let _osPersonCapabilitySearch: OsPersonCapabilitySearch | null = null;
+
+/** Register (or clear) the OS capability search used by resolvePersonCapability. */
+export function setOsPersonCapabilitySearch(fn: OsPersonCapabilitySearch | null): void {
+  _osPersonCapabilitySearch = fn;
+}
+
+function capabilityValue(
+  row: { phone?: string | null; address?: string | null; email?: string | null },
+  capability: Exclude<PersonCapability, 'any'>,
+): string | undefined {
+  const raw =
+    capability === 'phone' ? row.phone
+    : capability === 'address' ? row.address
+    : row.email;
+  const trimmed = raw?.trim();
+  return trimmed || undefined;
+}
+
+/**
+ * Capability provider for an already-resolved contact. Herald field first;
+ * OS only when Herald lacks the field, searched by that contact's identity
+ * attributes (never the original utterance). Does not call
+ * resolvePersonIdentity and never silently picks among OS multiples.
+ */
+export async function resolvePersonCapability(
+  contact: Contact,
+  capability: PersonCapability,
+): Promise<PersonCapabilityResolution> {
+  if (capability === 'any') {
+    return { status: 'available', value: contact.name, source: 'herald' };
+  }
+
+  const heraldValue = capabilityValue(contact, capability);
+  if (heraldValue) {
+    return { status: 'available', value: heraldValue, source: 'herald' };
+  }
+
+  if (!_osPersonCapabilitySearch) return { status: 'missing' };
+
+  const osMatches = await _osPersonCapabilitySearch(
+    { name: contact.name, relationship: contact.relationship },
+    capability,
+  );
+
+  const withCap = osMatches.filter(m => !!capabilityValue(m, capability));
+  if (withCap.length === 0) return { status: 'missing' };
+  if (withCap.length === 1) {
+    return {
+      status: 'available',
+      value: capabilityValue(withCap[0], capability)!,
+      source: 'os',
+    };
+  }
+
+  return {
+    status: 'ambiguous',
+    candidates: withCap.map((m, i) => ({
+      id: `os:${i}:${m.name}`,
+      name: m.name,
+      phone: m.phone,
+      address: m.address,
+      email: m.email,
+      importance: 5,
+      created_at: '',
+      updated_at: '',
+    })),
+  };
+}
+
 // ─── getImportantContacts ─────────────────────────────────────────────────────
 //
 // Returns contacts with importance >= threshold, ordered by importance.

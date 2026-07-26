@@ -218,7 +218,7 @@ const RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", BOLD = "\x1b[1m",
 let passed = 0;
 const failures = [];
 const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length + 4; // +1 list_todo+medical intercept, +3 classifier tri-state
-const EXPECTED_TOTAL = 722;   // was 712; +10 T-RPI identity resolver + capability helper (replaced draft T-RPR)
+const EXPECTED_TOTAL = 729;   // was 722; +7 T-CAP resolvePersonCapability
 
 console.log(`\n${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  HERALD ROUTER + PHONE TEST SUITE — ${TOTAL} tests${RESET}`);

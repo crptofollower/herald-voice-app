@@ -99,6 +99,7 @@ import {
   setEmergencyContact,
   nameMatchesQuery,
   normalizeAddressInput,
+  setOsPersonCapabilitySearch,
 } from "../db/contactsDB";
 import { writeMedicalFact, writeMedicalRecord, writeMedication, writeMedicalContact, guessMedicationName, confirmMedicationCapture, deactivateMedicationByName } from "../db/medicalDB";
 import { extractDosage } from "../utils/detectMedicalEvent";
@@ -297,6 +298,42 @@ export default function ChatScreen() {
     return null;
   };
   resolveContactPhoneRef.current = resolveContactPhone;
+
+  // OS capability search for resolvePersonCapability — constrained to the
+  // already-resolved contact's name (never the original user utterance).
+  useEffect(() => {
+    setOsPersonCapabilitySearch(async (identity, capability) => {
+      if (capability !== 'phone') return [];
+      try {
+        const Contacts = await import('expo-contacts');
+        const { status } = await Contacts.requestPermissionsAsync();
+        if (status !== 'granted') return [];
+        const { data } = await Contacts.getContactsAsync({
+          fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name],
+        });
+        if (!data?.length) return [];
+        const query = identity.name.trim().toLowerCase();
+        if (!query) return [];
+        const exactMatches = data.filter(c =>
+          c.name?.toLowerCase() === query ||
+          c.firstName?.toLowerCase() === query ||
+          c.lastName?.toLowerCase() === query
+        );
+        const partialMatches = data.filter(c => nameMatchesQuery(c.name, query));
+        const candidates = exactMatches.length > 0 ? exactMatches : partialMatches;
+        return candidates
+          .filter(c => !!c.phoneNumbers?.[0]?.number)
+          .map(c => ({
+            name: c.name ?? identity.name,
+            phone: c.phoneNumbers![0].number!.replace(/\D/g, ''),
+          }));
+      } catch (e) {
+        console.warn('[osPersonCapabilitySearch] expo-contacts failed:', e);
+        return [];
+      }
+    });
+    return () => setOsPersonCapabilitySearch(null);
+  }, []);
 
   const handleLaunchActionRef = useRef<((appName: string) => Promise<void>) | null>(null);
 

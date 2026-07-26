@@ -16,7 +16,7 @@ import type { ConversationSession } from '../../routing/conversationSession';
 import * as IntentLauncher from 'expo-intent-launcher';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getDB } from '../../db/schema';
-import { isPersonalDestination, isRelationshipTerm, RELATIONSHIP_WORDS, resolvePersonIdentity, contactHasCapability } from '../../db/contactsDB';
+import { isPersonalDestination, isRelationshipTerm, RELATIONSHIP_WORDS, resolvePersonIdentity, contactHasCapability, resolvePersonCapability } from '../../db/contactsDB';
 import { normalizePersonTarget, liftRelationshipName } from '../../utils/personReference';
 import { answerHouseholdRead } from '../../utils/householdRead';
 import { guessMedicationName, deactivateMedicationByName } from '../../db/medicalDB';
@@ -156,8 +156,10 @@ export async function dispatchAction(
               speak(reply);
             };
 
-            const askForNumber = (name: string) => {
-              const reply = `I don't have a number for ${name}. What's their number?`;
+            const askForNumber = (name: string, opts?: { knownPerson?: boolean }) => {
+              const reply = opts?.knownPerson
+                ? `I know ${name} but I don't have a phone number for them. What's their number?`
+                : `I don't have a number for ${name}. What's their number?`;
               addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
               speak(reply);
               pendingContactCollectRef.current = { action: 'text', name, body: message };
@@ -178,19 +180,26 @@ export async function dispatchAction(
                   const match = matchCandidateToken(replyText, smsCandidates);
                   if (match === 'ambiguous' || match === 'none') return { status: 'noop', ack: '' };
                   const picked = byId.get(match.ref);
-                  if (!picked || !contactHasCapability(picked, 'phone')) {
+                  if (!picked) {
                     return { status: 'failed', ack: `I don't have a number for ${match.label}. What's their number?` };
                   }
-                  const smsUrl = `sms:${picked.phone!.replace(/\D/g, '')}${message ? `?body=${encodeURIComponent(message)}` : ''}`;
-                  try {
-                    await openURL(smsUrl);
-                    const okReply = message
-                      ? `Opening a message to ${picked.name} with your note ready.`
-                      : `Opening a message to ${picked.name}.`;
-                    return { status: 'committed', ack: okReply };
-                  } catch {
-                    return { status: 'failed', ack: `I couldn't open a message to ${picked.name} — try again.` };
+                  const cap = await resolvePersonCapability(picked, 'phone');
+                  if (cap.status === 'available') {
+                    const smsUrl = `sms:${cap.value.replace(/\D/g, '')}${message ? `?body=${encodeURIComponent(message)}` : ''}`;
+                    try {
+                      await openURL(smsUrl);
+                      const okReply = message
+                        ? `Opening a message to ${picked.name} with your note ready.`
+                        : `Opening a message to ${picked.name}.`;
+                      return { status: 'committed', ack: okReply };
+                    } catch {
+                      return { status: 'failed', ack: `I couldn't open a message to ${picked.name} — try again.` };
+                    }
                   }
+                  return {
+                    status: 'failed',
+                    ack: `I know ${picked.name} but I don't have a phone number for them. What's their number?`,
+                  };
                 },
               });
               return;
@@ -198,11 +207,44 @@ export async function dispatchAction(
 
             if (identity.status === 'single') {
               const only = identity.contact;
-              if (contactHasCapability(only, 'phone')) {
-                await openSmsTo({ name: only.name, phone: only.phone! });
+              const cap = await resolvePersonCapability(only, 'phone');
+              if (cap.status === 'available') {
+                await openSmsTo({ name: only.name, phone: cap.value });
                 return;
               }
-              askForNumber(only.name);
+              if (cap.status === 'ambiguous') {
+                const smsCandidates = cap.candidates.map(c => ({ label: c.name, ref: c.id }));
+                const byId = new Map(cap.candidates.map(c => [c.id, c]));
+                const names = cap.candidates.map(c => c.name).join(', ');
+                const reply = `I found more than one ${only.name} in your contacts — ${names}. Which one did you mean?`;
+                addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+                speak(reply);
+                session.setPending({
+                  pendingKey: 'sms_disambiguate_os_capability',
+                  kind: 'standard',
+                  reaskPrompt: `I'm not sure I caught that — which one did you mean: ${names}?`,
+                  resume: async (replyText: string): Promise<CommitResult> => {
+                    const match = matchCandidateToken(replyText, smsCandidates);
+                    if (match === 'ambiguous' || match === 'none') return { status: 'noop', ack: '' };
+                    const picked = byId.get(match.ref);
+                    if (!picked || !contactHasCapability(picked, 'phone')) {
+                      return { status: 'failed', ack: `I don't have a number for ${match.label}. What's their number?` };
+                    }
+                    const smsUrl = `sms:${picked.phone!.replace(/\D/g, '')}${message ? `?body=${encodeURIComponent(message)}` : ''}`;
+                    try {
+                      await openURL(smsUrl);
+                      const okReply = message
+                        ? `Opening a message to ${picked.name} with your note ready.`
+                        : `Opening a message to ${picked.name}.`;
+                      return { status: 'committed', ack: okReply };
+                    } catch {
+                      return { status: 'failed', ack: `I couldn't open a message to ${picked.name} — try again.` };
+                    }
+                  },
+                });
+                return;
+              }
+              askForNumber(only.name, { knownPerson: true });
               return;
             }
 

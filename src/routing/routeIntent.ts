@@ -9,7 +9,7 @@ import { detectDiagnosisCapture, detectDoctorIntroCapture, detectMedicalEvent } 
 import { detectFamilyCapture } from '../utils/familyCapture';
 import { getDB } from '../db/schema';
 import { capturePerson } from '../db/capturePerson';
-import { findContactByName, setEmergencyContact, getEmergencyContact, retireRelationshipHolder, RELATIONSHIP_WORDS, resolvePersonIdentity, contactHasCapability } from '../db/contactsDB';
+import { findContactByName, setEmergencyContact, getEmergencyContact, retireRelationshipHolder, RELATIONSHIP_WORDS, resolvePersonIdentity, contactHasCapability, resolvePersonCapability } from '../db/contactsDB';
 import { normalizePersonTarget, liftRelationshipName } from '../utils/personReference';
 
 type ActionIntent = NonNullable<TierDecision['actionIntent']>;
@@ -67,7 +67,9 @@ const DETERMINISTIC_CAPTURERS: DeterministicCapturer[] = [
 export async function resolveContactCallIntent(
   contactName: string,
   raw: string,
-  deps: { resolveContact?: (n: string) => Promise<{phone:string;name:string;contactId?:string;source:'herald'|'device'}|{phone:null;name:string;source:'device';candidateNames:string[];deviceCandidates:{name:string;phone:string}[]}|null> },
+  deps: {
+    resolveContact?: (n: string) => Promise<{phone:string;name:string;contactId?:string;source:'herald'|'device'}|{phone:null;name:string;source:'device';candidateNames:string[];deviceCandidates:{name:string;phone:string}[]}|null>;
+  },
 ): Promise<IntentRecord> {
   const cleaned = liftRelationshipName(normalizePersonTarget(contactName));
 
@@ -89,21 +91,45 @@ export async function resolveContactCallIntent(
 
   if (identity.status === 'single') {
     const c = identity.contact;
-    if (contactHasCapability(c, 'phone')) {
+    const cap = await resolvePersonCapability(c, 'phone');
+    if (cap.status === 'available') {
       return {
         type: 'contact_call',
         contact: contactName,
         candidates: [{
           name: c.name,
           relationship: c.relationship,
-          phone: c.phone!.trim(),
+          phone: cap.value,
           importance: c.importance,
         }],
         raw,
       };
     }
-    // Known person, missing phone — honest collect; no OS (Herald was not 'none').
-    return { type: 'contact_call', contact: c.name, raw };
+    if (cap.status === 'ambiguous') {
+      // OS returned multiple phones for this known person — ask, never top-1.
+      return {
+        type: 'contact_call',
+        contact: contactName,
+        candidates: cap.candidates.map(x => ({
+          name: x.name,
+          phone: (x.phone ?? '').trim(),
+          importance: 5,
+        })),
+        raw,
+      };
+    }
+    // Known person, no phone in Herald or OS — empty-phone candidate → writer known-missing collect.
+    return {
+      type: 'contact_call',
+      contact: contactName,
+      candidates: [{
+        name: c.name,
+        relationship: c.relationship,
+        phone: '',
+        importance: c.importance,
+      }],
+      raw,
+    };
   }
 
   // identity.status === 'none' — temporary exception: existing OS fall-through.
@@ -1071,13 +1097,18 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
         return digits;
       };
 
-      function collectStage(contactLabel: string): CommitResult {
+      function collectStage(contactLabel: string, opts?: { knownPerson?: boolean }): CommitResult {
+        const known = opts?.knownPerson === true;
         return {
           status: 'pending',
-          prompt: `I don't have a number for ${contactLabel} yet — what's their name, or you can give me the number?`,
+          prompt: known
+            ? `I know ${contactLabel} but I don't have a phone number for them. What's their number?`
+            : `I don't have a number for ${contactLabel} yet — what's their name, or you can give me the number?`,
           pendingKey: 'contact_call',
           kind: 'standard',
-          reaskPrompt: `I'm not sure I'm following — what's your ${contactLabel}'s name, or their number?`,
+          reaskPrompt: known
+            ? `I'm not sure I'm following — what's ${contactLabel}'s number?`
+            : `I'm not sure I'm following — what's your ${contactLabel}'s name, or their number?`,
           resume: async (reply: string): Promise<CommitResult> => {
             const phone = extractPhone10(reply);
             if (phone) {
@@ -1304,7 +1335,7 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       if (herald.length === 1) {
         const only = herald[0];
         if (!only.phone?.trim()) {
-          return collectStage(only.name);
+          return collectStage(only.name, { knownPerson: true });
         }
         // phonelessNames retained on IntentRecord for back-compat; disclosure only
         // when resolver still supplies it (identity-first path normally does not).
