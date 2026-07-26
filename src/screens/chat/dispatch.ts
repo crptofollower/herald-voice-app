@@ -16,7 +16,7 @@ import type { ConversationSession } from '../../routing/conversationSession';
 import * as IntentLauncher from 'expo-intent-launcher';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getDB } from '../../db/schema';
-import { findAllContactMatches, findContactByName, findContactByRelationship, isPersonalDestination, isRelationshipTerm, resolveRelationshipOrNull, RELATIONSHIP_WORDS } from '../../db/contactsDB';
+import { isPersonalDestination, isRelationshipTerm, RELATIONSHIP_WORDS, resolvePersonIdentity, contactHasCapability } from '../../db/contactsDB';
 import { normalizePersonTarget, liftRelationshipName } from '../../utils/personReference';
 import { answerHouseholdRead } from '../../utils/householdRead';
 import { guessMedicationName, deactivateMedicationByName } from '../../db/medicalDB';
@@ -144,17 +144,29 @@ export async function dispatchAction(
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
           let resolvedSms;
           try {
-            // Herald multi-match fence (same finder as resolveContactCallIntent) —
-            // ask before silently picking importance DESC LIMIT 1 via resolveContactPhone.
-            const cleaned = contact.trim().toLowerCase()
-              .replace(/[\u2018\u2019\u02BC\u0060]/g, "'")
-              .replace(/^(?:my|the|a)\s+/, '');
-            const heraldWithPhone = findAllContactMatches(cleaned).filter(c => !!c.phone?.trim());
+            const identity = resolvePersonIdentity(contact);
 
-            if (heraldWithPhone.length > 1) {
-              const smsCandidates = heraldWithPhone.map(c => ({ label: c.name, ref: c.id }));
-              const byId = new Map(heraldWithPhone.map(c => [c.id, c]));
-              const names = heraldWithPhone.map(c => c.name).join(', ');
+            const openSmsTo = async (person: { name: string; phone: string }) => {
+              const smsUrl = `sms:${person.phone.replace(/\D/g, '')}${message ? `?body=${encodeURIComponent(message)}` : ''}`;
+              await openURL(smsUrl);
+              const reply = message
+                ? `Opening a message to ${person.name} with your note ready.`
+                : `Opening a message to ${person.name}.`;
+              addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+              speak(reply);
+            };
+
+            const askForNumber = (name: string) => {
+              const reply = `I don't have a number for ${name}. What's their number?`;
+              addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+              speak(reply);
+              pendingContactCollectRef.current = { action: 'text', name, body: message };
+            };
+
+            if (identity.status === 'ambiguous') {
+              const smsCandidates = identity.candidates.map(c => ({ label: c.name, ref: c.id }));
+              const byId = new Map(identity.candidates.map(c => [c.id, c]));
+              const names = identity.candidates.map(c => c.name).join(', ');
               const reply = `I found more than one ${contact} in your contacts — ${names}. Which one did you mean?`;
               addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
               speak(reply);
@@ -166,10 +178,10 @@ export async function dispatchAction(
                   const match = matchCandidateToken(replyText, smsCandidates);
                   if (match === 'ambiguous' || match === 'none') return { status: 'noop', ack: '' };
                   const picked = byId.get(match.ref);
-                  if (!picked?.phone) {
+                  if (!picked || !contactHasCapability(picked, 'phone')) {
                     return { status: 'failed', ack: `I don't have a number for ${match.label}. What's their number?` };
                   }
-                  const smsUrl = `sms:${picked.phone.replace(/\D/g, '')}${message ? `?body=${encodeURIComponent(message)}` : ''}`;
+                  const smsUrl = `sms:${picked.phone!.replace(/\D/g, '')}${message ? `?body=${encodeURIComponent(message)}` : ''}`;
                   try {
                     await openURL(smsUrl);
                     const okReply = message
@@ -184,28 +196,20 @@ export async function dispatchAction(
               return;
             }
 
-            if (heraldWithPhone.length === 1) {
-              const only = heraldWithPhone[0];
-              const smsUrl = `sms:${only.phone!.replace(/\D/g, '')}${message ? `?body=${encodeURIComponent(message)}` : ''}`;
-              await openURL(smsUrl);
-              const reply = message
-                ? `Opening a message to ${only.name} with your note ready.`
-                : `Opening a message to ${only.name}.`;
-              addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-              speak(reply);
+            if (identity.status === 'single') {
+              const only = identity.contact;
+              if (contactHasCapability(only, 'phone')) {
+                await openSmsTo({ name: only.name, phone: only.phone! });
+                return;
+              }
+              askForNumber(only.name);
               return;
             }
 
-            // heraldWithPhone.length === 0 — existing path unchanged (Herald miss / OS fallback).
+            // identity.status === 'none' — temporary exception: existing OS fall-through.
             resolvedSms = await resolveContactPhone(contact);
             if (resolvedSms?.phone) {
-              const smsUrl = `sms:${resolvedSms.phone.replace(/\D/g, '')}${message ? `?body=${encodeURIComponent(message)}` : ''}`;
-              await openURL(smsUrl);
-              const reply = message
-                ? `Opening a message to ${resolvedSms.name} with your note ready.`
-                : `Opening a message to ${resolvedSms.name}.`;
-              addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-              speak(reply);
+              await openSmsTo({ name: resolvedSms.name, phone: resolvedSms.phone });
             } else if (resolvedSms && 'candidateNames' in resolvedSms && resolvedSms.candidateNames.length > 0) {
               // Pending Disambiguation Commit 1: refs-only candidates (names),
               // resolved live at commit time — never a cached phone-less
@@ -239,20 +243,14 @@ export async function dispatchAction(
                 },
               });
             } else {
-              const relationshipMatch = resolveRelationshipOrNull(contact);
-              const isRelationshipWord = RELATIONSHIP_WORDS.test(contact.trim());
-              if (isRelationshipWord && !relationshipMatch) {
+              if (RELATIONSHIP_WORDS.test(contact.trim())) {
                 const bare = contact.trim().replace(/^(my|our|his|her|their)\s+/i, '');
                 const reply = `I don't know who your ${bare} is yet. Tell me their name and I'll remember them.`;
                 addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
                 speak(reply);
                 return;
               }
-              const resolvedName = relationshipMatch?.name ?? contact;
-              const reply = `I don't have a number for ${resolvedName}. What's their number?`;
-              addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-              speak(reply);
-              pendingContactCollectRef.current = { action: 'text', name: resolvedName, body: message };
+              askForNumber(contact);
             }
           } catch (err) {
             console.error('[dispatch sms] openURL failed', resolvedSms?.phone, err);
@@ -390,7 +388,9 @@ export async function dispatchAction(
           const { resolveContactCallIntent } = await import('../../routing/routeIntent');
           const { applyIntents } = await import('../../routing/processUtterance');
           const rawContact = actionIntent.contact ?? '';
-          const callIntent = await resolveContactCallIntent(rawContact, text, { resolveContact: resolveContactPhone });
+          const callIntent = await resolveContactCallIntent(rawContact, text, {
+            resolveContact: resolveContactPhone,
+          });
           const { responseText, commits } = await applyIntents([callIntent], text, session, undefined, 'deterministic');
           addMessage({ id: generateId('msg'), role: 'assistant', content: responseText, timestamp: Date.now() });
           speak(responseText);
@@ -409,11 +409,7 @@ export async function dispatchAction(
           const raw = actionIntent.destination;
 
           const cleaned = liftRelationshipName(normalizePersonTarget(raw));
-
-          // Herald multi-match fence (same finder as resolveContactCallIntent / SMS) —
-          // ask before silently picking importance DESC LIMIT 1. Pool is NOT
-          // filtered by address — completeness must not stand in for confirmation.
-          const heraldMatches = findAllContactMatches(cleaned);
+          const identity = resolvePersonIdentity(raw);
 
           // Returns CommitResult so the multi-match resume path can reuse it.
           // announce (default true): length===1 speaks here; resume passes
@@ -423,9 +419,20 @@ export async function dispatchAction(
             opts?: { announce?: boolean },
           ): Promise<CommitResult> => {
             const announce = opts?.announce !== false;
-            if (contact.address) {
+            const hasAddress = contactHasCapability(
+              {
+                id: '',
+                name: contact.name,
+                importance: 0,
+                created_at: '',
+                updated_at: '',
+                address: contact.address ?? undefined,
+              },
+              'address',
+            );
+            if (hasAddress) {
               try {
-                await handleMapsAction(contact.address);
+                await handleMapsAction(contact.address!);
                 const reply = `Opening directions to ${contact.name}.`;
                 if (announce) {
                   addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
@@ -450,10 +457,10 @@ export async function dispatchAction(
             return { status: 'noop', ack: reply };
           };
 
-          if (heraldMatches.length > 1) {
-            const navCandidates = heraldMatches.map(c => ({ label: c.name, ref: c.id }));
-            const byId = new Map(heraldMatches.map(c => [c.id, c]));
-            const names = heraldMatches.map(c => c.name).join(', ');
+          if (identity.status === 'ambiguous') {
+            const navCandidates = identity.candidates.map(c => ({ label: c.name, ref: c.id }));
+            const byId = new Map(identity.candidates.map(c => [c.id, c]));
+            const names = identity.candidates.map(c => c.name).join(', ');
             const reply = `I found more than one ${cleaned} in your contacts — ${names}. Which one did you mean?`;
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
@@ -468,33 +475,19 @@ export async function dispatchAction(
                 if (!picked) {
                   return { status: 'failed', ack: `I couldn't find that contact — try again?` };
                 }
-                // Same path as length===1 (maps try/catch + collect); announce:false
-                // so pending_resume speaks the ack once.
                 return openOrCollectAddress(picked, { announce: false });
               },
             });
             return;
           }
 
-          if (heraldMatches.length === 1) {
-            await openOrCollectAddress(heraldMatches[0]);
+          if (identity.status === 'single') {
+            await openOrCollectAddress(identity.contact);
             return;
           }
 
-          // heraldMatches.length === 0 — existing path unchanged (top-1 helpers / raw destination).
-          const contact = findContactByRelationship(cleaned) ?? findContactByName(cleaned);
-
-          if (contact?.address) {
-            await handleMapsAction(contact.address);
-            const reply = `Opening directions to ${contact.name}.`;
-            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-            speak(reply);
-          } else if (contact) {
-            const reply = `I know ${contact.name} but I don't have an address for them. What's their address?`;
-            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-            speak(reply);
-            pendingContactCollectRef.current = { action: 'navigate', name: contact.name };
-          } else if (isPersonalDestination(raw, cleaned)) {
+          // identity.status === 'none' — place search or honest personal miss (no top-1 helpers).
+          if (isPersonalDestination(raw, cleaned)) {
             // Unresolved PERSONAL destination. Never claim navigation started,
             // never hand a personal phrase to a Maps text search. No pending,
             // no contact row — a relationship word is not an identity.

@@ -398,9 +398,10 @@ export async function runContactCallTests() {
       'unmapped, still type call — no fabricated contact_call');
   }
 
-  // ── T-CT-13: name-hop bridge must NOT inherit relationship onto namesakes ──
-  // Phoneless "father-in-law" row + two phoneable Davids with no relationship of
-  // their own. Bridge finds the Davids by name; must not paint FIL onto them.
+  // ── T-CT-13: identity-first — phoneless FIL does NOT bridge to namesakes ──
+  // Phoneless "father-in-law" row + two phoneable Davids. Without the deleted
+  // name-hop bridge, identity resolves to the single FIL row; missing phone →
+  // collect for that person (never silent OS/name-hop to the Davids).
   {
     const db = freshDB();
     insertContact(db, { id: 'c_fil', name: 'David', relationship: 'father-in-law', importance: 7 });
@@ -409,40 +410,29 @@ export async function runContactCallTests() {
     const intent = await resolveContactCallIntent('father-in-law', 'call my father-in-law', { resolveContact: async () => null });
     const cands = (intent as { candidates?: Array<{ name: string; relationship?: string | null }> }).candidates ?? [];
     const pending = await DOMAIN_WRITERS['contact_call']!.add(intent, '');
-    assert('T-CT-13 bridged namesakes keep no inherited relationship',
-      { cands, pending },
-      v => {
-        if (v.pending.status !== 'pending') return false;
-        // Candidates themselves must never carry the FIL label from the
-        // phoneless row — this is the law this case guards (name-hop bridge
-        // must not paint m.relationship onto an unrelated namesake). The
-        // PROMPT'S wording for this scenario is asserted separately in
-        // T-CT-15 (no-relationship-evidence honest ask, added 2026-07-17
-        // alongside the false-confidence-guess fix — a version of this test
-        // used to also assert the old Mossholder-guess prompt shape here;
-        // that assertion was locking in the bug, not guarding against it,
-        // and has been removed).
-        return v.cands.length >= 2 && v.cands.every(c => !c.relationship?.trim());
-      },
-      'candidates carry no inherited relationship; prompt shape covered by T-CT-15');
+    assert('T-CT-13 phoneless FIL → collect for David; no bridged David candidates',
+      { cands, pending, contact: (intent as { contact?: string }).contact },
+      v => v.cands.length === 0
+        && v.contact === 'David'
+        && v.pending.status === 'pending'
+        && /don't have a number for David/i.test(v.pending.prompt),
+      'no candidates; collect pending for David');
   }
 
-  // ── T-CT-14: phoneless sibling disclosure (cold-start silent-narrowing fix) ─
+  // ── T-CT-14: identity-first — mixed phone among siblings asks, never silent dial ─
   {
     const db = freshDB();
     insertContact(db, { id: 'c_hunter', name: 'Hunter', relationship: 'son', phone: '555-010-0101', importance: 9 });
     insertContact(db, { id: 'c_grant', name: 'Grant', relationship: 'son', importance: 5 });
     const intent = await resolveContactCallIntent('son', 'call my son', { resolveContact: async () => null });
     const result = await DOMAIN_WRITERS['contact_call']!.add(intent, '');
-    assert('T-CT-14a one phoned + one phoneless → dials Hunter and ack names Grant',
-      { status: result.status, phone: dialPhone(result), ack: result.status === 'committed' ? result.ack : '' },
-      v => v.status === 'committed'
-        && v.phone === '5550100101'
-        && /Calling Hunter/i.test(v.ack)
-        && /Grant/i.test(v.ack)
-        && /don't have a number for Grant yet/i.test(v.ack)
-        && !/\b(his|her)\b/i.test(v.ack),
-      'committed dial Hunter; ack discloses Grant neutrally');
+    assert('T-CT-14a one phoned + one phoneless → identity ambiguous (ask), no silent dial',
+      { status: result.status, prompt: result.status === 'pending' ? result.prompt : '', cands: (intent as { candidates?: unknown[] }).candidates?.length },
+      v => v.status === 'pending'
+        && v.cands === 2
+        && /more than one son/i.test(v.prompt)
+        && /Hunter/i.test(v.prompt),
+      'pending disambiguation over both sons');
   }
   {
     const db = freshDB();
@@ -450,14 +440,12 @@ export async function runContactCallTests() {
     insertContact(db, { id: 'c_anna', name: 'Anna', relationship: 'daughter', importance: 5 });
     const intent = await resolveContactCallIntent('daughter', 'call my daughter', { resolveContact: async () => null });
     const result = await DOMAIN_WRITERS['contact_call']!.add(intent, '');
-    assert('T-CT-14a2 phoneless daughter → ack names Anna with no his/her',
-      { status: result.status, phone: dialPhone(result), ack: result.status === 'committed' ? result.ack : '' },
-      v => v.status === 'committed'
-        && v.phone === '5550100101'
-        && /Calling Emily/i.test(v.ack)
-        && /don't have a number for Anna yet/i.test(v.ack)
-        && !/\b(his|her)\b/i.test(v.ack),
-      'committed dial Emily; Anna disclosed without gendered pronoun');
+    assert('T-CT-14a2 phoned + phoneless daughters → identity ambiguous (ask)',
+      { status: result.status, prompt: result.status === 'pending' ? result.prompt : '' },
+      v => v.status === 'pending'
+        && /more than one daughter/i.test(v.prompt)
+        && /Emily/i.test(v.prompt),
+      'pending disambiguation');
   }
   {
     const db = freshDB();
@@ -491,13 +479,10 @@ export async function runContactCallTests() {
     insertContact(db, { id: 'c_d4', name: 'Alex', relationship: 'son', importance: 2 });
     const intent = await resolveContactCallIntent('son', 'call my son', { resolveContact: async () => null });
     const result = await DOMAIN_WRITERS['contact_call']!.add(intent, '');
-    assert('T-CT-14d 4+ phoneless → ack caps at 2 names + and N others',
-      { status: result.status, ack: result.status === 'committed' ? result.ack : '' },
-      v => v.status === 'committed'
-        && /Calling Hunter/i.test(v.ack)
-        && /and 2 others/i.test(v.ack)
-        && /don't have their numbers yet/i.test(v.ack),
-      'capped disclosure with and 2 others');
+    assert('T-CT-14d many sons (mixed phone) → identity ambiguous, no silent dial',
+      { status: result.status, prompt: result.status === 'pending' ? result.prompt : '', n: (intent as { candidates?: unknown[] }).candidates?.length },
+      v => v.status === 'pending' && v.n === 5 && /more than one son/i.test(v.prompt),
+      'pending over all five identity matches');
   }
   {
     freshDB();
@@ -729,11 +714,15 @@ export async function runContactCallTests() {
   }
 
   // ── T-CT-27: collectStage OS multi-match → pending pick, then unique name ─
-  // Ambiguous surname must not dial; unique given name resolves, persists
-  // relationship, and retires any prior live holder of that relationship.
+  // Herald identity 'none' (no son row) falls through to collect; ambiguous
+  // surname must not dial; unique given name resolves, persists relationship,
+  // and retires any prior live holder of that relationship.
   {
     const db = freshDB();
     insertContact(db, { id: 'c_old_son', name: 'Prior Holder', relationship: 'son', importance: 7 });
+    // Soft-clear the relationship so identity is 'none' and collect/OS path runs
+    // (identity-first would otherwise collect for Prior Holder's missing phone).
+    db.prepare(`UPDATE contacts SET relationship = NULL WHERE id = 'c_old_son'`).run();
     const intent = await resolveContactCallIntent('son', 'call my son', { resolveContact: async () => null });
     const pending = await addPending(intent, {
       resolveContact: async (n: string) =>

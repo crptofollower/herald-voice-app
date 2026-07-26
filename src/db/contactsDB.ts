@@ -17,6 +17,7 @@
 //   - getImportantContacts() → surfaced proactively
 
 import { getDB } from "./schema";
+import { normalizePersonTarget, liftRelationshipName } from "../utils/personReference";
 
 export interface Contact {
   id: string;
@@ -360,6 +361,39 @@ export function findAllContactMatches(input: string): Contact[] {
   } catch {
     return [];
   }
+}
+
+export type PersonCapability = 'phone' | 'address' | 'email' | 'any';
+
+export type PersonIdentityResolution =
+  | { status: 'single'; contact: Contact }
+  | { status: 'ambiguous'; candidates: Contact[] }
+  | { status: 'none' };
+
+/** Pure capability check — no lookup, no selection. */
+export function contactHasCapability(
+  contact: Contact,
+  capability: PersonCapability,
+): boolean {
+  if (capability === 'any') return true;
+  if (capability === 'phone') return !!contact.phone?.trim();
+  if (capability === 'address') return !!contact.address?.trim();
+  return !!contact.email?.trim();
+}
+
+/**
+ * Identity-only Herald person resolution. Normalizes via shared personReference
+ * helpers and matches with findAllContactMatches. Does not filter by capability
+ * and does not call OS contacts.
+ */
+export function resolvePersonIdentity(rawTarget: string): PersonIdentityResolution {
+  const cleaned = liftRelationshipName(normalizePersonTarget(rawTarget));
+  if (!cleaned) return { status: 'none' };
+
+  const candidates = findAllContactMatches(cleaned);
+  if (candidates.length === 0) return { status: 'none' };
+  if (candidates.length === 1) return { status: 'single', contact: candidates[0] };
+  return { status: 'ambiguous', candidates };
 }
 
 // ─── getImportantContacts ─────────────────────────────────────────────────────

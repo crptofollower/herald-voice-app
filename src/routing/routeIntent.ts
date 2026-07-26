@@ -9,7 +9,8 @@ import { detectDiagnosisCapture, detectDoctorIntroCapture, detectMedicalEvent } 
 import { detectFamilyCapture } from '../utils/familyCapture';
 import { getDB } from '../db/schema';
 import { capturePerson } from '../db/capturePerson';
-import { findContactByName, findAllContactMatches, setEmergencyContact, getEmergencyContact, retireRelationshipHolder, RELATIONSHIP_WORDS } from '../db/contactsDB';
+import { findContactByName, setEmergencyContact, getEmergencyContact, retireRelationshipHolder, RELATIONSHIP_WORDS, resolvePersonIdentity, contactHasCapability } from '../db/contactsDB';
+import { normalizePersonTarget, liftRelationshipName } from '../utils/personReference';
 
 type ActionIntent = NonNullable<TierDecision['actionIntent']>;
 
@@ -68,66 +69,47 @@ export async function resolveContactCallIntent(
   raw: string,
   deps: { resolveContact?: (n: string) => Promise<{phone:string;name:string;contactId?:string;source:'herald'|'device'}|{phone:null;name:string;source:'device';candidateNames:string[];deviceCandidates:{name:string;phone:string}[]}|null> },
 ): Promise<IntentRecord> {
-  const clean = contactName.trim().toLowerCase()
-    .replace(/[\u2018\u2019\u02BC\u0060]/g, "'")
-    .replace(/^(?:my|the|a)\s+/, '');
-  const allMatches = findAllContactMatches(clean);
-  let withPhone = allMatches.filter(c => !!c.phone?.trim());
+  const cleaned = liftRelationshipName(normalizePersonTarget(contactName));
 
-  // Relationship→name→phone second hop. A relationship word ("son") may match a
-  // row that is itself phoneless — captured as a family fact, not a numbered
-  // contact. The NUMBER lives on a name-keyed row (or the OS contact book). So
-  // resolve the matched person's NAME forward instead of stopping. The two-row
-  // split for one person is a Rung-5 entity-unification concern; this is the
-  // safe read-side join, not a write/merge, and never fabricates a number.
-  let resolvedName: string | null = null;
-  if (withPhone.length === 0 && allMatches.length > 0) {
-    resolvedName = allMatches[0].name;
-    const seen = new Set<string>();
-    const bridged: ReturnType<typeof findAllContactMatches> = [];
-    for (const m of allMatches) {
-      for (const b of findAllContactMatches(m.name)) {
-        if (!b.phone?.trim() || seen.has(b.id)) continue;
-        seen.add(b.id);
-        // Keep b's own relationship only — never inherit m's. Name-hop has no
-        // join key proving b and m are the same person; painting m.relationship
-        // onto an unrelated namesake fabricates a family claim (Elder Safety).
-        bridged.push({ ...b, relationship: b.relationship ?? undefined });
-      }
-    }
-    withPhone = bridged;
-  }
+  const identity = resolvePersonIdentity(contactName);
 
-  if (withPhone.length > 0) {
-    // Names that matched the query but still have no phone after filtering +
-    // bridge rescue — carried for honest disclosure when we dial the one
-    // (or few) callable hits. Not dial candidates (no phone).
-    const dialableIds = new Set(withPhone.map(c => c.id));
-    const phonelessNames = allMatches
-      .filter(c => !dialableIds.has(c.id) && !c.phone?.trim())
-      .map(c => c.name.trim())
-      .filter(Boolean);
-    // De-dupe preserving order
-    const seenName = new Set<string>();
-    const uniquePhoneless: string[] = [];
-    for (const n of phonelessNames) {
-      const k = n.toLowerCase();
-      if (seenName.has(k)) continue;
-      seenName.add(k);
-      uniquePhoneless.push(n);
-    }
+  if (identity.status === 'ambiguous') {
     return {
       type: 'contact_call',
       contact: contactName,
-      candidates: withPhone,
-      ...(uniquePhoneless.length > 0 ? { phonelessNames: uniquePhoneless } : {}),
+      candidates: identity.candidates.map(c => ({
+        name: c.name,
+        relationship: c.relationship,
+        phone: (c.phone ?? '').trim(),
+        importance: c.importance,
+      })),
       raw,
     };
   }
 
-  // Device fallback resolves the PERSON'S NAME (e.g. "Hunter"), never the bare
-  // relationship word ("son"), which the OS contact book will not contain.
-  const deviceQuery = resolvedName ?? clean;
+  if (identity.status === 'single') {
+    const c = identity.contact;
+    if (contactHasCapability(c, 'phone')) {
+      return {
+        type: 'contact_call',
+        contact: contactName,
+        candidates: [{
+          name: c.name,
+          relationship: c.relationship,
+          phone: c.phone!.trim(),
+          importance: c.importance,
+        }],
+        raw,
+      };
+    }
+    // Known person, missing phone — honest collect; no OS (Herald was not 'none').
+    return { type: 'contact_call', contact: c.name, raw };
+  }
+
+  // identity.status === 'none' — temporary exception: existing OS fall-through.
+  const deviceQuery = cleaned || contactName.trim().toLowerCase()
+    .replace(/[\u2018\u2019\u02BC\u0060]/g, "'")
+    .replace(/^(?:my|the|a)\s+/, '');
   const device = deps.resolveContact ? await deps.resolveContact(deviceQuery) : null;
   if (device && device.phone) {
     return { type: 'contact_call', contact: contactName, devicePhone: device.phone, deviceName: device.name, raw };
@@ -992,12 +974,21 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       const { contact, candidates, devicePhone, deviceName, phonelessNames } = intent;
       type CallCandidate = { name: string; relationship?: string; phone: string; importance: number };
 
-      const herald = (candidates ?? []).filter((c): c is CallCandidate => !!c.phone?.trim());
+      // Identity-first: candidates are identity matches (phone may be empty).
+      // Capability ('phone') is checked only after a single identity is chosen.
+      const herald: CallCandidate[] = (candidates ?? []).map(c => ({
+        name: c.name,
+        relationship: c.relationship,
+        phone: (c.phone ?? '').trim(),
+        importance: c.importance,
+      }));
 
       const handleFor = (c: CallCandidate): string =>
         c.relationship?.trim()
           ? `your ${c.relationship} ${c.name}`
-          : `at ...${c.phone.replace(/\D/g, '').slice(-4)}`;
+          : (c.phone.replace(/\D/g, '').length >= 4
+            ? `at ...${c.phone.replace(/\D/g, '').slice(-4)}`
+            : c.name);
 
       const joinNaturally = (items: string[]): string => {
         if (items.length === 0) return '';
@@ -1099,9 +1090,9 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
                   : `Calling your ${contactLabel} now. Tell me their name sometime and I'll remember them for next time.`,
               );
             }
-            const named = findAllContactMatches(reply).filter(c => !!c.phone?.trim());
-            if (named.length === 1) {
-              const match = named[0];
+            const replyIdentity = resolvePersonIdentity(reply);
+            if (replyIdentity.status === 'single' && contactHasCapability(replyIdentity.contact, 'phone')) {
+              const match = replyIdentity.contact;
               if (RELATIONSHIP_WORDS.test(contactLabel.trim())) {
                 retireRelationshipHolder(contactLabel, match.name);
                 capturePerson({ name: match.name, relationship: contactLabel, phone: match.phone!, importance: 7 });
@@ -1220,16 +1211,15 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
               // The reply named someone NOT in this pre-built candidate list —
               // a genuinely new name. Same fallback ladder as collectStage: try
               // Herald's own contacts fresh, then the OS contact book.
-              const freshMatch = findAllContactMatches(reply).filter(c => !!c.phone?.trim());
-              if (freshMatch.length === 1) {
-                const fresh = freshMatch[0];
-                if (!fresh.phone) return { status: 'noop', ack: '' };
+              const freshIdentity = resolvePersonIdentity(reply);
+              if (freshIdentity.status === 'single' && contactHasCapability(freshIdentity.contact, 'phone')) {
+                const fresh = freshIdentity.contact;
                 if (RELATIONSHIP_WORDS.test(contactLabel.trim())) {
                   retireRelationshipHolder(contactLabel, fresh.name);
-                  capturePerson({ name: fresh.name, relationship: contactLabel, phone: fresh.phone, importance: 7 });
-                  return commitDial(fresh.name, fresh.phone);
+                  capturePerson({ name: fresh.name, relationship: contactLabel, phone: fresh.phone!, importance: 7 });
+                  return commitDial(fresh.name, fresh.phone!);
                 }
-                return commitDial(fresh.name, fresh.phone);
+                return commitDial(fresh.name, fresh.phone!);
               }
               if (ctx?.resolveContact) {
                 const device = await ctx.resolveContact(reply);
@@ -1283,7 +1273,9 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
           resume: async (reply: string): Promise<CommitResult> => {
             const trimmed = reply.trim();
             const { CONFIRM_YES_RE, CONFIRM_NO_RE } = await import('./conversationSession');
-            if (CONFIRM_YES_RE.test(trimmed)) return commitDial(guess.name, guess.phone);
+            const dialOrCollect = (c: CallCandidate): CommitResult =>
+              c.phone?.trim() ? commitDial(c.name, c.phone) : collectStage(c.name);
+            if (CONFIRM_YES_RE.test(trimmed)) return dialOrCollect(guess);
             if (CONFIRM_NO_RE.test(trimmed)) {
               const remaining = list.slice(1);
               if (remaining.length === 0) return collectStage(contactLabel);
@@ -1297,34 +1289,26 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
                 resume: async (pick: string): Promise<CommitResult> => {
                   const matched = matchCandidate(pick, remaining, contactLabel);
                   if (!matched) return { status: 'noop', ack: '' };
-                  return commitDial(matched.name, matched.phone);
+                  return dialOrCollect(matched);
                 },
               };
             }
             const named = matchCandidate(trimmed, list, contactLabel);
-            if (named) return commitDial(named.name, named.phone);
+            if (named) return dialOrCollect(named);
             return { status: 'noop', ack: '' };
           },
         };
       }
 
-      const sameName = (a: string, b: string): boolean => {
-        const tok = (s: string) => new Set(
-          s.trim().toLowerCase().replace(/\s+/g, ' ').split(' ').filter(Boolean)
-        );
-        const A = tok(a), B = tok(b);
-        if (A.size === 0 || B.size === 0) return false;
-        const [small, big] = A.size <= B.size ? [A, B] : [B, A];
-        return [...small].every(t => big.has(t));
-      };
-
       if (herald.length > 1) return disambiguateStage(herald, contact);
       if (herald.length === 1) {
         const only = herald[0];
-        const dropped = (phonelessNames ?? [])
-          .map(n => n.trim())
-          .filter(Boolean)
-          .filter(n => !sameName(n, only.name));
+        if (!only.phone?.trim()) {
+          return collectStage(only.name);
+        }
+        // phonelessNames retained on IntentRecord for back-compat; disclosure only
+        // when resolver still supplies it (identity-first path normally does not).
+        const dropped = (phonelessNames ?? []).map(n => n.trim()).filter(Boolean);
         if (dropped.length > 0) {
           return commitDial(only.name, only.phone, disclosureAck(only.name, dropped));
         }

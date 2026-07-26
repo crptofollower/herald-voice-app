@@ -6,7 +6,7 @@
 
 import Database from 'better-sqlite3';
 import { setDB } from '../../src/db/schema.ts';
-import { findAllContactMatches, nameMatchesQuery, isPersonalDestination, isRelationshipTerm, writeContactRaw, writeContactValidated, stripRelationshipLead, findContactByName } from '../../src/db/contactsDB.ts';
+import { findAllContactMatches, nameMatchesQuery, isPersonalDestination, isRelationshipTerm, writeContactRaw, writeContactValidated, stripRelationshipLead, findContactByName, resolvePersonIdentity, contactHasCapability } from '../../src/db/contactsDB.ts';
 import type { Contact } from '../../src/db/contactsDB.ts';
 
 const BOLD='\x1b[1m',RED='\x1b[31m',GREEN='\x1b[32m',DIM='\x1b[2m',RESET='\x1b[0m';
@@ -54,14 +54,15 @@ function insertContact(
 ) {
   const now = new Date().toISOString();
   db.prepare(
-    `INSERT INTO contacts (id, name, relationship, phone, address, importance, created_at, updated_at, removed_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO contacts (id, name, relationship, phone, address, email, importance, created_at, updated_at, removed_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     row.id,
     row.name,
     row.relationship ?? null,
     row.phone ?? null,
     row.address ?? null,
+    row.email ?? null,
     row.importance ?? 5,
     row.created_at ?? now,
     row.updated_at ?? now,
@@ -535,6 +536,114 @@ export async function runContactsDBTests() {
         && (v as { ok: boolean; reason?: string }).ok === false
         && (v as { ok: boolean; reason?: string }).reason === 'missing_identity',
       "{ ok: false, reason: 'missing_identity' }");
+  }
+
+  // ── T-RPI: resolvePersonIdentity (identity-only) + contactHasCapability ───
+  console.log(`\n${BOLD}-- resolvePersonIdentity Contract Tests -------------------${RESET}\n`);
+
+  // ── T-RPI-1: >1 identity candidates → ambiguous (never silent top-1) ──────
+  {
+    const db = freshDB();
+    insertContact(db, { id: 'rpi_s1', name: 'Sarah Smith', phone: '5551112222', importance: 9 });
+    insertContact(db, { id: 'rpi_s2', name: 'Sarah Jones', phone: '5553334444', importance: 5 });
+    const r = resolvePersonIdentity('Sarah');
+    assert('T-RPI-1 two Sarahs → ambiguous with full candidates array',
+      r,
+      v => typeof v === 'object' && v !== null
+        && (v as { status: string }).status === 'ambiguous'
+        && Array.isArray((v as { candidates: Contact[] }).candidates)
+        && (v as { candidates: Contact[] }).candidates.length === 2
+        && (v as { candidates: Contact[] }).candidates.map(c => c.id).sort().join(',') === 'rpi_s1,rpi_s2',
+      "{ status: 'ambiguous', candidates.length === 2 }");
+  }
+
+  // ── T-RPI-2: 0 identity candidates → none ─────────────────────────────────
+  {
+    freshDB();
+    assert('T-RPI-2 unstored wife → none',
+      resolvePersonIdentity('my wife'),
+      v => typeof v === 'object' && v !== null
+        && (v as { status: string }).status === 'none'
+        && !('contact' in (v as object)),
+      "{ status: 'none' }");
+  }
+
+  // ── T-RPI-3: 1 identity candidate → single ────────────────────────────────
+  {
+    const db = freshDB();
+    insertContact(db, { id: 'rpi_only', name: 'Emily', relationship: 'daughter', phone: '5550101', importance: 8 });
+    insertContact(db, { id: 'rpi_other', name: 'Mike', phone: '5559999', importance: 5 });
+    assert('T-RPI-3 my daughter → single Emily',
+      resolvePersonIdentity('my daughter'),
+      v => typeof v === 'object' && v !== null
+        && (v as { status: string }).status === 'single'
+        && (v as { contact: Contact }).contact?.id === 'rpi_only',
+      "{ status: 'single', contact.id === rpi_only }");
+  }
+
+  // ── T-RPI-4..6: identity independent of missing capability fields ─────────
+  {
+    const db = freshDB();
+    insertContact(db, {
+      id: 'rpi_bare', name: 'Shannon', relationship: 'wife',
+      phone: null, address: null, email: null, importance: 9,
+    });
+    const r = resolvePersonIdentity('wife');
+    assert('T-RPI-4 known wife with no phone → single',
+      r,
+      v => typeof v === 'object' && v !== null
+        && (v as { status: string }).status === 'single'
+        && (v as { contact: Contact }).contact?.id === 'rpi_bare'
+        && !(v as { contact: Contact }).contact?.phone?.trim(),
+      "{ status: 'single', phoneless }");
+    assert('T-RPI-5 known wife with no address → single',
+      r,
+      v => typeof v === 'object' && v !== null
+        && (v as { status: string }).status === 'single'
+        && !(v as { contact: Contact }).contact?.address?.trim(),
+      "{ status: 'single', addressless }");
+    assert('T-RPI-6 known wife with no email → single',
+      r,
+      v => typeof v === 'object' && v !== null
+        && (v as { status: string }).status === 'single'
+        && !(v as { contact: Contact }).contact?.email?.trim(),
+      "{ status: 'single', emailless }");
+  }
+
+  // ── T-RPI-7: contactHasCapability pure helper ─────────────────────────────
+  {
+    const withAll: Contact = {
+      id: 'x', name: 'X', phone: '555', address: '1 Main', email: 'a@b.c',
+      importance: 5, created_at: '', updated_at: '',
+    };
+    const empty: Contact = {
+      id: 'y', name: 'Y', phone: '  ', address: '', email: undefined,
+      importance: 5, created_at: '', updated_at: '',
+    };
+    assert('T-RPI-7a phone true only when non-empty phone',
+      { with: contactHasCapability(withAll, 'phone'), empty: contactHasCapability(empty, 'phone') },
+      v => typeof v === 'object' && v !== null
+        && (v as { with: boolean; empty: boolean }).with === true
+        && (v as { with: boolean; empty: boolean }).empty === false,
+      '{ with: true, empty: false }');
+    assert('T-RPI-7b address true only when non-empty address',
+      { with: contactHasCapability(withAll, 'address'), empty: contactHasCapability(empty, 'address') },
+      v => typeof v === 'object' && v !== null
+        && (v as { with: boolean; empty: boolean }).with === true
+        && (v as { with: boolean; empty: boolean }).empty === false,
+      '{ with: true, empty: false }');
+    assert('T-RPI-7c email true only when non-empty email',
+      { with: contactHasCapability(withAll, 'email'), empty: contactHasCapability(empty, 'email') },
+      v => typeof v === 'object' && v !== null
+        && (v as { with: boolean; empty: boolean }).with === true
+        && (v as { with: boolean; empty: boolean }).empty === false,
+      '{ with: true, empty: false }');
+    assert('T-RPI-7d any always true',
+      { with: contactHasCapability(withAll, 'any'), empty: contactHasCapability(empty, 'any') },
+      v => typeof v === 'object' && v !== null
+        && (v as { with: boolean; empty: boolean }).with === true
+        && (v as { with: boolean; empty: boolean }).empty === true,
+      '{ with: true, empty: true }');
   }
 
   const total = passed + failures.length;
