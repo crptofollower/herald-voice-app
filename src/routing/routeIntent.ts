@@ -1067,6 +1067,98 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
         'actually', 'i', 'mean', 'think',
       ]);
 
+      // TEMPORARY [OSA-DIAG] — log-only; never affects selection / pending / dial.
+      const osaLast4 = (n?: string | null) => {
+        const d = (n ?? '').replace(/\D/g, '');
+        return d.length >= 4 ? d.slice(-4) : (d || null);
+      };
+      const osaNormName = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
+      const osaReplyTokens = (reply: string, contactLabel?: string) => {
+        const labelTokens = new Set(
+          (contactLabel ?? '').trim().toLowerCase().replace(/[\s-]+/g, ' ').split(' ').filter(Boolean)
+        );
+        return reply.trim().toLowerCase().replace(/[\s-]+/g, ' ').split(' ').filter(Boolean)
+          .filter(t => !CORRECTION_STOPWORDS.has(t) && !labelTokens.has(t));
+      };
+      const osaCandSnapshot = (list: CallCandidate[]) => list.map(c => ({
+        name: c.name,
+        relationship: c.relationship ?? null,
+        phoneLast4: osaLast4(c.phone),
+        importance: c.importance,
+        matchPool: [
+          ...osaNormName(c.name).split(' ').filter(Boolean),
+          ...(c.relationship ?? '').trim().toLowerCase().replace(/\s+/g, ' ').split(' ').filter(Boolean),
+        ],
+      }));
+      const osaLogPendingWrite = (
+        path: string,
+        contactLabel: string,
+        list: CallCandidate[],
+        prompt: string,
+      ) => {
+        console.log('[OSA-DIAG] contact_call.pendingWrite', {
+          actionType: 'contact_call',
+          path,
+          contactLabel,
+          originalQuery: contact,
+          prompt,
+          pendingKey: 'contact_call',
+          pendingKind: 'standard',
+          presentedLabels: list.map(c => c.name),
+          candidateSnapshot: osaCandSnapshot(list),
+          resumeMatchIdentifiers: list.map(c => ({
+            name: c.name,
+            nameNormalized: osaNormName(c.name),
+            relationship: c.relationship ?? null,
+            phoneLast4: osaLast4(c.phone),
+          })),
+        });
+      };
+      const osaLogResumeEntry = (
+        path: string,
+        rawReply: string,
+        contactLabel: string,
+        list: CallCandidate[],
+      ) => {
+        const normalizedReply = rawReply.trim().toLowerCase().replace(/[\s-]+/g, ' ');
+        const replyTokens = osaReplyTokens(rawReply, contactLabel);
+        console.log('[OSA-DIAG] contact_call.resume.entry', {
+          actionType: 'contact_call',
+          path,
+          pendingKey: 'contact_call',
+          contactLabel,
+          rawReply,
+          normalizedReply,
+          replyTokens,
+          candidateSnapshot: osaCandSnapshot(list),
+          candidateCompareValues: list.map(c => ({
+            name: c.name,
+            nameNormalized: osaNormName(c.name),
+            matchPool: [
+              ...osaNormName(c.name).split(' ').filter(Boolean),
+              ...(c.relationship ?? '').trim().toLowerCase().replace(/\s+/g, ' ').split(' ').filter(Boolean),
+            ],
+          })),
+        });
+      };
+      const osaLogResumeResult = (
+        path: string,
+        strategy: string,
+        matched: CallCandidate | null,
+        nextBranch: string,
+        reason?: string,
+      ) => {
+        console.log('[OSA-DIAG] contact_call.resume.result', {
+          path,
+          matchStrategy: strategy,
+          matchedName: matched?.name ?? null,
+          matchedPhoneLast4: matched ? osaLast4(matched.phone) : null,
+          selectedCandidate: matched ? { name: matched.name, phoneLast4: osaLast4(matched.phone) } : null,
+          nextBranch,
+          reason: reason ?? null,
+        });
+      };
+
       const matchCandidate = (
         reply: string,
         list: CallCandidate[],
@@ -1099,19 +1191,36 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
 
       function collectStage(contactLabel: string, opts?: { knownPerson?: boolean }): CommitResult {
         const known = opts?.knownPerson === true;
+        const collectPrompt = known
+          ? `I know ${contactLabel} but I don't have a phone number for them. What's their number?`
+          : `I don't have a number for ${contactLabel} yet — what's their name, or you can give me the number?`;
+        console.log('[OSA-DIAG] contact_call.pendingWrite', {
+          actionType: 'contact_call',
+          path: known ? 'collectStage_knownPerson' : 'collectStage',
+          contactLabel,
+          originalQuery: contact,
+          prompt: collectPrompt,
+          pendingKey: 'contact_call',
+          pendingKind: 'standard',
+          reason: known
+            ? 'known person missing phone — number-collection path'
+            : 'zero usable candidates — honest collect / number-collection path',
+          candidateSnapshot: [],
+        });
         return {
           status: 'pending',
-          prompt: known
-            ? `I know ${contactLabel} but I don't have a phone number for them. What's their number?`
-            : `I don't have a number for ${contactLabel} yet — what's their name, or you can give me the number?`,
+          prompt: collectPrompt,
           pendingKey: 'contact_call',
           kind: 'standard',
           reaskPrompt: known
             ? `I'm not sure I'm following — what's ${contactLabel}'s number?`
             : `I'm not sure I'm following — what's your ${contactLabel}'s name, or their number?`,
           resume: async (reply: string): Promise<CommitResult> => {
+            osaLogResumeEntry(known ? 'collectStage_knownPerson' : 'collectStage', reply, contactLabel, []);
             const phone = extractPhone10(reply);
             if (phone) {
+              osaLogResumeResult(known ? 'collectStage_knownPerson' : 'collectStage', 'extractPhone10', null, 'commitDial_bare_phone',
+                'number-collection path: bare phone accepted');
               const writeResult = capturePerson({ name: contactLabel, phone, importance: 7 });
               return commitDial(
                 contactLabel,
@@ -1124,6 +1233,9 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
             const replyIdentity = resolvePersonIdentity(reply);
             if (replyIdentity.status === 'single' && contactHasCapability(replyIdentity.contact, 'phone')) {
               const match = replyIdentity.contact;
+              osaLogResumeResult(known ? 'collectStage_knownPerson' : 'collectStage', 'resolvePersonIdentity', {
+                name: match.name, phone: match.phone!, relationship: match.relationship, importance: match.importance,
+              } as CallCandidate, 'commitDial_fresh_herald');
               if (RELATIONSHIP_WORDS.test(contactLabel.trim())) {
                 retireRelationshipHolder(contactLabel, match.name);
                 capturePerson({ name: match.name, relationship: contactLabel, phone: match.phone!, importance: 7 });
@@ -1138,6 +1250,9 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
             if (ctx?.resolveContact) {
               const device = await ctx.resolveContact(reply);
               if (device && device.phone) {
+                osaLogResumeResult(known ? 'collectStage_knownPerson' : 'collectStage', 'resolveContact_os', {
+                  name: device.name, phone: device.phone, importance: 5,
+                } as CallCandidate, 'commitDial_os_single');
                 if (RELATIONSHIP_WORDS.test(contactLabel.trim())) {
                   retireRelationshipHolder(contactLabel, device.name);
                   capturePerson({ name: device.name, relationship: contactLabel, phone: device.phone, importance: 7 });
@@ -1152,25 +1267,36 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
                   importance: 5,
                 }));
                 const names = joinNaturally(osCandidates.map(c => c.name));
+                const nestedPrompt = `I found a few in your contacts — ${names} — which one?`;
+                osaLogPendingWrite('collectStage_nested_os_multi', contactLabel, osCandidates, nestedPrompt);
                 return {
                   status: 'pending',
-                  prompt: `I found a few in your contacts — ${names} — which one?`,
+                  prompt: nestedPrompt,
                   pendingKey: 'contact_call',
                   kind: 'standard',
                   reaskPrompt: `I'm not sure I'm following — which one did you mean?`,
                   resume: async (pick: string): Promise<CommitResult> => {
+                    osaLogResumeEntry('collectStage_nested_os_multi', pick, contactLabel, osCandidates);
                     const matched = matchCandidate(pick, osCandidates, contactLabel);
-                    if (!matched) return { status: 'noop', ack: '' };
+                    if (!matched) {
+                      osaLogResumeResult('collectStage_nested_os_multi', 'matchCandidate', null, 'noop_reask',
+                        'no unique token match against collectStage nested OS snapshot');
+                      return { status: 'noop', ack: '' };
+                    }
                     if (RELATIONSHIP_WORDS.test(contactLabel.trim())) {
+                      osaLogResumeResult('collectStage_nested_os_multi', 'matchCandidate', matched, 'commitDial_with_relationship_write');
                       retireRelationshipHolder(contactLabel, matched.name);
                       capturePerson({ name: matched.name, relationship: contactLabel, phone: matched.phone, importance: 7 });
                       return commitDial(matched.name, matched.phone);
                     }
+                    osaLogResumeResult('collectStage_nested_os_multi', 'matchCandidate', matched, 'commitDial');
                     return commitDial(matched.name, matched.phone);
                   },
                 };
               }
             }
+            osaLogResumeResult(known ? 'collectStage_knownPerson' : 'collectStage', 'none', null, 'noop_reask',
+              'number-collection path: no phone, no herald/os hit');
             return { status: 'noop', ack: '' };
           },
         };
@@ -1179,21 +1305,30 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       function deviceConfirmStage(name: string, phone: string): CommitResult {
         const LOOSE_YES_RE = /^\s*(yes|yeah|yep|sure|ok|okay|go ahead|call them|do it)\b/i;
         const LOOSE_NO_RE = /^\s*(no|nope|cancel|never mind|nevermind|don't|dont|stop)\b/i;
+        const confirmPrompt = `I found ${name} in your contacts — want me to call them?`;
+        const confirmSnap: CallCandidate[] = [{ name, phone, importance: 5 }];
+        osaLogPendingWrite('deviceConfirmStage', name, confirmSnap, confirmPrompt);
         return {
           status: 'pending',
-          prompt: `I found ${name} in your contacts — want me to call them?`,
+          prompt: confirmPrompt,
           pendingKey: 'contact_call',
           kind: 'standard',
           reaskPrompt: `I'm not sure I'm following — should I call ${name}?`,
           resume: async (reply: string): Promise<CommitResult> => {
+            osaLogResumeEntry('deviceConfirmStage', reply, name, confirmSnap);
             const trimmed = reply.trim();
             if (LOOSE_YES_RE.test(trimmed)) {
+              osaLogResumeResult('deviceConfirmStage', 'LOOSE_YES_RE', confirmSnap[0], 'commitDial');
               capturePerson({ name, phone, importance: 5 });
               return commitDial(name, phone);
             }
             if (LOOSE_NO_RE.test(trimmed)) {
+              osaLogResumeResult('deviceConfirmStage', 'LOOSE_NO_RE', null, 'noop_redirect',
+                'user declined device confirm');
               return { status: 'noop', ack: 'No problem — who were you trying to reach?' };
             }
+            osaLogResumeResult('deviceConfirmStage', 'none', null, 'noop_reask',
+              'device confirm: reply not recognized as YES/NO');
             return { status: 'noop', ack: '' };
           },
         };
@@ -1210,33 +1345,56 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
             list.length >= 2 && list.every(c => !!c.phone?.trim());
           if (RELATIONSHIP_WORDS.test(contactLabel.trim()) && allPhoneable) {
             const names = joinNaturally(list.map(c => c.name));
+            const prompt = `I found a few in your contacts — ${names} — which one?`;
+            osaLogPendingWrite('named_multi_no_relationship_evidence', contactLabel, list, prompt);
             return {
               status: 'pending',
-              prompt: `I found a few in your contacts — ${names} — which one?`,
+              prompt,
               pendingKey: 'contact_call',
               kind: 'standard',
               reaskPrompt: `I'm not sure I'm following — which one did you mean?`,
               resume: async (pick: string): Promise<CommitResult> => {
+                osaLogResumeEntry('named_multi_no_relationship_evidence', pick, contactLabel, list);
                 const matched = matchCandidate(pick, list, contactLabel);
-                if (!matched) return { status: 'noop', ack: '' };
+                if (!matched) {
+                  osaLogResumeResult('named_multi_no_relationship_evidence', 'matchCandidate', null, 'noop_reask',
+                    'no unique token match against stored candidate snapshot');
+                  return { status: 'noop', ack: '' };
+                }
                 // Dial only — do not retire/write relationship, do not persist
                 // the relationship word as a contact name.
-                return matched.phone?.trim()
-                  ? commitDial(matched.name, matched.phone)
-                  : collectStage(matched.name);
+                if (matched.phone?.trim()) {
+                  osaLogResumeResult('named_multi_no_relationship_evidence', 'matchCandidate', matched, 'commitDial');
+                  return commitDial(matched.name, matched.phone);
+                }
+                osaLogResumeResult('named_multi_no_relationship_evidence', 'matchCandidate', matched, 'collectStage',
+                  'matched candidate has no usable phone');
+                return collectStage(matched.name);
               },
             };
           }
 
+          const genericPrompt = `I don't know who your ${contactLabel} is yet — what's their last name, or you can just give me the number?`;
+          osaLogPendingWrite('generic_confusion_no_relationship_evidence', contactLabel, list, genericPrompt);
+          console.log('[OSA-DIAG] contact_call.genericConfusionPath', {
+            reason: 'no_relationship_evidence_and_not_named_multi_phoneable_exception',
+            contactLabel,
+            listLength: list.length,
+            allPhoneable,
+            hasRelationshipEvidence: false,
+          });
           return {
             status: 'pending',
-            prompt: `I don't know who your ${contactLabel} is yet — what's their last name, or you can just give me the number?`,
+            prompt: genericPrompt,
             pendingKey: 'contact_call',
             kind: 'standard',
             reaskPrompt: `I'm not sure I'm following — what's your ${contactLabel}'s last name, or their number?`,
             resume: async (reply: string): Promise<CommitResult> => {
+              osaLogResumeEntry('generic_confusion_no_relationship_evidence', reply, contactLabel, list);
               const phone = extractPhone10(reply);
               if (phone) {
+                osaLogResumeResult('generic_confusion_no_relationship_evidence', 'extractPhone10', null, 'commitDial_bare_phone',
+                  'bare phone on generic-confusion path');
                 const writeResult = capturePerson({ name: contactLabel, phone, importance: 7 });
                 return commitDial(
                   contactLabel,
@@ -1259,10 +1417,12 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
                   // one, so a current-value relationship never has two active answers
                   // (Spine §6 principle 3). This is the explicit-confirmation case Spine
                   // §4a permits; writeContact's own identity-key logic stays untouched.
+                  osaLogResumeResult('generic_confusion_no_relationship_evidence', 'matchCandidate', matched, 'commitDial_with_relationship_write');
                   retireRelationshipHolder(contactLabel, matched.name);
                   capturePerson({ name: matched.name, relationship: contactLabel, phone: matched.phone, importance: 7 });
                   return commitDial(matched.name, matched.phone);
                 }
+                osaLogResumeResult('generic_confusion_no_relationship_evidence', 'matchCandidate', matched, 'commitDial');
                 return commitDial(matched.name, matched.phone);
               }
               // The reply named someone NOT in this pre-built candidate list —
@@ -1272,15 +1432,24 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
               if (freshIdentity.status === 'single' && contactHasCapability(freshIdentity.contact, 'phone')) {
                 const fresh = freshIdentity.contact;
                 if (RELATIONSHIP_WORDS.test(contactLabel.trim())) {
+                  osaLogResumeResult('generic_confusion_no_relationship_evidence', 'resolvePersonIdentity', {
+                    name: fresh.name, phone: fresh.phone!, relationship: fresh.relationship, importance: fresh.importance,
+                  } as CallCandidate, 'commitDial_fresh_herald');
                   retireRelationshipHolder(contactLabel, fresh.name);
                   capturePerson({ name: fresh.name, relationship: contactLabel, phone: fresh.phone!, importance: 7 });
                   return commitDial(fresh.name, fresh.phone!);
                 }
+                osaLogResumeResult('generic_confusion_no_relationship_evidence', 'resolvePersonIdentity', {
+                  name: fresh.name, phone: fresh.phone!, relationship: fresh.relationship, importance: fresh.importance,
+                } as CallCandidate, 'commitDial_fresh_herald');
                 return commitDial(fresh.name, fresh.phone!);
               }
               if (ctx?.resolveContact) {
                 const device = await ctx.resolveContact(reply);
                 if (device && device.phone) {
+                  osaLogResumeResult('generic_confusion_no_relationship_evidence', 'resolveContact_os', {
+                    name: device.name, phone: device.phone, importance: 5,
+                  } as CallCandidate, 'commitDial_os_single');
                   if (RELATIONSHIP_WORDS.test(contactLabel.trim())) {
                     retireRelationshipHolder(contactLabel, device.name);
                     capturePerson({ name: device.name, relationship: contactLabel, phone: device.phone, importance: 7 });
@@ -1295,25 +1464,36 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
                     importance: 5,
                   }));
                   const names = joinNaturally(osCandidates.map(c => c.name));
+                  const nestedPrompt = `I found a few in your contacts — ${names} — which one?`;
+                  osaLogPendingWrite('generic_confusion_nested_os_multi', contactLabel, osCandidates, nestedPrompt);
                   return {
                     status: 'pending',
-                    prompt: `I found a few in your contacts — ${names} — which one?`,
+                    prompt: nestedPrompt,
                     pendingKey: 'contact_call',
                     kind: 'standard',
                     reaskPrompt: `I'm not sure I'm following — which one did you mean?`,
                     resume: async (pick: string): Promise<CommitResult> => {
+                      osaLogResumeEntry('generic_confusion_nested_os_multi', pick, contactLabel, osCandidates);
                       const matchedOs = matchCandidate(pick, osCandidates, contactLabel);
-                      if (!matchedOs) return { status: 'noop', ack: '' };
+                      if (!matchedOs) {
+                        osaLogResumeResult('generic_confusion_nested_os_multi', 'matchCandidate', null, 'noop_reask',
+                          'no unique token match against nested OS candidate snapshot');
+                        return { status: 'noop', ack: '' };
+                      }
                       if (RELATIONSHIP_WORDS.test(contactLabel.trim())) {
+                        osaLogResumeResult('generic_confusion_nested_os_multi', 'matchCandidate', matchedOs, 'commitDial_with_relationship_write');
                         retireRelationshipHolder(contactLabel, matchedOs.name);
                         capturePerson({ name: matchedOs.name, relationship: contactLabel, phone: matchedOs.phone, importance: 7 });
                         return commitDial(matchedOs.name, matchedOs.phone);
                       }
+                      osaLogResumeResult('generic_confusion_nested_os_multi', 'matchCandidate', matchedOs, 'commitDial');
                       return commitDial(matchedOs.name, matchedOs.phone);
                     },
                   };
                 }
               }
+              osaLogResumeResult('generic_confusion_no_relationship_evidence', 'none', null, 'noop_reask',
+                'generic-confusion path: no phone, no candidate match, no fresh herald/os hit');
               return { status: 'noop', ack: '' };
             },
           };
@@ -1321,37 +1501,62 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
 
         const guess = list[0];
         const relPrefix = guess.relationship?.trim() ? `your ${guess.relationship} ` : '';
+        const relEvidencePrompt = `I've got more than one ${contactLabel} — did you mean ${relPrefix}${guess.name}?`;
+        osaLogPendingWrite('relationship_evidence_guess', contactLabel, list, relEvidencePrompt);
         return {
           status: 'pending',
-          prompt: `I've got more than one ${contactLabel} — did you mean ${relPrefix}${guess.name}?`,
+          prompt: relEvidencePrompt,
           pendingKey: 'contact_call',
           kind: 'standard',
           reaskPrompt: `I'm not sure I'm following — which ${contactLabel} did you mean?`,
           resume: async (reply: string): Promise<CommitResult> => {
+            osaLogResumeEntry('relationship_evidence_guess', reply, contactLabel, list);
             const trimmed = reply.trim();
             const { CONFIRM_YES_RE, CONFIRM_NO_RE } = await import('./conversationSession');
             const dialOrCollect = (c: CallCandidate): CommitResult =>
               c.phone?.trim() ? commitDial(c.name, c.phone) : collectStage(c.name);
-            if (CONFIRM_YES_RE.test(trimmed)) return dialOrCollect(guess);
+            if (CONFIRM_YES_RE.test(trimmed)) {
+              osaLogResumeResult('relationship_evidence_guess', 'CONFIRM_YES_RE', guess, guess.phone?.trim() ? 'commitDial' : 'collectStage');
+              return dialOrCollect(guess);
+            }
             if (CONFIRM_NO_RE.test(trimmed)) {
               const remaining = list.slice(1);
-              if (remaining.length === 0) return collectStage(contactLabel);
+              if (remaining.length === 0) {
+                osaLogResumeResult('relationship_evidence_guess', 'CONFIRM_NO_RE', null, 'collectStage',
+                  'NO with no remaining candidates');
+                return collectStage(contactLabel);
+              }
               const handles = remaining.map(handleFor).join(', ');
+              const altPrompt = `No problem — I've also got ${handles}. Which one?`;
+              osaLogPendingWrite('relationship_evidence_alternates', contactLabel, remaining, altPrompt);
               return {
                 status: 'pending',
-                prompt: `No problem — I've also got ${handles}. Which one?`,
+                prompt: altPrompt,
                 pendingKey: 'contact_call',
                 kind: 'standard',
                 reaskPrompt: `I'm not sure I'm following — which one did you mean?`,
                 resume: async (pick: string): Promise<CommitResult> => {
+                  osaLogResumeEntry('relationship_evidence_alternates', pick, contactLabel, remaining);
                   const matched = matchCandidate(pick, remaining, contactLabel);
-                  if (!matched) return { status: 'noop', ack: '' };
+                  if (!matched) {
+                    osaLogResumeResult('relationship_evidence_alternates', 'matchCandidate', null, 'noop_reask',
+                      'no unique token match against alternate candidate snapshot');
+                    return { status: 'noop', ack: '' };
+                  }
+                  osaLogResumeResult('relationship_evidence_alternates', 'matchCandidate', matched,
+                    matched.phone?.trim() ? 'commitDial' : 'collectStage');
                   return dialOrCollect(matched);
                 },
               };
             }
             const named = matchCandidate(trimmed, list, contactLabel);
-            if (named) return dialOrCollect(named);
+            if (named) {
+              osaLogResumeResult('relationship_evidence_guess', 'matchCandidate', named,
+                named.phone?.trim() ? 'commitDial' : 'collectStage');
+              return dialOrCollect(named);
+            }
+            osaLogResumeResult('relationship_evidence_guess', 'none', null, 'noop_reask',
+              'relationship-evidence path: not YES/NO and no unique name match');
             return { status: 'noop', ack: '' };
           },
         };
