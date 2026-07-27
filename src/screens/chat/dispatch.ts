@@ -259,6 +259,29 @@ export async function dispatchAction(
               const smsCandidates = resolvedSms.candidateNames.map(n => ({ label: n, ref: n }));
               const names = resolvedSms.candidateNames.join(', ');
               const reply = `I found more than one ${contact} in your contacts — ${names}. Which one did you mean?`;
+              // TEMPORARY [OSA-DIAG] — log-only; does not change pending write or resume.
+              const osaLast4 = (n?: string | null) => {
+                const d = (n ?? '').replace(/\D/g, '');
+                return d.length >= 4 ? d.slice(-4) : (d || null);
+              };
+              const deviceCands =
+                'deviceCandidates' in resolvedSms && Array.isArray((resolvedSms as { deviceCandidates?: { name: string; phone: string }[] }).deviceCandidates)
+                  ? (resolvedSms as { deviceCandidates: { name: string; phone: string }[] }).deviceCandidates
+                  : [];
+              console.log('[OSA-DIAG] sms.pendingWrite', {
+                actionType: 'sms',
+                action: 'text',
+                query: contact,
+                pendingKey: 'sms_disambiguate',
+                pendingKind: 'standard',
+                prompt: reply,
+                candidateSnapshot: smsCandidates.map(c => ({ label: c.label, ref: c.ref })),
+                candidatesStored: smsCandidates.map(c => c.label),
+                deviceCandidatesLast4: deviceCands.map(c => ({
+                  name: c.name,
+                  phoneLast4: osaLast4(c.phone),
+                })),
+              });
               addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
               speak(reply);
               session.setPending({
@@ -266,12 +289,52 @@ export async function dispatchAction(
                 kind: 'standard',
                 reaskPrompt: `I'm not sure I caught that — which one did you mean: ${names}?`,
                 resume: async (replyText: string): Promise<CommitResult> => {
+                  const normalizedReply = replyText.trim().toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ');
+                  console.log('[OSA-DIAG] sms.resume.entry', {
+                    actionType: 'sms',
+                    pendingKey: 'sms_disambiguate',
+                    query: contact,
+                    rawReply: replyText,
+                    normalizedReply,
+                    candidateSnapshot: smsCandidates.map(c => ({ label: c.label, ref: c.ref })),
+                  });
                   const match = matchCandidateToken(replyText, smsCandidates);
-                  if (match === 'ambiguous' || match === 'none') return { status: 'noop', ack: '' };
+                  if (match === 'ambiguous' || match === 'none') {
+                    console.log('[OSA-DIAG] sms.resume.result', {
+                      matchResult: match,
+                      selectedCandidate: null,
+                      nextBranch: 'noop_reask',
+                      reason: match === 'ambiguous'
+                        ? 'selection reply matched multiple candidates — re-ask'
+                        : 'selection reply matched no candidate — re-ask',
+                    });
+                    return { status: 'noop', ack: '' };
+                  }
+                  console.log('[OSA-DIAG] sms.resume.match', {
+                    matchResult: 'selected',
+                    selectedCandidate: { label: match.label, ref: match.ref },
+                  });
                   const picked = await resolveContactPhone(match.ref);
                   if (!picked?.phone) {
+                    console.log('[OSA-DIAG] sms.resume.result', {
+                      matchResult: 'selected',
+                      selectedCandidate: { label: match.label, ref: match.ref },
+                      nextBranch: 'number_collection_failed_ack',
+                      reason: 'matched candidate but resolveContactPhone returned no usable phone — number-collection wording',
+                      pickedName: picked?.name ?? null,
+                      pickedPhoneLast4: null,
+                      hasCandidateNames: !!(picked && 'candidateNames' in picked && (picked as { candidateNames?: string[] }).candidateNames?.length),
+                    });
                     return { status: 'failed', ack: `I don't have a number for ${match.label}. What's their number?` };
                   }
+                  console.log('[OSA-DIAG] sms.resume.result', {
+                    matchResult: 'selected',
+                    selectedCandidate: { label: match.label, ref: match.ref },
+                    nextBranch: 'open_sms',
+                    reason: 'matched candidate with usable phone',
+                    pickedName: picked.name,
+                    pickedPhoneLast4: osaLast4(picked.phone),
+                  });
                   const smsUrl = `sms:${picked.phone.replace(/\D/g, '')}${message ? `?body=${encodeURIComponent(message)}` : ''}`;
                   try {
                     await openURL(smsUrl);
@@ -280,6 +343,12 @@ export async function dispatchAction(
                       : `Opening a message to ${picked.name}.`;
                     return { status: 'committed', ack: okReply };
                   } catch {
+                    console.log('[OSA-DIAG] sms.resume.result', {
+                      matchResult: 'selected',
+                      selectedCandidate: { label: match.label, ref: match.ref },
+                      nextBranch: 'open_sms_failed',
+                      reason: 'openURL threw after successful phone resolve',
+                    });
                     return { status: 'failed', ack: `I couldn't open a message to ${picked.name} — try again.` };
                   }
                 },
