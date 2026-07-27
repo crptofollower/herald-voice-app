@@ -40,7 +40,7 @@ export interface DispatchDeps extends DispatchPendingRefs {
   generateId: (prefix: string) => string;
   llmStatus: string;
   getCtx: () => LlamaContext | null;
-  resolveContactPhone: (nameOrRelation: string) => Promise<{ phone: string; name: string; contactId?: string; source: 'herald' | 'device' } | { phone: null; name: string; source: 'device'; candidateNames: string[] } | null>;
+  resolveContactPhone: (nameOrRelation: string) => Promise<{ phone: string; name: string; contactId?: string; source: 'herald' | 'device' } | { phone: null; name: string; source: 'device'; candidateNames: string[]; deviceCandidates: { name: string; phone: string }[] } | null>;
   handleCalendarAction: (value: string) => Promise<void>;
   handleMapsAction: (query: string) => Promise<void>;
   launchAndroidTimer: (seconds: number) => Promise<boolean>;
@@ -253,35 +253,19 @@ export async function dispatchAction(
             if (resolvedSms?.phone) {
               await openSmsTo({ name: resolvedSms.name, phone: resolvedSms.phone });
             } else if (resolvedSms && 'candidateNames' in resolvedSms && resolvedSms.candidateNames.length > 0) {
-              // Pending Disambiguation Commit 1: refs-only candidates (names),
-              // resolved live at commit time — never a cached phone-less
-              // contact. Matches spec PENDING_DISAMBIGUATION_DESIGN_SPEC.md §6.
-              const smsCandidates = resolvedSms.candidateNames.map(n => ({ label: n, ref: n }));
+              // Pending snapshot carries phone from discovery — resume must not
+              // re-lookup by display label (second OS lookup loses identity).
+              const deviceCands = resolvedSms.deviceCandidates ?? [];
+              const phoneByName = new Map(
+                deviceCands.map(c => [c.name.trim().toLowerCase(), c.phone]),
+              );
+              const smsCandidates = resolvedSms.candidateNames.map(n => ({
+                label: n,
+                ref: n,
+                phone: phoneByName.get(n.trim().toLowerCase()) ?? '',
+              }));
               const names = resolvedSms.candidateNames.join(', ');
               const reply = `I found more than one ${contact} in your contacts — ${names}. Which one did you mean?`;
-              // TEMPORARY [OSA-DIAG] — log-only; does not change pending write or resume.
-              const osaLast4 = (n?: string | null) => {
-                const d = (n ?? '').replace(/\D/g, '');
-                return d.length >= 4 ? d.slice(-4) : (d || null);
-              };
-              const deviceCands =
-                'deviceCandidates' in resolvedSms && Array.isArray((resolvedSms as { deviceCandidates?: { name: string; phone: string }[] }).deviceCandidates)
-                  ? (resolvedSms as { deviceCandidates: { name: string; phone: string }[] }).deviceCandidates
-                  : [];
-              console.log('[OSA-DIAG] sms.pendingWrite', {
-                actionType: 'sms',
-                action: 'text',
-                query: contact,
-                pendingKey: 'sms_disambiguate',
-                pendingKind: 'standard',
-                prompt: reply,
-                candidateSnapshot: smsCandidates.map(c => ({ label: c.label, ref: c.ref })),
-                candidatesStored: smsCandidates.map(c => c.label),
-                deviceCandidatesLast4: deviceCands.map(c => ({
-                  name: c.name,
-                  phoneLast4: osaLast4(c.phone),
-                })),
-              });
               addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
               speak(reply);
               session.setPending({
@@ -289,67 +273,23 @@ export async function dispatchAction(
                 kind: 'standard',
                 reaskPrompt: `I'm not sure I caught that — which one did you mean: ${names}?`,
                 resume: async (replyText: string): Promise<CommitResult> => {
-                  const normalizedReply = replyText.trim().toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ');
-                  console.log('[OSA-DIAG] sms.resume.entry', {
-                    actionType: 'sms',
-                    pendingKey: 'sms_disambiguate',
-                    query: contact,
-                    rawReply: replyText,
-                    normalizedReply,
-                    candidateSnapshot: smsCandidates.map(c => ({ label: c.label, ref: c.ref })),
-                  });
                   const match = matchCandidateToken(replyText, smsCandidates);
                   if (match === 'ambiguous' || match === 'none') {
-                    console.log('[OSA-DIAG] sms.resume.result', {
-                      matchResult: match,
-                      selectedCandidate: null,
-                      nextBranch: 'noop_reask',
-                      reason: match === 'ambiguous'
-                        ? 'selection reply matched multiple candidates — re-ask'
-                        : 'selection reply matched no candidate — re-ask',
-                    });
                     return { status: 'noop', ack: '' };
                   }
-                  console.log('[OSA-DIAG] sms.resume.match', {
-                    matchResult: 'selected',
-                    selectedCandidate: { label: match.label, ref: match.ref },
-                  });
-                  const picked = await resolveContactPhone(match.ref);
-                  if (!picked?.phone) {
-                    console.log('[OSA-DIAG] sms.resume.result', {
-                      matchResult: 'selected',
-                      selectedCandidate: { label: match.label, ref: match.ref },
-                      nextBranch: 'number_collection_failed_ack',
-                      reason: 'matched candidate but resolveContactPhone returned no usable phone — number-collection wording',
-                      pickedName: picked?.name ?? null,
-                      pickedPhoneLast4: null,
-                      hasCandidateNames: !!(picked && 'candidateNames' in picked && (picked as { candidateNames?: string[] }).candidateNames?.length),
-                    });
+                  const phone = match.phone?.replace(/\D/g, '') ?? '';
+                  if (!phone) {
                     return { status: 'failed', ack: `I don't have a number for ${match.label}. What's their number?` };
                   }
-                  console.log('[OSA-DIAG] sms.resume.result', {
-                    matchResult: 'selected',
-                    selectedCandidate: { label: match.label, ref: match.ref },
-                    nextBranch: 'open_sms',
-                    reason: 'matched candidate with usable phone',
-                    pickedName: picked.name,
-                    pickedPhoneLast4: osaLast4(picked.phone),
-                  });
-                  const smsUrl = `sms:${picked.phone.replace(/\D/g, '')}${message ? `?body=${encodeURIComponent(message)}` : ''}`;
+                  const smsUrl = `sms:${phone}${message ? `?body=${encodeURIComponent(message)}` : ''}`;
                   try {
                     await openURL(smsUrl);
                     const okReply = message
-                      ? `Opening a message to ${picked.name} with your note ready.`
-                      : `Opening a message to ${picked.name}.`;
+                      ? `Opening a message to ${match.label} with your note ready.`
+                      : `Opening a message to ${match.label}.`;
                     return { status: 'committed', ack: okReply };
                   } catch {
-                    console.log('[OSA-DIAG] sms.resume.result', {
-                      matchResult: 'selected',
-                      selectedCandidate: { label: match.label, ref: match.ref },
-                      nextBranch: 'open_sms_failed',
-                      reason: 'openURL threw after successful phone resolve',
-                    });
-                    return { status: 'failed', ack: `I couldn't open a message to ${picked.name} — try again.` };
+                    return { status: 'failed', ack: `I couldn't open a message to ${match.label} — try again.` };
                   }
                 },
               });

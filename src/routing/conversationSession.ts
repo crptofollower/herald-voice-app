@@ -32,7 +32,7 @@ export const CONFIRM_NO_RE  = /^(no|nope|not yet|negative)[\s.,!]*$/i;
 // otherwise a single distinct token hit wins; anything else is ambiguous or
 // no-match and must re-ask, never guess. No substring/fuzzy matching in v1 —
 // a false-positive match is a fabrication-class trust failure (spec §3).
-export type MatchableCandidate = { label: string; ref: string };
+export type MatchableCandidate = { label: string; ref: string; phone?: string };
 
 const normalizeForMatch = (s: string): string =>
   s.trim().toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ');

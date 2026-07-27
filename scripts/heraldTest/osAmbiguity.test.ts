@@ -810,6 +810,172 @@ export async function runOsAmbiguityTests() {
       'c30ed9a1 named prompt intact');
   }
 
+  // ── Resume-boundary regressions (snapshot phone + shared matcher) ────────
+  {
+    // SMS: select displayed candidate opens SMS from pending phone — no second OS lookup.
+    freshDB();
+    const messages: string[] = [];
+    const openURLs: string[] = [];
+    const session = new ConversationSession();
+    let osLookups = 0;
+    const deps = makeSmsDeps({
+      messages,
+      openURLs,
+      session,
+      resolveContactPhone: async (q) => {
+        osLookups += 1;
+        const key = q.trim().toLowerCase().replace(/^(?:my|the|a)\s+/, '');
+        if (key === 'mom') {
+          return {
+            phone: null,
+            name: 'Mom',
+            source: 'device',
+            candidateNames: ['Mom', 'My Mom'],
+            deviceCandidates: [
+              { name: 'Mom', phone: '5550001111' },
+              { name: 'My Mom', phone: '5550002222' },
+            ],
+          };
+        }
+        // Any resume-time re-lookup would hit here and must not run.
+        throw new Error(`unexpected second OS lookup for: ${q}`);
+      },
+    });
+    await dispatchAction({ type: 'sms', contact: 'Mom', message: '' }, 'text Mom', deps);
+    assert('T-OSA-SMS-SNAP-1 multi candidate → named ask; discovery OS lookup only',
+      { messages, openURLs, osLookups, hasPending: session.hasPending() },
+      v => v.openURLs.length === 0
+        && v.hasPending === true
+        && v.osLookups === 1
+        && v.messages.some((m: string) => /Mom/i.test(m) && /My Mom/i.test(m)),
+      'pending with both names; one OS call');
+
+    const bad = await session.resolvePending('zzzz-not-a-person');
+    assert('T-OSA-SMS-SNAP-2 invalid reply → re-prompt; still no second OS lookup',
+      { bad, openURLs, osLookups, stillPending: session.hasPending() },
+      v => v.openURLs.length === 0
+        && v.osLookups === 1
+        && v.stillPending === true
+        && (v.bad.status === 'pending' || v.bad.status === 'noop'),
+      're-prompt; lookup count stays 1');
+
+    const ok = await session.resolvePending('My Mom');
+    assert('T-OSA-SMS-SNAP-3 select displayed candidate → open SMS; no second OS lookup',
+      { ok, openURLs, osLookups },
+      v => v.osLookups === 1
+        && v.openURLs.some((u: string) => u.startsWith('sms:5550002222'))
+        && (v.ok as CommitResult).status === 'committed',
+      'sms:5550002222 from snapshot phone');
+  }
+  {
+    // CALL: "My Dad" must bind to stored snapshot via matchCandidateToken (not label-strip matcher).
+    const db = freshDB();
+    const session = new ConversationSession();
+    const intent = await resolveContactCallIntent('Dad', 'call Dad', {
+      resolveContact: async () => ({
+        phone: null,
+        name: 'Dad',
+        source: 'device',
+        candidateNames: ['Mikes Dad', 'My Dad', 'Dad-home'],
+        deviceCandidates: [
+          { name: 'Mikes Dad', phone: '5551001001' },
+          { name: 'My Dad', phone: '5551001002' },
+          { name: 'Dad-home', phone: '5551001003' },
+        ],
+      }),
+    });
+    const pending = await addPending(intent);
+    assert('T-OSA-CALL-SNAP-1 multi Dad candidates → named which-one ask',
+      pending,
+      v => v.status === 'pending'
+        && /I found a few in your contacts/i.test(v.prompt)
+        && /My Dad/i.test(v.prompt)
+        && /Mikes Dad/i.test(v.prompt),
+      'named multi prompt with My Dad');
+
+    session.setPending({
+      pendingKey: pending.pendingKey,
+      resume: pending.resume,
+      kind: pending.kind ?? 'standard',
+      reaskPrompt: pending.reaskPrompt,
+    });
+    const before = contactCount(db);
+    const bad = await session.resolvePending('zzzz-not-a-person');
+    assert('T-OSA-CALL-SNAP-2 invalid reply → re-prompt; no dial; no write',
+      {
+        status: bad.status,
+        phone: dialPhone(bad),
+        stillPending: session.hasPending(),
+        before,
+        after: contactCount(db),
+      },
+      v => (v.status === 'pending' || v.status === 'noop')
+        && !v.phone
+        && v.stillPending === true
+        && v.before === v.after,
+      're-prompt pending');
+
+    const ok = await session.resolvePending('My Dad');
+    assert('T-OSA-CALL-SNAP-3 reply "My Dad" binds snapshot → dial that phone',
+      { status: ok.status, phone: dialPhone(ok), after: contactCount(db), before },
+      v => v.status === 'committed'
+        && v.phone === '5551001002'
+        && v.after === v.before,
+      'dial My Dad 5551001002; no write');
+  }
+  {
+    // Normalization variants against the same stored representation.
+    freshDB();
+    const intent = await resolveContactCallIntent('Dad', 'call Dad', {
+      resolveContact: async () => ({
+        phone: null,
+        name: 'Dad',
+        source: 'device',
+        candidateNames: ['Mikes Dad', 'My Dad', 'Dad-home'],
+        deviceCandidates: [
+          { name: 'Mikes Dad', phone: '5551001001' },
+          { name: 'My Dad', phone: '5551001002' },
+          { name: 'Dad-home', phone: '5551001003' },
+        ],
+      }),
+    });
+    const pending = await addPending(intent);
+    const a = await pending.resume('my dad');
+    assert('T-OSA-CALL-SNAP-4 normalize variant "my dad" → dial My Dad',
+      { status: a.status, phone: dialPhone(a) },
+      v => v.status === 'committed' && v.phone === '5551001002',
+      'my dad → 5551001002');
+  }
+  {
+    // Control: Josh remains Herald identity path (no OS when seeded).
+    const db = freshDB();
+    insertContact(db, { id: 'c_josh', name: 'Josh Durand', phone: '9725550101', importance: 9 });
+    const intent = await resolveContactCallIntent('Josh', 'call Josh', {
+      resolveContact: async () => { throw new Error('OS must not run for Herald Josh'); },
+    });
+    const result = await DOMAIN_WRITERS['contact_call']!.add(intent, '');
+    assert('T-OSA-CTL-CALL-Josh Herald identity path unchanged',
+      { status: result.status, phone: dialPhone(result) },
+      v => v.status === 'committed' && v.phone === '9725550101',
+      'Calling Josh from Herald');
+  }
+  {
+    // No diagnostic residue in production sources.
+    const roots = [
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src/screens/ChatScreen.tsx'),
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src/routing/routeIntent.ts'),
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src/screens/chat/dispatch.ts'),
+    ];
+    const hits = roots.flatMap(f => {
+      const src = fs.readFileSync(f, 'utf8');
+      return src.includes('[OSA-DIAG]') ? [path.basename(f)] : [];
+    });
+    assert('T-OSA-SRC-DIAG no [OSA-DIAG] residue in production sources',
+      hits,
+      v => (v as string[]).length === 0,
+      'ChatScreen / routeIntent / dispatch clean');
+  }
+
   const total = passed + failures.length;
   console.log(`\n${BOLD}OS Ambiguity: ${passed}/${total} passed${failures.length > 0 ? ` — ${RED}${failures.length} FAILED${RESET}` : ` — ${GREEN}all green${RESET}`}${RESET}\n`);
   return { passed, failed: failures.length, total, failures };

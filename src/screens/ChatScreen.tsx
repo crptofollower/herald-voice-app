@@ -249,43 +249,7 @@ export default function ChatScreen() {
         fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name],
       });
 
-      const fieldsRequested = [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name];
-      console.log('[OSA-DIAG] resolveContactPhone.query', {
-        rawQuery: nameOrRelation,
-        cleanQuery: clean,
-        fields: fieldsRequested,
-        totalContactsReturned: data?.length ?? 0,
-      });
-
-      if (!data?.length) {
-        console.log('[OSA-DIAG] resolveContactPhone.branch', { branch: 'zero', reason: 'no_contacts_returned' });
-        return null;
-      }
-
-      const last4 = (n?: string | null) => {
-        const d = (n ?? '').replace(/\D/g, '');
-        return d.length >= 4 ? d.slice(-4) : (d || null);
-      };
-      const phoneSlots = (c: (typeof data)[number]) =>
-        (c.phoneNumbers ?? []).map(p => last4(p.number));
-
-      // Every returned contact that matches the query across name OR firstName OR lastName
-      // (same criteria as exact ∪ partial — log-only; does not change selection).
-      const queryHits = data.filter(c =>
-        c.name?.toLowerCase() === clean ||
-        c.firstName?.toLowerCase() === clean ||
-        c.lastName?.toLowerCase() === clean ||
-        nameMatchesQuery(c.name, clean)
-      );
-      console.log('[OSA-DIAG] resolveContactPhone.queryHits', queryHits.map(c => ({
-        id: c.id,
-        name: c.name,
-        firstName: c.firstName,
-        lastName: c.lastName,
-        phoneCount: c.phoneNumbers?.length ?? 0,
-        phone0Last4: last4(c.phoneNumbers?.[0]?.number),
-        phoneAllLast4: phoneSlots(c),
-      })));
+      if (!data?.length) return null;
 
       // Union of exact + partial name matches (never prefer exact-only over the
       // full set). Deduplicate, then keep only contacts with a usable phone.
@@ -302,11 +266,7 @@ export default function ChatScreen() {
       // a silent miss — instead of even offering ambiguity.
       const partialMatches = data.filter(c => nameMatchesQuery(c.name, clean));
 
-      console.log('[OSA-DIAG] resolveContactPhone.exactMatches', exactMatches.map(c => c.name));
-      console.log('[OSA-DIAG] resolveContactPhone.partialMatches', partialMatches.map(c => c.name));
-
       const beforeDedup = [...exactMatches, ...partialMatches];
-      console.log('[OSA-DIAG] resolveContactPhone.beforeDedup', beforeDedup.map(c => c.name));
 
       const deduped = new Map<string, (typeof data)[number]>();
       for (const c of beforeDedup) {
@@ -314,35 +274,18 @@ export default function ChatScreen() {
         const key = c.id
           ? `id:${c.id}`
           : `np:${(c.name ?? '').trim().toLowerCase()}|${phoneDigits}`;
-        console.log('[OSA-DIAG] resolveContactPhone.dedupeKey', {
-          name: c.name,
-          key,
-          phone0Last4: last4(c.phoneNumbers?.[0]?.number),
-          phoneAllLast4: phoneSlots(c),
-        });
         if (!deduped.has(key)) deduped.set(key, c);
       }
       const afterDedup = [...deduped.values()];
-      console.log('[OSA-DIAG] resolveContactPhone.afterDedup', afterDedup.map(c => c.name));
-      console.log('[OSA-DIAG] resolveContactPhone.phoneSlotsAfterDedup', afterDedup.map(c => ({
-        name: c.name,
-        phone0Last4: last4(c.phoneNumbers?.[0]?.number),
-        phoneAllLast4: phoneSlots(c),
-      })));
 
       const phoneable = afterDedup.filter(c => !!c.phoneNumbers?.[0]?.number?.trim());
-      console.log('[OSA-DIAG] resolveContactPhone.afterPhoneableFilter', phoneable.map(c => c.name));
 
-      if (phoneable.length === 0) {
-        console.log('[OSA-DIAG] resolveContactPhone.branch', { branch: 'zero' });
-        return null;
-      }
+      if (phoneable.length === 0) return null;
 
       // Multiple phoneable matches — honest ambiguity, never a silent guess.
       // Surface the real names so the caller can ask which one
       // (Graceful Confusion Rule, CLAUDE.md) instead of claiming no number exists.
       if (phoneable.length >= 2) {
-        console.log('[OSA-DIAG] resolveContactPhone.branch', { branch: 'multiple', count: phoneable.length });
         const candidateNames = phoneable
           .map(c => c.name)
           .filter((n): n is string => !!n)
@@ -356,7 +299,6 @@ export default function ChatScreen() {
         return { phone: null, name: nameOrRelation, source: 'device' as const, candidateNames, deviceCandidates };
       }
 
-      console.log('[OSA-DIAG] resolveContactPhone.branch', { branch: 'single', name: phoneable[0].name });
       const match = phoneable[0];
       const phone = match.phoneNumbers![0].number!.replace(/\D/g, '');
       const name = match.name ?? nameOrRelation;
