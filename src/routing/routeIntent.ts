@@ -1202,6 +1202,32 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       function disambiguateStage(list: CallCandidate[], contactLabel: string): CommitResult {
         const hasRelationshipEvidence = list.some(c => c.relationship?.trim());
         if (!hasRelationshipEvidence) {
+          // Relationship label + ≥2 phoneable OS/device candidates with no
+          // relationship fields: name them all and ask — never top-1, never
+          // write the relationship from this path. Keep the generic
+          // "I don't know who your …" prompt below for zero/no-phone cases.
+          const allPhoneable =
+            list.length >= 2 && list.every(c => !!c.phone?.trim());
+          if (RELATIONSHIP_WORDS.test(contactLabel.trim()) && allPhoneable) {
+            const names = joinNaturally(list.map(c => c.name));
+            return {
+              status: 'pending',
+              prompt: `I found a few in your contacts — ${names} — which one?`,
+              pendingKey: 'contact_call',
+              kind: 'standard',
+              reaskPrompt: `I'm not sure I'm following — which one did you mean?`,
+              resume: async (pick: string): Promise<CommitResult> => {
+                const matched = matchCandidate(pick, list, contactLabel);
+                if (!matched) return { status: 'noop', ack: '' };
+                // Dial only — do not retire/write relationship, do not persist
+                // the relationship word as a contact name.
+                return matched.phone?.trim()
+                  ? commitDial(matched.name, matched.phone)
+                  : collectStage(matched.name);
+              },
+            };
+          }
+
           return {
             status: 'pending',
             prompt: `I don't know who your ${contactLabel} is yet — what's their last name, or you can just give me the number?`,

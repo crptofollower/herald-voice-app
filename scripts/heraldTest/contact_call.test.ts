@@ -510,17 +510,22 @@ export async function runContactCallTests() {
     };
   }
 
-  // ── T-CT-15: no-relationship-evidence pending never guesses a name ──────────
+  // ── T-CT-15: relationship label + phoneable multi-candidate → named ask ───
+  // No relationship fields on candidates, but every candidate has a phone:
+  // list the names (never top-1, never "I don't know who your …").
   {
     freshDB();
     const pending = await addPending(filBridgeIntent());
-    assert('T-CT-15 no-relationship-evidence pending never guesses a name',
+    assert('T-CT-15 relationship label + phoneable OS multi → named "which one?" ask',
       pending,
       v => v.status === 'pending'
-        && !/Mossholder/i.test(v.prompt)
-        && !/Clevenger/i.test(v.prompt)
-        && /last name|give me the number/i.test(v.prompt),
-      'pending asks last name/number; does not name Mossholder or Clevenger');
+        && /I found a few in your contacts/i.test(v.prompt)
+        && /Mossholder/i.test(v.prompt)
+        && /Clevenger/i.test(v.prompt)
+        && /which one/i.test(v.prompt)
+        && !/I don't know who your/i.test(v.prompt)
+        && !/did you mean/i.test(v.prompt),
+      'pending names both candidates; never top-1 guess; never generic unknown');
   }
 
   // ── T-CT-16: bare last-name reply resolves via matchCandidate ─────────────
@@ -545,16 +550,45 @@ export async function runContactCallTests() {
       'dial 2145553434');
   }
 
-  // ── T-CT-18: bare phone on relationship-label collect — dial, do not store ─
+  // ── T-CT-16b: named multi-candidate path never writes the relationship ─────
   {
     const db = freshDB();
     const pending = await addPending(filBridgeIntent());
+    const before = contactCount(db);
+    await pending.resume('Clevenger');
+    const after = contactCount(db);
+    const byRel = findContactByRelationship('father-in-law');
+    assert('T-CT-16b named multi-candidate pick → dial only, no relationship write',
+      { before, after, byRel },
+      v => v.before === 0 && v.after === 0 && v.byRel == null,
+      'no FIL relationship row persisted');
+  }
+
+  // ── T-CT-18: bare phone on relationship-label collect — dial, do not store ─
+  // Phoneless multi-candidate still uses the generic collect path.
+  {
+    const db = freshDB();
+    const pending = await addPending({
+      type: 'contact_call',
+      contact: 'father-in-law',
+      candidates: [
+        { name: 'David Mossholder', phone: '', importance: 5 },
+        { name: 'David Clevenger', phone: '', importance: 5 },
+      ],
+      raw: 'call my father-in-law',
+    });
+    assert('T-CT-18a phoneless multi → generic last-name/number collect',
+      pending,
+      v => v.status === 'pending'
+        && /I don't know who your father-in-law/i.test(v.prompt)
+        && /last name|give me the number/i.test(v.prompt),
+      'generic unknown collect');
     const before = contactCount(db);
     const result = await pending.resume('214 555 9999');
     const after = contactCount(db);
     const byName = findContactByName('father-in-law');
     const byRel = findContactByRelationship('father-in-law');
-    assert('T-CT-18 bare phone reply → dial commits, no relationship-as-name row, warm ack',
+    assert('T-CT-18b bare phone reply → dial commits, no relationship-as-name row, warm ack',
       { result, before, after, phone: dialPhone(result), byName, byRel },
       v => v.before === 0
         && v.after === 0
@@ -584,19 +618,19 @@ export async function runContactCallTests() {
       'prompt names Anna, dial 5550200202');
   }
 
-  // ── T-CT-20: successful name-match resolution persists the relationship ───
+  // ── T-CT-20: named multi-candidate pick dials; does NOT persist relationship ─
   {
     freshDB();
     const pending = await addPending(filBridgeIntent());
     const result = await pending.resume('Clevenger');
     const stored = findContactByName('David Clevenger');
-    assert('T-CT-20 name-match resolution persists father-in-law on David Clevenger',
-      { phone: dialPhone(result), stored },
+    const byRel = findContactByRelationship('father-in-law');
+    assert('T-CT-20 named multi pick dials; does not persist father-in-law',
+      { phone: dialPhone(result), stored, byRel },
       v => v.phone === '2145553434'
-        && !!v.stored
-        && v.stored.name === 'David Clevenger'
-        && v.stored.relationship === 'father-in-law',
-      'dial 2145553434; contact row has relationship father-in-law');
+        && v.stored == null
+        && v.byRel == null,
+      'dial 2145553434; no contact row / no FIL relationship');
   }
 
   // ── T-CT-21: plain-name lookup must NOT fabricate a relationship ──────────
@@ -631,7 +665,7 @@ export async function runContactCallTests() {
       'dial 2145553434');
   }
 
-  // ── T-CT-23: persisting a resolution retires the stale placeholder's tag ──
+  // ── T-CT-23: named multi-candidate pick does not retire/write relationship ─
   {
     const db = freshDB();
     insertContact(db, { id: 'c_fil', name: 'David', relationship: 'father-in-law', importance: 7 });
@@ -644,16 +678,16 @@ export async function runContactCallTests() {
     const placeholder = db.prepare(
       `SELECT name, relationship, removed_at FROM contacts WHERE id = 'c_fil'`,
     ).get() as { name: string; relationship: string | null; removed_at: string | null };
-    assert('T-CT-23 resolution retires stale placeholder relationship tag',
+    assert('T-CT-23 named multi pick leaves placeholder FIL untouched (no relationship write)',
       { phone: dialPhone(result), holder, filCount, placeholder },
       v => v.phone === '2145553434'
         && v.filCount === 1
         && !!v.holder
-        && v.holder.name === 'David Clevenger'
+        && v.holder.name === 'David'
         && v.placeholder?.name === 'David'
-        && v.placeholder.relationship == null
+        && v.placeholder.relationship === 'father-in-law'
         && v.placeholder.removed_at == null,
-      'one FIL holder David Clevenger; placeholder David still live with relationship cleared');
+      'dials Clevenger; placeholder David still holds FIL');
   }
 
   // ── T-CT-24: collectStage falls back to the OS contact book when Herald ──
@@ -682,22 +716,20 @@ export async function runContactCallTests() {
       'dials David Clevenger; writes 1 relationship-tagged row');
   }
 
-  // ── T-CT-25: disambiguateStage falls back to a fresh Herald-DB search ────
-  // when the reply names someone NOT in the original two-candidate list.
+  // ── T-CT-25: named multi path — out-of-list name is noop (no top-1 / no write)
   {
     const db = freshDB();
     insertContact(db, { id: 'c_shane', name: 'Shane Clevenger', phone: '2145559999', importance: 5 });
     const pending = await addPending(filBridgeIntent());
     const result = await pending.resume('Shane Clevenger');
     const holder = findContactByRelationship('father-in-law');
-    assert('T-CT-25 disambiguateStage fresh Herald-DB fallback dials and persists relationship',
-      { phone: dialPhone(result), holder },
-      v => v.phone === '2145559999' && !!v.holder && v.holder.name === 'Shane Clevenger',
-      'dials Shane Clevenger; writes relationship-tagged row');
+    assert('T-CT-25 named multi path: out-of-list name → noop, no relationship write',
+      { result, holder, phone: dialPhone(result) },
+      v => v.result.status === 'noop' && !v.phone && v.holder == null,
+      'noop; no dial; no FIL row');
   }
 
-  // ── T-CT-26: disambiguateStage falls back to the OS contact book when ────
-  // the reply matches neither the original list nor Herald's own DB.
+  // ── T-CT-26: named multi path — OS out-of-list name is noop (no write) ────
   {
     const db = freshDB();
     const pending = await addPending(filBridgeIntent(), {
@@ -708,10 +740,10 @@ export async function runContactCallTests() {
     });
     const result = await pending.resume('Maria Sanchez');
     const holder = findContactByRelationship('father-in-law');
-    assert('T-CT-26 disambiguateStage OS-contact fallback dials and persists relationship',
-      { phone: dialPhone(result), holder },
-      v => v.phone === '5557778888' && !!v.holder && v.holder.name === 'Maria Sanchez',
-      'dials Maria Sanchez; writes relationship-tagged row');
+    assert('T-CT-26 named multi path: OS out-of-list name → noop, no relationship write',
+      { result, holder, phone: dialPhone(result) },
+      v => v.result.status === 'noop' && !v.phone && v.holder == null,
+      'noop; no dial; no FIL row');
   }
 
   // ── T-CT-27: collectStage OS multi-match → pending pick, then unique name ─
