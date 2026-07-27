@@ -251,7 +251,8 @@ export default function ChatScreen() {
 
       if (!data?.length) return null;
 
-      // Find best match — prioritize exact name match, then partial
+      // Union of exact + partial name matches (never prefer exact-only over the
+      // full set). Deduplicate, then keep only contacts with a usable phone.
       const exactMatches = data.filter(c =>
         c.name?.toLowerCase() === clean ||
         c.firstName?.toLowerCase() === clean ||
@@ -265,18 +266,27 @@ export default function ChatScreen() {
       // a silent miss — instead of even offering ambiguity.
       const partialMatches = data.filter(c => nameMatchesQuery(c.name, clean));
 
-      const candidates = exactMatches.length > 0 ? exactMatches : partialMatches;
+      const deduped = new Map<string, (typeof data)[number]>();
+      for (const c of [...exactMatches, ...partialMatches]) {
+        const phoneDigits = c.phoneNumbers?.[0]?.number?.replace(/\D/g, '') ?? '';
+        const key = c.id
+          ? `id:${c.id}`
+          : `np:${(c.name ?? '').trim().toLowerCase()}|${phoneDigits}`;
+        if (!deduped.has(key)) deduped.set(key, c);
+      }
+      const phoneable = [...deduped.values()].filter(c => !!c.phoneNumbers?.[0]?.number?.trim());
 
-      // Multiple matches — honest ambiguity, never a silent guess or a silent
-      // "not found." Surface the real names so the caller can ask which one
+      if (phoneable.length === 0) return null;
+
+      // Multiple phoneable matches — honest ambiguity, never a silent guess.
+      // Surface the real names so the caller can ask which one
       // (Graceful Confusion Rule, CLAUDE.md) instead of claiming no number exists.
-      if (candidates.length > 1) {
-        const candidateNames = candidates
+      if (phoneable.length >= 2) {
+        const candidateNames = phoneable
           .map(c => c.name)
           .filter((n): n is string => !!n)
           .slice(0, 5);
-        const deviceCandidates = candidates
-          .filter(c => !!c.phoneNumbers?.[0]?.number)
+        const deviceCandidates = phoneable
           .map(c => ({
             name: c.name ?? nameOrRelation,
             phone: c.phoneNumbers![0].number!.replace(/\D/g, ''),
@@ -285,12 +295,10 @@ export default function ChatScreen() {
         return { phone: null, name: nameOrRelation, source: 'device' as const, candidateNames, deviceCandidates };
       }
 
-      const match = candidates[0];
-      if (match?.phoneNumbers?.[0]?.number) {
-        const phone = match.phoneNumbers[0].number.replace(/\D/g, '');
-        const name = match.name ?? nameOrRelation;
-        return { phone, name, source: 'device' as const };
-      }
+      const match = phoneable[0];
+      const phone = match.phoneNumbers![0].number!.replace(/\D/g, '');
+      const name = match.name ?? nameOrRelation;
+      return { phone, name, source: 'device' as const };
     } catch (e) {
       console.warn('[resolveContactPhone] expo-contacts failed:', e);
     }
