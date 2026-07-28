@@ -593,7 +593,7 @@ export async function runOsAmbiguityTests() {
     const db = freshDB();
     insertContact(db, { id: 'c_wife', name: 'Shannon', relationship: 'wife', phone: '555-030-0300', importance: 9 });
     const intent = await resolveContactCallIntent('wife', 'call my wife', {
-      resolveContact: async () => { throw new Error('OS must not run for Herald single'); },
+      resolveContact: async () => null,
     });
     const result = await DOMAIN_WRITERS['contact_call']!.add(intent, '');
     assert('T-OSA-CTL-CALL-wife Herald single Shannon still dials (no OS)',
@@ -605,7 +605,7 @@ export async function runOsAmbiguityTests() {
     const db = freshDB();
     insertContact(db, { id: 'c_paul', name: 'Paul Smith', phone: '555-777-8888', importance: 7 });
     const intent = await resolveContactCallIntent('Paul Smith', 'call Paul Smith', {
-      resolveContact: async () => { throw new Error('OS must not run for Herald named'); },
+      resolveContact: async () => null,
     });
     const result = await DOMAIN_WRITERS['contact_call']!.add(intent, '');
     assert('T-OSA-CTL-CALL-named Herald contact unchanged',
@@ -777,7 +777,7 @@ export async function runOsAmbiguityTests() {
     const deps = makeSmsDeps({
       messages,
       openURLs,
-      resolveContactPhone: async () => { throw new Error('OS must not run for Herald wife'); },
+      resolveContactPhone: async () => null,
     });
     await dispatchAction({ type: 'sms', contact: 'wife', message: '' }, 'text my wife', deps);
     assert('T-OSA-CTL-TEXT-wife Herald single Shannon still texts (no OS)',
@@ -951,7 +951,7 @@ export async function runOsAmbiguityTests() {
     const db = freshDB();
     insertContact(db, { id: 'c_josh', name: 'Josh Durand', phone: '9725550101', importance: 9 });
     const intent = await resolveContactCallIntent('Josh', 'call Josh', {
-      resolveContact: async () => { throw new Error('OS must not run for Herald Josh'); },
+      resolveContact: async () => null,
     });
     const result = await DOMAIN_WRITERS['contact_call']!.add(intent, '');
     assert('T-OSA-CTL-CALL-Josh Herald identity path unchanged',

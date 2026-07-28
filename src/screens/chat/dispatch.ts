@@ -207,64 +207,86 @@ export async function dispatchAction(
 
             if (identity.status === 'single') {
               const only = identity.contact;
-              const cap = await resolvePersonCapability(only, 'phone');
-              if (cap.status === 'available') {
-                await openSmsTo({ name: only.name, phone: cap.value });
+
+              // OS-multi-always-ask (state doc §9, locked 2026-07-28): check broad
+              // device cardinality on the ORIGINAL spoken reference before trusting
+              // Herald's single identity. resolvePersonCapability must not receive
+              // the raw utterance. Cardinality is derived exclusively from
+              // phone-bearing deviceCandidates — candidateNames is never used for
+              // the count, and no candidate without a phone is ever selectable.
+              const broadSms = await resolveContactPhone(contact);
+              const reachableCandidates =
+                broadSms &&
+                !broadSms.phone &&
+                'deviceCandidates' in broadSms
+                  ? broadSms.deviceCandidates.filter(c => !!c.phone?.trim())
+                  : [];
+              const broadIsMulti = reachableCandidates.length > 1;
+
+              if (!broadIsMulti) {
+                const cap = await resolvePersonCapability(only, 'phone');
+                if (cap.status === 'available') {
+                  await openSmsTo({ name: only.name, phone: cap.value });
+                  return;
+                }
+                if (cap.status === 'ambiguous') {
+                  const smsCandidates = cap.candidates.map(c => ({ label: c.name, ref: c.id }));
+                  const byId = new Map(cap.candidates.map(c => [c.id, c]));
+                  const names = cap.candidates.map(c => c.name).join(', ');
+                  const reply = `I found more than one ${only.name} in your contacts — ${names}. Which one did you mean?`;
+                  addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+                  speak(reply);
+                  session.setPending({
+                    pendingKey: 'sms_disambiguate_os_capability',
+                    kind: 'standard',
+                    reaskPrompt: `I'm not sure I caught that — which one did you mean: ${names}?`,
+                    resume: async (replyText: string): Promise<CommitResult> => {
+                      const match = matchCandidateToken(replyText, smsCandidates);
+                      if (match === 'ambiguous' || match === 'none') return { status: 'noop', ack: '' };
+                      const picked = byId.get(match.ref);
+                      if (!picked || !contactHasCapability(picked, 'phone')) {
+                        return { status: 'failed', ack: `I don't have a number for ${match.label}. What's their number?` };
+                      }
+                      const smsUrl = `sms:${picked.phone!.replace(/\D/g, '')}${message ? `?body=${encodeURIComponent(message)}` : ''}`;
+                      try {
+                        await openURL(smsUrl);
+                        const okReply = message
+                          ? `Opening a message to ${picked.name} with your note ready.`
+                          : `Opening a message to ${picked.name}.`;
+                        return { status: 'committed', ack: okReply };
+                      } catch {
+                        return { status: 'failed', ack: `I couldn't open a message to ${picked.name} — try again.` };
+                      }
+                    },
+                  });
+                  return;
+                }
+                askForNumber(only.name, { knownPerson: true });
                 return;
               }
-              if (cap.status === 'ambiguous') {
-                const smsCandidates = cap.candidates.map(c => ({ label: c.name, ref: c.id }));
-                const byId = new Map(cap.candidates.map(c => [c.id, c]));
-                const names = cap.candidates.map(c => c.name).join(', ');
-                const reply = `I found more than one ${only.name} in your contacts — ${names}. Which one did you mean?`;
-                addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-                speak(reply);
-                session.setPending({
-                  pendingKey: 'sms_disambiguate_os_capability',
-                  kind: 'standard',
-                  reaskPrompt: `I'm not sure I caught that — which one did you mean: ${names}?`,
-                  resume: async (replyText: string): Promise<CommitResult> => {
-                    const match = matchCandidateToken(replyText, smsCandidates);
-                    if (match === 'ambiguous' || match === 'none') return { status: 'noop', ack: '' };
-                    const picked = byId.get(match.ref);
-                    if (!picked || !contactHasCapability(picked, 'phone')) {
-                      return { status: 'failed', ack: `I don't have a number for ${match.label}. What's their number?` };
-                    }
-                    const smsUrl = `sms:${picked.phone!.replace(/\D/g, '')}${message ? `?body=${encodeURIComponent(message)}` : ''}`;
-                    try {
-                      await openURL(smsUrl);
-                      const okReply = message
-                        ? `Opening a message to ${picked.name} with your note ready.`
-                        : `Opening a message to ${picked.name}.`;
-                      return { status: 'committed', ack: okReply };
-                    } catch {
-                      return { status: 'failed', ack: `I couldn't open a message to ${picked.name} — try again.` };
-                    }
-                  },
-                });
-                return;
-              }
-              askForNumber(only.name, { knownPerson: true });
-              return;
+              // broadIsMulti === true: fall through — resolvedSms holds the
+              // multi result; the shared block below builds the prompt from
+              // deviceCandidates only.
+              resolvedSms = broadSms;
+            } else {
+              // identity.status === 'none' — temporary exception: existing OS fall-through.
+              resolvedSms = await resolveContactPhone(contact);
             }
 
-            // identity.status === 'none' — temporary exception: existing OS fall-through.
-            resolvedSms = await resolveContactPhone(contact);
             if (resolvedSms?.phone) {
               await openSmsTo({ name: resolvedSms.name, phone: resolvedSms.phone });
-            } else if (resolvedSms && 'candidateNames' in resolvedSms && resolvedSms.candidateNames.length > 0) {
-              // Pending snapshot carries phone from discovery — resume must not
-              // re-lookup by display label (second OS lookup loses identity).
-              const deviceCands = resolvedSms.deviceCandidates ?? [];
-              const phoneByName = new Map(
-                deviceCands.map(c => [c.name.trim().toLowerCase(), c.phone]),
-              );
-              const smsCandidates = resolvedSms.candidateNames.map(n => ({
-                label: n,
-                ref: n,
-                phone: phoneByName.get(n.trim().toLowerCase()) ?? '',
-              }));
-              const names = resolvedSms.candidateNames.join(', ');
+            } else if (
+              resolvedSms &&
+              !resolvedSms.phone &&
+              'deviceCandidates' in resolvedSms &&
+              resolvedSms.deviceCandidates.filter(c => !!c.phone?.trim()).length > 0
+            ) {
+              // Only phone-bearing candidates are ever selectable — a name that
+              // cannot be texted is not a candidate, per the Contact Candidacy
+              // Rule (action-capability, not data completeness).
+              const reachable = resolvedSms.deviceCandidates.filter(c => !!c.phone?.trim());
+              const smsCandidates = reachable.map(c => ({ label: c.name, ref: c.name, phone: c.phone }));
+              const names = reachable.map(c => c.name).join(', ');
               const reply = `I found more than one ${contact} in your contacts — ${names}. Which one did you mean?`;
               addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
               speak(reply);

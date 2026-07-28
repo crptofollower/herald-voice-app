@@ -92,6 +92,30 @@ export async function resolveContactCallIntent(
 
   if (identity.status === 'single') {
     const c = identity.contact;
+
+    // OS-multi-always-ask (state doc §9, locked 2026-07-28): resolvePersonCapability
+    // is deliberately identity-constrained and must never receive the raw spoken
+    // reference. Broad cardinality is checked here first, using the existing
+    // raw-utterance resolver — never top-1, never a relationship write from this
+    // path. Only phone-bearing device candidates count toward cardinality; a
+    // candidate that cannot be dialed is not a candidate.
+    if (deps.resolveContact) {
+      const deviceQuery = cleaned || contactName.trim().toLowerCase()
+        .replace(/[\u2018\u2019\u02BC\u0060]/g, "'")
+        .replace(/^(?:my|the|a)\s+/, '');
+      const broad = await deps.resolveContact(deviceQuery);
+      const reachableCandidates =
+        broad &&
+        !broad.phone &&
+        'deviceCandidates' in broad
+          ? broad.deviceCandidates.filter(c => !!c.phone?.trim())
+          : [];
+      if (reachableCandidates.length > 1) {
+        const candidates = reachableCandidates.map(dc => ({ name: dc.name, phone: dc.phone, importance: 5 }));
+        return { type: 'contact_call', contact: contactName, candidates, raw };
+      }
+    }
+
     const cap = await resolvePersonCapability(c, 'phone');
     if (cap.status === 'available') {
       return {
@@ -1234,13 +1258,14 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       function disambiguateStage(list: CallCandidate[], contactLabel: string): CommitResult {
         const hasRelationshipEvidence = list.some(c => c.relationship?.trim());
         if (!hasRelationshipEvidence) {
-          // Relationship label + ≥2 phoneable OS/device candidates with no
-          // relationship fields: name them all and ask — never top-1, never
-          // write the relationship from this path. Keep the generic
-          // "I don't know who your …" prompt below for zero/no-phone cases.
+          // ≥2 phoneable candidates with no relationship-field evidence — name
+          // them all and ask, whether the spoken reference was a relationship
+          // word or a plain name (state doc §9). Never top-1, never write a
+          // relationship from this path. Keep the generic "I don't know who
+          // your …" prompt below for zero/no-phone cases.
           const allPhoneable =
             list.length >= 2 && list.every(c => !!c.phone?.trim());
-          if (RELATIONSHIP_WORDS.test(contactLabel.trim()) && allPhoneable) {
+          if (allPhoneable) {
             const names = joinNaturally(list.map(c => c.name));
             const prompt = `I found a few in your contacts — ${names} — which one?`;
 
