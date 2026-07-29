@@ -36,6 +36,7 @@ scripts/heraldTest/node_modules/
 !scripts/heraldTest/runCommitEffects.test.ts
 !scripts/heraldTest/doctorRead.test.ts
 !scripts/heraldTest/schemaMigrationContract.test.ts
+!scripts/heraldTest/visitOutcomeContract.test.ts
 !scripts/heraldTest/llmLayers.test.ts
 !scripts/heraldTest/wall1.test.ts
 !scripts/heraldTest/parseSmsIntent.test.ts

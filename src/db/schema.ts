@@ -2,7 +2,7 @@
 // Herald device SQLite — table definitions and migration runner.
 // Session L — Device-First Intelligence Layer
 //
-// SCHEMA VERSION: 20
+// SCHEMA VERSION: 21
 // v1: Initial schema — facts, profile, medical, calendar_cache (ISO strings), life_tracker
 // v2: calendar_cache rebuilt with Unix ms timestamps (timezone fix)
 // v3: Entity graph + importance scoring + temporal awareness (locked Session L spec)
@@ -28,6 +28,7 @@
 //      (MEDICAL_SURFACING_DESIGN_SPEC §2.1 — three additive columns, one migration)
 // v20: appointments table (canonical domain record — closes confirmed gap,
 //      Herald-owned scheduling memory independent of the device-calendar mirror)
+// v21: medical_records.visit_outcome + outcome_asked_at (post-visit outcome ask / never-nag)
 //
 // RULE: NEVER modify a past migration. Always add at the next version number.
 //
@@ -46,7 +47,7 @@
 
 import * as SQLite from "expo-sqlite";
 
-export const SCHEMA_VERSION = 20;
+export const SCHEMA_VERSION = 21;
 export const DB_NAME = "herald_device.db";
 
 // ─── Open database ────────────────────────────────────────────────────────────
@@ -783,5 +784,20 @@ const MIGRATIONS: Record<number, (db: SQLite.SQLiteDatabase) => void> = {
         ON appointments(external_id) WHERE external_id IS NOT NULL;
     `);
     console.log("Herald schema V20: appointments table added (canonical domain record)");
+  },
+
+  // ── v21: post-visit outcome ask / never-nag latch ─────────────────────────
+  21: (db) => {
+    try {
+      db.execSync("ALTER TABLE medical_records ADD COLUMN visit_outcome TEXT;");
+    } catch {
+      // column already exists (re-run safety) — ignore
+    }
+    try {
+      db.execSync("ALTER TABLE medical_records ADD COLUMN outcome_asked_at TEXT;");
+    } catch {
+      // column already exists (re-run safety) — ignore
+    }
+    console.log("Herald schema V21: medical_records.visit_outcome + outcome_asked_at added");
   },
 };

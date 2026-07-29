@@ -26,6 +26,8 @@ export interface MedicalRecord {
   follow_up?: string;
   notes?: string;
   status?: 'upcoming' | 'noted';
+  visit_outcome?: string;
+  outcome_asked_at?: string;
   created_at: string;
 }
 
@@ -193,6 +195,105 @@ export function markAppointmentSurfaced(id: string): void {
     `UPDATE medical_records SET surfaced_at = ? WHERE id = ?;`,
     [new Date().toISOString(), id]
   );
+}
+
+/**
+ * Past noted visit that was surfaced, not yet outcome-asked, and never
+ * dismissed — candidate for the post-visit outcome ask (once-only).
+ */
+export function getVisitAwaitingOutcome(): {
+  id: string;
+  doctorName?: string;
+  visitDate: string;
+} | null {
+  const db = getDB();
+  const row = db.getFirstSync<{ id: string; doctor_name: string | null; visit_date: string }>(
+    `SELECT id, doctor_name, visit_date FROM medical_records
+      WHERE status='noted' AND removed_at IS NULL
+        AND surfaced_at IS NOT NULL
+        AND visit_outcome IS NULL
+        AND outcome_asked_at IS NULL
+        AND visit_date IS NOT NULL
+        AND date(visit_date) < date('now','localtime')
+      ORDER BY visit_date DESC LIMIT 1;`
+  );
+  if (!row) return null;
+  return {
+    id: row.id,
+    doctorName: row.doctor_name ?? undefined,
+    visitDate: row.visit_date,
+  };
+}
+
+/** Once-only latch — never re-asks after dismiss or ask. Idempotent. */
+export function markVisitOutcomeAsked(id: string): void {
+  const db = getDB();
+  db.runSync(
+    `UPDATE medical_records SET outcome_asked_at = ?
+      WHERE id = ? AND outcome_asked_at IS NULL AND removed_at IS NULL;`,
+    [new Date().toISOString(), id]
+  );
+}
+
+/**
+ * Store a verbatim visit outcome. Outcome is its own provenance when no
+ * separate rawPhrase is supplied (unextracted). Substring Gate enforced.
+ */
+export function attachVisitOutcome(id: string, outcome: string, rawPhrase?: string): void {
+  const trimmed = outcome.trim();
+  if (!trimmed) return;
+  const raw = rawPhrase ?? outcome; // outcome is its own provenance (unextracted)
+  if (!passesSubstringGate(trimmed, raw)) throw new SubstringGateRejection(trimmed, raw);
+  const db = getDB();
+  const now = new Date().toISOString();
+  db.runSync(
+    `UPDATE medical_records
+        SET visit_outcome = ?, outcome_asked_at = COALESCE(outcome_asked_at, ?)
+      WHERE id = ? AND removed_at IS NULL;`,
+    [trimmed, now, id]
+  );
+}
+
+/**
+ * Most recent visit with a non-empty outcome, optionally filtered by doctor
+ * name (substring match, case-insensitive — same behavior as getLastVisit).
+ */
+export function getLastVisitOutcome(doctorHint?: string): {
+  doctorName?: string;
+  visitDate: string;
+  outcome: string;
+} | null {
+  const db = getDB();
+  const rows = db.getAllSync<{
+    doctor_name: string | null;
+    visit_date: string;
+    visit_outcome: string;
+  }>(
+    `SELECT doctor_name, visit_date, visit_outcome FROM medical_records
+      WHERE visit_outcome IS NOT NULL AND trim(visit_outcome) != '' AND removed_at IS NULL
+        AND visit_date IS NOT NULL
+      ORDER BY visit_date DESC;`
+  );
+  const filtered = doctorHint
+    ? rows.filter((r) =>
+        r.doctor_name?.toLowerCase().includes(doctorHint.toLowerCase())
+      )
+    : rows;
+  if (filtered.length === 0) return null;
+  const latest = filtered[0];
+  return {
+    doctorName: latest.doctor_name ?? undefined,
+    visitDate: latest.visit_date,
+    outcome: latest.visit_outcome,
+  };
+}
+
+/** Deterministic read-back for device-prove recall. Memory Language Rule compliant. */
+export function getLastVisitOutcomeSummary(doctorHint?: string): string {
+  const v = getLastVisitOutcome(doctorHint);
+  if (!v) return "I don't have anything from your last visit yet.";
+  const who = v.doctorName ? ` with ${v.doctorName}` : '';
+  return `Last time${who}, you mentioned: ${v.outcome}`;
 }
 
 // ─── Diagnoses (Spine §3 verbatim, §4a single writer/reader) ──────────────────
