@@ -217,8 +217,8 @@ const DOSAGE_TESTS = [
 const RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", BOLD = "\x1b[1m", DIM = "\x1b[2m";
 let passed = 0;
 const failures = [];
-const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length + 4; // +1 list_todo+medical intercept, +3 classifier tri-state
-const EXPECTED_TOTAL = 774;   // was 765; +9 resume-boundary snapshot / matcher / diag-clean asserts
+const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length + 11; // +1 list_todo+medical intercept, +3 classifier tri-state, +1 Law 5 positive control, +6 Law 5 regression fence
+const EXPECTED_TOTAL = 781;   // was 774; +7 Build D contract tests (1 positive control + 6 regression fence, LLM_LIVE P3)
 
 console.log(`\n${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  HERALD ROUTER + PHONE TEST SUITE — ${TOTAL} tests${RESET}`);
@@ -426,6 +426,75 @@ for (const [label, input, expected] of DOSAGE_TESTS) {
         : `${decision.kind}`;
       failures.push({ label, phrase, expected: "capture[list_add]", got });
       console.log(`${RED}❌ FAIL${RESET}  ${label}\n      ${DIM}"${phrase}"${RESET}\n      ${RED}→ got ${got}, expected capture[list_add]${RESET}\n`);
+    }
+  }
+}
+
+// Build D (LLM_LIVE P3) positive control: a genuinely allowlisted world-data
+// query must still reach the backend. Uses the REAL classifyQuery/tierRouter
+// (no mock) — proves the allowlist itself fires, not just routeIntent's
+// downstream handling of an already-mocked reason.
+{
+  const label = "weather query still reaches backend (Law 5 positive control)";
+  const phrase = "what's the weather like";
+  let decision;
+  try {
+    decision = await routeIntent(phrase, {
+      classifyQuery,
+      classifyLLM: null,
+      llmReady: false,
+    });
+  } catch (e) {
+    failures.push({ label, phrase, expected: "backend", got: `THREW: ${e.message}` });
+    console.log(`${RED}❌ FAIL${RESET}  ${label}\n      ${DIM}"${phrase}"${RESET}\n      ${RED}→ THREW: ${e.message}${RESET}\n`);
+  }
+  if (decision !== undefined) {
+    const ok = decision.kind === "backend" && decision.reason === "live:data";
+    if (ok) {
+      passed++;
+      console.log(`${GREEN}✅ PASS${RESET}  ${label}\n      ${DIM}"${phrase}" → backend/live:data${RESET}\n`);
+    } else {
+      failures.push({ label, phrase, expected: "backend/live:data", got: `${decision.kind}/${decision.reason ?? ""}` });
+      console.log(`${RED}❌ FAIL${RESET}  ${label}\n      ${DIM}"${phrase}"${RESET}\n      ${RED}→ got ${decision.kind}/${decision.reason ?? ""}, expected backend/live:data${RESET}\n`);
+    }
+  }
+}
+
+// Build D (LLM_LIVE P3) regression fence: real messy personal-domain
+// phrasings, run through the REAL classifyQuery/tierRouter (no mock),
+// must never cross to the backend — whatever local path they resolve to
+// (device_action, needs_clarification, etc.), kind:'backend' is the one
+// forbidden outcome. Characterized 2026-07-29 against the live router.
+{
+  const REGRESSION_PHRASES = [
+    "I dunno maybe write down the plumber charged too much",
+    "kinda need to remember my son's game schedule thing",
+    "put that appointment thing somewhere",
+    "the insurance guy called about something",
+    "not feeling great today think it's my sugar",
+    "need to grab that stuff from the store",
+  ];
+  for (const phrase of REGRESSION_PHRASES) {
+    const label = `personal phrasing never reaches backend (Law 5): "${phrase}"`;
+    let decision;
+    try {
+      decision = await routeIntent(phrase, {
+        classifyQuery,
+        classifyLLM: null,
+        llmReady: false,
+      });
+    } catch (e) {
+      failures.push({ label, phrase, expected: "not backend", got: `THREW: ${e.message}` });
+      console.log(`${RED}❌ FAIL${RESET}  ${label}\n      ${RED}→ THREW: ${e.message}${RESET}\n`);
+      continue;
+    }
+    const ok = decision.kind !== "backend";
+    if (ok) {
+      passed++;
+      console.log(`${GREEN}✅ PASS${RESET}  ${label}\n      ${DIM}→ ${decision.kind}${RESET}\n`);
+    } else {
+      failures.push({ label, phrase, expected: "not backend", got: decision.kind });
+      console.log(`${RED}❌ FAIL${RESET}  ${label}\n      ${RED}→ got backend, expected not backend${RESET}\n`);
     }
   }
 }
