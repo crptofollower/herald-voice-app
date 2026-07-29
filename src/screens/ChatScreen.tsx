@@ -715,9 +715,16 @@ export default function ChatScreen() {
     });
     speak(localGreeting);
 
-    // ── Proactive medical surfacing (Beat 1, MEDICAL_SURFACING_DESIGN_SPEC §2.3) ──
-    // Runs once per cold mount, alongside the greeting. A failure here must
-    // never block the greeting above or crash the mount.
+    // ── Proactive medical surfacing (Beat 1, MEDICAL_SURFACING_DESIGN_SPEC §2.3)
+    // + Moment 2 post-visit outcome ask ──────────────────────────────────────
+    // Mutually exclusive by construction: at most one proactive medical
+    // utterance per cold mount (North Star §3 — one thing at a time; this
+    // also closes the reply-target-ambiguity risk a second armed pending
+    // would create — see 2026-07-29 Session 3 review). If Beat 1 has
+    // something to say, it claims the mount and the outcome ask is deferred
+    // to the next cold mount — the eligible visit is untouched
+    // (outcome_asked_at not stamped) so nothing is lost, nothing double-fires.
+    // A failure here must never block the greeting above or crash the mount.
     try {
       const { PROACTIVE_SURFACING_ENABLED } = require('../constants/features');
       if (PROACTIVE_SURFACING_ENABLED) {
@@ -725,6 +732,8 @@ export default function ChatScreen() {
           supersedeStaleUpcomingAppointments,
           getTodaysUpcomingAppointment,
           markAppointmentSurfaced,
+          getVisitAwaitingOutcome,
+          markVisitOutcomeAsked,
         } = require('../db/medicalDB');
         supersedeStaleUpcomingAppointments();
         const surfaced = getTodaysUpcomingAppointment();
@@ -740,10 +749,35 @@ export default function ChatScreen() {
             timestamp: Date.now() + 1,
           });
           speak(line);
+        } else {
+          const awaiting = getVisitAwaitingOutcome();
+          if (awaiting) {
+            // Sequencing is load-bearing (2026-07-29 Session 3 review):
+            // retrieve → build (pure) → arm → PRESENT → stamp → speak.
+            // outcome_asked_at is stamped only AFTER the message is added,
+            // so a crash before presentation never permanently suppresses
+            // the question (fails open — re-offered next cold mount).
+            const { buildVisitOutcomeAskSlot } = require('../routing/medicalVisitOutcomeAsk');
+            const slot = buildVisitOutcomeAskSlot(awaiting);
+            sessionRef.current.setPending({
+              pendingKey: slot.pendingKey,
+              kind: slot.kind,
+              budget: slot.budget,
+              resume: slot.resume,
+            });
+            addMessage({
+              id: generateId("msg"),
+              role: "assistant",
+              content: slot.prompt,
+              timestamp: Date.now() + 1,
+            });
+            markVisitOutcomeAsked(awaiting.id);
+            speak(slot.prompt);
+          }
         }
       }
     } catch {
-      // Surfacing failure must never block the greeting or crash the mount.
+      // Surfacing/outcome-ask failure must never block the greeting or crash the mount.
     }
 
     // ── BACKGROUND LIVE ENHANCEMENT ──────────────────────────────────────────
