@@ -237,6 +237,7 @@ const TIER1_SIGNALS = {
     /\bwhat (should i|do i) take\b/i,
     /\bmy (meds|medications|pills|prescriptions)\b/i,
     /\bdo i take (any )?(medication|meds|pills)\b/i,
+    /\bwhat (medication|medications|medicine|meds|pills|prescriptions) do i take\b/i,
   ],
   visit_read: [
     /\bwho (did|have) i seen?\b/i,

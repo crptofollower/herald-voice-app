@@ -218,7 +218,7 @@ const RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", BOLD = "\x1b[1m",
 let passed = 0;
 const failures = [];
 const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length + 11; // +1 list_todo+medical intercept, +3 classifier tri-state, +1 Law 5 positive control, +6 Law 5 regression fence
-const EXPECTED_TOTAL = 830;   // was 793; +15 medicalVisitOutcomeAsk (T1..T9c) + 22 conversationSessionVisitOutcome (V1..V7b-3)
+const EXPECTED_TOTAL = 834;   // was 830; +4 doctorRead DR5/DR6 (medication-recall word-order gap, 2026-07-30)
 
 console.log(`\n${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  HERALD ROUTER + PHONE TEST SUITE — ${TOTAL} tests${RESET}`);

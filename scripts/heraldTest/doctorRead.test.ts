@@ -10,7 +10,7 @@
 
 import Database from 'better-sqlite3';
 import { setDB } from '../../src/db/schema.ts';
-import { writeMedicalContact } from '../../src/db/medicalDB.ts';
+import { writeMedicalContact, writeMedication } from '../../src/db/medicalDB.ts';
 import { classifyQuery } from '../../src/routing/tierRouter.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
@@ -127,12 +127,34 @@ export async function runDoctorReadTests() {
       (v) => v === 'medical:doctor_read', 'medical:doctor_read');
   }
 
-  // ── DR4: med phrasing still medical:summary (regression guard) ────────────
+  // ── DR4: med phrasing still medical:summary (regression guard)
   {
     freshDB();
     const d = await classifyQuery('what medication am I on');
     assert('DR4 med phrasing still routes medical:summary', d.reason,
       (v) => v === 'medical:summary', 'medical:summary');
+  }
+
+  // ── DR5: "what medications do i take" — real seeded med, real recall
+  {
+    freshDB();
+    writeMedication({ name: 'Aspirin', dosage: '81mg', is_active: 1 });
+    const d = await classifyQuery('what medications do i take');
+    assert('DR5 routes medical:summary', d.reason,
+      (v) => v === 'medical:summary', 'medical:summary');
+    assert('DR5 summary includes exact drug name', d.tier1Response,
+      (v) => typeof v === 'string' && v.includes('Aspirin'), 'includes "Aspirin"');
+  }
+
+  // ── DR6: "what medicine do i take" — singular-noun variant, same seed
+  {
+    freshDB();
+    writeMedication({ name: 'Aspirin', dosage: '81mg', is_active: 1 });
+    const d = await classifyQuery('what medicine do i take');
+    assert('DR6 routes medical:summary', d.reason,
+      (v) => v === 'medical:summary', 'medical:summary');
+    assert('DR6 summary includes exact drug name', d.tier1Response,
+      (v) => typeof v === 'string' && v.includes('Aspirin'), 'includes "Aspirin"');
   }
 
   const total = passed + failures.length;
