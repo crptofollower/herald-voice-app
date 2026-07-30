@@ -5,3 +5,9 @@ dist/
 _tmp_handoff/
 _handoff_extract/
 design_handoff_persona_system/
+# Local Android build outputs — never upload to EAS
+android/.gradle/
+android/build/
+android/app/build/
+android/app/.cxx/
+android/.cxx/
