@@ -7,7 +7,7 @@ import { getCachedEvents, formatCachedEventsForSpeech, refreshCalendarCache, get
 import { calendarWriteIsRecent } from "../db/calendarState";
 import { getFactsSummary } from "../db/factDB";
 import { normalizeInput } from "../utils/normalizeInput";
-import { getProfileSummary } from "../db/profileDB";
+import { getProfileSummary, getProfileField } from "../db/profileDB";
 import { getMedicalSummary, getMedicalRecords, getDiagnosisSummary, getDoctorsSummary } from "../db/medicalDB";
 import { getRecentMentions, formatRecentMentions } from "../db/recallDB";
 import { detectMedicalEvent } from "../utils/detectMedicalEvent";
@@ -263,6 +263,29 @@ const TIER1_SIGNALS = {
     /\bdo you know (how old i am|my age)\b/i,
   ],
 };
+
+// ─── Greeting ──────────────────────────────────────────────────────────────
+// Deterministic, no LLM. Matches a bare greeting, or a greeting addressed to
+// whatever ai_name is CURRENTLY configured — read fresh at call time, never
+// hardcoded, so any future companion name works with zero code changes.
+// A greeting addressed to any OTHER name (e.g. "Hello Herald" when
+// ai_name = "Kit") is deliberately left unmatched — whether the product
+// brand name is a permanent greeting alias is a separate product decision,
+// not established here (2026-07-30).
+const GREETING_WORDS = /^(hello|hi|hey)$/i;
+
+export function isGreeting(text: string, aiName: string | null): boolean {
+  const cleaned = text.trim().replace(/[!.,?]+$/, '');
+  if (!cleaned) return false;
+  const parts = cleaned.split(/\s+/);
+  if (parts.length === 1) {
+    return GREETING_WORDS.test(parts[0]);
+  }
+  if (parts.length === 2 && aiName) {
+    return GREETING_WORDS.test(parts[0]) && parts[1].toLowerCase() === aiName.trim().toLowerCase();
+  }
+  return false;
+}
 
 // Diagnosis reads — "what's my diagnosis", "what was I diagnosed with", "what
 // conditions do I have". Own branch + reader (getDiagnoses) so a diagnosis question
@@ -1244,6 +1267,14 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
       tier1Response: response || "I don't have your profile details stored on device yet.",
       reason: "profile:lookup",
     };
+  }
+
+  // Tier 1: greeting
+  if (isGreeting(msg, getProfileField('ai_name'))) {
+    const rawName = getProfileField('name');
+    const firstName = rawName ? rawName.trim().split(/\s+/)[0] : '';
+    const response = firstName ? `Hi ${firstName} — I'm here.` : `Hi — I'm here.`;
+    return { tier: 1, tier1Response: response, reason: 'greeting' };
   }
 
   // Tier 2: memory probe

@@ -46,6 +46,11 @@ const SCHEMA_SQL = `
     valid_until TEXT,
     context_type TEXT DEFAULT 'historical'
   );
+  CREATE TABLE IF NOT EXISTS local_profile (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
 `;
 
 function makeShim(db: Database.Database) {

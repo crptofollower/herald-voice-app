@@ -28,6 +28,11 @@ const SCHEMA_SQL = `
     created_at TEXT,
     updated_at TEXT
   );
+  CREATE TABLE IF NOT EXISTS local_profile (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
 `;
 
 function makeShim(db: Database.Database) {

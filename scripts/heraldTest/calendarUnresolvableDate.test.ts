@@ -15,16 +15,21 @@ const REFUSAL =
 // Minimal replica — calendar_cache only (schema v2 Unix-ms shape). Same pattern
 // as doctorRead.test.ts freshDB(); empty table is enough for CUD1–8.
 const SCHEMA_SQL = `
-  CREATE TABLE IF NOT EXISTS calendar_cache (
-    id        TEXT PRIMARY KEY,
-    title     TEXT NOT NULL,
-    start_ms  INTEGER NOT NULL,
-    end_ms    INTEGER NOT NULL,
-    all_day   INTEGER DEFAULT 0,
-    notes     TEXT,
-    cached_at TEXT NOT NULL
-  );
-`;
+    CREATE TABLE IF NOT EXISTS calendar_cache (
+      id        TEXT PRIMARY KEY,
+      title     TEXT NOT NULL,
+      start_ms  INTEGER NOT NULL,
+      end_ms    INTEGER NOT NULL,
+      all_day   INTEGER DEFAULT 0,
+      notes     TEXT,
+      cached_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS local_profile (
+      key        TEXT PRIMARY KEY,
+      value      TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `;
 
 function makeShim(db: Database.Database) {
   return {
