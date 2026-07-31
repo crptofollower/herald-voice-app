@@ -25,7 +25,7 @@
 // DEFAULT_REASK`).
 
 import type { CommitResult } from './routeIntent';
-import { CONFIRM_YES_RE, CONFIRM_NO_RE } from './conversationSession';
+import { CONFIRM_YES_RE, CONFIRM_NO_RE, type CorrectableField } from './conversationSession';
 import { attachVisitOutcome } from '../db/medicalDB';
 
 export interface VisitOutcomeAskSlot {
@@ -89,6 +89,29 @@ export function buildVisitOutcomeAskSlot(awaiting: {
           }
           // Neither yes nor no → re-ask ladder, confirm stage retained.
           return { status: 'noop', ack: '' };
+        },
+        correctable: {
+          currentValue: candidate,
+          buildCorrected: (newValue: string) => {
+            const build = (v: string): ReturnType<CorrectableField['buildCorrected']> => ({
+              pendingKey: 'medical_visit_outcome_confirm',
+              prompt: `Should I remember "${v}" from your appointment${who}?`,
+              reaskPrompt: `Please say yes or no. Should I remember "${v}" from your appointment${who}?`,
+              resume: async (confirmText: string): Promise<CommitResult> => {
+                const t = confirmText.trim();
+                if (CONFIRM_NO_RE.test(t)) {
+                  return { status: 'noop', ack: "Okay, I won't save that. What would you like me to do?" };
+                }
+                if (CONFIRM_YES_RE.test(t)) {
+                  attachVisitOutcome(awaiting.id, v);
+                  return { status: 'committed', ack: "Got it — I'll remember that." };
+                }
+                return { status: 'noop', ack: '' };
+              },
+              correctable: { currentValue: v, buildCorrected: (v2: string) => build(v2) },
+            });
+            return build(newValue);
+          },
         },
       };
     },
