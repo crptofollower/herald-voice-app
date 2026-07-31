@@ -570,6 +570,49 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
             return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
           }
         },
+        correctable: {
+          currentValue: famName,
+          // Named function expression so buildCorrected can recurse into itself
+          // without a TDZ/self-reference error on the outer property binding.
+          buildCorrected: function buildCorrected(newValue: string) {
+            const correctedPrompt = location
+              ? `${newValue}, your ${relation}, in ${location} — that right?`
+              : `${newValue}, your ${relation} — that right?`;
+            return {
+              pendingKey: 'family_capture_correction_confirm',
+              prompt: correctedPrompt,
+              resume: async (confirmText: string): Promise<CommitResult> => {
+                const { CONFIRM_YES_RE, CONFIRM_NO_RE } = await import('./conversationSession');
+                const t = confirmText.trim();
+                if (CONFIRM_NO_RE.test(t)) {
+                  return { status: 'noop', ack: "No problem — I won't remember that." };
+                }
+                if (!CONFIRM_YES_RE.test(t)) {
+                  return { status: 'noop', ack: '' };
+                }
+                try {
+                  const { capturePerson } = await import('../db/capturePerson');
+                  const { findContactByName } = await import('../db/contactsDB');
+                  capturePerson({ name: newValue, relationship: relation, location });
+                  const saved = findContactByName(newValue);
+                  if (!saved) {
+                    return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
+                  }
+                  const ack = location
+                    ? `Got it — I'll remember ${newValue} is your ${relation} in ${location}.`
+                    : `Got it — I'll remember ${newValue} is your ${relation}.`;
+                  return { status: 'committed', ack };
+                } catch {
+                  return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
+                }
+              },
+              correctable: {
+                currentValue: newValue,
+                buildCorrected,
+              },
+            };
+          },
+        },
       };
     },
     async remove(item: string): Promise<CommitResult> {
