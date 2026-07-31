@@ -11,6 +11,8 @@ import { fileURLToPath } from 'url';
 import { setDB } from '../../src/db/schema.ts';
 import { DOMAIN_WRITERS } from '../../src/routing/routeIntent.ts';
 import type { CommitResult } from '../../src/routing/routeIntent.ts';
+import { applyIntents } from '../../src/routing/processUtterance.ts';
+import type { IntentRecord } from '../../src/hooks/llmLayers.ts';
 import { ConversationSession } from '../../src/routing/conversationSession.ts';
 import { buildVisitOutcomeAskSlot } from '../../src/routing/medicalVisitOutcomeAsk.ts';
 import { writeMedicalRecord, markAppointmentSurfaced } from '../../src/db/medicalDB.ts';
@@ -266,6 +268,52 @@ export async function runConversationalRepairTests() {
         && (v as any).pending === true
         && (v as any).rows === 0,
       'pending / family_capture / DEFAULT_REASK / no write',
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PROP1 — applyIntents() arming path (correctable must survive setPending)
+  // ═══════════════════════════════════════════════════════════════════════════
+  {
+    const db = freshDB();
+    const session = new ConversationSession();
+    const intent: IntentRecord = { type: 'family_capture', name: 'Harold', relation: 'son' };
+
+    const { commits } = await applyIntents(
+      [intent], "my son's name is Harold", session, undefined, 'deterministic',
+    );
+
+    assert(
+      'PROP1a family_capture.add returns a pending with correctable set',
+      commits[0],
+      v => (v as any).status === 'pending' && (v as any).correctable !== undefined,
+      'pending with correctable',
+    );
+    assert(
+      'PROP1b applyIntents arms the session (external setPending call site)',
+      session.hasPending(),
+      v => v === true,
+      'true',
+    );
+
+    const corrected = await session.resolvePending("No, it's Kyle.");
+    assert(
+      'PROP1c correctable survived the applyIntents->setPending hop — correction fires, not unresolved',
+      corrected,
+      v => (v as any).status === 'pending' && (v as any).pendingKey === 'family_capture_correction_confirm',
+      'pending / family_capture_correction_confirm',
+    );
+    assert(
+      'PROP1d re-confirm prompt names the corrected value (Kyle)',
+      corrected,
+      v => /Kyle/i.test((v as any).prompt),
+      'prompt contains Kyle',
+    );
+    assert(
+      'PROP1e no write yet — correction only re-confirms, does not commit',
+      contactCount(db),
+      v => v === 0,
+      '0 contacts',
     );
   }
 
