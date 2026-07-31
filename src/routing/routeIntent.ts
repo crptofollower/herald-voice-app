@@ -37,6 +37,7 @@ export type CommitResult =
   | { status: 'pending';   prompt: string; pendingKey: string;
       kind?: 'standard' | 'destructive';
       reaskPrompt?: string;
+      correctable?: import('./conversationSession').CorrectableField;
       resume: (userText: string) => Promise<CommitResult> }
   | { status: 'noop';      ack: string }
   | { status: 'failed';    ack: string };

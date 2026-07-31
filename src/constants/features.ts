@@ -19,3 +19,10 @@ export const LOCAL_LLM_ENABLED = true;
 //   (MEDICAL_SURFACING_DESIGN_SPEC §2.3). Flip false to silence
 //   proactive offers without removing the sweep/read path.
 export const PROACTIVE_SURFACING_ENABLED = true;
+
+// CORRECTION_REPAIR_ENABLED:
+// Additive marker-based single-turn correction during an active pending
+// confirmation ("no, it's Dr. Nguyen" / "actually X"). Governing spec:
+// S_CONVERSATIONAL_REPAIR_DESIGN_SPEC.md v2. Does not alter existing
+// Yes/No matching or any domain's committed-write path.
+export const CORRECTION_REPAIR_ENABLED = true;

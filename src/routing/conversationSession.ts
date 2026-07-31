@@ -1,4 +1,5 @@
 import type { CommitResult } from './routeIntent';
+import { CORRECTION_REPAIR_ENABLED } from '../constants/features';
 
 // D0 (S54 addendum) + S-DISCLOSE Step 2 (C2, Gap 4 discharged by design):
 // the confirm-primitive. Replaces take-then-clear with hold/resolve-in-place.
@@ -9,12 +10,18 @@ import type { CommitResult } from './routeIntent';
 
 export type PendingKind = 'standard' | 'destructive';
 
+export type CorrectableField = {
+  currentValue: string;
+  buildCorrected: (newValue: string) => Omit<PendingSlot, 'kind' | 'budget'> & { prompt: string };
+};
+
 export type PendingSlot = {
   pendingKey: string;
   kind: PendingKind;
   budget: number;                                  // remaining re-asks
   resume: (userText: string) => Promise<CommitResult>;
   reaskPrompt?: string;                             // optional domain-specific re-ask override
+  correctable?: CorrectableField;
 };
 
 // Single anchored CANCEL vocabulary (§4.2 sibling — cancel is checked before
@@ -26,6 +33,35 @@ export const CANCEL_RE = /^(never\s*mind|nevermind|cancel|stop|forget\s+it)[\s.,
 // carried item; do not widen this set without founder decision.
 export const CONFIRM_YES_RE = /^(yes|yeah|yep|correct|right|10-4)[\s.,!]*$/i;
 export const CONFIRM_NO_RE  = /^(no|nope|not yet|negative)[\s.,!]*$/i;
+
+// MVP closed set only (S_CONVERSATIONAL_REPAIR_DESIGN_SPEC.md v2). Order
+// matters: "it's"-bearing alternatives must be tried before bare "actually"
+// or "actually it's X" would capture "it's X" instead of "X".
+//
+// Unicode apostrophe folding is a caller responsibility, not this function's.
+// ChatScreen.sendMessage (line ~1003) calls normalizeInput before
+// processUtterance is ever invoked, so on the live path text arriving here
+// is already normalized. Direct callers of resolvePending/processUtterance
+// (test harness included) do NOT get that normalization automatically and
+// must call normalizeInput themselves first if they want curly-apostrophe
+// input recognized. This is a fail-safe gap, not a fail-dangerous one: an
+// unnormalized correction marker that doesn't match simply falls through to
+// the existing unresolved/re-ask ladder, same as any other unparseable
+// reply — it never mis-fires as a false-positive correction.
+const CORRECTION_MARKER_RE =
+  /^(?:no,?\s+it'?s|that'?s\s+wrong,?\s+it'?s|actually\s+it'?s|actually|i\s+meant|rather)\s+(.+)$/i;
+
+export function extractCorrection(userText: string): string | null {
+  const trimmed = userText.trim();
+  const m = CORRECTION_MARKER_RE.exec(trimmed);
+  if (!m) return null;
+  const replacement = m[1]?.trim();
+  if (!replacement) return null;
+  if (CONFIRM_YES_RE.test(replacement) || CONFIRM_NO_RE.test(replacement) || CANCEL_RE.test(replacement)) {
+    return null;
+  }
+  return replacement;
+}
 
 // Deterministic candidate matcher (Pending Disambiguation, Commit 1 — spec
 // PENDING_DISAMBIGUATION_DESIGN_SPEC.md §3). Exact normalized match wins;
@@ -82,6 +118,7 @@ export class ConversationSession {
       pendingKey: slot.pendingKey,
       resume: slot.resume,
       reaskPrompt: slot.reaskPrompt,
+      correctable: slot.correctable,
       kind,
       budget: slot.budget ?? (kind === 'destructive' ? 1 : DEFAULT_STANDARD_BUDGET),
     };
@@ -110,6 +147,26 @@ export class ConversationSession {
     // Domain parser could not interpret this reply → Graceful Confusion re-ask.
     // (Rung 2, the scoped classifier, lands post-Session-W per W5 — skipped here.)
     if (result.status === 'noop' && !result.ack) {
+      if (CORRECTION_REPAIR_ENABLED && slot.correctable) {
+        const extracted = extractCorrection(userText);
+        if (extracted) {
+          const corrected = slot.correctable.buildCorrected(extracted);
+          this.pending = {
+            pendingKey: corrected.pendingKey,
+            resume: corrected.resume,
+            reaskPrompt: corrected.reaskPrompt,
+            correctable: corrected.correctable,
+            kind: slot.kind,
+            budget: slot.kind === 'destructive' ? 1 : DEFAULT_STANDARD_BUDGET,
+          };
+          return {
+            status: 'pending',
+            prompt: corrected.prompt,
+            pendingKey: corrected.pendingKey,
+            resume: corrected.resume,
+          };
+        }
+      }
       slot.budget -= 1;
       if (slot.budget <= 0) {
         this.pending = null;
@@ -130,6 +187,7 @@ export class ConversationSession {
         pendingKey: result.pendingKey,
         resume: result.resume,
         reaskPrompt: result.reaskPrompt,
+        correctable: result.correctable,
         kind: slot.kind,
         budget: slot.kind === 'destructive' ? 1 : DEFAULT_STANDARD_BUDGET,
       };
