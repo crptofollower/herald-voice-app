@@ -4,13 +4,15 @@
 // (never a medication summary), seeded doctor_name returned verbatim, singular
 // "who is my doctor" stays on doctor_read (not medical:summary), and med
 // phrasing still routes medical:summary (regression on the removed patterns).
+// DR7/DR8 (added later): visit-outcome recall — schema updated to v21 shape
+// (visit_outcome/outcome_asked_at) to support attachVisitOutcome.
 //
 // Runner: npx tsx scripts/heraldTest/doctorRead.test.ts
 // Gate:   wired from run.mjs — must be green before Build 72 closes.
 
 import Database from 'better-sqlite3';
 import { setDB } from '../../src/db/schema.ts';
-import { writeMedicalContact, writeMedication } from '../../src/db/medicalDB.ts';
+import { writeMedicalContact, writeMedication, writeMedicalRecord, attachVisitOutcome } from '../../src/db/medicalDB.ts';
 import { classifyQuery } from '../../src/routing/tierRouter.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
@@ -18,6 +20,8 @@ const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', R
 // Hand-maintained replica of the medical tables classifyQuery/getDoctorSummary
 // touch. Same caveat as medicalContract / diagnosisContract: if production DDL
 // drifts, update this — device is the real migration proof.
+// UPDATED for DR7/DR8: medical_records gains visit_outcome/outcome_asked_at
+// (v21 migration, 07-29) — this replica was stale until this session.
 const SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS medications (
     id TEXT PRIMARY KEY,
@@ -43,6 +47,8 @@ const SCHEMA_SQL = `
     notes TEXT,
     status TEXT DEFAULT 'noted',
     surfaced_at TEXT,
+    visit_outcome TEXT,
+    outcome_asked_at TEXT,
     removed_at TEXT,
     created_at TEXT
   );
@@ -162,6 +168,47 @@ export async function runDoctorReadTests() {
       (v) => typeof v === 'string' && v.includes('Aspirin'), 'includes "Aspirin"');
   }
 
+  // ── DR7: "what did Dr Alvarez say at my last appointment" — real committed
+  // outcome, real recall path via VISIT_OUTCOME_READ -> getLastVisitOutcomeSummary
+  {
+    freshDB();
+    const id = writeMedicalRecord({ doctor_name: 'Dr. Alvarez', notes: 'visit', visit_date: '2026-07-20' });
+    attachVisitOutcome(id, 'Blood work looked good, no medication changes, follow up in six months');
+    const d = await classifyQuery('what did Dr Alvarez say at my last appointment');
+    assert('DR7 routes medical:visit_outcome_read', d.reason,
+      (v) => v === 'medical:visit_outcome_read', 'medical:visit_outcome_read');
+    assert('DR7 response includes exact stored outcome verbatim', d.tier1Response,
+      (v) => typeof v === 'string' && v.includes('Blood work looked good, no medication changes, follow up in six months'),
+      'includes stored outcome');
+  }
+
+  // ── DR8: "what did the doctor say last time" — natural variant, no name, same seed
+  {
+    freshDB();
+    const id = writeMedicalRecord({ doctor_name: 'Dr. Alvarez', notes: 'visit', visit_date: '2026-07-20' });
+    attachVisitOutcome(id, 'Blood work looked good, no medication changes, follow up in six months');
+    const d = await classifyQuery('what did the doctor say last time');
+    assert('DR8 routes medical:visit_outcome_read', d.reason,
+      (v) => v === 'medical:visit_outcome_read', 'medical:visit_outcome_read');
+    assert('DR8 response includes exact stored outcome verbatim', d.tier1Response,
+      (v) => typeof v === 'string' && v.includes('Blood work looked good, no medication changes, follow up in six months'),
+      'includes stored outcome');
+  }
+
+  // ── DR9: getLastVisit period-insensitivity — same normalization fix,
+  // different reader (VISIT_HISTORY_READ, "when did I last see"), proves the
+  // shared helper actually fixed both call sites, not just getLastVisitOutcome.
+  {
+    freshDB();
+    writeMedicalRecord({ doctor_name: 'Dr. Alvarez', notes: 'visit', visit_date: '2026-07-20' });
+    const d = await classifyQuery('when did i last see Dr Alvarez');
+    assert('DR9 routes medical:visit_history_read', d.reason,
+      (v) => v === 'medical:visit_history_read', 'medical:visit_history_read');
+    assert('DR9 finds the visit despite no-period query vs. stored "Dr. Alvarez"', d.tier1Response,
+      (v) => typeof v === 'string' && v.includes('Alvarez') && !/don't have a visit/i.test(v),
+      'response names Alvarez, not the honest-miss line');
+  }
+
   const total = passed + failures.length;
   console.log(
     `\n${BOLD}DoctorRead: ${passed}/${total} passed` +
@@ -171,6 +218,3 @@ export async function runDoctorReadTests() {
   return { passed, failed: failures.length, total, failures };
 }
 
-if (process.argv[1]?.endsWith('doctorRead.test.ts')) {
-  runDoctorReadTests().catch(console.error);
-}

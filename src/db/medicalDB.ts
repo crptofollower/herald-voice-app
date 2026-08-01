@@ -126,6 +126,19 @@ export function getMedicalRecords(): MedicalRecord[] {
  * match, case-insensitive). Verbatim date + notes read-back — never the
  * generative phrasing path (Spine §3). Honest miss when none exist.
  */
+/**
+ * Normalizes a doctor name for COMPARISON ONLY — case, periods, surrounding
+ * whitespace. Never touches a stored or displayed value (Spine §3 verbatim
+ * rule is unaffected — this changes matching logic, not data). Shared by
+ * getLastVisit and getLastVisitOutcome, the two readers that compare a
+ * caller-supplied doctorHint against stored doctor_name. Deliberately scoped
+ * to these two doctor-hint comparisons only — not a general-purpose name
+ * normalizer, not wired into contacts or any other entity-resolution path.
+ */
+function normalizeDoctorNameForMatch(name: string): string {
+  return name.toLowerCase().replace(/\./g, '').trim();
+}
+
 export function getLastVisit(doctorHint?: string): {
   doctorName?: string;
   visitDate: string;
@@ -136,7 +149,7 @@ export function getLastVisit(doctorHint?: string): {
   );
   const filtered = doctorHint
     ? records.filter(
-        (r) => r.doctor_name?.toLowerCase().includes(doctorHint.toLowerCase())
+        (r) => r.doctor_name && normalizeDoctorNameForMatch(r.doctor_name).includes(normalizeDoctorNameForMatch(doctorHint))
       )
     : records;
   if (filtered.length === 0) return null;
@@ -276,7 +289,7 @@ export function getLastVisitOutcome(doctorHint?: string): {
   );
   const filtered = doctorHint
     ? rows.filter((r) =>
-        r.doctor_name?.toLowerCase().includes(doctorHint.toLowerCase())
+        r.doctor_name && normalizeDoctorNameForMatch(r.doctor_name).includes(normalizeDoctorNameForMatch(doctorHint))
       )
     : rows;
   if (filtered.length === 0) return null;

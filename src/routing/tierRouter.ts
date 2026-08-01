@@ -313,6 +313,16 @@ const VISIT_HISTORY_READ = [
   /\bwhat was (?:it|that) for\b/i,
 ];
 
+// Visit OUTCOME read — "what did Dr X say" (content of what was discussed).
+// Distinct §4a reader from visit_read (who) and VISIT_HISTORY_READ (when/why);
+// reads medical_records.visit_outcome via getLastVisitOutcomeSummary. Deterministic,
+// offline, never the LLM (Spine §3 — medical reads never route through generative
+// phrasing).
+const VISIT_OUTCOME_READ = [
+  /\bwhat did (?:dr\.?\s*\w+|(?:the|my) doctor) say\s+(?:at\s+)?(?:my\s+)?(?:last|previous)\s+(?:appointment|visit)\b/i,
+  /\bwhat did (?:dr\.?\s*\w+|(?:the|my) doctor) say\s+last\s+time\b/i,
+];
+
 const TIER2_SIGNALS = [
   /what do you know (about me|about my life)/i,
   /what have i told you/i,
@@ -1162,6 +1172,17 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
       response = `You last saw ${who} on ${spoken}${reasonPart}.`;
     }
     return { tier: 1, tier1Response: response, isMedical: true, reason: "medical:visit_history_read" };
+  }
+
+  // Tier 1: visit outcome read — "what did Dr X say" — BEFORE diagnosis/doctor/
+  // general medical summary, same §4a specific-before-general convention as the
+  // other readers in this file.
+  if (VISIT_OUTCOME_READ.some((p) => p.test(msg))) {
+    const { getLastVisitOutcomeSummary } = await import('../db/medicalDB');
+    const { extractDoctorName } = await import('../utils/detectMedicalEvent');
+    const doctorHint = extractDoctorName(msg);
+    const response = getLastVisitOutcomeSummary(doctorHint);
+    return { tier: 1, tier1Response: response, isMedical: true, reason: "medical:visit_outcome_read" };
   }
 
   // Tier 1: calendar this week — read evidence + this-week scope, or travel probe.
