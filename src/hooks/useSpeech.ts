@@ -121,6 +121,16 @@ export function useSpeech(ensureMicSuspendedRef: EnsureMicSuspendedRef) {
   const turnSuppressedRef = useRef(false);  // true = mic suspend failed, stay silent this turn
   const turnStartGateRef = useRef(createTurnStartGate());
 
+  // ── TEMP DIAGNOSTIC — recovery-contract evidence gathering, 2026-08-02 ──
+  // Additive only. No control-flow dependency.
+  const rlog = (event: string, gen: number, extra: Record<string, unknown> = {}) => {
+    console.log(
+      `[RECOVERY-INSTRUMENT] ts=${Date.now()} turn=tts:${gen} gen=tts:${gen} ` +
+      `entry=tts_turn_start event=${event} ${JSON.stringify(extra)}`
+    );
+  };
+  // ── END NEW DIAGNOSTIC HEADER ────────────────────────────────────────────
+
   const configureAudio = useCallback(async () => {
     try {
       await Audio.setAudioModeAsync({
@@ -134,7 +144,8 @@ export function useSpeech(ensureMicSuspendedRef: EnsureMicSuspendedRef) {
 
   const ensureTurnStarted = useCallback((): Promise<boolean> => {
     const gen = genRef.current;
-    return turnStartGateRef.current.ensure(
+    rlog('ENSURE_TURN_STARTED_CALLED', gen);
+    const p = turnStartGateRef.current.ensure(
       gen,
       () => genRef.current,
       async () => {
@@ -144,6 +155,10 @@ export function useSpeech(ensureMicSuspendedRef: EnsureMicSuspendedRef) {
         return suspend();
       },
     );
+    p.then((result) => {
+      rlog('ENSURE_TURN_STARTED_RESOLVED', gen, { resolution: result ? 'granted' : 'rejected' });
+    });
+    return p;
   }, [configureAudio, ensureMicSuspendedRef]);
 
   // ── Hard stop ──────────────────────────────────────────────────────────────
@@ -308,7 +323,10 @@ export function useSpeech(ensureMicSuspendedRef: EnsureMicSuspendedRef) {
         if (turnSuppressedRef.current) return;
 
         const started = await ensureTurnStarted();
-        if (gen !== genRef.current) return; // a new turn began while we waited
+        if (gen !== genRef.current) {
+          rlog('STALE_CALLBACK', gen, { context: 'enqueueSentence_post_turnStart', currentGen: genRef.current });
+          return; // a new turn began while we waited
+        }
 
         if (!started) {
           turnSuppressedRef.current = true;

@@ -1998,7 +1998,7 @@ export default function ChatScreen() {
     if (!isSpeaking && handsFreeRef.current && !isStreaming) {
       // Ref check AT FIRE TIME — state was true 700ms ago is not proof it's
       // true now; startRecording itself re-checks, this just avoids the call.
-      const timer = setTimeout(() => { if (!isSpeakingRef.current) startRecording(); }, 1400);
+      const timer = setTimeout(() => { if (!isSpeakingRef.current) startRecording('post_tts_handoff'); }, 1400);
       return () => clearTimeout(timer);
     }
   }, [isSpeaking, isStreaming, startRecording]);
@@ -2810,7 +2810,7 @@ export default function ChatScreen() {
                 } else {
                   // 50ms delay: lets Android layout settle after keyboard dismiss
                   // before speech recognition initialises -- fixes first-tap miss.
-                  setTimeout(() => startRecording(), 50);
+                  setTimeout(() => startRecording('manual_button'), 50);
                 }
               }}
               accessibilityLabel={handsFreeMode ? "Stop hands-free mode" : "Start hands-free mode"}

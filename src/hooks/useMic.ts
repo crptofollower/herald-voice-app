@@ -22,6 +22,19 @@ export function useMic(
   const engineActiveRef = useRef(false);
   const BUFFER_WINDOW = 2500;
 
+  // ── TEMP DIAGNOSTIC — recovery-contract evidence gathering, 2026-08-02 ──
+  // Additive only. No control flow depends on micSessionRef or entryPointRef.
+  // Remove entirely once one failing trace is captured and analyzed.
+  const micSessionRef = useRef(0);
+  const entryPointRef = useRef<'manual_button' | 'post_tts_handoff' | 'unknown_entry'>('unknown_entry');
+  const rlog = (event: string, extra: Record<string, unknown> = {}) => {
+    console.log(
+      `[RECOVERY-INSTRUMENT] ts=${Date.now()} turn=mic:${micSessionRef.current} gen=mic:${micSessionRef.current} ` +
+      `entry=${entryPointRef.current} event=${event} ${JSON.stringify(extra)}`
+    );
+  };
+  // ── END NEW DIAGNOSTIC HEADER ────────────────────────────────────────────
+
   // ── TEMP DIAGNOSTIC — post-TTS voice input failure, 2026-08-02 ──────────
   // Remove entirely before any fix for THIS issue is committed. Logging
   // only, no behavior change. Separate from the (already committed and
@@ -39,8 +52,11 @@ export function useMic(
   const suspendCoordinatorRef = useRef(createSuspendCoordinator(SUSPEND_TIMEOUT_MS));
 
   const suspendForSpeech = useCallback((): Promise<{ confirmed: boolean }> => {
+    rlog('SUSPEND_CALLED');
+
     if (!engineActiveRef.current) {
       // Mic already idle -- the common case. Nothing to wait for.
+      rlog('SUSPEND_RESOLVED', { resolution: 'already_idle' });
       return Promise.resolve({ confirmed: true });
     }
 
@@ -50,7 +66,12 @@ export function useMic(
     if (maxTimer.current) { clearTimeout(maxTimer.current); maxTimer.current = null; }
 
     const promise = suspendCoordinatorRef.current.beginSuspend(() => {
+      rlog('TEARDOWN_REQUESTED', { reason: 'suspend_for_speech' });
       ExpoSpeechRecognitionModule.stop();
+    });
+    promise.then((result) => {
+      rlog('SUSPEND_RESOLVED', { resolution: result.confirmed ? 'confirmed_end' : 'timeout_fail_closed' });
+      rlog('TEARDOWN_COMPLETED', { reason: 'suspend_for_speech', outcome: result.confirmed ? 'confirmed' : 'forced_timeout' });
     });
     setIsRecording(false);
     return promise;
@@ -70,19 +91,24 @@ export function useMic(
   // re-arm and keep accumulating. The 2500ms timer is the ONLY turn-over judge.
   const restartListening = () => {
     try {
+      micSessionRef.current += 1;
       ExpoSpeechRecognitionModule.start(START_CONFIG);
       engineActiveRef.current = true;
+      rlog('NATIVE_START_REQUESTED', { restart: true });
     } catch (e) {
       console.error('[useMic] restart failed:', e);
+      rlog('NATIVE_START_FAILED', { error: String(e), restart: true });
     }
   };
 
   useSpeechRecognitionEvent('start', () => {
     log('NATIVE_START_EVENT');
+    rlog('NATIVE_ACTIVE');
   });
 
   useSpeechRecognitionEvent('result', (event) => {
     log('NATIVE_RESULT', { isFinal: event.isFinal, transcript: event.results[0]?.transcript });
+    rlog('NATIVE_RESULT', { isFinal: !!event.isFinal, contentPresent: !!event.results[0]?.transcript?.trim() });
     // Half-duplex: never transcribe while Herald is speaking -- Herald's own
     // voice buffered into an utterance is a fabrication-class failure.
     if (ttsActiveRef?.current) { log('NATIVE_RESULT_DROPPED_TTS_ACTIVE'); return; }
@@ -107,6 +133,7 @@ export function useMic(
         bufferTimerRef.current = null;
         turnActiveRef.current = false; // genuine turn-over: the next 'end' must NOT restart
         log('STOP_REQUEST', { source: 'bufferTimer_turnOver' });
+        rlog('TEARDOWN_REQUESTED', { reason: 'turn_over' });
         // Turn over: close the mic BEFORE handoff so Herald's spoken reply
         // isn't captured as the next utterance (continuous-mode feedback loop).
         try { ExpoSpeechRecognitionModule.stop(); } catch {}
@@ -122,6 +149,7 @@ export function useMic(
 
   useSpeechRecognitionEvent('error', (event) => {
     log('NATIVE_ERROR', { error: event.error, message: (event as any).message });
+    rlog('NATIVE_ERROR', { code: event.error });
     engineActiveRef.current = false;
     // no-speech mid-turn = engine timed out on a pause; re-arm, keep the buffer
     if (event.error === 'no-speech' && turnActiveRef.current && bufferRef.current.trim()) {
@@ -140,6 +168,7 @@ export function useMic(
 
   useSpeechRecognitionEvent('end', () => {
     log('NATIVE_END');
+    rlog('NATIVE_END');
     engineActiveRef.current = false;
     // Per the library's own contract, 'end' is always the last event
     // dispatched, including after errors -- the one reliable confirmation
@@ -176,12 +205,14 @@ export function useMic(
       const final = bufferRef.current.trim();
       bufferRef.current = '';
       if (maxTimer.current) { clearTimeout(maxTimer.current); maxTimer.current = null; }
+      rlog('TEARDOWN_REQUESTED', { reason: 'manual_stop' });
       try { ExpoSpeechRecognitionModule.stop(); } catch (e) { console.error('[useMic] stop failed:', e); }
       setIsRecording(false);
       onTranscript(final);
       return;
     }
     if (maxTimer.current) { clearTimeout(maxTimer.current); maxTimer.current = null; }
+    rlog('TEARDOWN_REQUESTED', { reason: 'manual_stop' });
     try {
       ExpoSpeechRecognitionModule.stop();
     } catch (e) {
@@ -191,11 +222,19 @@ export function useMic(
   }, [onTranscript]);
 
   // ── startRecording memoized -- stopRecording is its only dep ───────────────
-  const startRecording = useCallback(async () => {
+  const startRecording = useCallback(async (
+    entryPoint: 'manual_button' | 'post_tts_handoff' | 'unknown_entry' = 'unknown_entry'
+  ) => {
+    entryPointRef.current = entryPoint;
+    rlog(
+      entryPoint === 'manual_button' ? 'ENTRY_MANUAL_MIC_PRESS' :
+      entryPoint === 'post_tts_handoff' ? 'ENTRY_AUTO_POST_TTS' :
+      'ENTRY_UNKNOWN'
+    );
     try {
       log('START_REQUEST');
-      if (engineActiveRef.current) { log('START_BLOCKED', { reason: 'engineActive' }); return; }      // session already live -- never double-start
-      if (ttsActiveRef?.current) { log('START_BLOCKED', { reason: 'ttsActive' }); return; }        // Herald is audible -- mic stays closed
+      if (engineActiveRef.current) { log('START_BLOCKED', { reason: 'engineActive' }); rlog('NATIVE_START_BLOCKED', { reason: 'engineActive' }); return; }      // session already live -- never double-start
+      if (ttsActiveRef?.current) { log('START_BLOCKED', { reason: 'ttsActive' }); rlog('NATIVE_START_BLOCKED', { reason: 'ttsActive' }); return; }        // Herald is audible -- mic stays closed
       const { granted } =
         await ExpoSpeechRecognitionModule.requestPermissionsAsync();
       if (!granted) { console.error('[useMic] Mic permission denied'); return; }
@@ -205,10 +244,12 @@ export function useMic(
       try { stateBefore = await ExpoSpeechRecognitionModule.getStateAsync(); } catch (e) { stateBefore = `error:${String(e)}`; }
       log('STATE_BEFORE_START', { state: stateBefore });
 
+      micSessionRef.current += 1;
       ExpoSpeechRecognitionModule.start(START_CONFIG);
       engineActiveRef.current = true;
       setIsRecording(true);
       log('NATIVE_START_CALLED');
+      rlog('NATIVE_START_REQUESTED', { restart: false });
 
       let stateAfter: string = 'unknown';
       try { stateAfter = await ExpoSpeechRecognitionModule.getStateAsync(); } catch (e) { stateAfter = `error:${String(e)}`; }
@@ -217,6 +258,7 @@ export function useMic(
       maxTimer.current = setTimeout(() => stopRecording(), 30000);
     } catch (e) {
       log('START_FAILED', { error: String(e) });
+      rlog('NATIVE_START_FAILED', { error: String(e), restart: false });
       console.error('[useMic] start failed:', e);
       setIsRecording(false);
     }

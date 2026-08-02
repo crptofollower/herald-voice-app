@@ -6,6 +6,12 @@ export function createTurnStartGate() {
     currentGen: () => number,
     suspend: () => Promise<{ confirmed: boolean }>,
   ): Promise<boolean> {
+    const attachedExisting = !!pending;
+    console.log(
+      `[RECOVERY-INSTRUMENT] ts=${Date.now()} turn=tts:${gen} gen=tts:${gen} ` +
+      `entry=tts_turn_start event=TURN_START_CALLED attachedExisting=${attachedExisting}`
+    );
+
     if (pending) return pending;
 
     pending = (async () => {
@@ -16,7 +22,17 @@ export function createTurnStartGate() {
       } catch {
         confirmed = false;
       }
-      if (gen !== currentGen()) return false;
+      if (gen !== currentGen()) {
+        console.log(
+          `[RECOVERY-INSTRUMENT] ts=${Date.now()} turn=tts:${gen} gen=tts:${gen} ` +
+          `entry=tts_turn_start event=TURN_START_RESOLVED resolution=rejected_stale currentGen=${currentGen()}`
+        );
+        return false;
+      }
+      console.log(
+        `[RECOVERY-INSTRUMENT] ts=${Date.now()} turn=tts:${gen} gen=tts:${gen} ` +
+        `entry=tts_turn_start event=TURN_START_RESOLVED resolution=${confirmed ? 'granted' : 'rejected_suspend_not_confirmed'}`
+      );
       return confirmed;
     })();
 
