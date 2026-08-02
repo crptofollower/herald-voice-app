@@ -136,6 +136,36 @@ const CASES = [
     { kind: "device_action", actionType: "list_read" },
   ],
   [
+    "todo is there hyphen → todo_read",
+    "is there anything on my to-do list",
+    { kind: "device_action", actionType: "todo_read" },
+    { kind: "device_action", actionType: "todo_read" },
+  ],
+  [
+    "todo is there no hyphen → todo_read",
+    "is there anything on my todo list",
+    { kind: "device_action", actionType: "todo_read" },
+    { kind: "device_action", actionType: "todo_read" },
+  ],
+  [
+    "todo do i have → todo_read",
+    "do i have anything on my to-do list",
+    { kind: "device_action", actionType: "todo_read" },
+    { kind: "device_action", actionType: "todo_read" },
+  ],
+  [
+    "todo whats on → todo_read",
+    "what is on my to-do list",
+    { kind: "device_action", actionType: "todo_read" },
+    { kind: "device_action", actionType: "todo_read" },
+  ],
+  [
+    "list whats on grocery exact → list_read",
+    "what is on my grocery list",
+    { kind: "device_action", actionType: "list_read" },
+    { kind: "device_action", actionType: "list_read" },
+  ],
+  [
     "hear me → backend",
     "can you hear me",
     { kind: "backend" },

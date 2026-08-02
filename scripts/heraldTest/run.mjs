@@ -97,6 +97,11 @@ const TESTS = [
   ["list is there",        "is there anything on my grocery list",           1, "list_read"],
   ["list do i have",       "do i have anything on my grocery list",          1, "list_read"],
   ["list do i have a",     "do i have a grocery list",                       1, "list_read"],
+  ["todo is there hyphen",        "is there anything on my to-do list",   1, "todo_read"],
+  ["todo is there no hyphen",     "is there anything on my todo list",    1, "todo_read"],
+  ["todo do i have",              "do i have anything on my to-do list",  1, "todo_read"],
+  ["todo whats on",               "what is on my to-do list",             1, "todo_read"],
+  ["list whats on grocery exact", "what is on my grocery list",           1, "list_read"],
 
   // Calendar
   ["cal today",            "what do i have today",                           1, "calendar"],
@@ -218,7 +223,7 @@ const RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", BOLD = "\x1b[1m",
 let passed = 0;
 const failures = [];
 const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length + 11; // +1 list_todo+medical intercept, +3 classifier tri-state, +1 Law 5 positive control, +6 Law 5 regression fence
-const EXPECTED_TOTAL = 936;   // was 929; +3 T10/T11/T12 (7 asserts), Scenario 3 decline fix, 2026-08-02
+const EXPECTED_TOTAL = 941;   // was 936; +5 todo_read / list_read reproduction rows, 2026-08-02
 
 console.log(`\n${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  HERALD ROUTER + PHONE TEST SUITE — ${TOTAL} tests${RESET}`);

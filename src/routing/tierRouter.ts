@@ -499,6 +499,7 @@ const TODO_READ_SIGNALS = [
   /\bany (open |pending )?(to.?do|todo)s?\b/i,
   /\bwhat (tasks|things) do I have\b/i,
   /\bdo I have (anything |something )?on my (to.?do|todo) list\b/i,
+  /\bis there (anything |something )?on my (to.?do|todo) list\b/i,
 ];
 
 const TODO_COMPLETE_SIGNALS = [
