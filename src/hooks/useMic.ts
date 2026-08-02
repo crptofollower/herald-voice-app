@@ -22,6 +22,20 @@ export function useMic(
   const engineActiveRef = useRef(false);
   const BUFFER_WINDOW = 2500;
 
+  // ── TEMP DIAGNOSTIC — post-TTS voice input failure, 2026-08-02 ──────────
+  // Remove entirely before any fix for THIS issue is committed. Logging
+  // only, no behavior change. Separate from the (already committed and
+  // accepted) self-hearing fix -- this instruments what happens AFTER
+  // suspendForSpeech resolves and startRecording() is called again.
+  const log = (event: string, extra: Record<string, unknown> = {}) => {
+    console.log(
+      `[MICLOG2] t=${Date.now()} evt=${event} ` +
+      `isRecording=${isRecording} engineActive=${engineActiveRef.current} ` +
+      `turnActive=${turnActiveRef.current} ttsActive=${!!ttsActiveRef?.current} ${JSON.stringify(extra)}`
+    );
+  };
+  // ── END TEMP DIAGNOSTIC HEADER ────────────────────────────────────────────
+
   const suspendCoordinatorRef = useRef(createSuspendCoordinator(SUSPEND_TIMEOUT_MS));
 
   const suspendForSpeech = useCallback((): Promise<{ confirmed: boolean }> => {
@@ -63,13 +77,18 @@ export function useMic(
     }
   };
 
+  useSpeechRecognitionEvent('start', () => {
+    log('NATIVE_START_EVENT');
+  });
+
   useSpeechRecognitionEvent('result', (event) => {
+    log('NATIVE_RESULT', { isFinal: event.isFinal, transcript: event.results[0]?.transcript });
     // Half-duplex: never transcribe while Herald is speaking -- Herald's own
     // voice buffered into an utterance is a fabrication-class failure.
-    if (ttsActiveRef?.current) return;
+    if (ttsActiveRef?.current) { log('NATIVE_RESULT_DROPPED_TTS_ACTIVE'); return; }
     if (event.isFinal) {
       const text = event.results[0]?.transcript?.trim();
-      if (!text) return; // noise segment - keep the mic hot, don't end the turn
+      if (!text) { log('NATIVE_RESULT_EMPTY_NOISE'); return; } // noise segment - keep the mic hot, don't end the turn
 
       turnActiveRef.current = true; // a turn is in progress; protect it from premature end
 
@@ -87,6 +106,7 @@ export function useMic(
         bufferRef.current = '';
         bufferTimerRef.current = null;
         turnActiveRef.current = false; // genuine turn-over: the next 'end' must NOT restart
+        log('STOP_REQUEST', { source: 'bufferTimer_turnOver' });
         // Turn over: close the mic BEFORE handoff so Herald's spoken reply
         // isn't captured as the next utterance (continuous-mode feedback loop).
         try { ExpoSpeechRecognitionModule.stop(); } catch {}
@@ -101,6 +121,7 @@ export function useMic(
   });
 
   useSpeechRecognitionEvent('error', (event) => {
+    log('NATIVE_ERROR', { error: event.error, message: (event as any).message });
     engineActiveRef.current = false;
     // no-speech mid-turn = engine timed out on a pause; re-arm, keep the buffer
     if (event.error === 'no-speech' && turnActiveRef.current && bufferRef.current.trim()) {
@@ -118,6 +139,7 @@ export function useMic(
   });
 
   useSpeechRecognitionEvent('end', () => {
+    log('NATIVE_END');
     engineActiveRef.current = false;
     // Per the library's own contract, 'end' is always the last event
     // dispatched, including after errors -- the one reliable confirmation
@@ -171,17 +193,30 @@ export function useMic(
   // ── startRecording memoized -- stopRecording is its only dep ───────────────
   const startRecording = useCallback(async () => {
     try {
-      if (engineActiveRef.current) return;      // session already live -- never double-start
-      if (ttsActiveRef?.current) return;        // Herald is audible -- mic stays closed
+      log('START_REQUEST');
+      if (engineActiveRef.current) { log('START_BLOCKED', { reason: 'engineActive' }); return; }      // session already live -- never double-start
+      if (ttsActiveRef?.current) { log('START_BLOCKED', { reason: 'ttsActive' }); return; }        // Herald is audible -- mic stays closed
       const { granted } =
         await ExpoSpeechRecognitionModule.requestPermissionsAsync();
       if (!granted) { console.error('[useMic] Mic permission denied'); return; }
       turnActiveRef.current = false; // clean slate for a new turn
+
+      let stateBefore: string = 'unknown';
+      try { stateBefore = await ExpoSpeechRecognitionModule.getStateAsync(); } catch (e) { stateBefore = `error:${String(e)}`; }
+      log('STATE_BEFORE_START', { state: stateBefore });
+
       ExpoSpeechRecognitionModule.start(START_CONFIG);
       engineActiveRef.current = true;
       setIsRecording(true);
+      log('NATIVE_START_CALLED');
+
+      let stateAfter: string = 'unknown';
+      try { stateAfter = await ExpoSpeechRecognitionModule.getStateAsync(); } catch (e) { stateAfter = `error:${String(e)}`; }
+      log('STATE_AFTER_START', { state: stateAfter });
+
       maxTimer.current = setTimeout(() => stopRecording(), 30000);
     } catch (e) {
+      log('START_FAILED', { error: String(e) });
       console.error('[useMic] start failed:', e);
       setIsRecording(false);
     }
