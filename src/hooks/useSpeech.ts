@@ -12,6 +12,17 @@
 //   goes straight to expo-speech with zero network round-trip. Eliminates
 //   the 4-5s delay on greetings and short one-shot replies.
 //
+// CHANGES 2026-08-02 (audio session lifecycle fix):
+//   speak() and enqueueSentence() now share ONE queue/state authority.
+//   speak() = enqueueSentence(text, { isLast: true }) -- marks the turn
+//   done immediately since nothing more is coming. enqueueSentence() alone
+//   leaves the turn open until the caller calls finishStream().
+//   ensureTurnStarted() awaits an injected ensureMicSuspended() (via a ref,
+//   to break a circular hook dependency with useMic) before any audio of a
+//   turn is allowed to queue. Single-flight via createTurnStartGate --
+//   concurrent callers within one turn share the same promise. Fails
+//   closed: if the mic can't be confirmed suspended, no audio plays.
+//
 // WHY THIS DESIGN:
 //   The backend streams sentences (the [S] markers in /ask/stream).
 //   Instead of waiting for the full response, we speak each sentence the
@@ -26,22 +37,22 @@
 // API:
 //   speak(text)            one-shot: greeting, direct replies
 //   enqueueSentence(text)  streaming: call per [S] sentence marker
+//   finishStream()         call when the backend stream has fully completed
 //   resetSpeech()          clear queue + stop (call on new send)
 //   stop()                 hard stop everything
 //   isSpeaking             true while audio is playing
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { Audio } from "expo-av";
 import * as ExpoSpeech from "expo-speech";
 import { API_BASE } from "../constants/api";
+import { createTurnStartGate } from "./turnStartGate";
 
-// ON_DEVICE_TTS: true = expo-speech for all responses (instant, no network)
-// false = Nova primary with expo-speech fallback (higher quality, 3-5s delay)
 const ON_DEVICE_TTS = true;
 
 const TTS_ENDPOINT = `${API_BASE}/tts`;
-const TTS_SPEED = 0.88; // v8.7: bumped from 0.85 -- slightly more energy, less "low key"
-const SENTENCE_PAUSE_MS = 200; // breath between sentences
+const TTS_SPEED = 0.88;
+const SENTENCE_PAUSE_MS = 200;
 
 function cleanForSpeech(text: string): string {
   return text
@@ -59,9 +70,6 @@ function cleanForSpeech(text: string): string {
     .trim();
 }
 
-// True when the text is short enough to skip the Nova network round-trip.
-// Under 100 chars: definitely short. Otherwise, single sentence: no mid-text
-// sentence boundary means nothing to queue -- expo-speech is instant.
 function isShortOrOneSentence(text: string): boolean {
   if (text.length < 100) return true;
   const sentences = text
@@ -86,7 +94,10 @@ async function fetchAudioDataUri(text: string): Promise<string> {
   });
 }
 
-export function useSpeech() {
+type EnsureMicSuspended = () => Promise<{ confirmed: boolean }>;
+type EnsureMicSuspendedRef = { current: EnsureMicSuspended | null };
+
+export function useSpeech(ensureMicSuspendedRef: EnsureMicSuspendedRef) {
   const [isSpeaking, setIsSpeaking] = useState(false);
   // Half-duplex authority: a ref mirror of isSpeaking, readable synchronously
   // at the moment the mic tries to open. State alone races (stale by the time
@@ -102,9 +113,13 @@ export function useSpeech() {
   const fetchingRef   = useRef(false);
   const playingRef    = useRef(false);
   const soundRef         = useRef<Audio.Sound | null>(null);
-  const genRef           = useRef(0); // incremented on reset to abandon stale loops
+  const genRef           = useRef(0); // incremented on reset/unmount to abandon stale loops
   const expoQueueRef = useRef<string[]>([]);
   const expoSpeakingRef  = useRef(false); // guards overlapping expo-speech fallbacks
+
+  const streamEndedRef = useRef(true);      // true = no stream currently open
+  const turnSuppressedRef = useRef(false);  // true = mic suspend failed, stay silent this turn
+  const turnStartGateRef = useRef(createTurnStartGate());
 
   const configureAudio = useCallback(async () => {
     try {
@@ -117,6 +132,20 @@ export function useSpeech() {
     } catch {}
   }, []);
 
+  const ensureTurnStarted = useCallback((): Promise<boolean> => {
+    const gen = genRef.current;
+    return turnStartGateRef.current.ensure(
+      gen,
+      () => genRef.current,
+      async () => {
+        await configureAudio();
+        const suspend = ensureMicSuspendedRef.current;
+        if (!suspend) return { confirmed: true };
+        return suspend();
+      },
+    );
+  }, [configureAudio, ensureMicSuspendedRef]);
+
   // ── Hard stop ──────────────────────────────────────────────────────────────
   const stop = useCallback(async () => {
     genRef.current += 1;
@@ -126,6 +155,10 @@ export function useSpeech() {
     playingRef.current    = false;
     expoSpeakingRef.current = false;
     setSpeaking(false);
+
+    streamEndedRef.current = true;
+    turnSuppressedRef.current = false;
+    turnStartGateRef.current.reset();
 
     if (soundRef.current) {
       try {
@@ -141,7 +174,16 @@ export function useSpeech() {
 
   const resetSpeech = stop;
 
-  // ── Playback loop ──────────────────────────────────────────────────────────
+  // Unmount: abandon any in-flight turn-start/playback work. The gen check
+  // inside ensureTurnStarted/enqueueSentence makes a late resolution after
+  // unmount a safe no-op, not a stray state update.
+  useEffect(() => {
+    return () => {
+      genRef.current += 1;
+    };
+  }, []);
+
+  // ── Playback loop (Nova path -- currently dead code, ON_DEVICE_TTS is always true) ──
   const runPlaybackLoop = useCallback(async (gen: number) => {
     if (playingRef.current) return;
     playingRef.current = true;
@@ -179,9 +221,6 @@ export function useSpeech() {
         try { await sound.unloadAsync(); } catch {}
         soundRef.current = null;
 
-        // ── Breath between sentences ──────────────────────────────────────
-        // Without this pause sentences run together and sound rushed.
-        // 200ms is enough to feel like a natural speaking rhythm.
         if (gen === genRef.current && audioQueueRef.current.length > 0) {
           await new Promise((r) => setTimeout(r, SENTENCE_PAUSE_MS));
         }
@@ -194,7 +233,6 @@ export function useSpeech() {
     if (gen === genRef.current && !expoSpeakingRef.current) setSpeaking(false);
   }, []);
 
-  // ── Fetch loop ─────────────────────────────────────────────────────────────
   const runFetchLoop = useCallback(async (gen: number) => {
     if (fetchingRef.current) return;
     fetchingRef.current = true;
@@ -210,7 +248,6 @@ export function useSpeech() {
         if (gen !== genRef.current) break;
         audioQueueRef.current.push(uri);
       } catch {
-        // Nova failed -- expo-speech fallback for this sentence
         if (gen !== genRef.current || expoSpeakingRef.current) continue;
         expoSpeakingRef.current = true;
         ExpoSpeech.stop();
@@ -237,7 +274,11 @@ export function useSpeech() {
     if (expoSpeakingRef.current) return;
     const next = expoQueueRef.current.shift();
     if (!next) {
-      setSpeaking(false);
+      if (streamEndedRef.current) {
+        setSpeaking(false);
+      }
+      // else: queue empty but more sentences are still expected -- stay
+      // "speaking" and wait for the next enqueueSentence/finishStream call.
       return;
     }
     expoSpeakingRef.current = true;
@@ -255,59 +296,58 @@ export function useSpeech() {
     });
   }, []);
 
-  // ── enqueueSentence -- streaming entry point ───────────────────────────────
+  // ── enqueueSentence -- the single TTS-turn authority. Called directly
+  // for streamed sentences, and internally by speak() for one-shot replies.
   const enqueueSentence = useCallback(
-    (text: string) => {
+    (text: string, opts?: { isLast?: boolean }) => {
       const clean = cleanForSpeech(text);
       if (!clean) return;
-
-      if (ON_DEVICE_TTS || isShortOrOneSentence(clean)) {
-        setSpeaking(true);
-        expoQueueRef.current.push(clean);
-        drainExpoQueue();
-        return;
-      }
-
       const gen = genRef.current;
 
-      textQueueRef.current.push(clean);
-      configureAudio();
-      runFetchLoop(gen);
-      runPlaybackLoop(gen);
+      (async () => {
+        if (turnSuppressedRef.current) return;
+
+        const started = await ensureTurnStarted();
+        if (gen !== genRef.current) return; // a new turn began while we waited
+
+        if (!started) {
+          turnSuppressedRef.current = true;
+          console.warn('[useSpeech] turn suppressed -- mic suspend not confirmed, no audio this turn');
+          return;
+        }
+
+        if (opts?.isLast) streamEndedRef.current = true;
+
+        if (ON_DEVICE_TTS || isShortOrOneSentence(clean)) {
+          setSpeaking(true);
+          expoQueueRef.current.push(clean);
+          drainExpoQueue();
+          return;
+        }
+
+        textQueueRef.current.push(clean);
+        runFetchLoop(gen);
+        runPlaybackLoop(gen);
+      })();
     },
-    [configureAudio, runFetchLoop, runPlaybackLoop]
+    [ensureTurnStarted, drainExpoQueue, runFetchLoop, runPlaybackLoop]
   );
 
-  // ── speak -- one-shot (greeting / non-streamed) ────────────────────────────
-  //
-  // Fast path: short text or a single sentence speaks instantly via expo-speech,
-  // bypassing the Nova fetch entirely. This is the common case for greetings
-  // ("Good morning!") and brief replies ("Sure, done.") -- zero perceptible delay.
-  //
-  // Long multi-sentence responses fall through to the Nova pipeline so they
-  // still get the higher-quality neural voice with the sentence queue.
+  // ── speak -- one-shot (greeting / non-streamed / deterministic replies) ────
   const speak = useCallback(
     async (text: string) => {
       await stop();
-      const clean = cleanForSpeech(text);
-      if (!clean) return;
-
-      if (ON_DEVICE_TTS || isShortOrOneSentence(clean)) {
-        setSpeaking(true);
-        await configureAudio();
-        ExpoSpeech.speak(clean, {
-          rate: 0.9,
-          pitch: 1.0,
-          onDone: () => setSpeaking(false),
-          onError: () => setSpeaking(false),
-        });
-        return;
-      }
-
-      enqueueSentence(clean);
+      enqueueSentence(text, { isLast: true });
     },
-    [stop, enqueueSentence, configureAudio]
+    [stop, enqueueSentence]
   );
 
-  return { speak, enqueueSentence, resetSpeech, stop, isSpeaking, isSpeakingRef };
+  // ── finishStream -- caller (ChatScreen) calls this exactly when the
+  // backend stream has completed, on every path (success/error/early-exit).
+  const finishStream = useCallback(() => {
+    streamEndedRef.current = true;
+    drainExpoQueue();
+  }, [drainExpoQueue]);
+
+  return { speak, enqueueSentence, finishStream, resetSpeech, stop, isSpeaking, isSpeakingRef };
 }

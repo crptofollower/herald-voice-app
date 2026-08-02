@@ -392,7 +392,8 @@ export default function ChatScreen() {
   // If they've scrolled up to read (Freddie response etc.), leave them there.
   const isAtBottomRef = useRef(true);
 
-  const { speak, enqueueSentence, resetSpeech, stop, isSpeaking, isSpeakingRef } = useSpeech();
+  const suspendForSpeechRef = useRef<(() => Promise<{ confirmed: boolean }>) | null>(null);
+  const { speak, enqueueSentence, finishStream, resetSpeech, stop, isSpeaking, isSpeakingRef } = useSpeech(suspendForSpeechRef);
   const [handsFreeMode, setHandsFreeMode] = useState(false);
   const handsFreeRef = useRef(false);
 
@@ -478,7 +479,8 @@ export default function ChatScreen() {
       clearTimeout((streamAbortRef.current as any)._maxTimer);
     }
     streamAbortRef.current = null;
-  }, []);
+    finishStream();
+  }, [finishStream]);
 
   // ── AppState listener (stable, uses ref) ──────────────────────────────────
   useEffect(() => {
@@ -1775,7 +1777,7 @@ export default function ChatScreen() {
       ];
       _bridgePhrase = _default[Math.floor(Math.random() * _default.length)];
     }
-    speak(_bridgePhrase);
+    enqueueSentence(_bridgePhrase);
 
     setShowProactive(false);
     setIsWaiting(true);
@@ -1974,7 +1976,8 @@ export default function ChatScreen() {
       sendMessage(trimmed);
     }, 600);
   }, [sendMessage]);
-  const { isRecording, startRecording, stopRecording } = useMic(handleTranscript, isSpeakingRef);
+  const { isRecording, startRecording, stopRecording, suspendForSpeech } = useMic(handleTranscript, isSpeakingRef);
+  suspendForSpeechRef.current = suspendForSpeech;
 
   useRaiseToWake({
     aiName: aiName || 'Herald',
@@ -2800,7 +2803,7 @@ export default function ChatScreen() {
                 },
               ]}
               onPress={() => {
-                if (isStreaming || isWaiting || isSpeaking) return;
+                if (isStreaming || isWaiting || isSpeakingRef.current) return;
                 Keyboard.dismiss();
                 if (isRecording) {
                   stopRecording();
