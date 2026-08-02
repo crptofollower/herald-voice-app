@@ -2754,6 +2754,32 @@ export default function ChatScreen() {
             />
           )}
 
+          {/* TEMP DIAGNOSTIC — hands-free reachability toggle, 2026-08-02.
+              Founder-only. No persistence, no AsyncStorage. Defaults OFF on
+              every launch (relies on handsFreeMode's existing useState(false)
+              initializer — nothing added here changes that). Remove in the
+              same commit that removes recovery instrumentation. */}
+          <TouchableOpacity
+            onPress={() => setHandsFreeMode((v) => !v)}
+            accessibilityLabel={
+              handsFreeMode
+                ? "TEMP DIAGNOSTIC: hands-free is ON, tap to turn off"
+                : "TEMP DIAGNOSTIC: hands-free is OFF, tap to turn on"
+            }
+            style={{
+              alignSelf: 'center',
+              paddingVertical: 4,
+              paddingHorizontal: 10,
+              marginBottom: 4,
+              borderRadius: 6,
+              backgroundColor: handsFreeMode ? '#cc3333' : 'rgba(255,255,255,0.15)',
+            }}
+          >
+            <Text style={{ color: '#fff', fontSize: 11, fontWeight: '600', letterSpacing: 0.5 }}>
+              TEMP DIAGNOSTIC — HANDS-FREE: {handsFreeMode ? 'ON' : 'OFF'}
+            </Text>
+          </TouchableOpacity>
+
           <View
             style={[
               styles.inputBar,
