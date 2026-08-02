@@ -168,6 +168,52 @@ export async function runMedicalVisitOutcomeAskTests() {
       v => (v as { visit_outcome: string | null }).visit_outcome === null, 'null');
   }
 
+  // ── T10: bare "No" at stage-1 → declines the flow, never becomes candidate ─
+  {
+    const db = freshDB();
+    const awaiting = makeAwaitingVisit(db);
+    const slot = buildVisitOutcomeAskSlot(awaiting);
+    const result = await slot.resume('No');
+    assert('T10a bare "No" → noop with decline ack, not a candidate', result,
+      v => (v as any).status === 'noop'
+        && (v as any).ack === "Okay, no worries. What would you like me to do?"
+        && (v as any).pendingKey === undefined
+        && (v as any).resume === undefined,
+      'noop / decline ack / no pendingKey / no nested resume');
+    assert('T10b visit_outcome stays null', readOutcome(db, awaiting.id),
+      v => (v as { visit_outcome: string | null }).visit_outcome === null, 'null');
+  }
+
+  // ── T11: "No thanks" at stage-1 → same decline path ────────────────────────
+  {
+    const db = freshDB();
+    const awaiting = makeAwaitingVisit(db);
+    const slot = buildVisitOutcomeAskSlot(awaiting);
+    const result = await slot.resume('No thanks');
+    assert('T11a "No thanks" → noop with decline ack', result,
+      v => (v as any).status === 'noop'
+        && (v as any).ack === "Okay, no worries. What would you like me to do?",
+      'noop / decline ack');
+    assert('T11b visit_outcome stays null', readOutcome(db, awaiting.id),
+      v => (v as { visit_outcome: string | null }).visit_outcome === null, 'null');
+  }
+
+  // ── T12: a real answer starting with "No" must still become a candidate ───
+  {
+    const db = freshDB();
+    const awaiting = makeAwaitingVisit(db);
+    const slot = buildVisitOutcomeAskSlot(awaiting);
+    const result = await slot.resume('No complications, everything looked fine.');
+    assert('T12a real answer starting with "No" still advances to confirm-stage', result,
+      v => (v as any).status === 'pending' && (v as any).pendingKey === 'medical_visit_outcome_confirm',
+      'pending / medical_visit_outcome_confirm');
+    assert('T12b confirm prompt reads back the exact candidate verbatim', result,
+      v => (v as any).prompt === 'Should I remember "No complications, everything looked fine." from your appointment with Dr. Patel?',
+      'exact verbatim read-back prompt');
+    assert('T12c visit_outcome still null — candidate not yet written', readOutcome(db, awaiting.id),
+      v => (v as { visit_outcome: string | null }).visit_outcome === null, 'null');
+  }
+
   // ── T8: recall — committed candidate is exactly recallable offline ────────
   {
     const db = freshDB();

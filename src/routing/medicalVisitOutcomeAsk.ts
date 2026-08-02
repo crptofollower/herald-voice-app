@@ -28,6 +28,15 @@ import type { CommitResult } from './routeIntent';
 import { CONFIRM_YES_RE, CONFIRM_NO_RE, type CorrectableField } from './conversationSession';
 import { attachVisitOutcome } from '../db/medicalDB';
 
+// Whole-string match only, deliberately narrow. A real answer that merely
+// starts with "no" ("No complications, all good") must still fall through
+// to candidate capture — only a standalone decline utterance short-circuits
+// here. Deliberately excludes "nothing"/"not really" — those may be
+// legitimate or ambiguous visit outcomes, not clear declines. Missing an
+// edge-case phrasing is safe (falls through to normal capture, same as
+// today) — matching a real answer as a decline would not be.
+const OUTCOME_DECLINE_RE = /^(no|no thanks|no thank you|nope|nah|not now)[.!]?$/i;
+
 export interface VisitOutcomeAskSlot {
   prompt: string;
   pendingKey: 'medical_visit_outcome';
@@ -55,8 +64,15 @@ export function buildVisitOutcomeAskSlot(awaiting: {
     kind: 'standard',
     budget: 2,
     resume: async (userText: string): Promise<CommitResult> => {
-      if (!userText.trim()) {
+      const trimmed = userText.trim();
+      if (!trimmed) {
         return { status: 'noop', ack: '' }; // re-ask ladder, original question
+      }
+      if (OUTCOME_DECLINE_RE.test(trimmed)) {
+        return {
+          status: 'noop',
+          ack: "Okay, no worries. What would you like me to do?",
+        };
       }
 
       // In-memory candidate ONLY. This closure variable is the sole place
