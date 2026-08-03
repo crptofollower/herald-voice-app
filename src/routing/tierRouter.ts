@@ -238,6 +238,7 @@ const TIER1_SIGNALS = {
     /\bmy (meds|medications|pills|prescriptions)\b/i,
     /\bdo i take (any )?(medication|meds|pills)\b/i,
     /\bwhat (medication|medications|medicine|meds|pills|prescriptions) do i take\b/i,
+    /\bam i (on|taking) (any )?(medication|medications|meds|pills|prescriptions)\b/i,
   ],
   visit_read: [
     /\bwho (did|have) i seen?\b/i,
@@ -302,6 +303,7 @@ const DIAGNOSIS_READ_SIGNALS = [
 // doctor_name rows; empty → honest miss, never a confident wrong read.
 const DOCTOR_READ_SIGNALS = [
   /\bwho\s+(?:is|are)\s+my\s+(?:doctor|doctors|physician|physicians|specialist|specialists)\b/i,
+  /\bwho'?s\s+my\s+(?:doctor|doctors|physician|physicians|specialist|specialists)\b/i,
   /\bwhat(?:'s| is)\s+my\s+doctor'?s?\s+name\b/i,
   /\bdo\s+(?:i|you)\s+(?:have|know)\s+(?:a\s+|my\s+)?(?:doctor|physician|gp|general practitioner)\b/i,
   /\bmy\s+doctors?\b.*\bname/i,

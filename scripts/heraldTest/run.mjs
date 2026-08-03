@@ -114,7 +114,9 @@ const TESTS = [
 
   // Medical — standard
   ["med meds",             "what medications am i on",                       1, "medical"],
+  ["med am i on any",      "am I on any medications",                        1, "medical"],
   ["med doctor",           "who is my doctor",                               1, "medical"],
+  ["med doctor whos",      "who's my doctor",                                1, "medical"],
 
   // Diagnosis read (Build 49) — routes to the diagnosis reader, tier1/medical
   ["dx read whats",        "what's my diagnosis",                            1, "medical"],
@@ -223,7 +225,7 @@ const RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", BOLD = "\x1b[1m",
 let passed = 0;
 const failures = [];
 const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length + 11; // +1 list_todo+medical intercept, +3 classifier tri-state, +1 Law 5 positive control, +6 Law 5 regression fence
-const EXPECTED_TOTAL = 941;   // was 936; +5 todo_read / list_read reproduction rows, 2026-08-02
+const EXPECTED_TOTAL = 943;   // was 941; +2 doctor/med phrase-coverage rows (who's / am I on any), 2026-08-03
 
 console.log(`\n${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  HERALD ROUTER + PHONE TEST SUITE — ${TOTAL} tests${RESET}`);
