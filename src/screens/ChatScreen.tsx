@@ -2395,7 +2395,7 @@ export default function ChatScreen() {
       maps:             { deep: "comgooglemaps://",  fallback: "https://maps.google.com" },
       // ── Email / productivity ──────────────────────────────────────────────
       gmail:            { deep: "googlegmail://",    fallback: "https://mail.google.com" },
-      email:            { deep: "intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.APP_EMAIL;end" },
+      email:            { deep: "mailto:" },
       googledocs:       { deep: "googledocs://",     fallback: "https://docs.google.com" },
       googledrive:      { deep: "googledrive://",    fallback: "https://drive.google.com" },
       zoom:             { deep: "zoomus://",         fallback: "https://zoom.us" },
