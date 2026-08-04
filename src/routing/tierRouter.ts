@@ -524,6 +524,13 @@ const APP_OPEN_SIGNALS = [
   /\b(open|launch|start|pull\s+up)\s+(my\s+)?(banking|bank)\s*(app)?\b/i,
   /\b(open|launch)\s+(my\s+)?(camera)\b/i,
   /\btake\s+a?\s*selfie\b/i,
+  // Generic app-open gate (state doc: app_open routing-gap class fix).
+  // Must stay LAST in this array — every more specific action (household,
+  // calendar, contacts, lists, photos) is already checked earlier in
+  // classifyQuery and wins first. This only recognizes the explicit
+  // open/launch/start/pull-up <name> shape and hands appName straight to
+  // the existing handleLaunchAction registry — it adds zero new app support.
+  /\b(open|launch|start|pull\s+up)\s+(?:my\s+)?[a-z0-9][\w .+-]{0,30}?(?:\s+app)?\s*$/i,
 ];
 
 const LIST_REMOVE_SIGNALS = [

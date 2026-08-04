@@ -2341,6 +2341,11 @@ export default function ChatScreen() {
     x: 'twitter',
     express_scripts: 'expressscripts',
     expressscripts_app: 'expressscripts',
+    mail: 'email',
+    inbox: 'email',
+    myemail: 'email',
+    myinbox: 'email',
+    mymail: 'email',
   };
 
   const canonicalKey = (k: string): string => {
@@ -2350,7 +2355,7 @@ export default function ChatScreen() {
     return CANONICAL_KEYS[base] ?? base;
   };
 
-  const handleLaunchAction = async (appName: string) => {
+  const handleLaunchAction = async (appName: string): Promise<boolean> => {
     const key = canonicalKey(appName);
     const launchApps: Record<string, { deep: string | string[]; fallback?: string }> = {
       // ── Social ────────────────────────────────────────────────────────────
@@ -2390,6 +2395,7 @@ export default function ChatScreen() {
       maps:             { deep: "comgooglemaps://",  fallback: "https://maps.google.com" },
       // ── Email / productivity ──────────────────────────────────────────────
       gmail:            { deep: "googlegmail://",    fallback: "https://mail.google.com" },
+      email:            { deep: "intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.APP_EMAIL;end" },
       googledocs:       { deep: "googledocs://",     fallback: "https://docs.google.com" },
       googledrive:      { deep: "googledrive://",    fallback: "https://drive.google.com" },
       zoom:             { deep: "zoomus://",         fallback: "https://zoom.us" },
@@ -2497,20 +2503,26 @@ export default function ChatScreen() {
       for (const link of links) {
         try {
           await Linking.openURL(link);
-          return;
+          return true;
         } catch {
           // try next deep link or web fallback
         }
       }
       if (app.fallback) {
-        await Linking.openURL(app.fallback);
-        return;
+        try {
+          await Linking.openURL(app.fallback);
+          return true;
+        } catch {
+          return false;
+        }
       }
+      return false;
     }
 
-    await Linking.openURL(
-      `https://www.google.com/search?q=${encodeURIComponent(appName)}`
-    );
+    // Unrecognized app name — no registry entry. Do not silently redirect to
+    // a Google search and call it success; that isn't the app the user asked
+    // for. Honest failure, per the "no fabricated success" rule.
+    return false;
   };
   handleLaunchActionRef.current = handleLaunchAction;
 
