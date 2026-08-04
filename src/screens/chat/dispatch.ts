@@ -389,21 +389,7 @@ export async function dispatchAction(
         }
         if (actionIntent.type === 'photo_open') {
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-          let opened = false;
-          if (platformOS === 'android') {
-            const photoIntents = [
-              'intent:#Intent;action=android.intent.action.VIEW;type=image/*;package=com.google.android.apps.photos;end',
-              'intent:#Intent;action=android.intent.action.VIEW;type=image/*;package=com.sec.android.gallery3d;end',
-              'googlephotos://',
-            ];
-            for (const uri of photoIntents) {
-              try {
-                await openURL(uri);
-                opened = true;
-                break;
-              } catch { /* try next */ }
-            }
-          }
+          const opened = await handleLaunchActionRef.current?.('photos') ?? false;
           const reply = opened
             ? 'Opening your photos.'
             : "I couldn't open your gallery — try opening Photos manually.";
@@ -414,20 +400,23 @@ export async function dispatchAction(
 
         if (actionIntent.type === 'app_open') {
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-          const { appName } = actionIntent;
+          const { appName: rawAppName } = actionIntent;
+          const isCameraPhrase =
+            rawAppName.toLowerCase().includes('camera') ||
+            /\b(selfie|picture|photo|photograph|pic)\b/i.test(text);
+          const appName = isCameraPhrase ? 'camera' : rawAppName;
           let opened = false;
           try {
-            if (appName.toLowerCase().includes('camera') || /\bselfie\b/i.test(text)) {
+            if (isCameraPhrase) {
               await IntentLauncher.startActivityAsync('android.media.action.IMAGE_CAPTURE', {});
               opened = true;
             } else {
-              await handleLaunchActionRef.current?.(appName);
-              opened = true;
+              opened = await handleLaunchActionRef.current?.(appName) ?? false;
             }
           } catch { /* fall through */ }
           const reply = opened
             ? `Opening ${appName}.`
-            : `I couldn't open ${appName} — try opening it manually.`;
+            : `I don't have ${appName} set up to open yet — try it manually.`;
           addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
           speak(reply);
           return;

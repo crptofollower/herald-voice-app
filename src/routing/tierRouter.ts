@@ -524,6 +524,12 @@ const APP_OPEN_SIGNALS = [
   /\b(open|launch|start|pull\s+up)\s+(my\s+)?(banking|bank)\s*(app)?\b/i,
   /\b(open|launch)\s+(my\s+)?(camera)\b/i,
   /\btake\s+a?\s*selfie\b/i,
+  // Camera-photo verb coverage (state doc: camera-intent routing gap fix).
+  // Unifies "take a picture" / "take a photo" / "snap a picture" /
+  // "take a photograph" / "capture a photo" with the existing selfie/camera
+  // mechanism, so these never fall through to the medication-capture tier.
+  /\b(take|snap|grab)\s+a\s+(picture|photo|photograph|pic)\b/i,
+  /\bcapture\s+a\s+(picture|photo|photograph|pic)\b/i,
   // Generic app-open gate (state doc: app_open routing-gap class fix).
   // Must stay LAST in this array — every more specific action (household,
   // calendar, contacts, lists, photos) is already checked earlier in
