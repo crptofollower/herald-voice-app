@@ -519,6 +519,58 @@ const PHOTO_SIGNALS = [
   /\b(go\s+to|take\s+me\s+to)\s+(my\s+)?(photos?|gallery)\b/i,
 ];
 
+function escapeAppOpenRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Closed, bounded set of conversational openers. Not a wildcard skip —
+// only these exact words (plus the live ai_name) may precede the verb.
+const APP_OPEN_DISCOURSE_WORDS = ['hey', 'okay', 'ok', 'um', 'uh', 'so', 'alright', 'please', 'yeah', 'like'];
+
+function buildAppOpenPrefix(): string {
+  const words = [...APP_OPEN_DISCOURSE_WORDS];
+  const aiName = getProfileField('ai_name'); // read fresh at call time — never hardcoded, same pattern as isGreeting
+  if (aiName && aiName.trim()) {
+    words.push(escapeAppOpenRegex(aiName.trim()));
+  }
+  // Up to 3 reps — covers "opener + wake-name" (e.g. "Yeah Kit, ..."). Each
+  // rep must be an exact member of this closed list or the exact live
+  // ai_name — nothing else can be consumed here.
+  return `(?:(?:${words.join('|')})[,]?\\s+){0,3}`;
+}
+
+// Continuation/filler words that mark the end of a spoken app name.
+const APP_OPEN_STOP_WORDS = new Set([
+  'for', 'please', 'and', 'so', 'cause', 'because', 'since', 'when',
+  'while', 'that', 'which', 'who', 'before', 'after', 'until', 'though',
+  'but', 'or', 'if', 'i', "i've", 'ive', "i'm", 'im', "i'd", 'id',
+  'we', "we've", 'weve', 'you', 'can', 'could', 'would', 'will', 'to', 'me',
+]);
+const APP_OPEN_MAX_WORDS = 4; // safety ceiling only — real boundary is stop-words.
+
+function extractAppOpenName(msg: string): string | null {
+  const prefix = buildAppOpenPrefix();
+  const imperative = new RegExp(`^${prefix}(?:open|launch|start|pull\\s+up)\\s+(.+)$`, 'i');
+  const requestFrame = new RegExp(
+    `^${prefix}(?:can|could|would|will)\\s+you\\s+(?:open|launch|start|pull\\s+up)\\s+(.+)$`, 'i'
+  );
+  const m = imperative.exec(msg) ?? requestFrame.exec(msg);
+  if (!m) return null;
+
+  const rest = m[1].replace(/^(?:my|the|an?)\s+/i, ''); // strip one leading determiner
+
+  const words = rest.trim().split(/\s+/);
+  const nameWords: string[] = [];
+  for (const raw of words) {
+    if (nameWords.length >= APP_OPEN_MAX_WORDS) break;
+    const bare = raw.replace(/[.,!?;:]+$/, '').toLowerCase();
+    if (bare === 'app') break;
+    if (APP_OPEN_STOP_WORDS.has(bare)) break;
+    nameWords.push(raw.replace(/[.,!?;:]+$/, ''));
+  }
+  return nameWords.length > 0 ? nameWords.join(' ') : null;
+}
+
 const APP_OPEN_SIGNALS = [
   /\b(open|launch|start|pull\s+up)\s+(my\s+)?(banking|bank)\s*(app)?\b/i,
   /\b(open|launch)\s+(my\s+)?(camera)\b/i,
@@ -535,7 +587,7 @@ const APP_OPEN_SIGNALS = [
   // classifyQuery and wins first. This only recognizes the explicit
   // open/launch/start/pull-up <name> shape and hands appName straight to
   // the existing handleLaunchAction registry — it adds zero new app support.
-  /\b(open|launch|start|pull\s+up)\s+(?:my\s+)?[a-z0-9][\w .+-]{0,30}?(?:\s+app)?\s*$/i,
+  { test: (m: string) => extractAppOpenName(m) !== null },
 ];
 
 const LIST_REMOVE_SIGNALS = [
@@ -950,10 +1002,7 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
 
   // Device: app open
   if (APP_OPEN_SIGNALS.some((p) => p.test(msg))) {
-    const nameMatch = msg.match(
-      /\b(?:open|launch|start|pull\s+up)\s+(?:my\s+)?(.+?)(?:\s+app)?\s*$/i,
-    );
-    const appName = nameMatch?.[1]?.trim() ?? 'app';
+    const appName = extractAppOpenName(msg) ?? 'app';
     return { tier: 1, actionIntent: { type: 'app_open', appName }, reason: 'action:app_open' };
   }
 
