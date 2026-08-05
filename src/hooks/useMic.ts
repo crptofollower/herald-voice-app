@@ -4,6 +4,9 @@ import {
   useSpeechRecognitionEvent,
 } from 'expo-speech-recognition';
 import { createSuspendCoordinator } from './suspendCoordinator';
+import { evaluateEmptySessionRecovery } from './emptySessionRecoveryDecision';
+
+export { evaluateEmptySessionRecovery } from './emptySessionRecoveryDecision';
 
 const SUSPEND_TIMEOUT_MS = 1200;
 
@@ -16,6 +19,22 @@ export function useMic(
   const bufferRef = useRef<string>('');
   const bufferTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const turnActiveRef = useRef(false);
+  const emptySessionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const emptySessionTokenRef = useRef<number | null>(null);
+
+  // Cancels/clears the empty-session recovery timer + its captured token.
+  // Called on every path that means "this session is no longer a candidate
+  // for empty-session recovery" -- contentful result, stop, end, error,
+  // new session start, unmount. Never call clearTimeout without also
+  // nulling both refs -- a stale non-null ref blocks a later empty-final
+  // period in the SAME session from ever arming recovery again.
+  const clearEmptySessionRecovery = () => {
+    if (emptySessionTimerRef.current) {
+      clearTimeout(emptySessionTimerRef.current);
+    }
+    emptySessionTimerRef.current = null;
+    emptySessionTokenRef.current = null;
+  };
   // Engine session guard: start() on an already-active session wedges the
   // Android recognizer (Listening shown, no results delivered) or fires a
   // non-no-speech error that kills a live turn. One session at a time, always.
@@ -114,7 +133,43 @@ export function useMic(
     if (ttsActiveRef?.current) { log('NATIVE_RESULT_DROPPED_TTS_ACTIVE'); return; }
     if (event.isFinal) {
       const text = event.results[0]?.transcript?.trim();
-      if (!text) { log('NATIVE_RESULT_EMPTY_NOISE'); return; } // noise segment - keep the mic hot, don't end the turn
+      if (!text) {
+        log('NATIVE_RESULT_EMPTY_NOISE');
+        if (!emptySessionTimerRef.current) {
+          const armedToken = micSessionRef.current;
+          emptySessionTokenRef.current = armedToken;
+          log('EMPTY_SESSION_TIMER_ARMED');
+          emptySessionTimerRef.current = setTimeout(() => {
+            emptySessionTimerRef.current = null; // this timeout has now fired
+            const decision = evaluateEmptySessionRecovery({
+              armedToken,
+              currentToken: micSessionRef.current,
+              engineActive: engineActiveRef.current,
+              turnActive: turnActiveRef.current,
+              bufferHasContent: !!bufferRef.current.trim(),
+            });
+            if (decision === 'stale_session') {
+              log('EMPTY_SESSION_RECOVERY_STALE_SESSION');
+              emptySessionTokenRef.current = null;
+              return;
+            }
+            if (decision === 'state_changed') {
+              log('EMPTY_SESSION_RECOVERY_STATE_CHANGED');
+              emptySessionTokenRef.current = null;
+              return;
+            }
+            log('EMPTY_SESSION_RECOVERY_FIRED');
+            emptySessionTokenRef.current = null;
+            stopRecording();
+          }, 5000);
+        }
+        return; // noise segment - keep the mic hot, don't end the turn
+      }
+
+      if (emptySessionTimerRef.current) {
+        log('EMPTY_SESSION_TIMER_CANCELLED_CONTENT');
+      }
+      clearEmptySessionRecovery();
 
       turnActiveRef.current = true; // a turn is in progress; protect it from premature end
 
@@ -151,6 +206,7 @@ export function useMic(
     log('NATIVE_ERROR', { error: event.error, message: (event as any).message });
     rlog('NATIVE_ERROR', { code: event.error });
     engineActiveRef.current = false;
+    clearEmptySessionRecovery();
     // no-speech mid-turn = engine timed out on a pause; re-arm, keep the buffer
     if (event.error === 'no-speech' && turnActiveRef.current && bufferRef.current.trim()) {
       restartListening();
@@ -170,6 +226,7 @@ export function useMic(
     log('NATIVE_END');
     rlog('NATIVE_END');
     engineActiveRef.current = false;
+    clearEmptySessionRecovery();
     // Per the library's own contract, 'end' is always the last event
     // dispatched, including after errors -- the one reliable confirmation
     // point that a suspend request actually completed.
@@ -191,11 +248,13 @@ export function useMic(
   useEffect(() => {
     return () => {
       suspendCoordinatorRef.current.cancel();
+      clearEmptySessionRecovery();
     };
   }, []);
 
   // ── stopRecording memoized -- onTranscript is its only external dep ─────────
   const stopRecording = useCallback(async () => {
+    clearEmptySessionRecovery();
     turnActiveRef.current = false; // manual stop: the resulting 'end' must NOT restart
     if (bufferTimerRef.current) {
       clearTimeout(bufferTimerRef.current);
@@ -239,6 +298,7 @@ export function useMic(
         await ExpoSpeechRecognitionModule.requestPermissionsAsync();
       if (!granted) { console.error('[useMic] Mic permission denied'); return; }
       turnActiveRef.current = false; // clean slate for a new turn
+      clearEmptySessionRecovery();
 
       let stateBefore: string = 'unknown';
       try { stateBefore = await ExpoSpeechRecognitionModule.getStateAsync(); } catch (e) { stateBefore = `error:${String(e)}`; }
