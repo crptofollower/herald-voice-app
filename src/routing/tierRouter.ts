@@ -505,13 +505,12 @@ const TODO_READ_SIGNALS = [
 ];
 
 const TODO_COMPLETE_SIGNALS = [
-  /\bI (called|finished|completed|did|done|took care of|handled)\b/i,
+  /\bI (?:already )?(called|finished|completed|did|done|took care of|handled)\b/i,
   /\bcross (off|that off)\b/i,
   /\bmark (that |it )?done\b/i,
-  /\bI already\b/i,
   /\bthat('s| is) done\b/i,
-  /\bI (picked up|dropped off|returned|sent|submitted|paid|filed|bought|got|grabbed)\b/i,
-  /\bI (went to|made it to|got to|stopped by)\b/i,
+  /\bI (?:already )?(picked up|dropped off|returned|sent|submitted|paid|filed|bought|got|grabbed)\b/i,
+  /\bI (?:already )?(went to|made it to|got to|stopped by)\b/i,
 ];
 
 const PHOTO_SIGNALS = [
