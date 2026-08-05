@@ -101,6 +101,9 @@ export function useMic(
     interimResults: false,
     continuous: true,
     requiresOnDeviceRecognition: true,
+    androidIntentOptions: {
+      EXTRA_LANGUAGE_MODEL: 'web_search',
+    },
   } as const;
 
   // On-device STT endpoints after ~1-1.5s of silence and stops delivering
