@@ -323,6 +323,8 @@ const VISIT_HISTORY_READ = [
 const VISIT_OUTCOME_READ = [
   /\bwhat did (?:dr\.?\s*\w+|(?:the|my) doctor) say\s+(?:at\s+)?(?:my\s+)?(?:last|previous)\s+(?:appointment|visit)\b/i,
   /\bwhat did (?:dr\.?\s*\w+|(?:the|my) doctor) say\s+last\s+time\b/i,
+  /\bhow did (?:my |the )?appointment with (?:dr\.?\s*\w+|(?:the|my) doctor)\s+go\b/i,
+  /\bhow was (?:my |the )?appointment with (?:dr\.?\s*\w+|(?:the|my) doctor)\b/i,
 ];
 
 const TIER2_SIGNALS = [
@@ -1150,6 +1152,18 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     }
   }
 
+  // Tier 1: visit outcome read — BEFORE medical capture so "how did my
+  // appointment with Dr X go" cannot be claimed as FUTURE_VISIT /
+  // medical_visit_upcoming. Same §4a reader as the prior later placement;
+  // doctor hint still via extractDoctorName (unchanged for existing patterns).
+  if (VISIT_OUTCOME_READ.some((p) => p.test(msg))) {
+    const { getLastVisitOutcomeSummary } = await import('../db/medicalDB');
+    const { extractDoctorName } = await import('../utils/detectMedicalEvent');
+    const doctorHint = extractDoctorName(msg);
+    const response = getLastVisitOutcomeSummary(doctorHint);
+    return { tier: 1, tier1Response: response, isMedical: true, reason: "medical:visit_outcome_read" };
+  }
+
   // Device: medical capture — past-tense medical events only
   const medEvent = detectMedicalEvent(msg);
   if (medEvent && (medEvent.tense === 'past' || (medEvent.type === 'visit' && medEvent.tense === 'future'))) {
@@ -1265,17 +1279,6 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
       response = `You last saw ${who} on ${spoken}${reasonPart}.`;
     }
     return { tier: 1, tier1Response: response, isMedical: true, reason: "medical:visit_history_read" };
-  }
-
-  // Tier 1: visit outcome read — "what did Dr X say" — BEFORE diagnosis/doctor/
-  // general medical summary, same §4a specific-before-general convention as the
-  // other readers in this file.
-  if (VISIT_OUTCOME_READ.some((p) => p.test(msg))) {
-    const { getLastVisitOutcomeSummary } = await import('../db/medicalDB');
-    const { extractDoctorName } = await import('../utils/detectMedicalEvent');
-    const doctorHint = extractDoctorName(msg);
-    const response = getLastVisitOutcomeSummary(doctorHint);
-    return { tier: 1, tier1Response: response, isMedical: true, reason: "medical:visit_outcome_read" };
   }
 
   // Tier 1: calendar this week — read evidence + this-week scope, or travel probe.
