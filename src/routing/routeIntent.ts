@@ -1701,7 +1701,18 @@ export async function routeIntent(
     if (out.status === 'not_ready') {
       return { kind: 'not_ready', reason: `llm:not_ready:${out.reason}` };
     }
-    const llmResult = await mapCallIntents(out.intents, text, deps);
+    // 'pass' is the classifier's own honest "unclear / none of the above"
+    // signal (llmLayers.ts prompt: "When genuinely unclear → pass"). It is
+    // NOT a capture instruction and has no DOMAIN_WRITERS entry — letting it
+    // through here made needs_clarification unreachable for these utterances
+    // and routed them into dispatchLocalIntent's generic default case instead.
+    // Filtering it here restores the honest tail (needs_clarification) and
+    // — because processUtterance's allConverted gate then never needs to run
+    // ChatScreen's second classifyWithLLM call for this utterance — also
+    // removes one redundant on-device inference per unmatched turn.
+    const llmResult = (
+      await mapCallIntents(out.intents, text, deps)
+    ).filter(i => i.type !== 'pass');
     if (llmResult.length > 0) {
       return { kind: 'capture', intents: llmResult, source: 'llm', reason: 'llm:capture' };
     }

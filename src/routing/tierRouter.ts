@@ -362,6 +362,35 @@ const TIER3_SIGNALS = [
   /latest|recent|today('s)? (news|headlines)/i,
 ];
 
+const CHIT_CHAT_SOCIAL_CHECKIN: RegExp[] = [
+  /^how(?:'s| is) it going\s*[?.!]*$/i,
+  /^how are you\s*[?.!]*$/i,
+  /^how (?:are you|you) doing\s*[?.!]*$/i,
+];
+
+const CHIT_CHAT_AVAILABILITY: RegExp[] = [
+  /^i just wanted to (?:chat|talk)\s*[?.!]*$/i,
+  /^i'?m just talking\s*[?.!]*$/i,
+  /^i was just talking to you\s*[?.!]*$/i,
+  /^i thought i'?d have a conversation with you\s*[?.!]*$/i,
+];
+
+const CHIT_CHAT_IDENTITY: RegExp[] = [
+  /^who are you\s*[?.!]*$/i,
+  /^what are you\s*[?.!]*$/i,
+  /^tell me about yourself\s*[?.!]*$/i,
+  /^what do you know about yourself\s*[?.!]*$/i,
+  /^what(?:'s| is) your purpose\s*[?.!]*$/i,
+];
+
+const CHIT_CHAT_RESPONSES = {
+  social_checkin: "I'm here and ready. How are you doing?",
+  availability: "That's okay. We can just talk.",
+  identity: "I'm Kit, your personal memory companion. I help you remember what matters and find it when you need it.",
+} as const;
+
+const WHATS_UP_PATTERN = /^what(?:'s| is) up\s*[?.!]*$/i;
+
 const ALARM_SIGNALS = [
   /\b(set|create|put)?\s*(an?\s+)?(?:\d+\s*(?:minute|min|hour|hr)s?\s+)?alarm\b/i,
   /\bwake\s+me\s+(up\s+)?(at|in)\b/i,
@@ -1355,7 +1384,7 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   }
 
   // Tier 1: greeting
-  if (isGreeting(msg, getProfileField('ai_name'))) {
+  if (isGreeting(msg, getProfileField('ai_name')) || WHATS_UP_PATTERN.test(msg)) {
     const rawName = getProfileField('name');
     const firstName = rawName ? rawName.trim().split(/\s+/)[0] : '';
     const response = firstName ? `Hi ${firstName} — I'm here.` : `Hi — I'm here.`;
@@ -1379,6 +1408,16 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   }
 
   // Default: Tier 3
+  if (CHIT_CHAT_SOCIAL_CHECKIN.some((p) => p.test(msg))) {
+    return { tier: 1, tier1Response: CHIT_CHAT_RESPONSES.social_checkin, reason: 'chit_chat:social_checkin' };
+  }
+  if (CHIT_CHAT_AVAILABILITY.some((p) => p.test(msg))) {
+    return { tier: 1, tier1Response: CHIT_CHAT_RESPONSES.availability, reason: 'chit_chat:availability' };
+  }
+  if (CHIT_CHAT_IDENTITY.some((p) => p.test(msg))) {
+    return { tier: 1, tier1Response: CHIT_CHAT_RESPONSES.identity, reason: 'chit_chat:identity' };
+  }
+
   return { tier: 3, reason: "default" };
 }
 
