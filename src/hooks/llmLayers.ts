@@ -421,7 +421,7 @@ User: "${trimmed.replace(/"/g, '\\"')}"`;
     });
 
     const raw = result?.text?.trim();
-    console.log('[classifyWithLLM]', JSON.stringify({ ms: Date.now() - __t0, rawLen: raw?.length ?? 0 }));
+    console.log('[classifyWithLLM]', JSON.stringify({ ms: Date.now() - __t0, rawLen: raw?.length ?? 0, raw, utterance: trimmed }));
     if (!raw) return { status: 'ok', intents: [] };
     const vocab = buildClassifierVocab(hints.lists);
     return { status: 'ok', intents: parseClassifierOutput(raw, trimmed, vocab) };
