@@ -1156,7 +1156,22 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   // appointment with Dr X go" cannot be claimed as FUTURE_VISIT /
   // medical_visit_upcoming. Same §4a reader as the prior later placement;
   // doctor hint still via extractDoctorName (unchanged for existing patterns).
-  if (VISIT_OUTCOME_READ.some((p) => p.test(msg))) {
+  const VOR_MARKER = 'VISIT_OUTCOME_DIAGNOSTIC_V1';
+  const voResults = VISIT_OUTCOME_READ.map((p, i) => {
+    const lastIndexBefore = p.lastIndex;
+    const result = p.test(msg);
+    const lastIndexAfter = p.lastIndex;
+    return { index: i, source: p.source, flags: p.flags, lastIndexBefore, result, lastIndexAfter };
+  });
+  console.log(VOR_MARKER, JSON.stringify({
+    fingerprint: { commit: '90b81f78', tierRouterBlob: 'a5d4e954de906435fedde63cdf60c2a2fbcec993' },
+    msg: JSON.stringify(msg),
+    msgLength: msg.length,
+    msgCodePoints: Array.from(msg).map((ch) => ch.codePointAt(0)),
+    patterns: voResults,
+  }));
+  const voMatched = voResults.some((r) => r.result);
+  if (voMatched) {
     const { getLastVisitOutcomeSummary } = await import('../db/medicalDB');
     const { extractDoctorName } = await import('../utils/detectMedicalEvent');
     const doctorHint = extractDoctorName(msg);
@@ -1166,6 +1181,7 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
 
   // Device: medical capture — past-tense medical events only
   const medEvent = detectMedicalEvent(msg);
+  console.log(VOR_MARKER, JSON.stringify({ stage: 'detectMedicalEvent_result', medEvent }));
   if (medEvent && (medEvent.tense === 'past' || (medEvent.type === 'visit' && medEvent.tense === 'future'))) {
     return {
       tier: 1,
