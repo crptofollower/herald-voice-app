@@ -315,17 +315,24 @@ const VISIT_HISTORY_READ = [
   /\bwhat was (?:it|that) for\b/i,
 ];
 
-// Visit OUTCOME read — "what did Dr X say" (content of what was discussed).
-// Distinct §4a reader from visit_read (who) and VISIT_HISTORY_READ (when/why);
-// reads medical_records.visit_outcome via getLastVisitOutcomeSummary. Deterministic,
-// offline, never the LLM (Spine §3 — medical reads never route through generative
-// phrasing).
-const VISIT_OUTCOME_READ = [
-  /\bwhat did (?:dr\.?\s*\w+|(?:the|my) doctor) say\s+(?:at\s+)?(?:my\s+)?(?:last|previous)\s+(?:appointment|visit)\b/i,
-  /\bwhat did (?:dr\.?\s*\w+|(?:the|my) doctor) say\s+last\s+time\b/i,
-  /\bhow did (?:my |the )?appointment with (?:dr\.?\s*\w+|(?:the|my) doctor)\s+go\b/i,
-  /\bhow was (?:my |the )?appointment with (?:dr\.?\s*\w+|(?:the|my) doctor)\b/i,
-];
+// Visit OUTCOME read — retrospective "how did / how was / what did … say"
+// about an appointment/visit with a doctor. Distinct §4a reader from visit_read
+// (who) and VISIT_HISTORY_READ (when/why); reads medical_records.visit_outcome
+// via getLastVisitOutcomeSummary. Deterministic, offline, never the LLM
+// (Spine §3 — medical reads never route through generative phrasing).
+// Three independent signals ANDed — order-independent so phrase reorderings
+// like "how did my doctor's appointment go with Dr X" still match.
+const OUTCOME_CUE = /\b(?:how did|how was)\b|\bwhat did\b[\s\S]*?\bsay\b/i;
+const APPOINTMENT_CONTEXT = /\b(?:appointment|visit|check-?up|last time)\b/i;
+const DOCTOR_REFERENCE = /\b(?:dr\.?\s*\w+|(?:the|my) doctor)\b/i;
+
+function isVisitOutcomeRead(msg: string): boolean {
+  return (
+    OUTCOME_CUE.test(msg) &&
+    APPOINTMENT_CONTEXT.test(msg) &&
+    DOCTOR_REFERENCE.test(msg)
+  );
+}
 
 const TIER2_SIGNALS = [
   /what do you know (about me|about my life)/i,
@@ -1156,7 +1163,7 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   // appointment with Dr X go" cannot be claimed as FUTURE_VISIT /
   // medical_visit_upcoming. Same §4a reader as the prior later placement;
   // doctor hint still via extractDoctorName (unchanged for existing patterns).
-  if (VISIT_OUTCOME_READ.some((p) => p.test(msg))) {
+  if (isVisitOutcomeRead(msg)) {
     const { getLastVisitOutcomeSummary } = await import('../db/medicalDB');
     const { extractDoctorName } = await import('../utils/detectMedicalEvent');
     const doctorHint = extractDoctorName(msg);

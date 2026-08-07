@@ -199,6 +199,23 @@ export async function runVisitOutcomeHowDidTests() {
       (v) => v === 1, '1');
   }
 
+  // ── E: phrase-order / noun-variant class (componentized isVisitOutcomeRead) ─
+  // Previously fused-order regexes missed "doctor's appointment … with Dr X".
+  {
+    freshDB();
+    const phrases: { label: string; text: string }[] = [
+      { label: "E1 doctor's appointment + Dr Foster (reordered)", text: "How did my doctor's appointment go with Dr Foster?" },
+      { label: "E2 doctor's appointment + Dr Wynn (reordered)", text: "How did my doctor's appointment go with Dr Wynn?" },
+      { label: 'E3 visit-noun variant with Dr Foster', text: 'How did my visit with Dr Foster go?' },
+      { label: 'E4 checkup-noun variant with Dr Foster', text: 'How was my checkup with Dr Foster?' },
+    ];
+    for (const { label, text } of phrases) {
+      const d = await classifyQuery(text);
+      assert(label, d.reason,
+        (v) => v === 'medical:visit_outcome_read', 'medical:visit_outcome_read');
+    }
+  }
+
   const total = passed + failures.length;
   console.log(
     `\n${BOLD}VisitOutcomeHowDid: ${passed}/${total} passed` +
