@@ -23,6 +23,7 @@ import {
   Animated,
   Image,
   ImageBackground,
+  SafeAreaView,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Location from "expo-location";
@@ -112,7 +113,9 @@ const BeachBg = ({ children }: { children: React.ReactNode }) => (
       locations={[0, 0.5, 1]}
       style={{ flex: 1 }}
     >
-      <FadeIn>{children}</FadeIn>
+      <SafeAreaView style={{ flex: 1 }}>
+        <FadeIn>{children}</FadeIn>
+      </SafeAreaView>
     </LinearGradient>
   </ImageBackground>
 );
@@ -238,7 +241,7 @@ export default function OnboardingScreen() {
   if (step === "welcome") {
     return (
       <BeachBg>
-        <View style={styles.centered}>
+        <ScrollView contentContainerStyle={styles.centered} bounces={false}>
           <Text style={[styles.stepHeadline, { fontFamily: "SourceSerif4-Regular" }]}>
             Hi — I'm Herald.
           </Text>
@@ -262,7 +265,7 @@ export default function OnboardingScreen() {
           >
             <Text style={styles.primaryBtnText}>Get started</Text>
           </TouchableOpacity>
-        </View>
+        </ScrollView>
       </BeachBg>
     );
   }
@@ -271,7 +274,7 @@ export default function OnboardingScreen() {
     return (
       <BeachBg>
         <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "padding"} style={{ flex: 1 }}>
-          <View style={styles.centered}>
+          <ScrollView contentContainerStyle={styles.centered} bounces={false}>
             <Text style={styles.stepCaption}>Step 1 of 7  ·  about 5 minutes</Text>
             <Text style={[styles.stepHeadline, { fontFamily: "SourceSerif4-Regular" }]}>
               Let's get you set up.
@@ -299,7 +302,7 @@ export default function OnboardingScreen() {
             >
               <Text style={styles.primaryBtnText}>Begin</Text>
             </TouchableOpacity>
-          </View>
+          </ScrollView>
         </KeyboardAvoidingView>
       </BeachBg>
     );
@@ -309,7 +312,7 @@ export default function OnboardingScreen() {
     return (
       <BeachBg>
         <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "padding"} style={{ flex: 1 }}>
-          <View style={styles.centered}>
+          <ScrollView contentContainerStyle={styles.centered} bounces={false}>
             <Text style={styles.stepCaption}>Step 2 of 7</Text>
             <Text style={[styles.stepHeadline, { fontFamily: "SourceSerif4-Regular" }]}>
               Who do I have the pleasure of meeting?
@@ -337,7 +340,7 @@ export default function OnboardingScreen() {
             >
               <Text style={styles.primaryBtnText}>That's me</Text>
             </TouchableOpacity>
-          </View>
+          </ScrollView>
         </KeyboardAvoidingView>
       </BeachBg>
     );
@@ -348,7 +351,7 @@ export default function OnboardingScreen() {
     return (
       <BeachBg>
         <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "padding"} style={{ flex: 1 }}>
-          <View style={styles.centered}>
+          <ScrollView contentContainerStyle={styles.centered} bounces={false}>
             <Text style={styles.stepGreeting}>Good to meet you, {firstName}.</Text>
             <Text style={[styles.stepHeadline, { fontFamily: "SourceSerif4-Regular" }]}>
               What would you like to call me?
@@ -394,7 +397,7 @@ export default function OnboardingScreen() {
                 {aiName.trim() ? `Call you ${aiName.trim()}` : "Herald works for me"}
               </Text>
             </TouchableOpacity>
-          </View>
+          </ScrollView>
         </KeyboardAvoidingView>
       </BeachBg>
     );
@@ -431,7 +434,7 @@ export default function OnboardingScreen() {
   if (step === "notify") {
     return (
       <BeachBg>
-        <View style={styles.centered}>
+        <ScrollView contentContainerStyle={styles.centered} bounces={false}>
           <Text style={styles.stepCaption}>A quick ask  ·  Step 4 of 7</Text>
           <View style={styles.iconHalo}>
             <Text style={styles.iconGlyph}>🔔</Text>
@@ -452,7 +455,7 @@ export default function OnboardingScreen() {
           <TouchableOpacity style={styles.ghostBtn} onPress={() => setStep("location")}>
             <Text style={styles.ghostBtnText}>Not yet</Text>
           </TouchableOpacity>
-        </View>
+        </ScrollView>
       </BeachBg>
     );
   }
@@ -460,7 +463,7 @@ export default function OnboardingScreen() {
   if (step === "location") {
     return (
       <BeachBg>
-        <View style={styles.centered}>
+        <ScrollView contentContainerStyle={styles.centered} bounces={false}>
           <Text style={styles.stepCaption}>A quick ask  ·  Step 5 of 7</Text>
           <View style={styles.iconHalo}>
             <Text style={styles.iconGlyph}>📍</Text>
@@ -481,7 +484,7 @@ export default function OnboardingScreen() {
           <TouchableOpacity style={styles.ghostBtn} onPress={() => setStep("mic")}>
             <Text style={styles.ghostBtnText}>Not yet</Text>
           </TouchableOpacity>
-        </View>
+        </ScrollView>
       </BeachBg>
     );
   }
@@ -489,7 +492,7 @@ export default function OnboardingScreen() {
   if (step === "mic") {
     return (
       <BeachBg>
-        <View style={styles.centered}>
+        <ScrollView contentContainerStyle={styles.centered} bounces={false}>
           <Text style={styles.stepCaption}>One more  ·  Step 6 of 7</Text>
           <View style={styles.iconHalo}>
             <Text style={styles.iconGlyph}>🎤</Text>
@@ -510,7 +513,7 @@ export default function OnboardingScreen() {
           <TouchableOpacity style={styles.ghostBtn} onPress={() => setStep("persona")}>
             <Text style={styles.ghostBtnText}>Not yet</Text>
           </TouchableOpacity>
-        </View>
+        </ScrollView>
       </BeachBg>
     );
   }
