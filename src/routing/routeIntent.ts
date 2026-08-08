@@ -811,8 +811,9 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       if (intent.type !== 'medical_visit_upcoming') {
         return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
       }
-      const { writeMedicalRecord, passesSubstringGate } = await import('../db/medicalDB');
+      const { writeMedicalRecord, passesSubstringGate, getMedicalRecords } = await import('../db/medicalDB');
       const { parseDatePhrase, formatSpokenDate } = await import('../utils/parseTime');
+      const { buildCalendarCollectSlot, writeCalendarCore } = await import('./calendarWrite');
       const raw = intent.raw ?? rawPhrase;
       const doctorNameRaw = intent.doctor_name?.trim();
       const doctorName = (doctorNameRaw && passesSubstringGate(doctorNameRaw, raw)) ? doctorNameRaw : undefined;
@@ -820,14 +821,45 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       const YES = /^(yes|yeah|yep|yup|correct|right|that'?s right|sure|ok|okay|sounds good|that'?s it|exactly|y)\b/i;
       const NO = /^(no|nope|nah|wrong|not right|that'?s wrong|incorrect|cancel|nevermind|never mind)\b/i;
 
+      // Single acknowledgement rule: the medical write is the source of truth
+      // and completes (verified) before anything calendar-related is even
+      // attempted. Calendar visibility is a best-effort add-on chained onto
+      // the same turn's ack — it is never allowed to make the medical
+      // commit itself conditional, delayed, or reversible. No time is ever
+      // fabricated (Trust First) — if none was given, Herald asks, once,
+      // reusing the existing calendar collect-slot machinery verbatim.
       const commitUpcoming = (resolvedDate: string): CommitResult => {
-        writeMedicalRecord({
+        const id = writeMedicalRecord({
           doctor_name: doctorName,
           notes: raw,
           visit_date: resolvedDate,
           status: 'upcoming',
         });
-        return { status: 'committed', ack: "Got it — I'll remind you." };
+        const verified = getMedicalRecords().some((r) => r.id === id);
+        if (!verified) {
+          return { status: 'failed', ack: "I'm having trouble holding onto that — say it once more?" };
+        }
+        const medicalAck = "Got it — I'll remind you.";
+        // NOTE: buildCalendarCollectSlot treats the literal string
+        // 'Appointment' as its own "title not yet known" sentinel
+        // (calendarWrite.ts needsTitle check) — the no-doctor-name
+        // fallback must not collide with it, or a nameless captured
+        // visit would wrongly re-ask "what should I call this?" instead
+        // of going straight to the time question.
+        const title = doctorName ? `Appointment with ${doctorName}` : "Doctor's appointment";
+        const collectPlan = buildCalendarCollectSlot(title, resolvedDate, '', writeCalendarCore);
+        if (!collectPlan) {
+          // Shouldn't happen (timeStr is always '' here), but never block
+          // the already-verified medical commit on a calendar-side surprise.
+          return { status: 'committed', ack: medicalAck };
+        }
+        return {
+          status: 'pending',
+          prompt: `${medicalAck} ${collectPlan.prompt}`,
+          pendingKey: collectPlan.slot.pendingKey,
+          reaskPrompt: collectPlan.slot.reaskPrompt,
+          resume: collectPlan.slot.resume,
+        };
       };
 
       const confirmStage = (resolvedDate: string): CommitResult => {

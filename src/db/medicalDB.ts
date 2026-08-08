@@ -169,13 +169,31 @@ export function getLastVisit(doctorHint?: string): {
  * supersedes any 'upcoming' row whose date has passed to 'noted' — no
  * spoken output, Herald never says "you missed your appointment"
  * (Elder Safety: offers, never corrects/alarms).
+ *
+ * Also latches surfaced_at (COALESCE — never overwrites an existing
+ * value) at the same moment. surfaced_at is a nullable lifecycle latch,
+ * not a presentation-audit timestamp: nothing in the codebase reads its
+ * value, only NULL/NOT NULL (verified by full-repo grep, 2026-08-08). It
+ * is set either when Herald proactively surfaces the appointment
+ * same-day (markAppointmentSurfaced, ChatScreen.tsx cold-mount sweep) OR,
+ * here, when an appointment that was never proactively surfaced ages
+ * past its date and becomes outcome-eligible on its own. Without this
+ * second path, a conversationally-captured appointment whose day-of
+ * reminder never fired (e.g. captured mid-session, app never reopened
+ * that calendar day) was permanently excluded from
+ * getVisitAwaitingOutcome()'s surfaced_at IS NOT NULL predicate — a
+ * confirmed defect (Hexagon case, 2026-08-08), fixed here. Retrospective
+ * medical_visit rows (never status='upcoming') are untouched by this
+ * function, by construction — this WHERE clause never matches them.
  */
 export function supersedeStaleUpcomingAppointments(): void {
   const db = getDB();
+  const now = new Date().toISOString();
   db.runSync(
-    `UPDATE medical_records SET status = 'noted'
+    `UPDATE medical_records SET status = 'noted', surfaced_at = COALESCE(surfaced_at, ?)
      WHERE status = 'upcoming' AND removed_at IS NULL
-       AND date(visit_date) < date('now', 'localtime');`
+       AND date(visit_date) < date('now', 'localtime');`,
+    [now]
   );
 }
 
