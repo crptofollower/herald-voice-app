@@ -21,6 +21,7 @@ import {
 } from '../../src/db/medicalDB.ts';
 import { routeIntent } from '../../src/routing/routeIntent.ts';
 import { classifyQuery } from '../../src/routing/tierRouter.ts';
+import { parseDatePhrase } from '../../src/utils/parseTime.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
 
@@ -212,6 +213,149 @@ export async function runMedicalVisitLifecycleTests() {
       }
     } else {
       assert('F0 expected medical_visit_upcoming capture', rd.kind, () => false, 'capture / medical_visit_upcoming');
+    }
+  }
+
+  // ── G/H: existing-memory reconciliation gate — same doctor + same date ─────
+  // fires the reconciliation prompt (commit e9be9814); YES leaves the
+  // existing appointment untouched and writes nothing new.
+  {
+    const db = freshDB();
+    const phrase = 'I have an appointment with Dr. Hexagon tomorrow.';
+    const tomorrow = parseDatePhrase(phrase)!;
+    insertRow(db, { visit_date: tomorrow, doctor_name: 'Dr. Hexagon', status: 'upcoming' });
+
+    const rd = await routeIntent(phrase, ROUTE_DEPS);
+    if (rd.kind === 'capture' && rd.intents[0]?.type === 'medical_visit_upcoming') {
+      const { DOMAIN_WRITERS } = await import('../../src/routing/routeIntent.ts');
+      const writer = DOMAIN_WRITERS['medical_visit_upcoming']!;
+      const confirmResult = await writer.add(rd.intents[0], phrase);
+      assert('G1 reconciliation gate fires (pending)', confirmResult.status, (v) => v === 'pending', 'pending');
+      if (confirmResult.status === 'pending') {
+        assert('G2 pendingKey is the duplicate reconciliation key', confirmResult.pendingKey,
+          (v) => v === 'medical_visit_upcoming_duplicate', 'medical_visit_upcoming_duplicate');
+        assert('G3 prompt asks same-or-different', confirmResult.prompt,
+          (v) => typeof v === 'string' && v.includes('already have you down'), 'contains "already have you down"');
+
+        const yesResult = await confirmResult.resume('yes');
+        assert('H1 YES → noop (no new write)', yesResult.status, (v) => v === 'noop', 'noop');
+        assert('H2 YES ack leaves existing appointment as-is', (yesResult as any).ack,
+          (v) => typeof v === 'string' && /leave that as is/i.test(v), 'contains "leave that as is"');
+        assert('H3 exactly one medical_records row (seeded row only, no second write)',
+          getMedicalRecords().length, (v) => v === 1, '1');
+      }
+    } else {
+      assert('G0 routeIntent produced medical_visit_upcoming capture', rd.kind, () => false, 'capture / medical_visit_upcoming');
+    }
+  }
+
+  // ── I: reconciliation gate — NO proceeds through the normal new-appointment
+  //      commit path (same shape as test E's combined ack+time-question) ─────
+  {
+    const db = freshDB();
+    const phrase = 'I have an appointment with Dr. Hexagon tomorrow.';
+    const tomorrow = parseDatePhrase(phrase)!;
+    insertRow(db, { visit_date: tomorrow, doctor_name: 'Dr. Hexagon', status: 'upcoming' });
+
+    const rd = await routeIntent(phrase, ROUTE_DEPS);
+    if (rd.kind === 'capture' && rd.intents[0]?.type === 'medical_visit_upcoming') {
+      const { DOMAIN_WRITERS } = await import('../../src/routing/routeIntent.ts');
+      const writer = DOMAIN_WRITERS['medical_visit_upcoming']!;
+      const confirmResult = await writer.add(rd.intents[0], phrase);
+      assert('I1 reconciliation gate fires (pending)', confirmResult.status, (v) => v === 'pending', 'pending');
+      if (confirmResult.status === 'pending') {
+        assert('I2 pendingKey is the duplicate reconciliation key', confirmResult.pendingKey,
+          (v) => v === 'medical_visit_upcoming_duplicate', 'medical_visit_upcoming_duplicate');
+        const commitResult = await confirmResult.resume('no');
+        assert('I3 NO → proceeds to normal commit (pending, ack+time question)', commitResult.status,
+          (v) => v === 'pending', 'pending');
+        if (commitResult.status === 'pending') {
+          assert('I4 prompt contains medical ack', commitResult.prompt,
+            (v) => typeof v === 'string' && v.includes("I'll remind you"), 'contains "I\'ll remind you"');
+          assert('I5 prompt contains time question', commitResult.prompt,
+            (v) => typeof v === 'string' && /what time/i.test(v), 'contains "what time"');
+        }
+        assert('I6 two medical_records rows now (seeded + new commit)', getMedicalRecords().length,
+          (v) => v === 2, '2');
+      }
+    } else {
+      assert('I0 routeIntent produced medical_visit_upcoming capture', rd.kind, () => false, 'capture / medical_visit_upcoming');
+    }
+  }
+
+  // ── J: reconciliation gate — unresolved reply stays pending, commits nothing
+  {
+    const db = freshDB();
+    const phrase = 'I have an appointment with Dr. Hexagon tomorrow.';
+    const tomorrow = parseDatePhrase(phrase)!;
+    insertRow(db, { visit_date: tomorrow, doctor_name: 'Dr. Hexagon', status: 'upcoming' });
+
+    const rd = await routeIntent(phrase, ROUTE_DEPS);
+    if (rd.kind === 'capture' && rd.intents[0]?.type === 'medical_visit_upcoming') {
+      const { DOMAIN_WRITERS } = await import('../../src/routing/routeIntent.ts');
+      const writer = DOMAIN_WRITERS['medical_visit_upcoming']!;
+      const confirmResult = await writer.add(rd.intents[0], phrase);
+      assert('J1 reconciliation gate fires (pending)', confirmResult.status, (v) => v === 'pending', 'pending');
+      if (confirmResult.status === 'pending') {
+        assert('J2 pendingKey is the duplicate reconciliation key', confirmResult.pendingKey,
+          (v) => v === 'medical_visit_upcoming_duplicate', 'medical_visit_upcoming_duplicate');
+        const ambiguousResult = await confirmResult.resume('maybe');
+        assert('J3 unresolved reply → noop (stays pending per Graceful Confusion convention)',
+          ambiguousResult.status, (v) => v === 'noop', 'noop');
+        assert('J4 unresolved reply → empty ack (no commit language spoken)', (ambiguousResult as any).ack,
+          (v) => v === '', '""');
+        assert('J5 no new write on unresolved reply', getMedicalRecords().length, (v) => v === 1, '1');
+      }
+    } else {
+      assert('J0 routeIntent produced medical_visit_upcoming capture', rd.kind, () => false, 'capture / medical_visit_upcoming');
+    }
+  }
+
+  // ── K: same doctor, different date → reconciliation gate does not fire ─────
+  {
+    const db = freshDB();
+    const phrase = 'I have an appointment with Dr. Hexagon tomorrow.';
+    // Fixed far-future date — cannot collide with "tomorrow"'s resolution.
+    insertRow(db, { visit_date: '2026-12-25', doctor_name: 'Dr. Hexagon', status: 'upcoming' });
+
+    const rd = await routeIntent(phrase, ROUTE_DEPS);
+    if (rd.kind === 'capture' && rd.intents[0]?.type === 'medical_visit_upcoming') {
+      const { DOMAIN_WRITERS } = await import('../../src/routing/routeIntent.ts');
+      const writer = DOMAIN_WRITERS['medical_visit_upcoming']!;
+      const confirmResult = await writer.add(rd.intents[0], phrase);
+      assert('K1 different date → normal confirm pending', confirmResult.status, (v) => v === 'pending', 'pending');
+      if (confirmResult.status === 'pending') {
+        assert('K2 pendingKey is the normal confirm key, not the duplicate gate', confirmResult.pendingKey,
+          (v) => v === 'medical_visit_upcoming', 'medical_visit_upcoming');
+        assert('K3 prompt does not contain reconciliation language', confirmResult.prompt,
+          (v) => typeof v === 'string' && !v.includes('already have you down'), 'does not contain "already have you down"');
+      }
+    } else {
+      assert('K0 routeIntent produced medical_visit_upcoming capture', rd.kind, () => false, 'capture / medical_visit_upcoming');
+    }
+  }
+
+  // ── L: different doctor, same date → reconciliation gate does not fire ─────
+  {
+    const db = freshDB();
+    const phrase = 'I have an appointment with Dr. Hexagon tomorrow.';
+    const tomorrow = parseDatePhrase(phrase)!;
+    insertRow(db, { visit_date: tomorrow, doctor_name: 'Dr. Patel', status: 'upcoming' });
+
+    const rd = await routeIntent(phrase, ROUTE_DEPS);
+    if (rd.kind === 'capture' && rd.intents[0]?.type === 'medical_visit_upcoming') {
+      const { DOMAIN_WRITERS } = await import('../../src/routing/routeIntent.ts');
+      const writer = DOMAIN_WRITERS['medical_visit_upcoming']!;
+      const confirmResult = await writer.add(rd.intents[0], phrase);
+      assert('L1 different doctor → normal confirm pending', confirmResult.status, (v) => v === 'pending', 'pending');
+      if (confirmResult.status === 'pending') {
+        assert('L2 pendingKey is the normal confirm key, not the duplicate gate', confirmResult.pendingKey,
+          (v) => v === 'medical_visit_upcoming', 'medical_visit_upcoming');
+        assert('L3 prompt does not contain reconciliation language', confirmResult.prompt,
+          (v) => typeof v === 'string' && !v.includes('already have you down'), 'does not contain "already have you down"');
+      }
+    } else {
+      assert('L0 routeIntent produced medical_visit_upcoming capture', rd.kind, () => false, 'capture / medical_visit_upcoming');
     }
   }
 
