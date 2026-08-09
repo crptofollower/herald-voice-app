@@ -130,12 +130,14 @@ export function getMedicalRecords(): MedicalRecord[] {
  * Normalizes a doctor name for COMPARISON ONLY — case, periods, surrounding
  * whitespace. Never touches a stored or displayed value (Spine §3 verbatim
  * rule is unaffected — this changes matching logic, not data). Shared by
- * getLastVisit and getLastVisitOutcome, the two readers that compare a
- * caller-supplied doctorHint against stored doctor_name. Deliberately scoped
- * to these two doctor-hint comparisons only — not a general-purpose name
- * normalizer, not wired into contacts or any other entity-resolution path.
+ * getLastVisit, getLastVisitOutcome, and findMatchingUpcomingAppointment —
+ * three medical-domain doctor-name comparisons, all reading medical_records.
+ * Exported at the rule-of-three (Engineering Principles §1 / Harvest item 6a)
+ * for this third use. Still deliberately scoped to medical_records doctor-
+ * name comparisons only — not a general-purpose name normalizer, not wired
+ * into contacts or any other entity-resolution path.
  */
-function normalizeDoctorNameForMatch(name: string): string {
+export function normalizeDoctorNameForMatch(name: string): string {
   return name.toLowerCase().replace(/\./g, '').trim();
 }
 
@@ -162,6 +164,29 @@ export function getLastVisit(doctorHint?: string): {
     visitDate: latest.visit_date!,
     notes: latest.notes,
   };
+}
+
+/**
+ * Existing upcoming appointment matching this doctor + date exactly, if any
+ * (duplicate-recognition gate, 2026-08-09 — "I already have you down for
+ * Dr. Smith Thursday" case, device-observed). Exact normalized-name equality
+ * and exact visit_date equality only — no substring/fuzzy matching, unlike
+ * getLastVisit's doctorHint search. A false "you already have this" is the
+ * trust-damaging failure mode here; a missed real duplicate is the safe one.
+ */
+export function findMatchingUpcomingAppointment(
+  doctorName: string,
+  visitDate: string
+): MedicalRecord | null {
+  const match = getMedicalRecords().find(
+    (r) =>
+      r.status === 'upcoming' &&
+      !r.removed_at &&
+      r.doctor_name &&
+      normalizeDoctorNameForMatch(r.doctor_name) === normalizeDoctorNameForMatch(doctorName) &&
+      r.visit_date === visitDate
+  );
+  return match ?? null;
 }
 
 /**

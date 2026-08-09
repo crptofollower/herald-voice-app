@@ -811,7 +811,7 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       if (intent.type !== 'medical_visit_upcoming') {
         return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
       }
-      const { writeMedicalRecord, passesSubstringGate, getMedicalRecords } = await import('../db/medicalDB');
+      const { writeMedicalRecord, passesSubstringGate, getMedicalRecords, findMatchingUpcomingAppointment } = await import('../db/medicalDB');
       const { parseDatePhrase, formatSpokenDate } = await import('../utils/parseTime');
       const { buildCalendarCollectSlot, writeCalendarCore } = await import('./calendarWrite');
       const raw = intent.raw ?? rawPhrase;
@@ -865,6 +865,29 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       const confirmStage = (resolvedDate: string): CommitResult => {
         const spoken = formatSpokenDate(resolvedDate);
         const who = doctorName ? ` with ${doctorName}` : '';
+
+        // Duplicate-recognition gate (2026-08-09). Only checked when a
+        // doctor name is known; exact match only, never fuzzy.
+        if (doctorName) {
+          const existing = findMatchingUpcomingAppointment(doctorName, resolvedDate);
+          if (existing) {
+            return {
+              status: 'pending',
+              prompt: `I already have you down for an appointment with ${doctorName} ${spoken} — is this the same one, or a different appointment?`,
+              pendingKey: 'medical_visit_upcoming_duplicate',
+              resume: async (userText: string): Promise<CommitResult> => {
+                if (YES.test(userText.trim())) {
+                  return { status: 'noop', ack: `Got it — I'll leave that as is.` };
+                }
+                if (NO.test(userText.trim())) {
+                  return commitUpcoming(resolvedDate);
+                }
+                return { status: 'noop', ack: '' };
+              },
+            };
+          }
+        }
+
         return {
           status: 'pending',
           prompt: `Say yes and I'll remember — appointment${who} ${spoken}.`,
