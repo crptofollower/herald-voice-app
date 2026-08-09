@@ -315,6 +315,34 @@ const VISIT_HISTORY_READ = [
   /\bwhat was (?:it|that) for\b/i,
 ];
 
+// Upcoming medical appointment recall — explicit medical/doctor FUTURE
+// queries + named-doctor future queries only. Deliberately excludes generic
+// "what appointments do I have" (no medical token) and timeframe-scoped
+// medical queries ("this week"/"tomorrow"/"next week" — those stay with the
+// calendar reader this build does not touch). Each pattern requires BOTH a
+// medical token (doctor/medical/Dr.) AND a forward marker (coming up / next /
+// do I have / when do I see / with Dr X), so it cannot steal the past-tense
+// visit_read / VISIT_HISTORY_READ phrases or the calendar branches.
+// "next" list-vs-single is disambiguated at dispatch, not here.
+const UPCOMING_MEDICAL_READ = [
+  /\b(?:doctor|medical)\s+appointments?\b[\s\S]*\b(?:coming up|do i have|upcoming)\b/i,
+  /\b(?:do i have|have i got)\b[\s\S]*\b(?:doctor|medical)\s+(?:appointments?|visits?)\b/i,
+  /\b(?:doctor|medical)\s+(?:appointments?|visits?)\b[\s\S]*\bcoming up\b/i,
+  /\bwhen(?:'s| is)?\s+my\s+next\s+(?:doctor|medical)\s+appointment\b/i,
+  /\bwhen do i see\s+dr\.?\s/i,
+  /\bwhen(?:'s| is)?\s+my\s+appointment\s+with\s+dr\.?\s/i,
+  /\bdo i have\b[\s\S]*\b(?:coming up|upcoming)\b[\s\S]*\bwith\s+dr\.?\s/i,
+];
+
+// Requests that want only the SINGLE nearest upcoming appointment, not the
+// list ("when is my next doctor appointment", "when do I see Dr X",
+// "appointment with Dr X"). Everything else in UPCOMING_MEDICAL_READ lists.
+const UPCOMING_MEDICAL_SINGLE = [
+  /\bnext\s+(?:doctor|medical)\s+appointment\b/i,
+  /\bwhen do i see\s+dr\.?\s/i,
+  /\bappointment\s+with\s+dr\.?\s/i,
+];
+
 // Visit OUTCOME read — retrospective "how did / how was / what did … say"
 // about an appointment/visit with a doctor. Distinct §4a reader from visit_read
 // (who) and VISIT_HISTORY_READ (when/why); reads medical_records.visit_outcome
@@ -704,6 +732,47 @@ function getVisitSummary(): string {
   if (names.length === 2) return `You've seen ${names[0]} and ${names[1]}.`;
   const last = names.pop();
   return `You've seen ${names.join(', ')}, and ${last}.`;
+}
+
+// Comparison-only: is the COMPLETE stored doctor name supported by the raw
+// utterance? Normalizes both sides (lowercase, strip periods, collapse
+// whitespace) and tests the whole stored name as a substring of the whole
+// utterance. Never extracts or truncates a name from the utterance — the
+// stored name is the thing tested, so a partial capture can never select a
+// row. (Founder correction 2026-08-09: no bounded-token doctor extractor in
+// this capability.)
+function storedNameSupportedByUtterance(storedName: string, utterance: string): boolean {
+  const norm = (s: string) => s.toLowerCase().replace(/\./g, '').replace(/\s+/g, ' ').trim();
+  const n = norm(storedName);
+  if (!n) return false;
+  return norm(utterance).includes(n);
+}
+
+// Deterministic spoken phrasing for upcoming medical appointments. Verbatim
+// stored doctor names (Spine §3), existing formatSpokenDate, no LLM. List
+// caps at three then "plus N more"; single-nearest and named-doctor variants
+// handled by the caller selecting which rows to pass.
+function phraseUpcomingAppointments(
+  rows: { doctorName?: string; visitDate: string }[],
+  formatSpokenDate: (d: string) => string,
+): string {
+  const capped = rows.slice(0, 3);
+  const parts = capped.map((r, i) => {
+    const who = r.doctorName?.trim() || 'your doctor';
+    const when = formatSpokenDate(r.visitDate);
+    return i === 0 ? `${who} on ${when}` : `then ${who} on ${when}`;
+  });
+  let sentence: string;
+  if (parts.length === 1) {
+    sentence = `You see ${parts[0]}.`;
+  } else {
+    sentence = `You have ${parts.join(', ')}.`;
+  }
+  const remaining = rows.length - capped.length;
+  if (remaining > 0) {
+    sentence = sentence.replace(/\.$/, `, plus ${remaining} more.`);
+  }
+  return sentence;
 }
 
 function getDoctorSummary(): string {
@@ -1249,6 +1318,65 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     const events = await getTier1CalendarEvents("next week");
     const response = calendarSpeech("next week", events);
     return { tier: 1, tier1Response: response, reason: "calendar:next_week" };
+  }
+
+  // Tier 1: upcoming medical appointment recall (forward-looking). MUST precede
+  // visit_read / VISIT_HISTORY_READ (both past-tense) so "do I have any doctor
+  // visits coming up" resolves here, not to the past readers. Excludes generic
+  // and timeframe-scoped queries by construction (see UPCOMING_MEDICAL_READ).
+  if (UPCOMING_MEDICAL_READ.some((p) => p.test(msg))) {
+    const { getUpcomingAppointments } = await import('../db/medicalDB');
+    const { formatSpokenDate } = await import('../utils/parseTime');
+    const all = getUpcomingAppointments();
+    const isNamed = /\bdr\.?\s/i.test(msg);
+
+    if (isNamed) {
+      // Select by testing each COMPLETE stored name against the utterance;
+      // longest complete match wins; fail closed on none. No extracted hint.
+      const matches = all
+        .filter((r) => r.doctorName && storedNameSupportedByUtterance(r.doctorName, msg))
+        .sort((a, b) => (b.doctorName!.length - a.doctorName!.length));
+      if (matches.length === 0) {
+        return {
+          tier: 1,
+          tier1Response: "I don't have another visit with that doctor coming up.",
+          isMedical: true,
+          reason: "medical:upcoming_read_named_miss",
+        };
+      }
+      // Named query wants the nearest with that doctor. Re-sort the matched
+      // set soonest-first (getUpcomingAppointments already date-ASC, but the
+      // longest-name sort above reordered), take the first.
+      const nearest = [...matches].sort((a, b) =>
+        (a.visitDate < b.visitDate ? -1 : a.visitDate > b.visitDate ? 1 : 0)
+      )[0];
+      const who = nearest.doctorName!.trim();
+      return {
+        tier: 1,
+        tier1Response: `You see ${who} on ${formatSpokenDate(nearest.visitDate)}.`,
+        isMedical: true,
+        reason: "medical:upcoming_read_named",
+      };
+    }
+
+    if (all.length === 0) {
+      return {
+        tier: 1,
+        tier1Response: "I don't have any doctor appointments coming up.",
+        isMedical: true,
+        reason: "medical:upcoming_read_empty",
+      };
+    }
+
+    // Single-nearest vs list.
+    const wantsSingle = UPCOMING_MEDICAL_SINGLE.some((p) => p.test(msg));
+    const rows = wantsSingle ? all.slice(0, 1) : all;
+    return {
+      tier: 1,
+      tier1Response: phraseUpcomingAppointments(rows, formatSpokenDate),
+      isMedical: true,
+      reason: wantsSingle ? "medical:upcoming_read_next" : "medical:upcoming_read_list",
+    };
   }
 
   // Tier 1: visit read — MUST precede calendar-week so "who did I see this week"

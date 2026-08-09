@@ -190,6 +190,32 @@ export function findMatchingUpcomingAppointment(
 }
 
 /**
+ * All upcoming doctor appointments, soonest-first, dated today or later.
+ * The read authority for "what doctor appointments do I have coming up"
+ * (UPCOMING MEDICAL APPOINTMENT RECALL, 2026-08-09). medical_records only —
+ * never calendar_cache, never appointmentsDB (that store's own contract
+ * forbids reading it in the confirmed-memory voice). Verbatim doctor_name +
+ * visit_date; phrasing happens in the caller, never here (Spine §3 — no
+ * generative path). Belt-and-suspenders date filter (>= today) in addition
+ * to the status filter, so a not-yet-swept past 'upcoming' row can never
+ * surface as "coming up".
+ */
+export function getUpcomingAppointments(): { doctorName?: string; visitDate: string }[] {
+  const db = getDB();
+  const rows = db.getAllSync<{ doctor_name: string | null; visit_date: string }>(
+    `SELECT doctor_name, visit_date FROM medical_records
+     WHERE status = 'upcoming' AND removed_at IS NULL
+       AND visit_date IS NOT NULL
+       AND date(visit_date) >= date('now', 'localtime')
+     ORDER BY date(visit_date) ASC, created_at ASC;`
+  );
+  return rows.map((r) => ({
+    doctorName: r.doctor_name ?? undefined,
+    visitDate: r.visit_date,
+  }));
+}
+
+/**
  * Beat 1 surfacing sweep (MEDICAL_SURFACING_DESIGN_SPEC §2.3). Silently
  * supersedes any 'upcoming' row whose date has passed to 'noted' — no
  * spoken output, Herald never says "you missed your appointment"
