@@ -871,19 +871,40 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
         if (doctorName) {
           const existing = findMatchingUpcomingAppointment(doctorName, resolvedDate);
           if (existing) {
+            // Cancel words are checked ahead of NO so "cancel"/"never mind"
+            // exit honestly without being misread as "different" — NO's
+            // shared regex includes cancel words for the plain-decline
+            // case elsewhere, but this branch repurposes NO to mean
+            // "different appointment," so cancel must be intercepted
+            // first, here only.
+            const RECONCILE_CANCEL = /^(cancel|never ?mind|forget it|stop|nothing)[\s.,!]*$/i;
+            const reconciliationResume = async (userText: string): Promise<CommitResult> => {
+              const trimmed = userText.trim();
+              if (RECONCILE_CANCEL.test(trimmed)) {
+                return { status: 'noop', ack: "No problem — I won't do that." };
+              }
+              if (YES.test(trimmed)) {
+                return { status: 'noop', ack: `Got it — I'll leave that as is.` };
+              }
+              if (NO.test(trimmed)) {
+                return commitUpcoming(resolvedDate);
+              }
+              // Unresolved reply — stay inside reconciliation and re-ask
+              // the same deterministic question rather than falling
+              // through to generic Graceful Confusion, which was
+              // observed abandoning the pending (2026-08-09 device test).
+              return {
+                status: 'pending',
+                prompt: `I'm not sure I caught that — is this the same appointment with ${doctorName} ${spoken}, or a different one?`,
+                pendingKey: 'medical_visit_upcoming_duplicate',
+                resume: reconciliationResume,
+              };
+            };
             return {
               status: 'pending',
               prompt: `I already have you down for an appointment with ${doctorName} ${spoken} — is this the same one, or a different appointment?`,
               pendingKey: 'medical_visit_upcoming_duplicate',
-              resume: async (userText: string): Promise<CommitResult> => {
-                if (YES.test(userText.trim())) {
-                  return { status: 'noop', ack: `Got it — I'll leave that as is.` };
-                }
-                if (NO.test(userText.trim())) {
-                  return commitUpcoming(resolvedDate);
-                }
-                return { status: 'noop', ack: '' };
-              },
+              resume: reconciliationResume,
             };
           }
         }

@@ -225,7 +225,7 @@ const RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", BOLD = "\x1b[1m",
 let passed = 0;
 const failures = [];
 const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length + 11; // +1 list_todo+medical intercept, +3 classifier tri-state, +1 Law 5 positive control, +6 Law 5 regression fence
-const EXPECTED_TOTAL = 1115;  // was 1092; +23 medicalVisitLifecycle.test.ts (existing-memory reconciliation gate, commit e9be9814)
+const EXPECTED_TOTAL = 1123;  // was 1115; +8 medicalVisitLifecycle.test.ts (reconciliation re-ask loop + explicit-cancel fix, 2026-08-09)
 
 console.log(`\n${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  HERALD ROUTER + PHONE TEST SUITE — ${TOTAL} tests${RESET}`);

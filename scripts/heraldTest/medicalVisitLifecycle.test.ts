@@ -283,7 +283,10 @@ export async function runMedicalVisitLifecycleTests() {
     }
   }
 
-  // ── J: reconciliation gate — unresolved reply stays pending, commits nothing
+  // ── J: reconciliation gate — unresolved reply stays pending and re-asks,
+  //      then resolves correctly once the user answers same/different
+  //      (2026-08-09 fix — was previously abandoning into generic
+  //      Graceful Confusion, device-observed) ─────────────────────────────
   {
     const db = freshDB();
     const phrase = 'I have an appointment with Dr. Hexagon tomorrow.';
@@ -300,14 +303,56 @@ export async function runMedicalVisitLifecycleTests() {
         assert('J2 pendingKey is the duplicate reconciliation key', confirmResult.pendingKey,
           (v) => v === 'medical_visit_upcoming_duplicate', 'medical_visit_upcoming_duplicate');
         const ambiguousResult = await confirmResult.resume('maybe');
-        assert('J3 unresolved reply → noop (stays pending per Graceful Confusion convention)',
-          ambiguousResult.status, (v) => v === 'noop', 'noop');
-        assert('J4 unresolved reply → empty ack (no commit language spoken)', (ambiguousResult as any).ack,
-          (v) => v === '', '""');
-        assert('J5 no new write on unresolved reply', getMedicalRecords().length, (v) => v === 1, '1');
+        assert('J3 unresolved reply → stays pending (re-asks, does not abandon)', ambiguousResult.status,
+          (v) => v === 'pending', 'pending');
+        if (ambiguousResult.status === 'pending') {
+          assert('J4 pendingKey remains the duplicate reconciliation key on re-ask', ambiguousResult.pendingKey,
+            (v) => v === 'medical_visit_upcoming_duplicate', 'medical_visit_upcoming_duplicate');
+          assert('J5 re-ask prompt still asks same-or-different', ambiguousResult.prompt,
+            (v) => typeof v === 'string' && /same.*different|different.*same/i.test(v), 'asks same-or-different');
+          assert('J6 no write yet after unresolved reply', getMedicalRecords().length, (v) => v === 1, '1');
+
+          const resolvedSame = await ambiguousResult.resume('yes');
+          assert('J7 answering "same" after re-ask resolves to noop', resolvedSame.status,
+            (v) => v === 'noop', 'noop');
+          assert('J8 still exactly one medical_records row', getMedicalRecords().length, (v) => v === 1, '1');
+        }
       }
     } else {
       assert('J0 routeIntent produced medical_visit_upcoming capture', rd.kind, () => false, 'capture / medical_visit_upcoming');
+    }
+  }
+
+  // ── M: reconciliation gate — explicit cancel exits honestly and is NOT
+  //      misread as "different" (latent collision with NO's shared
+  //      cancel-word regex, fixed 2026-08-09) ──────────────────────────────
+  {
+    const db = freshDB();
+    const phrase = 'I have an appointment with Dr. Hexagon tomorrow.';
+    const tomorrow = parseDatePhrase(phrase)!;
+    insertRow(db, { visit_date: tomorrow, doctor_name: 'Dr. Hexagon', status: 'upcoming' });
+
+    const rd = await routeIntent(phrase, ROUTE_DEPS);
+    if (rd.kind === 'capture' && rd.intents[0]?.type === 'medical_visit_upcoming') {
+      const { DOMAIN_WRITERS } = await import('../../src/routing/routeIntent.ts');
+      const writer = DOMAIN_WRITERS['medical_visit_upcoming']!;
+      const confirmResult = await writer.add(rd.intents[0], phrase);
+      if (confirmResult.status === 'pending') {
+        const cancelResult = await confirmResult.resume('cancel');
+        assert('M1 explicit cancel → noop', cancelResult.status, (v) => v === 'noop', 'noop');
+        assert('M2 cancel ack is honest decline, not a leave-as-is claim', (cancelResult as any).ack,
+          (v) => typeof v === 'string' && /won't do that/i.test(v), 'contains "won\'t do that"');
+        assert('M3 no new write on cancel', getMedicalRecords().length, (v) => v === 1, '1');
+
+        const cancelResult2 = await confirmResult.resume('never mind');
+        assert('M4 "never mind" also → noop (not misread as "different")', cancelResult2.status,
+          (v) => v === 'noop', 'noop');
+        assert('M5 still no new write after "never mind"', getMedicalRecords().length, (v) => v === 1, '1');
+      } else {
+        assert('M0 expected pending reconciliation prompt', confirmResult.status, () => false, 'pending');
+      }
+    } else {
+      assert('M-1 routeIntent produced medical_visit_upcoming capture', rd.kind, () => false, 'capture / medical_visit_upcoming');
     }
   }
 
