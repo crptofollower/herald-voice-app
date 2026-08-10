@@ -212,6 +212,70 @@ export async function runUpcomingMedicalReadTests() {
       (v) => v === 'medical:visit_read', 'medical:visit_read');
   }
 
+  // U14 — named-doctor query, two upcoming visits with that doctor → both
+  // spoken, "and again" connector (2026-08-10, multi-visit named-recall).
+  {
+    const db = freshDB();
+    insertUpcoming(db, 'Dr. Smith', dayOffset(2));
+    insertUpcoming(db, 'Dr. Smith', dayOffset(9));
+    const d = await classifyQuery('when do I see Dr Smith');
+    assert('U14 named multi (2) → both spoken, and again', d.tier1Response,
+      (v) => typeof v === 'string' && /^You see Dr\. Smith on .*, and again .*\.$/.test(v as string),
+      'You see Dr. Smith on <date1>, and again <date2>.');
+    assert('U14b reason unchanged by count', (d as any).reason,
+      (v) => v === 'medical:upcoming_read_named', 'medical:upcoming_read_named');
+  }
+
+  // U15 — named-doctor query, three upcoming visits → "then again ... and again ..."
+  {
+    const db = freshDB();
+    insertUpcoming(db, 'Dr. Smith', dayOffset(2));
+    insertUpcoming(db, 'Dr. Smith', dayOffset(9));
+    insertUpcoming(db, 'Dr. Smith', dayOffset(15));
+    const d = await classifyQuery('when do I see Dr Smith');
+    assert('U15 named multi (3) → then again, and again', d.tier1Response,
+      (v) => typeof v === 'string' && /^You see Dr\. Smith on .*, then again .*, and again .*\.$/.test(v as string),
+      'You see Dr. Smith on <d1>, then again <d2>, and again <d3>.');
+  }
+
+  // U16 — named-doctor query, five upcoming visits → caps at three, states remainder
+  {
+    const db = freshDB();
+    insertUpcoming(db, 'Dr. Smith', dayOffset(2));
+    insertUpcoming(db, 'Dr. Smith', dayOffset(9));
+    insertUpcoming(db, 'Dr. Smith', dayOffset(15));
+    insertUpcoming(db, 'Dr. Smith', dayOffset(20));
+    insertUpcoming(db, 'Dr. Smith', dayOffset(30));
+    const d = await classifyQuery('when do I see Dr Smith');
+    assert('U16 named multi (5) caps at three, states remainder', d.tier1Response,
+      (v) => typeof v === 'string' && /and 2 more after that\.$/.test(v as string),
+      '... and 2 more after that.');
+    assert('U16b exactly two "then again" clauses, no "and again"', d.tier1Response,
+      (v) => typeof v === 'string' &&
+        ((v as string).match(/then again/g) || []).length === 2 &&
+        !/and again/.test(v as string),
+      'exactly two "then again" clauses before the overflow tail, no "and again"');
+  }
+
+  // U17 — mixed-doctor guard: a shorter-name decoy doctor also passes the
+  // substring filter and falls chronologically BETWEEN two of the target
+  // doctor's visits. The guard (sameDoctor filter, 2026-08-10) must exclude
+  // the decoy entirely rather than let it appear inside the spoken list —
+  // U12 proves the guard picks the right single doctor; this proves it
+  // still excludes a decoy once the winning doctor has multiple rows.
+  {
+    const db = freshDB();
+    insertUpcoming(db, 'Dr. Smith', dayOffset(5));
+    insertUpcoming(db, 'Dr. Smithson', dayOffset(2));
+    insertUpcoming(db, 'Dr. Smithson', dayOffset(9));
+    const d = await classifyQuery('when do I see Dr Smithson');
+    assert('U17 mixed-doctor guard excludes decoy despite chronological overlap', d.tier1Response,
+      (v) => typeof v === 'string' &&
+        /^You see Dr\. Smithson on .*, and again .*\.$/.test(v as string) &&
+        !/Dr\. Smith on/.test(v as string),
+      'You see Dr. Smithson on <d1>, and again <d2>. (no Dr. Smith clause)');
+  }
+
   const total = passed + failures.length;
   console.log(
     `\n${BOLD}UpcomingMedicalRead: ${passed}/${total} passed` +
