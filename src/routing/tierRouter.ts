@@ -775,6 +775,35 @@ function phraseUpcomingAppointments(
   return sentence;
 }
 
+// Deterministic spoken phrasing for a named-doctor upcoming-visit read when
+// more than one future visit with that doctor already exists (2026-08-10,
+// multi-visit named-recall presentation). Sibling to phraseUpcomingAppointments
+// (the multi-doctor list) — this one holds the doctor name constant across the
+// sentence instead of repeating it per row, since every row here is already
+// known to be the same doctor. Verbatim doctor name (Spine §3), existing
+// formatSpokenDate, no LLM — presentation only, the caller has already done
+// all matching/filtering/sorting. Caps at three spoken visits then "and N more
+// after that" — same cap value as phraseUpcomingAppointments, deliberately not
+// a second display-limit constant. Exported for direct unit testing (pure
+// function, no DB required).
+export function phraseNamedDoctorUpcoming(
+  who: string,
+  rows: { doctorName?: string; visitDate: string }[],
+  formatSpokenDate: (d: string) => string,
+): string {
+  const CAP = 3;
+  const shown = rows.slice(0, CAP);
+  const remaining = rows.length - shown.length;
+  let sentence = `You see ${who} on ${formatSpokenDate(shown[0].visitDate)}`;
+  for (let i = 1; i < shown.length; i++) {
+    const isLastShown = i === shown.length - 1;
+    const connector = isLastShown && remaining === 0 ? 'and again' : 'then again';
+    sentence += `, ${connector} ${formatSpokenDate(shown[i].visitDate)}`;
+  }
+  sentence += remaining > 0 ? `, and ${remaining} more after that.` : '.';
+  return sentence;
+}
+
 function getDoctorSummary(): string {
   const records = getMedicalRecords().filter((r) => r.doctor_name && r.doctor_name.trim());
   if (records.length === 0) {
@@ -1325,7 +1354,7 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   // visits coming up" resolves here, not to the past readers. Excludes generic
   // and timeframe-scoped queries by construction (see UPCOMING_MEDICAL_READ).
   if (UPCOMING_MEDICAL_READ.some((p) => p.test(msg))) {
-    const { getUpcomingAppointments } = await import('../db/medicalDB');
+    const { getUpcomingAppointments, normalizeDoctorNameForMatch } = await import('../db/medicalDB');
     const { formatSpokenDate } = await import('../utils/parseTime');
     const all = getUpcomingAppointments();
     const isNamed = /\bdr\.?\s/i.test(msg);
@@ -1344,16 +1373,29 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
           reason: "medical:upcoming_read_named_miss",
         };
       }
-      // Named query wants the nearest with that doctor. Re-sort the matched
-      // set soonest-first (getUpcomingAppointments already date-ASC, but the
-      // longest-name sort above reordered), take the first.
-      const nearest = [...matches].sort((a, b) =>
+      // Named query surfaces every upcoming visit with that doctor, soonest
+      // first — not just the nearest (2026-08-10, multi-visit presentation
+      // fix; see phraseNamedDoctorUpcoming). Re-sort the matched set
+      // soonest-first (getUpcomingAppointments already date-ASC, but the
+      // longest-name sort above reordered it).
+      const sorted = [...matches].sort((a, b) =>
         (a.visitDate < b.visitDate ? -1 : a.visitDate > b.visitDate ? 1 : 0)
-      )[0];
-      const who = nearest.doctorName!.trim();
+      );
+      const who = sorted[0].doctorName!.trim();
+      // Guard: phraseNamedDoctorUpcoming speaks `who` once and groups every
+      // subsequent row under it, so every row passed in must genuinely be
+      // that doctor. matches was filtered by "utterance supports this
+      // stored name," not "utterance names exactly one doctor" — a
+      // compound utterance naming two doctors could in principle pass rows
+      // for both through the filter above. This was harmless when only one
+      // row was ever spoken; it is not harmless now, so it's enforced here
+      // rather than assumed.
+      const sameDoctor = sorted.filter(
+        (r) => r.doctorName && normalizeDoctorNameForMatch(r.doctorName) === normalizeDoctorNameForMatch(who)
+      );
       return {
         tier: 1,
-        tier1Response: `You see ${who} on ${formatSpokenDate(nearest.visitDate)}.`,
+        tier1Response: phraseNamedDoctorUpcoming(who, sameDoctor, formatSpokenDate),
         isMedical: true,
         reason: "medical:upcoming_read_named",
       };
