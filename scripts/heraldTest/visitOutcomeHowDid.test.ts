@@ -208,6 +208,7 @@ export async function runVisitOutcomeHowDidTests() {
       { label: "E2 doctor's appointment + Dr Wynn (reordered)", text: "How did my doctor's appointment go with Dr Wynn?" },
       { label: 'E3 visit-noun variant with Dr Foster', text: 'How did my visit with Dr Foster go?' },
       { label: 'E4 checkup-noun variant with Dr Foster', text: 'How was my checkup with Dr Foster?' },
+      { label: 'E5 "what happened" cue variant with Dr Foster', text: 'What happened at my last appointment with Dr Foster?' },
     ];
     for (const { label, text } of phrases) {
       const d = await classifyQuery(text);

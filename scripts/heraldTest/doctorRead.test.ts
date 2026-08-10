@@ -209,6 +209,49 @@ export async function runDoctorReadTests() {
       'response names Alvarez, not the honest-miss line');
   }
 
+  // ── DR10: getLastVisit reason/diagnosis/follow_up now spoken verbatim —
+  // Session 1 (2026-08-10) widened getLastVisit's return shape; this proves
+  // VISIT_HISTORY_READ actually speaks the new fields rather than silently
+  // carrying unused data. Exact stored strings only — nothing invented.
+  {
+    freshDB();
+    writeMedicalRecord({
+      doctor_name: 'Dr. Alvarez',
+      visit_date: '2026-07-20',
+      reason: 'annual checkup',
+      diagnosis: 'mild hypertension',
+      follow_up: 'recheck blood pressure in three months',
+    });
+    const d = await classifyQuery('when did i last see Dr Alvarez');
+    assert('DR10a routes medical:visit_history_read', d.reason,
+      (v) => v === 'medical:visit_history_read', 'medical:visit_history_read');
+    assert('DR10b response includes exact stored reason verbatim', d.tier1Response,
+      (v) => typeof v === 'string' && v.includes('annual checkup'), 'includes "annual checkup"');
+    assert('DR10c response includes exact stored diagnosis verbatim', d.tier1Response,
+      (v) => typeof v === 'string' && v.includes('mild hypertension'), 'includes "mild hypertension"');
+    assert('DR10d response includes exact stored follow_up verbatim', d.tier1Response,
+      (v) => typeof v === 'string' && v.includes('recheck blood pressure in three months'),
+      'includes "recheck blood pressure in three months"');
+  }
+
+  // ── DR11: shared extractDoctorName resolves a phrasing the OLD inline
+  // /\bsee\s+(dr\.?\s+\w+)/i regex would have missed (no literal "see"
+  // adjacent to the name). Two doctors seeded, Foster's visit newer, so an
+  // undefined hint (old-code behavior) would fall back to Foster — the
+  // WRONG doctor — making this a genuine differential guard, not a test
+  // that would pass either way.
+  {
+    freshDB();
+    writeMedicalRecord({ doctor_name: 'Dr. Alvarez', visit_date: '2026-05-01', notes: 'older visit' });
+    writeMedicalRecord({ doctor_name: 'Dr. Foster', visit_date: '2026-07-20', notes: 'newer visit' });
+    const d = await classifyQuery('When was my last appointment with Dr Alvarez?');
+    assert('DR11a routes medical:visit_history_read', d.reason,
+      (v) => v === 'medical:visit_history_read', 'medical:visit_history_read');
+    assert('DR11b resolves Alvarez specifically, not the newer Foster fallback', d.tier1Response,
+      (v) => typeof v === 'string' && v.includes('Alvarez') && !v.includes('Foster'),
+      'response names Alvarez, not Foster');
+  }
+
   const total = passed + failures.length;
   console.log(
     `\n${BOLD}DoctorRead: ${passed}/${total} passed` +
