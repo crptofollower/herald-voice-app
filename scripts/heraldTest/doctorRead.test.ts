@@ -252,6 +252,116 @@ export async function runDoctorReadTests() {
       'response names Alvarez, not Foster');
   }
 
+  // ── DR12: doctor summary composer — full composite, everything present ────
+  // Session 2 (2026-08-10). Proves the composer surfaces identity/specialty,
+  // last-visit reason/diagnosis/follow_up, matching-date outcome, and an
+  // upcoming appointment together, without touching any new authority.
+  {
+    freshDB();
+    writeMedicalContact({ name: 'Dr. Alvarez', specialty: 'Cardiologist', is_primary: 1 });
+    const visitId = writeMedicalRecord({
+      doctor_name: 'Dr. Alvarez',
+      visit_date: '2026-07-20',
+      reason: 'annual checkup',
+      diagnosis: 'mild hypertension',
+      follow_up: 'recheck blood pressure in three months',
+      status: 'noted',
+    });
+    attachVisitOutcome(visitId, 'Blood pressure was a little high');
+    writeMedicalRecord({ doctor_name: 'Dr. Alvarez', visit_date: '2026-09-15', status: 'upcoming' });
+
+    const d = await classifyQuery('Tell me about Dr Alvarez');
+    assert('DR12a routes medical:doctor_summary', d.reason,
+      (v) => v === 'medical:doctor_summary', 'medical:doctor_summary');
+    assert('DR12b includes specialty', d.tier1Response,
+      (v) => typeof v === 'string' && v.includes('Cardiologist'), 'includes "Cardiologist"');
+    assert('DR12c includes reason, diagnosis, and follow_up verbatim', d.tier1Response,
+      (v) => typeof v === 'string'
+        && v.includes('annual checkup')
+        && v.includes('mild hypertension')
+        && v.includes('recheck blood pressure in three months'),
+      'includes reason, diagnosis, follow_up');
+    assert('DR12d includes matching-date outcome verbatim', d.tier1Response,
+      (v) => typeof v === 'string' && v.includes('Blood pressure was a little high'),
+      'includes stored outcome');
+    assert('DR12e includes upcoming appointment section', d.tier1Response,
+      (v) => typeof v === 'string' && v.includes('You see'), 'includes upcoming phrasing');
+  }
+
+  // ── DR13: no medical_contacts row — specialty line omitted, not fabricated,
+  // rest of the composite still present. ──────────────────────────────────
+  {
+    freshDB();
+    writeMedicalRecord({
+      doctor_name: 'Dr. Foster',
+      visit_date: '2026-06-01',
+      reason: 'follow-up visit',
+      status: 'noted',
+    });
+    const d = await classifyQuery('Tell me about Dr Foster');
+    assert('DR13a routes medical:doctor_summary', d.reason,
+      (v) => v === 'medical:doctor_summary', 'medical:doctor_summary');
+    assert('DR13b specialty line omitted (no "is your" phrase) when no contact exists', d.tier1Response,
+      (v) => typeof v === 'string' && !v.includes('is your'), 'no "is your"');
+    assert('DR13c visit info still present', d.tier1Response,
+      (v) => typeof v === 'string' && v.includes('follow-up visit'), 'includes "follow-up visit"');
+  }
+
+  // ── DR14: outcome/visit-date mismatch — the composer's own conflict guard.
+  // Older visit has the only outcome; newer visit has none. getLastVisit and
+  // getLastVisitOutcome correctly point at DIFFERENT rows — proves the
+  // composer suppresses the mismatched outcome rather than showing two dates
+  // in one breath. ────────────────────────────────────────────────────────
+  {
+    freshDB();
+    const olderId = writeMedicalRecord({
+      doctor_name: 'Dr. Lee',
+      visit_date: '2026-01-10',
+      reason: 'earlier concern',
+      status: 'noted',
+    });
+    attachVisitOutcome(olderId, 'Started a new medication back then');
+    writeMedicalRecord({
+      doctor_name: 'Dr. Lee',
+      visit_date: '2026-07-01',
+      reason: 'recent checkup',
+      status: 'noted',
+    });
+    const d = await classifyQuery('Tell me about Dr Lee');
+    assert('DR14a routes medical:doctor_summary', d.reason,
+      (v) => v === 'medical:doctor_summary', 'medical:doctor_summary');
+    assert('DR14b shows the NEWER visit (proves getLastVisit picked the right row)', d.tier1Response,
+      (v) => typeof v === 'string' && v.includes('recent checkup'), 'includes "recent checkup"');
+    assert('DR14c does NOT show the older mismatched-date outcome', d.tier1Response,
+      (v) => typeof v === 'string' && !v.includes('Started a new medication back then'),
+      'excludes older outcome text');
+  }
+
+  // ── DR15: complete miss — nothing known about this doctor at all ──────────
+  {
+    freshDB();
+    const d = await classifyQuery('Tell me about Dr Nguyen');
+    assert('DR15a routes medical:doctor_summary (fires on phrasing alone)', d.reason,
+      (v) => v === 'medical:doctor_summary', 'medical:doctor_summary');
+    assert('DR15b honest miss, names the doctor, no fabrication', d.tier1Response,
+      (v) => typeof v === 'string' && /don't have anything on/i.test(v) && v.includes('Nguyen'),
+      'honest miss naming Nguyen');
+  }
+
+  // ── DR16: routing coverage — "tell me about" and close paraphrases ────────
+  {
+    freshDB();
+    const phrasings = [
+      { label: 'DR16a "tell me about Dr X"', text: 'Tell me about Dr Alvarez' },
+      { label: 'DR16b "what do you know about Dr X"', text: 'What do you know about Dr Alvarez' },
+      { label: 'DR16c "give me a rundown on Dr X"', text: 'Give me a rundown on Dr Alvarez' },
+    ];
+    for (const { label, text } of phrasings) {
+      const d = await classifyQuery(text);
+      assert(label, d.reason, (v) => v === 'medical:doctor_summary', 'medical:doctor_summary');
+    }
+  }
+
   const total = passed + failures.length;
   console.log(
     `\n${BOLD}DoctorRead: ${passed}/${total} passed` +

@@ -225,7 +225,7 @@ const RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", BOLD = "\x1b[1m",
 let passed = 0;
 const failures = [];
 const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length + 11; // +1 list_todo+medical intercept, +3 classifier tri-state, +1 Law 5 positive control, +6 Law 5 regression fence
-const EXPECTED_TOTAL = 1156;  // was 1149; +7 Session 1 medical conversational recall — doctorRead.test.ts DR10/DR11 (reason/diagnosis/follow_up spoken + shared extractDoctorName differential guard), visitOutcomeHowDid.test.ts E5 ("what happened" cue), 2026-08-10
+const EXPECTED_TOTAL = 1172;  // was 1156; +16 Session 2 doctor summary composer — doctorRead.test.ts DR12-DR16 (full composite, specialty-omission, outcome/visit-date conflict guard, complete miss, 3-phrasing routing coverage), 2026-08-10
 
 console.log(`\n${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  HERALD ROUTER + PHONE TEST SUITE — ${TOTAL} tests${RESET}`);
