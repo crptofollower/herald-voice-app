@@ -145,6 +145,9 @@ export function getLastVisit(doctorHint?: string): {
   doctorName?: string;
   visitDate: string;
   notes?: string;
+  reason?: string;
+  diagnosis?: string;
+  follow_up?: string;
 } | null {
   const records = getMedicalRecords().filter(
     (r) => r.status !== 'upcoming' && r.visit_date
@@ -163,6 +166,9 @@ export function getLastVisit(doctorHint?: string): {
     doctorName: latest.doctor_name,
     visitDate: latest.visit_date!,
     notes: latest.notes,
+    reason: latest.reason,
+    diagnosis: latest.diagnosis,
+    follow_up: latest.follow_up,
   };
 }
 

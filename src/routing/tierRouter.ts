@@ -350,7 +350,7 @@ const UPCOMING_MEDICAL_SINGLE = [
 // (Spine §3 — medical reads never route through generative phrasing).
 // Three independent signals ANDed — order-independent so phrase reorderings
 // like "how did my doctor's appointment go with Dr X" still match.
-const OUTCOME_CUE = /\b(?:how did|how was)\b|\bwhat did\b[\s\S]*?\bsay\b/i;
+const OUTCOME_CUE = /\b(?:how did|how was|what happened)\b|\bwhat did\b[\s\S]*?\bsay\b/i;
 const APPOINTMENT_CONTEXT = /\b(?:appointment|visit|check-?up|last time)\b/i;
 const DOCTOR_REFERENCE = /\b(?:dr\.?\s*\w+|(?:the|my) doctor)\b/i;
 
@@ -1431,8 +1431,8 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   if (VISIT_HISTORY_READ.some((p) => p.test(msg))) {
     const { getLastVisit } = await import('../db/medicalDB');
     const { formatSpokenDate } = await import('../utils/parseTime');
-    const nameMatch = msg.match(/\bsee\s+(dr\.?\s+\w+)/i);
-    const doctorHint = nameMatch?.[1];
+    const { extractDoctorName } = await import('../utils/detectMedicalEvent');
+    const doctorHint = extractDoctorName(msg);
     const SPECIALTY_REFERENCE = /\bmy\s+(dentist|cardiologist|neurologist|oncologist|psychiatrist|therapist|specialist)\b/i;
     const specialtyMatch = msg.match(SPECIALTY_REFERENCE);
     if (!doctorHint && specialtyMatch) {
@@ -1452,7 +1452,12 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     } else {
       const who = visit.doctorName ?? 'your doctor';
       const spoken = formatSpokenDate(visit.visitDate);
-      const reasonPart = visit.notes ? ` — ${visit.notes}` : '';
+      const details: string[] = [];
+      if (visit.reason) details.push(`for ${visit.reason}`);
+      if (visit.diagnosis) details.push(`diagnosed with ${visit.diagnosis}`);
+      if (visit.notes) details.push(visit.notes);
+      if (visit.follow_up) details.push(`follow-up: ${visit.follow_up}`);
+      const reasonPart = details.length > 0 ? ` — ${details.join('; ')}` : '';
       response = `You last saw ${who} on ${spoken}${reasonPart}.`;
     }
     return { tier: 1, tier1Response: response, isMedical: true, reason: "medical:visit_history_read" };
