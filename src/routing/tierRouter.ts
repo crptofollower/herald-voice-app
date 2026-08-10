@@ -309,6 +309,15 @@ const DOCTOR_READ_SIGNALS = [
   /\bmy\s+doctors?\b.*\bname/i,
 ];
 
+// Doctor summary composer — "tell me about Dr X" and close paraphrases only.
+// Deliberately NOT widened to specialty references ("my cardiologist") — a
+// separate vocabulary expansion, out of scope for this session.
+const DOCTOR_SUMMARY_READ: RegExp[] = [
+  /\btell me about\s+dr\.?\s/i,
+  /\bwhat do you know about\s+dr\.?\s/i,
+  /\bgive me (?:a )?(?:summary|rundown|update) on\s+dr\.?\s/i,
+];
+
 const VISIT_HISTORY_READ = [
   /\bwhen did i (?:last )?see\b/i,
   /\bwhen was my (?:last )?(?:appointment|visit)\b/i,
@@ -804,6 +813,59 @@ export function phraseNamedDoctorUpcoming(
   return sentence;
 }
 
+// Doctor summary composer — "tell me about Dr X" and close paraphrases.
+// Phrasing wrapper ONLY: composes already-authoritative single-purpose reads
+// (medical_contacts identity/specialty; medical_records visit/outcome/upcoming)
+// into one conversational answer. Introduces no new database authority — §4a
+// one-reader-per-question is unaffected, each existing reader still owns its
+// own table/question; this only sequences and phrases their outputs. Sections
+// are omitted, never fabricated, when the underlying reader returns nothing
+// (Spine §3 — deterministic string assembly over already-verbatim values).
+//
+// Outcome/visit-date guard: getLastVisit and getLastVisitOutcome are each
+// independently correct but can point at different rows (most recent visit
+// vs. most recent visit WITH an outcome). Showing both together without this
+// guard could juxtapose two different dates in one answer — an Elder Safety
+// failure the individual readers never had a chance to cause on their own.
+// Outcome is only spoken when it belongs to the SAME visit already being
+// described; otherwise it's simply not available for THIS visit and omitted.
+function composeDoctorSummary(
+  who: string,
+  contact: { name?: string; specialty?: string } | undefined,
+  visit: { doctorName?: string; visitDate: string; notes?: string; reason?: string; diagnosis?: string; follow_up?: string } | null,
+  outcome: { doctorName?: string; visitDate: string; outcome: string } | null,
+  upcoming: { doctorName?: string; visitDate: string }[],
+  formatSpokenDate: (d: string) => string,
+): string {
+  if (!contact && !visit && upcoming.length === 0) {
+    return `I don't have anything on ${who} yet — tell me and I'll remember.`;
+  }
+
+  const parts: string[] = [];
+  parts.push(contact?.specialty ? `${who} is your ${contact.specialty}.` : `${who}.`);
+
+  if (visit) {
+    const spoken = formatSpokenDate(visit.visitDate);
+    const details: string[] = [];
+    if (visit.reason) details.push(`for ${visit.reason}`);
+    if (visit.diagnosis) details.push(`diagnosed with ${visit.diagnosis}`);
+    if (visit.notes) details.push(visit.notes);
+    if (visit.follow_up) details.push(`follow-up: ${visit.follow_up}`);
+    const detailPart = details.length > 0 ? ` — ${details.join('; ')}` : '';
+    parts.push(`You last saw them on ${spoken}${detailPart}.`);
+
+    if (outcome && outcome.visitDate === visit.visitDate) {
+      parts.push(`You mentioned: ${outcome.outcome}`);
+    }
+  }
+
+  if (upcoming.length > 0) {
+    parts.push(phraseNamedDoctorUpcoming(who, upcoming, formatSpokenDate));
+  }
+
+  return parts.join(' ');
+}
+
 function getDoctorSummary(): string {
   const records = getMedicalRecords().filter((r) => r.doctor_name && r.doctor_name.trim());
   if (records.length === 0) {
@@ -1255,6 +1317,49 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
         return { tier: 1, actionIntent: { type: 'medical_remove', name }, reason: 'action:medical_remove' };
       }
     }
+  }
+
+  // Tier 1: doctor summary composer — "tell me about Dr X" and close
+  // paraphrases. Composes already-authoritative single-purpose reads
+  // (medical_contacts identity/specialty; medical_records visit, outcome,
+  // upcoming) into one conversational answer. No new database authority —
+  // §4a one-reader-per-question unaffected, each existing reader still owns
+  // its own table/question; this only sequences and phrases outputs. MUST
+  // precede medical capture / visit outcome / visit history / diagnosis /
+  // doctor-read so a composite "tell me about" ask resolves here, not to a
+  // narrower single-purpose reader.
+  if (DOCTOR_SUMMARY_READ.some((p) => p.test(msg))) {
+    const { extractDoctorName } = await import('../utils/detectMedicalEvent');
+    const doctorHint = extractDoctorName(msg);
+    if (!doctorHint) {
+      return {
+        tier: 1,
+        tier1Response: "Help me out — which doctor do you mean? Tell me their name and I'll look it up.",
+        isMedical: true,
+        reason: "medical:doctor_summary_unresolved",
+      };
+    }
+    const {
+      getMedicalContacts,
+      getLastVisit,
+      getLastVisitOutcome,
+      getUpcomingAppointments,
+      normalizeDoctorNameForMatch,
+    } = await import('../db/medicalDB');
+    const { formatSpokenDate } = await import('../utils/parseTime');
+
+    const contact = getMedicalContacts().find(
+      (c) => normalizeDoctorNameForMatch(c.name).includes(normalizeDoctorNameForMatch(doctorHint))
+    );
+    const visit = getLastVisit(doctorHint);
+    const outcome = getLastVisitOutcome(doctorHint);
+    const upcomingAll = getUpcomingAppointments()
+      .filter((r) => r.doctorName && normalizeDoctorNameForMatch(r.doctorName).includes(normalizeDoctorNameForMatch(doctorHint)))
+      .sort((a, b) => (a.visitDate < b.visitDate ? -1 : a.visitDate > b.visitDate ? 1 : 0));
+
+    const who = contact?.name ?? visit?.doctorName ?? upcomingAll[0]?.doctorName ?? doctorHint;
+    const response = composeDoctorSummary(who, contact, visit, outcome, upcomingAll, formatSpokenDate);
+    return { tier: 1, tier1Response: response, isMedical: true, reason: "medical:doctor_summary" };
   }
 
   // Tier 1: visit outcome read — BEFORE medical capture so "how did my
