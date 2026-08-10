@@ -140,7 +140,7 @@ export async function runMedicalVisitLifecycleTests() {
   // fire early / skip appointments that haven't happened yet.
   {
     const db = freshDB();
-    const today = new Date().toISOString().slice(0, 10);
+    const today = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })();
     const id = insertRow(db, { visit_date: today, status: 'upcoming', surfaced_at: null });
     supersedeStaleUpcomingAppointments();
     const row = getMedicalRecords().find(r => r.id === id)!;
