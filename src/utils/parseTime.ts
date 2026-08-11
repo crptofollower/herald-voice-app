@@ -189,14 +189,20 @@ export function parseDatePhrase(text: string, referenceDate?: Date): string | nu
   }
 
   const names = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
-  const weekdayMatch = t.match(/\b(next|this|on)?\s*(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i);
+  const weekdayMatch = t.match(/\b(next|this|last|on)?\s*(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i);
   if (weekdayMatch) {
     const qualifier = weekdayMatch[1]?.toLowerCase();
     const targetDay = names.indexOf(weekdayMatch[2].toLowerCase());
     const d = new Date(ref);
-    let diff = (targetDay - d.getDay() + 7) % 7;
-    if (qualifier === 'next' && diff === 0) diff = 7;
-    d.setDate(d.getDate() + diff);
+    if (qualifier === 'last') {
+      let diff = (d.getDay() - targetDay + 7) % 7;
+      if (diff === 0) diff = 7; // "last Thursday" said on Thursday means a week ago
+      d.setDate(d.getDate() - diff);
+    } else {
+      let diff = (targetDay - d.getDay() + 7) % 7;
+      if (qualifier === 'next' && diff === 0) diff = 7;
+      d.setDate(d.getDate() + diff);
+    }
     return d.toLocaleDateString('en-CA');
   }
 

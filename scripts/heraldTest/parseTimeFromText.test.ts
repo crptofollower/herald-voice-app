@@ -8,6 +8,7 @@ import {
   parseAlarmIntent,
   parseReminderIntent,
   parseCalendarWriteIntent,
+  parseDatePhrase,
 } from '../../src/utils/parseTime.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
@@ -233,6 +234,167 @@ export async function runParseTimeFromTextTests() {
         );
       },
       'reason action:medical_capture; future visit Dr. Sarver',
+    );
+  }
+
+  // PT15: parseDatePhrase backward ("last <weekday>") extension.
+  // Reference dates fixed so this never depends on the real system clock.
+  // 2026-08-13 = Thursday, 2026-08-10 = Monday (both real calendar dates).
+  assert(
+    'PT15a "last Thursday" said on that same Thursday → 7 days back, not today',
+    parseDatePhrase('last Thursday', new Date(2026, 7, 13)),
+    (v) => v === '2026-08-06',
+    '"2026-08-06"',
+  );
+
+  assert(
+    'PT15b "last Thursday" said on the following Monday → the Thursday just past',
+    parseDatePhrase('last Thursday', new Date(2026, 7, 10)),
+    (v) => v === '2026-08-06',
+    '"2026-08-06"',
+  );
+
+  assert(
+    'PT15c regression — "next Thursday" said on that same Thursday still jumps a full week (unchanged forward behavior)',
+    parseDatePhrase('next Thursday', new Date(2026, 7, 13)),
+    (v) => v === '2026-08-20',
+    '"2026-08-20"',
+  );
+
+  assert(
+    'PT15d regression — "next Tuesday" said on Monday still resolves to tomorrow (unchanged forward behavior)',
+    parseDatePhrase('next Tuesday', new Date(2026, 7, 10)),
+    (v) => v === '2026-08-11',
+    '"2026-08-11"',
+  );
+
+  // PT16: calendar:specific_day routing — proves parseDatePhrase's resolved
+  // date actually reaches getCachedEventsForDate/formatEventsForSpecificDay
+  // end to end, not just the pure-function coverage in PT15.
+  // Computed relative to real "now" (parseDatePhrase is real-clock, confirmed
+  // 2026-08-10) so this passes regardless of which day the gate runs on.
+  {
+    const { setDB } = await import('../../src/db/schema.ts');
+    setDB({
+      getAllSync: (_sql: string, _params?: unknown[]) => [],
+      getFirstSync: (_sql: string, _params?: unknown[]) => null,
+      runSync: (_sql: string, _params?: unknown[]) => ({ changes: 0, lastInsertRowId: 0 }),
+      execSync: (_sql: string) => {},
+    });
+    const { classifyQuery } = await import('../../src/routing/tierRouter.ts');
+
+    const names = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+    const now = new Date();
+    let diff = (names.indexOf('tuesday') - now.getDay() + 7) % 7;
+    if (diff === 0) diff = 7; // "next Tuesday" always jumps a full week, per PT15c/d
+    const target = new Date(now);
+    target.setDate(target.getDate() + diff);
+    const expectedLabel = `next ${target.toLocaleDateString([], { weekday: 'long' })}`;
+
+    const input = 'what do I have next Tuesday';
+    const d = await classifyQuery(input);
+    console.log(`${DIM}PT16 routing: reason=${JSON.stringify(d.reason)} response=${JSON.stringify(d.tier1Response)}${RESET}`);
+    assert(
+      'PT16 "what do I have next Tuesday" → calendar:specific_day, empty-cache honest phrasing',
+      { reason: d.reason, response: d.tier1Response },
+      (v) => {
+        const x = v as { reason?: string; response?: string };
+        return x.reason === 'calendar:specific_day' &&
+          x.response === `Your calendar is clear ${expectedLabel}.`;
+      },
+      `reason calendar:specific_day; "Your calendar is clear ${'{expectedLabel}'}."`,
+    );
+  }
+
+  // PT17: calendar:specific_day_past routing, empty case — honest miss,
+  // appointments-sourced, past-tense phrasing distinct from piece A's
+  // calendar_cache-sourced "Your calendar is clear ___."
+  // calendar-shaped past request, not 'what did I do' —
+  // that phrasing is broader than Calendar's scope and belongs to a future
+  // life-history authority, not this reader.
+  {
+    const { setDB } = await import('../../src/db/schema.ts');
+    setDB({
+      getAllSync: (_sql: string, _params?: unknown[]) => [],
+      getFirstSync: (_sql: string, _params?: unknown[]) => null,
+      runSync: (_sql: string, _params?: unknown[]) => ({ changes: 0, lastInsertRowId: 0 }),
+      execSync: (_sql: string) => {},
+    });
+    const { classifyQuery } = await import('../../src/routing/tierRouter.ts');
+
+    const d = await classifyQuery("What's on my calendar last Thursday?");
+    console.log(`${DIM}PT17 routing: reason=${JSON.stringify(d.reason)} response=${JSON.stringify(d.tier1Response)}${RESET}`);
+    assert(
+      'PT17 "What\'s on my calendar last Thursday?" (empty) → calendar:specific_day_past, honest miss',
+      { reason: d.reason, response: d.tier1Response },
+      (v) => {
+        const x = v as { reason?: string; response?: string };
+        return x.reason === 'calendar:specific_day_past' &&
+          x.response === "I don't have anything on your calendar for last Thursday that I know of.";
+      },
+      'reason calendar:specific_day_past; honest-miss for "last Thursday"',
+    );
+  }
+
+  // PT18: calendar:specific_day_past, non-empty — proves a real appointments
+  // row actually reaches the composer, not just the honest-miss path.
+  // calendar-shaped past request, not 'what did I do' —
+  // that phrasing is broader than Calendar's scope and belongs to a future
+  // life-history authority, not this reader.
+  {
+    const { setDB } = await import('../../src/db/schema.ts');
+    setDB({
+      getAllSync: (sql: string, _params?: unknown[]) => {
+        if (sql.includes('FROM appointments')) {
+          return [{
+            id: 'apt1', title: 'Dentist', category: 'dental',
+            appt_date: '2020-01-01T15:00:00.000Z', appt_date_precision: 'exact',
+            end_date: null, location: null, notes: null, source: 'user_told',
+            external_id: null, raw_phrase: null, status: 'upcoming',
+            created_at: '2020-01-01T00:00:00.000Z',
+            updated_at: '2020-01-01T00:00:00.000Z', removed_at: null,
+          }];
+        }
+        return [];
+      },
+      getFirstSync: (_sql: string, _params?: unknown[]) => null,
+      runSync: (_sql: string, _params?: unknown[]) => ({ changes: 0, lastInsertRowId: 0 }),
+      execSync: (_sql: string) => {},
+    });
+    const { classifyQuery } = await import('../../src/routing/tierRouter.ts');
+    const d = await classifyQuery("What's on my calendar last Thursday?");
+    console.log(`${DIM}PT18 routing: reason=${JSON.stringify(d.reason)} response=${JSON.stringify(d.tier1Response)}${RESET}`);
+    assert(
+      'PT18 "What\'s on my calendar last Thursday?" (one row) → composer speaks it, past tense',
+      { reason: d.reason, mentionsTitle: (d.tier1Response ?? '').includes('Dentist'), mentionsHad: (d.tier1Response ?? '').includes('You had') },
+      (v) => {
+        const x = v as { reason?: string; mentionsTitle?: boolean; mentionsHad?: boolean };
+        return x.reason === 'calendar:specific_day_past' && x.mentionsTitle === true && x.mentionsHad === true;
+      },
+      'reason calendar:specific_day_past; response includes "Dentist" and "You had"',
+    );
+  }
+
+  // PT19: connector-bearing calendar shape ("for" between verb and temporal)
+  // — proves CALENDAR_TERSE_TEMPORAL's new weekday branch composes inside
+  // the existing (?:for\s+)? group rather than only matching the
+  // connector-less "what do i have" shape PT16 already covers.
+  {
+    const { setDB } = await import('../../src/db/schema.ts');
+    setDB({
+      getAllSync: (_sql: string, _params?: unknown[]) => [],
+      getFirstSync: (_sql: string, _params?: unknown[]) => null,
+      runSync: (_sql: string, _params?: unknown[]) => ({ changes: 0, lastInsertRowId: 0 }),
+      execSync: (_sql: string) => {},
+    });
+    const { classifyQuery } = await import('../../src/routing/tierRouter.ts');
+    const d = await classifyQuery("What's scheduled for next Tuesday?");
+    console.log(`${DIM}PT19 routing: reason=${JSON.stringify(d.reason)} response=${JSON.stringify(d.tier1Response)}${RESET}`);
+    assert(
+      'PT19 "What\'s scheduled for next Tuesday?" → calendar:specific_day (connector-bearing shape)',
+      d.reason,
+      (v) => v === 'calendar:specific_day',
+      'calendar:specific_day',
     );
   }
 
