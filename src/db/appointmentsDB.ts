@@ -134,3 +134,56 @@ export function clearAppointments(): void {
     [new Date().toISOString()]
   );
 }
+
+// ─── getAppointmentsForLocalDate ────────────────────────────────────────────
+//
+// appt_date is a UTC ISO-8601 instant (useCalendar.ts: new Date(appt.date)
+// .toISOString()), not a local calendar date. A bare string compare against
+// a local 'YYYY-MM-DD' would silently misalign for any user not in UTC —
+// the same class of bug calendar_cache was already patched for once
+// (Build 20). Convert the local day to UTC instant bounds first, then reuse
+// the existing getAppointments() range query — no new SQL, no new authority.
+//
+// Known limitation, unchanged by this function: only appointment-category
+// events (per useCalendar.ts's write-side filter) ever reach this table, so
+// a day with only non-appointment activity will honestly come back empty,
+// not incorrectly. Logged, not solved here.
+
+export function getAppointmentsForLocalDate(dateISO: string): Appointment[] {
+  const [year, month, day] = dateISO.split("-").map(Number);
+  const dayStart = new Date(year, month - 1, day, 0, 0, 0, 0);
+  const dayEnd = new Date(year, month - 1, day, 23, 59, 59, 999);
+  return getAppointments(dayStart.toISOString(), dayEnd.toISOString());
+}
+
+// ─── formatAppointmentsForSpecificDay ──────────────────────────────────────
+//
+// Presentation for one past day sourced from appointments, not
+// calendar_cache. Past tense throughout — distinct from
+// formatEventsForSpecificDay, which speaks forward days.
+
+export function formatAppointmentsForSpecificDay(
+  appointments: Appointment[],
+  dayLabel: string
+): string {
+  if (appointments.length === 0) {
+    return `I don't have anything on your calendar for ${dayLabel} that I know of.`;
+  }
+
+  const lines = appointments.map((a) => {
+    if (a.appt_date_precision === "date_only") return a.title;
+    const start = new Date(a.appt_date);
+    const timeStr = start.toLocaleTimeString([], {
+      hour: "numeric",
+      minute: "2-digit",
+    });
+    return `${a.title} at ${timeStr}`;
+  });
+
+  if (lines.length === 1) {
+    return `You had ${lines[0]} ${dayLabel}.`;
+  }
+
+  const last = lines.pop()!;
+  return `${dayLabel.charAt(0).toUpperCase() + dayLabel.slice(1)} you had: ${lines.join(", ")}, and ${last}.`;
+}
