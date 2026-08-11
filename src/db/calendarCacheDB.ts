@@ -221,3 +221,59 @@ export function getCacheAge(): number | null {
   const ageMs = Date.now() - new Date(row.cached_at).getTime();
   return Math.floor(ageMs / 60_000);
 }
+
+// ─── getCachedEventsForDate ────────────────────────────────────────────────
+//
+// Same query shape as getCachedEvents, for one specific date instead of a
+// fixed window. calendar_cache holds no history — callers must only pass
+// today-or-forward dates. parseDatePhrase's weekday resolution never
+// exceeds +7 days, so any date it produces is always inside the live
+// 14-day cache; this function does not itself re-check that bound.
+
+export function getCachedEventsForDate(dateISO: string): CachedEvent[] {
+  const db = getDB();
+  const [year, month, day] = dateISO.split("-").map(Number);
+  const dayStart = new Date(year, month - 1, day);
+  dayStart.setHours(0, 0, 0, 0);
+  const windowStartMs = dayStart.getTime();
+  const windowEndMs = windowStartMs + 24 * 60 * 60 * 1000 - 1;
+
+  return db.getAllSync<CachedEvent>(
+    `SELECT * FROM calendar_cache
+     WHERE start_ms <= ? AND end_ms >= ?
+     ORDER BY start_ms ASC;`,
+    [windowEndMs, windowStartMs]
+  );
+}
+
+// ─── formatEventsForSpecificDay ────────────────────────────────────────────
+//
+// Formats events for one caller-labeled day ("next Thursday", "today").
+// Distinct from formatCachedEventsForSpeech, which only knows the four
+// fixed CalendarWindow buckets.
+
+export function formatEventsForSpecificDay(
+  events: CachedEvent[],
+  dayLabel: string
+): string {
+  if (events.length === 0) {
+    return `Your calendar is clear ${dayLabel}.`;
+  }
+
+  const lines = events.map((e) => {
+    if (e.all_day) return e.title;
+    const start = new Date(e.start_ms);
+    const timeStr = start.toLocaleTimeString([], {
+      hour: "numeric",
+      minute: "2-digit",
+    });
+    return `${e.title} at ${timeStr}`;
+  });
+
+  if (lines.length === 1) {
+    return `You have ${lines[0]} ${dayLabel}.`;
+  }
+
+  const last = lines.pop()!;
+  return `${dayLabel.charAt(0).toUpperCase() + dayLabel.slice(1)} you have: ${lines.join(", ")}, and ${last}.`;
+}
