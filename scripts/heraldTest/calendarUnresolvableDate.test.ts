@@ -526,17 +526,66 @@ export async function runCalendarUnresolvableDateTests() {
     );
   }
 
-  // CUD8: REGRESSION — original named-weekday refusal still fires
+  // CUD8: "What's on my calendar Saturday" — calendar intent is established
+  // independently by "on my calendar" (CALENDAR_READ_FREE, unanchored —
+  // matches regardless of what follows), not by the weekday. Previously
+  // refused only because named weekdays were unresolvable entirely; now
+  // parseDatePhrase resolves them deterministically, so this correctly
+  // returns a real specific-day read instead of a blanket refusal. Date
+  // parsing still never creates the intent — CUD45 below proves the same
+  // weekday alone, with no calendar framing, is still not calendar intent.
   {
+    const names = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+    const now = new Date();
+    const diff = (names.indexOf('saturday') - now.getDay() + 7) % 7;
+    const target = new Date(now);
+    target.setDate(target.getDate() + diff);
+    target.setHours(0, 0, 0, 0);
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const expectedLabel = target.getTime() === todayStart.getTime()
+      ? 'today'
+      : `next ${target.toLocaleDateString([], { weekday: 'long' })}`;
+
     const d = await classifyQuery("What's on my calendar Saturday");
     assert(
-      'CUD8 "Saturday" → calendar:unresolved_weekday refusal',
-      d,
+      'CUD8 "What\'s on my calendar Saturday" → calendar:specific_day (intent from "on my calendar", weekday now resolves)',
+      { reason: d.reason, response: d.tier1Response },
       (v) => {
-        const x = v as { tier1Response?: string; reason?: string };
-        return x.tier1Response === REFUSAL && x.reason === 'calendar:unresolved_weekday';
+        const x = v as { reason?: string; response?: string };
+        return x.reason === 'calendar:specific_day' &&
+          x.response === `Your calendar is clear ${expectedLabel}.`;
       },
-      `tier1Response === REFUSAL, reason calendar:unresolved_weekday`,
+      `reason calendar:specific_day; "Your calendar is clear ${'{expectedLabel}'}."`,
+    );
+  }
+
+  // CUD44: declarative sentence with a named weekday (not "next week"/"this
+  // week" — the token class CUD22/23 already cover) must still not route to
+  // Calendar. Proves hasNamedWeekday alone, even now that parseDatePhrase
+  // can resolve it, is never sufficient on its own.
+  {
+    const d = await classifyQuery("My son is going to New Mexico next Thursday.");
+    assert(
+      'CUD44 "My son is going to New Mexico next Thursday." → no calendar read (named weekday, non-calendar-shaped)',
+      d,
+      noCalendarDispatch,
+      'no calendar read dispatch, no calendar data, no calendar write',
+    );
+  }
+
+  // CUD45: bare weekday, zero calendar framing at all — the case CUD8's
+  // name implied but its actual text never tested. Distinct from CUD8:
+  // there, the weekday sits inside explicit calendar-request framing;
+  // here it's alone, so shape-stripping reduces it to an empty string
+  // that correctly fails every request-shape pattern.
+  {
+    const d = await classifyQuery("Saturday");
+    assert(
+      'CUD45 "Saturday" (bare, no calendar framing) → no calendar dispatch',
+      d,
+      noCalendarDispatch,
+      'no calendar read dispatch, no calendar data, no calendar write',
     );
   }
 

@@ -3,7 +3,8 @@
 // Session L — Device-First Intelligence Layer
 // Build 20 fix: additional calendar phrase coverage (Bug 2 from Session L).
 
-import { getCachedEvents, formatCachedEventsForSpeech, refreshCalendarCache, getCacheAge } from "../db/calendarCacheDB";
+import { getCachedEvents, formatCachedEventsForSpeech, refreshCalendarCache, getCacheAge, getCachedEventsForDate, formatEventsForSpecificDay } from "../db/calendarCacheDB";
+import { getAppointmentsForLocalDate, formatAppointmentsForSpecificDay } from "../db/appointmentsDB";
 import { calendarWriteIsRecent } from "../db/calendarState";
 import { getFactsSummary } from "../db/factDB";
 import { normalizeInput } from "../utils/normalizeInput";
@@ -12,7 +13,7 @@ import { getMedicalSummary, getMedicalRecords, getDiagnosisSummary, getDoctorsSu
 import { getRecentMentions, formatRecentMentions } from "../db/recallDB";
 import { detectMedicalEvent } from "../utils/detectMedicalEvent";
 import type { MedicalEvent } from "../utils/detectMedicalEvent";
-import { MONTHS, CALENDAR_WRITE_TRIGGER, CALENDAR_WRITE_NAMED_APPOINTMENT } from "../utils/parseTime";
+import { MONTHS, CALENDAR_WRITE_TRIGGER, CALENDAR_WRITE_NAMED_APPOINTMENT, parseDatePhrase } from "../utils/parseTime";
 import { PERSON_RELATIONSHIP_ALTERNATION, normalizePersonTarget, liftRelationshipName } from "../utils/personReference";
 import { detectHouseholdRead, type HouseholdReadIntent } from "../utils/householdRead";
 import { detectServiceRemove } from "../utils/householdCapture";
@@ -84,9 +85,28 @@ const CALENDAR_READ_FREE: RegExp[] = [
   /\bwhat(?:'s| is) (?:on my calendar|my schedule)\b/i,
 ];
 
-/** Temporal tail allowed in a whole-utterance calendar read shape. */
+/** Shared weekday-name source — used by the calendar request-shape
+ * temporal tail below and by NAMED_WEEKDAY inside classifyQuery. One
+ * definition, two consumers in this file — a second, independent list
+ * already exists in parseDatePhrase (parseTime.ts); unifying across
+ * files is a separate, larger move and not needed for this fix. */
+const WEEKDAY_NAMES =
+  'monday|tuesday|wednesday|thursday|friday|saturday|sunday';
+
+/** Temporal tail allowed in a whole-utterance calendar read shape.
+ * Fixed-window enum (today/tomorrow/this week/next week) plus a
+ * resolvable-weekday shape (optional next/this/last/on qualifier +
+ * weekday name) — SHAPE only, mirrors the grammar parseDatePhrase()
+ * actually resolves downstream. Does not call parseDatePhrase() and
+ * does not itself establish calendar intent: every pattern below
+ * already anchors on its own calendar-noun-phrase prefix (^what's
+ * scheduled, ^on my calendar, ^do i have anything, etc) — this only
+ * lets that already-proven shape recognize a broader trailing date
+ * phrase than the four original windows, using the exact same
+ * connector-plus-temporal slot every pattern already reserves. */
 const CALENDAR_TERSE_TEMPORAL =
-  '(?:today|tomorrow|this(?:\\s+coming)?\\s+week|coming\\s+week|next\\s+week|next\\s+(?:7|seven)\\s+days)';
+  '(?:today|tomorrow|this(?:\\s+coming)?\\s+week|coming\\s+week|next\\s+week|next\\s+(?:7|seven)\\s+days' +
+  `|(?:next|this|last|on)?\\s*(?:${WEEKDAY_NAMES}))`;
 
 /**
  * Whole-utterance calendar-read shapes (same anchoring technique throughout).
@@ -1384,18 +1404,50 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     };
   }
 
-  const NAMED_WEEKDAY = /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i;
+  const NAMED_WEEKDAY = new RegExp(`\\b(?:${WEEKDAY_NAMES})\\b`, 'i');
   const MONTH_DAY = new RegExp(
     `\\b(${MONTHS.join('|')})\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b`,
     'i',
   );
   const FUZZY_FUTURE =
     /\b(couple weeks|few weeks|next month|a month|couple months)\b/i;
+  const hasNamedWeekday = NAMED_WEEKDAY.test(msg);
   const hasUnresolvableDate =
-    NAMED_WEEKDAY.test(msg) ||
+    hasNamedWeekday ||
     MONTH_DAY.test(msg) ||
     FUZZY_FUTURE.test(msg);
   const isCalendarIntent = isCalendarReadIntent(msg);
+
+  if (hasNamedWeekday && isCalendarIntent) {
+    const resolvedDate = parseDatePhrase(msg);
+    if (resolvedDate) {
+      const [y, mo, d] = resolvedDate.split("-").map(Number);
+      const resolved = new Date(y, mo - 1, d);
+      resolved.setHours(0, 0, 0, 0);
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const weekdayName = resolved.toLocaleDateString([], { weekday: "long" });
+
+      if (resolved.getTime() >= todayStart.getTime()) {
+        const dayLabel =
+          resolved.getTime() === todayStart.getTime() ? "today" : `next ${weekdayName}`;
+        const events = getCachedEventsForDate(resolvedDate);
+        return {
+          tier: 1,
+          tier1Response: formatEventsForSpecificDay(events, dayLabel),
+          reason: "calendar:specific_day",
+        };
+      }
+
+      const dayLabel = `last ${weekdayName}`;
+      const pastAppointments = getAppointmentsForLocalDate(resolvedDate);
+      return {
+        tier: 1,
+        tier1Response: formatAppointmentsForSpecificDay(pastAppointments, dayLabel),
+        reason: "calendar:specific_day_past",
+      };
+    }
+  }
 
   if (hasUnresolvableDate && isCalendarIntent) {
     return {
