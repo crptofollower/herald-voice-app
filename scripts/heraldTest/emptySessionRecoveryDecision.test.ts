@@ -9,7 +9,7 @@
 
 // Pure module — useMic re-exports the same symbol, but importing the hook
 // file under tsx pulls React Native / Expo and cannot run in this harness.
-import { evaluateEmptySessionRecovery } from '../../src/hooks/emptySessionRecoveryDecision.ts';
+import { evaluateEmptySessionRecovery, shouldCancelEmptySessionRecovery } from '../../src/hooks/emptySessionRecoveryDecision.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
 
@@ -76,6 +76,33 @@ export async function runEmptySessionRecoveryDecisionTests() {
       armedToken: 1, currentToken: 2, engineActive: false, turnActive: true, bufferHasContent: true,
     });
     assert('token mismatch precedes invalid state → stale_session', got, (v) => v === 'stale_session', 'stale_session');
+  }
+
+  console.log(`\n${BOLD}-- shouldCancelEmptySessionRecovery Tests ----------------${RESET}`);
+
+  {
+    const got = shouldCancelEmptySessionRecovery({ timerArmed: true, transcript: 'Put' });
+    assert('timer armed + non-empty partial content → cancel', got, (v) => v === true, 'true');
+  }
+
+  {
+    const got = shouldCancelEmptySessionRecovery({ timerArmed: true, transcript: '' });
+    assert('timer armed + empty transcript → do not cancel', got, (v) => v === false, 'false');
+  }
+
+  {
+    const got = shouldCancelEmptySessionRecovery({ timerArmed: true, transcript: undefined });
+    assert('timer armed + undefined transcript → do not cancel', got, (v) => v === false, 'false');
+  }
+
+  {
+    const got = shouldCancelEmptySessionRecovery({ timerArmed: false, transcript: 'Put blue lantern' });
+    assert('timer not armed + content present → do not cancel (nothing armed to cancel)', got, (v) => v === false, 'false');
+  }
+
+  {
+    const got = shouldCancelEmptySessionRecovery({ timerArmed: true, transcript: '   ' });
+    assert('timer armed + whitespace-only transcript → do not cancel', got, (v) => v === false, 'false');
   }
 
   const total = passed + failures.length;

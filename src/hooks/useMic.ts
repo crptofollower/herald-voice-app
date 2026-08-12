@@ -4,7 +4,7 @@ import {
   useSpeechRecognitionEvent,
 } from 'expo-speech-recognition';
 import { createSuspendCoordinator } from './suspendCoordinator';
-import { evaluateEmptySessionRecovery } from './emptySessionRecoveryDecision';
+import { evaluateEmptySessionRecovery, shouldCancelEmptySessionRecovery } from './emptySessionRecoveryDecision';
 
 export { evaluateEmptySessionRecovery } from './emptySessionRecoveryDecision';
 
@@ -134,6 +134,28 @@ export function useMic(
     // Half-duplex: never transcribe while Herald is speaking -- Herald's own
     // voice buffered into an utterance is a fabrication-class failure.
     if (ttsActiveRef?.current) { log('NATIVE_RESULT_DROPPED_TTS_ACTIVE'); return; }
+
+    // Any result carrying real transcript content -- final OR partial --
+    // proves this session is not empty/stalled. Cancel a pending empty-
+    // session recovery timer here, unconditionally, BEFORE the isFinal
+    // branch below. This recognizer delivers genuine mid-utterance speech
+    // as a stream of isFinal:false partials (even with interimResults:
+    // false requested) and, once an early spurious empty final has armed
+    // recovery, may not emit a second final until the turn ends on its
+    // own -- the previous clear-on-content path only ran inside the
+    // isFinal branch, so it was structurally unreachable for exactly the
+    // partial-only content stream this recognizer produces, leaving the
+    // timer to fire on schedule regardless of active speech. Decision
+    // logic lives in shouldCancelEmptySessionRecovery (gate-tested); this
+    // call site only wires it to the ref/timer side.
+    if (shouldCancelEmptySessionRecovery({
+      timerArmed: !!emptySessionTimerRef.current,
+      transcript: event.results[0]?.transcript,
+    })) {
+      log('EMPTY_SESSION_TIMER_CANCELLED_CONTENT');
+      clearEmptySessionRecovery();
+    }
+
     if (event.isFinal) {
       const text = event.results[0]?.transcript?.trim();
       if (!text) {
