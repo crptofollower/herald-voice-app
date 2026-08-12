@@ -8,6 +8,31 @@
 
 import { API_BASE } from '../constants/api';
 import { useStore } from '../store/useStore';
+import Constants from 'expo-constants';
+import { Platform } from 'react-native';
+
+// Coarse, non-personal device/build metadata attached to every beacon so a
+// single breadcrumb row can be tied to the install that produced it.
+// D-observability slice, 2026-08-12. Never includes serials, advertising
+// IDs, coordinates, or any personal content. Each field is read
+// defensively -- one unavailable field must never block the others or
+// beacon() itself.
+function getDeviceDiagnosticMeta(): Record<string, string> {
+  const meta: Record<string, string> = {};
+  try {
+    if (Constants.nativeAppVersion) meta.appVersion = String(Constants.nativeAppVersion);
+    if (Constants.nativeBuildVersion) meta.nativeBuildVersion = String(Constants.nativeBuildVersion);
+  } catch {}
+  try {
+    if (Platform.Version != null) meta.platformApi = String(Platform.Version);
+  } catch {}
+  try {
+    const c = (Platform as any).constants ?? {};
+    if (c.Manufacturer) meta.manufacturer = String(c.Manufacturer);
+    if (c.Model) meta.model = String(c.Model);
+  } catch {}
+  return meta;
+}
 
 export function beacon(stage: string, extra?: Record<string, unknown>): void {
   try {
@@ -19,6 +44,7 @@ export function beacon(stage: string, extra?: Record<string, unknown>): void {
         user_id: userId,
         stage,
         ts: new Date().toISOString(),
+        ...getDeviceDiagnosticMeta(),
         ...(extra ?? {}),
       }),
     }).catch(() => {});

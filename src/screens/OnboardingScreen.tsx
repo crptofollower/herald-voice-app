@@ -36,6 +36,7 @@ import { useStore } from "../store/useStore";
 import { API_BASE } from "../constants/api";
 import { saveLocalProfile } from "../hooks/useDeviceMemory";
 import { writeProfileFromOnboarding } from '../routing/tier1Responses';
+import { beacon } from '../utils/diag';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -214,6 +215,7 @@ export default function OnboardingScreen() {
       // Store the AI name -- used in header, greeting, everywhere
       if (storeSetAiName) storeSetAiName(data.ai_name || trimmedAiName);
       setOnboardingComplete();
+      beacon('onboarding_complete');
       writeProfileFromOnboarding({
         userId: data.user_id,
         name:   trimmedName,
@@ -227,6 +229,7 @@ export default function OnboardingScreen() {
       setOwner(false);
       if (storeSetAiName) storeSetAiName(trimmedAiName);
       setOnboardingComplete();
+      beacon('onboarding_complete');
       writeProfileFromOnboarding({
         userId: fallbackId,
         name:   trimmedName,
