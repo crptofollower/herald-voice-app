@@ -1220,6 +1220,11 @@ export default function ChatScreen() {
     // Deterministic-first routing: the regex/SQL classifier runs FIRST and always wins.
     // Tier-1 reads and actions are handled by the dispatch below. The on-device LLM only
     // attempts a capture when deterministic routing found nothing actionable (tier 3 gap).
+    // TEMP DIAGNOSTIC — D1 structured-speech integrity, 2026-08-12.
+    // Metadata only, no transcript content. Remove after D1 is classified.
+    console.log(
+      `[D1-DIAG] ts=${Date.now()} boundary=route digitCount=${(text.match(/\d/g) || []).length} charCount=${text.length}`
+    );
     const outcome = await processUtterance(text, sessionRef.current, {
       classifyQuery,
       classifyLLM: async (t: string) => classifyWithLLM(t, getCtx(), {

@@ -219,7 +219,16 @@ export function useMic(
         try { ExpoSpeechRecognitionModule.stop(); } catch {}
         if (maxTimer.current) { clearTimeout(maxTimer.current); maxTimer.current = null; }
         setIsRecording(false);
-        if (final) onTranscript(final);
+        if (final) {
+          // TEMP DIAGNOSTIC — D1 structured-speech integrity, 2026-08-12.
+          // Metadata only, no transcript content. Remove after D1 is classified.
+          log('TRANSCRIPT_SELECTED', {
+            digitCount: (final.match(/\d/g) || []).length,
+            charCount: final.length,
+            source: 'bufferTimer_turnOver',
+          });
+          onTranscript(final);
+        }
       }, delay);
 
       // NOTE: do NOT setIsRecording(false) here -- between pause segments the
@@ -292,6 +301,13 @@ export function useMic(
       rlog('TEARDOWN_REQUESTED', { reason: 'manual_stop' });
       try { ExpoSpeechRecognitionModule.stop(); } catch (e) { console.error('[useMic] stop failed:', e); }
       setIsRecording(false);
+      // TEMP DIAGNOSTIC — D1 structured-speech integrity, 2026-08-12.
+      // Metadata only, no transcript content. Remove after D1 is classified.
+      log('TRANSCRIPT_SELECTED', {
+        digitCount: (final.match(/\d/g) || []).length,
+        charCount: final.length,
+        source: 'manual_stop',
+      });
       onTranscript(final);
       return;
     }
