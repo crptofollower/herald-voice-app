@@ -3800,8 +3800,15 @@ async def diag_breadcrumb(request: Request):
     user_id = str(data.get("user_id", "unknown"))[:64]
     stage   = str(data.get("stage", "unknown"))[:64]
     ts      = str(data.get("ts", datetime.now().isoformat()))[:40]
-    _diag_record(user_id, {"kind": "breadcrumb", "stage": stage,
-                           "ts": ts, "rx": datetime.now().isoformat()})
+    entry = {"kind": "breadcrumb", "stage": stage, "ts": ts, "rx": datetime.now().isoformat()}
+    # Coarse, non-personal build/device metadata (D-observability slice,
+    # 2026-08-12). Allowlisted top-level keys only -- never forward
+    # arbitrary request fields into the diagnostic ring.
+    for k in ("appVersion", "nativeBuildVersion", "platformApi", "manufacturer", "model"):
+        v = data.get(k)
+        if v is not None:
+            entry[k] = str(v)[:64]
+    _diag_record(user_id, entry)
     print(f"[DIAG] {user_id} :: {stage} @ {ts}")
     return {"ok": True}
 
