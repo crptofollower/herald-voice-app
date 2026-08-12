@@ -16,7 +16,7 @@ import type { MedicalEvent } from "../utils/detectMedicalEvent";
 import { MONTHS, CALENDAR_WRITE_TRIGGER, CALENDAR_WRITE_NAMED_APPOINTMENT, parseDatePhrase } from "../utils/parseTime";
 import { PERSON_RELATIONSHIP_ALTERNATION, normalizePersonTarget, liftRelationshipName } from "../utils/personReference";
 import { detectHouseholdRead, type HouseholdReadIntent } from "../utils/householdRead";
-import { detectServiceRemove } from "../utils/householdCapture";
+import { detectServiceRemove, detectPhoneCapture } from "../utils/householdCapture";
 import { detectFamilyRead, answerFamilyRead } from "../utils/familyRead";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -1689,7 +1689,12 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   // Tier 1: contact phone lookup by name — "what's Linda's number", "Linda's phone number"
   // Device-first, offline. Extracts the name from possessive phrasing, calls findContactByName.
   // Never fabricates — honest miss if not found.
-  if (POSSESSIVE_CONTACT_STATEMENT.test(msg)) {
+  // Declarative guard: an utterance carrying a VALID phone capture is a write, not a
+  // question, and defers to DETERMINISTIC_CAPTURERS. detectPhoneCapture is the single
+  // authority for that judgment — no second phone-validity rule lives here. Mirrors the
+  // statement guard in detectFamilyRead and CALL_NUMBER_STATEMENT's guard at the call
+  // path (line 1039). §4a one-reader.
+  if (POSSESSIVE_CONTACT_STATEMENT.test(msg) && detectPhoneCapture(msg).length === 0) {
     const nameMatch = msg.match(/\b(\w+)'s\s+(?:phone|cell|mobile|number)/i);
     const lookupName = nameMatch?.[1]?.trim() ?? '';
     if (lookupName.length >= 2) {
