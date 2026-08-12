@@ -192,9 +192,9 @@ export async function runVisitOutcomeHowDidTests() {
       { handled: out.handled, text: out.handled ? out.responseText : null },
       (v) => {
         const x = v as { handled?: boolean; text?: string | null };
-        return x.handled === true && x.text === "Got it — I'll remember you saw Dr. Sarver.";
+        return x.handled === true && x.text === "I'll remember you saw Dr. Sarver.";
       },
-      "handled; Got it — I'll remember you saw Dr. Sarver.");
+      "handled; I'll remember you saw Dr. Sarver.");
     assert('D3 still writes exactly one medical_records row', getMedicalRecords().length,
       (v) => v === 1, '1');
   }

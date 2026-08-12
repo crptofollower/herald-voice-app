@@ -242,7 +242,7 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
           ? `${phone.slice(0, 3)}-${phone.slice(3, 6)}-${phone.slice(6, 10)}`
           : phone;
         const numberPart = phoneForAck ? ` — you can reach them at ${phoneForAck}` : '';
-        return { status: 'committed', ack: `Got it — ${nm} is your ${category}${numberPart}.` };
+        return { status: 'committed', ack: composeCaptureAck('service_capture', `${nm} is your ${category}${numberPart}.`) };
       };
 
       const extractName = (raw: string): string | null => {
@@ -337,9 +337,9 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
         return { status: 'noop', ack: `${itemList.length === 1 ? `${itemList[0]} was` : 'Those were'} already on your ${listName} list.` };
       }
       if (addedCount === 1) {
-        return { status: 'committed', ack: `Got it — ${itemList[0]} is on your ${listName} list.` };
+        return { status: 'committed', ack: composeCaptureAck('list_add', `${capitalizeFirst(itemList[0])} is on your ${listName} list.`) };
       }
-      return { status: 'committed', ack: `Got it — added ${addedCount} items to your ${listName} list.` };
+      return { status: 'committed', ack: composeCaptureAck('list_add', `${addedCount} items are on your ${listName} list now.`) };
     },
     async remove(item: string): Promise<CommitResult> {
       return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
@@ -379,9 +379,9 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       const openCount = db.getFirstSync<{ n: number }>(
         `SELECT COUNT(*) as n FROM list_items li JOIN lists l ON l.id = li.list_id WHERE l.name = 'todos' AND li.checked = 0`,
       )?.n ?? 1;
-      const ack = openCount === 1
-        ? `Got it — '${body}' is on your to-do list.`
-        : `Got it — '${body}' added. You've got ${openCount} open to-dos.`;
+      const ack = composeCaptureAck('todo_add', openCount === 1
+        ? `'${body}' is on your to-do list.`
+        : `'${body}' is on your to-do list. You've got ${openCount} open.`);
       return { status: 'committed', ack };
     },
     async remove(item: string): Promise<CommitResult> {
@@ -449,7 +449,7 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
         const formattedPhone = phone && /^\d{10}$/.test(phone.replace(/\D/g,''))
           ? `(${phone.replace(/\D/g,'').slice(0,3)}) ${phone.replace(/\D/g,'').slice(3,6)}-${phone.replace(/\D/g,'').slice(6)}`
           : phone;
-        return { status: 'committed', ack: `Got it — ${name}${relPart} at ${formattedPhone}.` };
+        return { status: 'committed', ack: composeCaptureAck('phone_capture', `${name}${relPart} at ${formattedPhone}.`) };
       } catch {
         return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
       }
@@ -480,7 +480,7 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
         if (!saved) {
           return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
         }
-        return { status: 'committed', ack: `Got it — I'll remember that for next time you need directions.` };
+        return { status: 'committed', ack: composeCaptureAck('address_capture', `I'll remember that for next time you need directions.`) };
       } catch {
         return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
       }
@@ -541,9 +541,9 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
                   if (!saved) {
                     return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
                   }
-                  const ack = location
-                    ? `Got it — I'll remember ${correctedName} is your ${relation} in ${location}.`
-                    : `Got it — I'll remember ${correctedName} is your ${relation}.`;
+                  const ack = composeCaptureAck('family_capture', location
+                    ? `I'll remember ${correctedName} is your ${relation} in ${location}.`
+                    : `I'll remember ${correctedName} is your ${relation}.`);
                   return { status: 'committed', ack };
                 } catch {
                   return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
@@ -562,9 +562,9 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
             if (!saved) {
               return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
             }
-            const ack = location
-              ? `Got it — I'll remember ${famName} is your ${relation} in ${location}.`
-              : `Got it — I'll remember ${famName} is your ${relation}.`;
+            const ack = composeCaptureAck('family_capture', location
+              ? `I'll remember ${famName} is your ${relation} in ${location}.`
+              : `I'll remember ${famName} is your ${relation}.`);
             return { status: 'committed', ack };
           } catch {
             return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
@@ -598,9 +598,9 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
                   if (!saved) {
                     return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
                   }
-                  const ack = location
-                    ? `Got it — I'll remember ${newValue} is your ${relation} in ${location}.`
-                    : `Got it — I'll remember ${newValue} is your ${relation}.`;
+                  const ack = composeCaptureAck('family_capture', location
+                    ? `I'll remember ${newValue} is your ${relation} in ${location}.`
+                    : `I'll remember ${newValue} is your ${relation}.`);
                   return { status: 'committed', ack };
                 } catch {
                   return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
@@ -638,9 +638,9 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
         if (!saved) {
           return { status: 'failed', ack: "Something went wrong holding onto that. Try again." };
         }
-        const ack = phone
-          ? `Got it — if you ever need help, I'll reach ${name} at that number.`
-          : `Got it — ${name} is your emergency contact. Tell me their number when you get a chance.`;
+        const ack = composeCaptureAck('emergency_contact', phone
+          ? `If you ever need help, I'll reach ${name} at that number.`
+          : `${name} is your emergency contact. Tell me their number when you get a chance.`);
         return { status: 'committed', ack };
       } catch {
         return { status: 'failed', ack: "Something went wrong holding onto that. Try again." };
@@ -687,11 +687,11 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
             }
             if (result.action === 'superseded') {
               return { status: 'committed',
-                ack: dosage ? `Got it — updated your ${name} to ${dosage}.` : `Got it — updated your ${name}.` };
+                ack: composeCaptureAck('medical_capture', dosage ? `I've updated your ${name} to ${dosage}.` : `I've updated your ${name}.`) };
             }
             return { status: 'committed',
-              ack: dosage ? `Got it — I'll remember ${name}, ${dosage}, with your medications.`
-                          : `Got it — I'll remember ${name} with your medications.` };
+              ack: composeCaptureAck('medical_capture', dosage ? `I'll remember ${name}, ${dosage}, with your medications.`
+                          : `I'll remember ${name} with your medications.`) };
           } catch {
             return { status: 'failed', ack: "I'm having trouble holding onto that — say it once more?" };
           }
@@ -703,7 +703,7 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
         const { deactivateMedicationByName } = await import('../db/medicalDB');
         const changes = deactivateMedicationByName(item);
         return changes > 0
-          ? { status: 'committed', ack: `Got it — took ${item} off your current medications.` }
+          ? { status: 'committed', ack: composeCaptureAck('medical_capture', `I've taken ${item} off your current medications.`) }
           : { status: 'noop', ack: `I don't have ${item} in your current medications.` };
       } catch { return { status: 'failed', ack: "I couldn't do that right now — try again." }; }
     },
@@ -767,7 +767,7 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
           notes: advice ? `${raw} — ${advice}` : raw,
           visit_date: visitDate,
         });
-        return { status: 'committed', ack: `Got it — I'll remember you saw ${doctorName}.` };
+        return { status: 'committed', ack: composeCaptureAck('medical_visit', `I'll remember you saw ${doctorName}.`) };
       };
 
       // A clean doctor name is HEARD (Dr. X), not guessed → write immediately
@@ -839,7 +839,7 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
         if (!verified) {
           return { status: 'failed', ack: "I'm having trouble holding onto that — say it once more?" };
         }
-        const medicalAck = "Got it — I'll remind you.";
+        const medicalAck = composeCaptureAck('medical_visit_upcoming', "I'll remind you.");
         // NOTE: buildCalendarCollectSlot treats the literal string
         // 'Appointment' as its own "title not yet known" sentinel
         // (calendarWrite.ts needsTitle check) — the no-doctor-name
@@ -982,7 +982,7 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
             if (!verified) {
               return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
             }
-            return { status: 'committed', ack: `Got it — I'll remember that. You can ask me about it anytime.` };
+            return { status: 'committed', ack: composeCaptureAck('diagnosis_capture', `I'll remember that. You can ask me about it anytime.`) };
           } catch {
             return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
           }
@@ -1033,7 +1033,7 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
             if (!verified) {
               return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
             }
-            return { status: 'committed', ack: `Got it — I'll remember ${name} as your ${specialty}.` };
+            return { status: 'committed', ack: composeCaptureAck('doctor_intro_capture', `I'll remember ${name} as your ${specialty}.`) };
           } catch {
             return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
           }
@@ -1067,9 +1067,9 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
         }
         return {
           status: 'committed',
-          ack: finalType
-            ? `Got it — ${finalCarrier} for your ${finalType} insurance.`
-            : `Got it — ${finalCarrier} for your insurance.`,
+          ack: composeCaptureAck('insurance_capture', finalType
+            ? `${finalCarrier} for your ${finalType} insurance.`
+            : `${finalCarrier} for your insurance.`),
         };
       };
 
@@ -1612,6 +1612,43 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
 // registered writer. Gates the new dispatch path; false = legacy path runs.
 export function allConverted(intents: IntentRecord[]): boolean {
   return intents.every(i => i.type in DOMAIN_WRITERS);
+}
+
+// ─── Deterministic capture-acknowledgment composer ───────────────────────────
+// Herald feels robotic — capture-ack repetition finding, 2026-08-12.
+//
+// Variation is derived ONLY from intent.type, which every DOMAIN_WRITER
+// already receives as a parameter — no new metadata, no regex, no keyword
+// matching on any string, no randomness, no LLM. This function never touches,
+// normalizes, paraphrases, or infers the user-derived value inside `body` —
+// it only decides whether a fixed, Memory-Language-Rule-compliant connector
+// precedes an already-complete body.
+//
+// Most capture bodies are already complete, specific statements on their own
+// (North Star §1, "Specific") — a generic lead-in prefix in front of them
+// was redundant scaffolding, not acknowledgment. phone_capture and
+// insurance_capture are the two types whose body is a genuine fragment (a
+// bare name-at-number pairing / a bare noun phrase, no verb) — those keep a
+// fixed connector. This function is only ever called on an already-committed
+// capture's `ack` string — every `status: 'pending'` confirmation prompt in
+// this file is untouched by this change.
+const CAPTURE_ACK_CONNECTOR: Partial<Record<IntentRecord['type'], string>> = {
+  phone_capture: 'Noted — ',
+  insurance_capture: 'Noted — ',
+};
+
+export function composeCaptureAck(type: IntentRecord['type'], body: string): string {
+  const connector = CAPTURE_ACK_CONNECTOR[type];
+  return connector ? `${connector}${body}` : body;
+}
+
+// Presentation-only capitalization for the one spoken sentence where a
+// captured list item becomes sentence-initial for the first time. Never
+// touches the stored item, raw_phrase, dedupe/matching, or read-back — those
+// all continue to use the item exactly as captured. Scoped to a single call
+// site (list_add, single-item ack); not a general normalizer.
+function capitalizeFirst(s: string): string {
+  return s.length > 0 ? s[0].toUpperCase() + s.slice(1) : s;
 }
 
 // composeAck: builds the spoken ACK from verified CommitResults only.
