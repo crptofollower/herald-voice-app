@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { setDB } from '../../src/db/schema.ts';
-import { writeServiceProvider, captureHousehold } from '../../src/utils/householdCapture.ts';
+import { writeServiceProvider, captureHousehold, detectPhoneCapture } from '../../src/utils/householdCapture.ts';
 import { answerHouseholdRead, detectHouseholdRead } from '../../src/utils/householdRead.ts';
 
 const BOLD='\x1b[1m',RED='\x1b[31m',GREEN='\x1b[32m',DIM='\x1b[2m',RESET='\x1b[0m';
@@ -67,6 +67,33 @@ export async function runHouseholdContractTests(){
   captureHousehold('remove my plumber');
   const rows=db10.prepare("SELECT * FROM service_providers WHERE category='plumber'").all();
   assert('C10 remove is soft-delete',rows,(v)=>v.length>0&&v.every(r=>r.removed_at!==null),'row exists with removed_at');
+
+  // Guard input: detectPhoneCapture verdict for POSSESSIVE_CONTACT_STATEMENT deferral.
+  // length===1 -> read defers, capture wins; length===0 -> read still answers.
+  {
+    const got=detectPhoneCapture("Sarah's number is 214-505-0100");
+    assert('C11 Sarah number+10digits -> capture',got,(v)=>Array.isArray(v)&&v.length===1&&v[0].name==='Sarah'&&v[0].phone==='2145050100','length 1; Sarah; 2145050100');
+  }
+  {
+    const got=detectPhoneCapture("Sarah's phone number is 214-505-0100");
+    assert('C12 Sarah phone number+10digits -> capture',got,(v)=>Array.isArray(v)&&v.length===1&&v[0].name==='Sarah'&&v[0].phone==='2145050100','length 1; Sarah; 2145050100');
+  }
+  {
+    const got=detectPhoneCapture("My sister Linda's cell is 469-505-0213");
+    assert('C13 Linda cell+10digits -> capture',got,(v)=>Array.isArray(v)&&v.length===1&&v[0].name==='Linda'&&v[0].phone==='4695050213','length 1; Linda; 4695050213');
+  }
+  {
+    const got=detectPhoneCapture("What's Sarah's number");
+    assert('C14 What\'s Sarah\'s number -> no capture (read wins)',got,(v)=>Array.isArray(v)&&v.length===0,'length 0');
+  }
+  {
+    const got=detectPhoneCapture("Sarah's phone number");
+    assert('C15 Sarah\'s phone number -> no capture (read wins)',got,(v)=>Array.isArray(v)&&v.length===0,'length 0');
+  }
+  {
+    const got=detectPhoneCapture("Sarah's number is 214-505-010");
+    assert('C16 Sarah number+9digits -> no capture (read answers honestly)',got,(v)=>Array.isArray(v)&&v.length===0,'length 0');
+  }
 
   const total=passed+failures.length;
   console.log(`\n${BOLD}Contract: ${passed}/${total} passed${failures.length>0?` — ${RED}${failures.length} FAILED${RESET}`:` — ${GREEN}all green${RESET}`}${RESET}\n`);
