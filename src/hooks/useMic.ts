@@ -5,6 +5,8 @@ import {
 } from 'expo-speech-recognition';
 import { createSuspendCoordinator } from './suspendCoordinator';
 import { evaluateEmptySessionRecovery, shouldCancelEmptySessionRecovery, shouldCancelEmptySessionRecoveryOnSpeechStart } from './emptySessionRecoveryDecision';
+import { getContextualStringsForMode } from './recognitionModeConfig';
+import type { RecognitionMode } from './recognitionModeConfig';
 
 export { evaluateEmptySessionRecovery } from './emptySessionRecoveryDecision';
 
@@ -96,15 +98,28 @@ export function useMic(
     return promise;
   }, []);
 
-  const START_CONFIG = {
-    lang: 'en-US',
-    interimResults: false,
-    continuous: true,
-    requiresOnDeviceRecognition: true,
-    androidIntentOptions: {
-      EXTRA_LANGUAGE_MODEL: 'web_search',
-    },
-  } as const;
+  // M1 short-utterance follow-on, 2026-08-13: recognitionModeRef lets a
+  // caller (ChatScreen, via startRecording's new mode param) bias STT
+  // toward the closed confirm vocabulary during a pending confirmation,
+  // without useMic depending on ConversationSession or session state
+  // directly -- it only ever receives the plain mode string. Default
+  // 'open' preserves the exact prior config shape byte-for-byte: when
+  // getContextualStringsForMode returns undefined, the spread below adds
+  // no key at all.
+  const recognitionModeRef = useRef<RecognitionMode>('open');
+  const getStartConfig = () => {
+    const contextualStrings = getContextualStringsForMode(recognitionModeRef.current);
+    return {
+      lang: 'en-US',
+      interimResults: false,
+      continuous: true,
+      requiresOnDeviceRecognition: true,
+      androidIntentOptions: {
+        EXTRA_LANGUAGE_MODEL: 'web_search',
+      },
+      ...(contextualStrings ? { contextualStrings } : {}),
+    } as const;
+  };
 
   // On-device STT endpoints after ~1-1.5s of silence and stops delivering
   // speech even with continuous:true. A mid-sentence pause makes it fire
@@ -114,7 +129,7 @@ export function useMic(
   const restartListening = () => {
     try {
       micSessionRef.current += 1;
-      ExpoSpeechRecognitionModule.start(START_CONFIG);
+      ExpoSpeechRecognitionModule.start(getStartConfig());
       engineActiveRef.current = true;
       rlog('NATIVE_START_REQUESTED', { restart: true });
     } catch (e) {
@@ -344,9 +359,11 @@ export function useMic(
 
   // ── startRecording memoized -- stopRecording is its only dep ───────────────
   const startRecording = useCallback(async (
-    entryPoint: 'manual_button' | 'post_tts_handoff' | 'unknown_entry' = 'unknown_entry'
+    entryPoint: 'manual_button' | 'post_tts_handoff' | 'unknown_entry' = 'unknown_entry',
+    mode: RecognitionMode = 'open'
   ) => {
     entryPointRef.current = entryPoint;
+    recognitionModeRef.current = mode;
     rlog(
       entryPoint === 'manual_button' ? 'ENTRY_MANUAL_MIC_PRESS' :
       entryPoint === 'post_tts_handoff' ? 'ENTRY_AUTO_POST_TTS' :
@@ -367,7 +384,7 @@ export function useMic(
       log('STATE_BEFORE_START', { state: stateBefore });
 
       micSessionRef.current += 1;
-      ExpoSpeechRecognitionModule.start(START_CONFIG);
+      ExpoSpeechRecognitionModule.start(getStartConfig());
       engineActiveRef.current = true;
       setIsRecording(true);
       log('NATIVE_START_CALLED');

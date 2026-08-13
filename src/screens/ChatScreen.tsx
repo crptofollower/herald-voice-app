@@ -2853,7 +2853,11 @@ export default function ChatScreen() {
                 } else {
                   // 50ms delay: lets Android layout settle after keyboard dismiss
                   // before speech recognition initialises -- fixes first-tap miss.
-                  setTimeout(() => startRecording('manual_button'), 50);
+                  // M1 short-utterance follow-on, 2026-08-13: bias STT toward the
+                  // closed confirm vocabulary when a pending confirmation is
+                  // active at tap time -- manual button only, per approved scope.
+                  const micMode = sessionRef.current.hasPending() ? 'control_confirmation' : 'open';
+                  setTimeout(() => startRecording('manual_button', micMode), 50);
                 }
               }}
               accessibilityLabel={handsFreeMode ? "Stop hands-free mode" : "Start hands-free mode"}
