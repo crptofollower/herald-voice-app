@@ -2,6 +2,8 @@ import Database from 'better-sqlite3';
 import { setDB } from '../../src/db/schema.ts';
 import { writeServiceProvider, captureHousehold, detectPhoneCapture } from '../../src/utils/householdCapture.ts';
 import { answerHouseholdRead, detectHouseholdRead } from '../../src/utils/householdRead.ts';
+import { processUtterance } from '../../src/routing/processUtterance.ts';
+import { ConversationSession } from '../../src/routing/conversationSession.ts';
 
 const BOLD='\x1b[1m',RED='\x1b[31m',GREEN='\x1b[32m',DIM='\x1b[2m',RESET='\x1b[0m';
 const SCHEMA_SQL = `
@@ -97,6 +99,68 @@ export async function runHouseholdContractTests(){
   {
     const got=detectPhoneCapture("Marcus's number is 972-55-0142");
     assert('C17 Marcus number+9digits -> matched_invalid',got,(v)=>v.kind==='matched_invalid'&&v.name==='Marcus'&&v.rawDigits==='972550142','kind matched_invalid; Marcus; 972550142');
+  }
+
+  // ── M1 completion, 2026-08-13: service_capture phone confirm gate ────────
+  // Routes through processUtterance + ConversationSession (the live path),
+  // never captureHousehold or writeServiceProvider directly — those bypass
+  // the routing authority and the confirm gate entirely (see audit).
+  const svcDeps = {
+    classifyQuery: async () => ({ tier: 3, reason: 'test:fallthrough' }),
+    classifyLLM: null,
+    llmReady: false,
+    captureContext: { contacts: [], lists: [] },
+  };
+  {
+    const dbA = freshDB();
+    const session = new ConversationSession();
+    const outcomeA = await processUtterance("My plumber is Bob, his number is 214-867-5309", session, svcDeps);
+    assert('SC1 service phone capture arms pending, no commit', outcomeA,
+      (v) => v.handled === true && session.hasPending() === true, 'pending armed');
+    const rowsA1 = dbA.prepare("SELECT * FROM service_providers WHERE category='plumber' AND removed_at IS NULL").all();
+    assert('SC2 no write before confirmation', rowsA1, (v) => v.length === 0, 'no rows');
+
+    await processUtterance('yes', session, svcDeps);
+    const rowsA2 = dbA.prepare("SELECT * FROM service_providers WHERE category='plumber' AND removed_at IS NULL").all();
+    assert('SC3 YES commits exactly one row', rowsA2,
+      (v) => v.length === 1 && v[0].name === 'Bob' && v[0].phone === '2148675309', 'one committed row, Bob, 2148675309');
+    assert('SC3b pending released after commit', session.hasPending(), (v) => v === false, 'released');
+  }
+  {
+    const dbB = freshDB();
+    const session = new ConversationSession();
+    await processUtterance("My plumber is Bob, his number is 214-867-5309", session, svcDeps);
+    await processUtterance('no', session, svcDeps);
+    const rowsB = dbB.prepare("SELECT * FROM service_providers WHERE category='plumber' AND removed_at IS NULL").all();
+    assert('SC4 NO does not commit', rowsB, (v) => v.length === 0, 'no rows');
+    assert('SC4b pending released after NO', session.hasPending(), (v) => v === false, 'released');
+  }
+  {
+    const dbC = freshDB();
+    const session = new ConversationSession();
+    await processUtterance("My plumber is Bob, his number is 214-867-5309", session, svcDeps);
+    await processUtterance('never mind', session, svcDeps);
+    const rowsC = dbC.prepare("SELECT * FROM service_providers WHERE category='plumber' AND removed_at IS NULL").all();
+    assert('SC5 cancel does not commit', rowsC, (v) => v.length === 0, 'no rows');
+    assert('SC5b pending released after cancel', session.hasPending(), (v) => v === false, 'released');
+  }
+  {
+    const dbD = freshDB();
+    const session = new ConversationSession();
+    await processUtterance("My plumber is Bob, his number is 214-867-5309", session, svcDeps);
+    await processUtterance('972-555-0142', session, svcDeps);
+    const rowsD = dbD.prepare("SELECT * FROM service_providers WHERE category='plumber' AND removed_at IS NULL").all();
+    assert('SC6 alternate valid candidate re-arms confirm, does not commit', rowsD, (v) => v.length === 0, 'no rows');
+    assert('SC6b still pending after alternate candidate', session.hasPending(), (v) => v === true, 'still pending');
+  }
+  {
+    const dbE = freshDB();
+    const session = new ConversationSession();
+    await processUtterance("My plumber is Bob", session, svcDeps);
+    const rowsE = dbE.prepare("SELECT * FROM service_providers WHERE category='plumber' AND removed_at IS NULL").all();
+    assert('SC7 no-phone service capture commits immediately, unchanged', rowsE,
+      (v) => v.length === 1 && v[0].name === 'Bob' && (v[0].phone === null || v[0].phone === ''), 'one committed row, no phone');
+    assert('SC7b no pending armed for no-phone capture', session.hasPending(), (v) => v === false, 'not pending');
   }
 
   const total=passed+failures.length;

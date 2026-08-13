@@ -236,16 +236,33 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       if (!category?.trim()) {
         return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
       }
-      const commit = (nm: string): CommitResult => {
-        const spId = writeServiceProvider(category, nm, phone);
+      const writeProvider = (nm: string, ph?: string): CommitResult => {
+        const spId = writeServiceProvider(category, nm, ph);
         if (!spId) {
           return { status: 'failed', ack: "Hmm — I couldn't hold onto that just now. Mind telling me once more?" };
         }
-        const phoneForAck = phone && /^\d{10}$/.test(phone)
-          ? `${phone.slice(0, 3)}-${phone.slice(3, 6)}-${phone.slice(6, 10)}`
-          : phone;
+        const phoneForAck = ph && /^\d{10}$/.test(ph)
+          ? `${ph.slice(0, 3)}-${ph.slice(3, 6)}-${ph.slice(6, 10)}`
+          : ph;
         const numberPart = phoneForAck ? ` — you can reach them at ${phoneForAck}` : '';
         return { status: 'committed', ack: composeCaptureAck('service_capture', `${nm} is your ${category}${numberPart}.`) };
+      };
+      // M1 completion, 2026-08-13: a spoken service-provider phone number is a
+      // candidate, not truth — same trust boundary as phone_capture /
+      // emergency_contact / phone_repair. No-phone captures are unaffected;
+      // they still commit immediately through writeProvider below.
+      const commit = (nm: string): CommitResult => {
+        if (phone && phone.trim()) {
+          const formattedPhone = formatPhoneForSpeech(phone);
+          return buildPhoneConfirmPending(
+            { name: nm, phone },
+            {
+              prompt: `Got it — ${nm} is your ${category} at ${formattedPhone}. Is that right?`,
+              onConfirm: (c) => writeProvider(c.name, c.phone),
+            },
+          );
+        }
+        return writeProvider(nm);
       };
 
       const extractName = (raw: string): string | null => {
