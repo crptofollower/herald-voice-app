@@ -9,7 +9,7 @@
 
 // Pure module — useMic re-exports the same symbol, but importing the hook
 // file under tsx pulls React Native / Expo and cannot run in this harness.
-import { evaluateEmptySessionRecovery, shouldCancelEmptySessionRecovery } from '../../src/hooks/emptySessionRecoveryDecision.ts';
+import { evaluateEmptySessionRecovery, shouldCancelEmptySessionRecovery, shouldCancelEmptySessionRecoveryOnSpeechStart } from '../../src/hooks/emptySessionRecoveryDecision.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
 
@@ -103,6 +103,18 @@ export async function runEmptySessionRecoveryDecisionTests() {
   {
     const got = shouldCancelEmptySessionRecovery({ timerArmed: true, transcript: '   ' });
     assert('timer armed + whitespace-only transcript → do not cancel', got, (v) => v === false, 'false');
+  }
+
+  console.log(`\n${BOLD}-- shouldCancelEmptySessionRecoveryOnSpeechStart Tests ----------------${RESET}`);
+
+  {
+    const got = shouldCancelEmptySessionRecoveryOnSpeechStart({ timerArmed: true });
+    assert('timer armed + speechstart → cancel', got, (v) => v === true, 'true');
+  }
+
+  {
+    const got = shouldCancelEmptySessionRecoveryOnSpeechStart({ timerArmed: false });
+    assert('timer not armed + speechstart → do not cancel (nothing armed to cancel)', got, (v) => v === false, 'false');
   }
 
   const total = passed + failures.length;

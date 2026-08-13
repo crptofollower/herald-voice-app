@@ -4,7 +4,7 @@ import {
   useSpeechRecognitionEvent,
 } from 'expo-speech-recognition';
 import { createSuspendCoordinator } from './suspendCoordinator';
-import { evaluateEmptySessionRecovery, shouldCancelEmptySessionRecovery } from './emptySessionRecoveryDecision';
+import { evaluateEmptySessionRecovery, shouldCancelEmptySessionRecovery, shouldCancelEmptySessionRecoveryOnSpeechStart } from './emptySessionRecoveryDecision';
 
 export { evaluateEmptySessionRecovery } from './emptySessionRecoveryDecision';
 
@@ -126,6 +126,27 @@ export function useMic(
   useSpeechRecognitionEvent('start', () => {
     log('NATIVE_START_EVENT');
     rlog('NATIVE_ACTIVE');
+  });
+
+  // Empty-session recovery gap, 2026-08-13: onset alone (before any
+  // transcript exists) is stronger evidence a session is live than
+  // silence -- yet nothing previously cancelled an armed recovery timer
+  // on speech start, only on content arriving via 'result'. Short
+  // utterances ("No", "Yes") lose that race by construction: on-device
+  // transcription of one word rarely beats a timer already seconds into
+  // its countdown from a prior empty-final segment. Reuses the identical
+  // teardown path already proven safe for content-cancellation --
+  // idempotent, so ordering relative to 'result' (unguaranteed per the
+  // library's own types) is safe either way. Decision logic lives in
+  // shouldCancelEmptySessionRecoveryOnSpeechStart (gate-tested); this
+  // call site only wires it to the ref/timer side, same pattern as the
+  // existing content-cancel call site above.
+  useSpeechRecognitionEvent('speechstart', () => {
+    rlog('NATIVE_SPEECH_START');
+    if (shouldCancelEmptySessionRecoveryOnSpeechStart({ timerArmed: !!emptySessionTimerRef.current })) {
+      log('EMPTY_SESSION_TIMER_CANCELLED_SPEECH_START');
+      clearEmptySessionRecovery();
+    }
   });
 
   useSpeechRecognitionEvent('result', (event) => {
