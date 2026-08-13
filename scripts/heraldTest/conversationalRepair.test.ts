@@ -704,9 +704,15 @@ export async function runConversationalRepairTests() {
       captureContext: { contacts: [], lists: [] },
     };
     await processUtterance("Marcus's number is 972-55-0142", session, deps);
-    await processUtterance('still not a number', session, deps);
+    const outcome3 = await processUtterance('still not a number', session, deps);
     assert('D-phone3 first invalid retry stays pending (budget decremented, not released)',
       session.hasPending(), (v) => v === true, 'still pending');
+    assert('D-phone3 reaskPrompt on first invalid retry', outcome3,
+      (v) => (v as any).responseText === "I still didn't get a complete phone number — try saying it once more, slowly.",
+      'phone reaskPrompt');
+    assert('D-phone3 reaskPrompt is not DEFAULT_REASK', outcome3,
+      (v) => (v as any).responseText !== "I'm not sure I'm following — can you say that again?",
+      'not DEFAULT_REASK');
     await processUtterance('nope', session, deps);
     assert('D-phone4 budget exhausted releases cleanly', session.hasPending(),
       (v) => v === false, 'released, no commit');

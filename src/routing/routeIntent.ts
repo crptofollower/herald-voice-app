@@ -1785,6 +1785,17 @@ export async function routeIntent(
         status: 'pending',
         prompt: 'I may have missed a digit. Can you say the number again?',
         pendingKey: 'phone_capture_repair',
+        // D-phone-repair polish, 2026-08-13: reaskPrompt fires only on the
+        // retry-after-the-retry (ConversationSession's budget-decrement
+        // path, conversationSession.ts). At that point the digits actually
+        // heard on THIS attempt live only inside resume()'s local `retry`
+        // and are discarded on an invalid CommitResult -- CommitResult's
+        // 'noop' variant carries no extra fields and resolvePending reads
+        // none, so an exact count is not truthfully available here without
+        // widening that contract (out of scope for this slice). Wording is
+        // therefore deliberately count-free and never implies which or how
+        // many digits are missing.
+        reaskPrompt: "I still didn't get a complete phone number — try saying it once more, slowly.",
         resume: async (userText: string): Promise<CommitResult> => {
           const retry = normalizePhone(userText);
           if (!retry.valid) {
