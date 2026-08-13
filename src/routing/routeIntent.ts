@@ -12,6 +12,7 @@ import { capturePerson } from '../db/capturePerson';
 import { findContactByName, setEmergencyContact, getEmergencyContact, retireRelationshipHolder, RELATIONSHIP_WORDS, resolvePersonIdentity, contactHasCapability, resolvePersonCapability } from '../db/contactsDB';
 import { normalizePersonTarget, liftRelationshipName } from '../utils/personReference';
 import { normalizePhone } from '../utils/phone';
+import { buildPhoneConfirmPending, formatPhoneForSpeech } from '../utils/phoneConfirm';
 import { matchCandidateToken } from './conversationSession';
 
 type ActionIntent = NonNullable<TierDecision['actionIntent']>;
@@ -441,20 +442,30 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       if (!phone || phone.length < 7) {
         return { status: 'failed', ack: "I didn't catch the number — can you say it again?" };
       }
-      try {
-        capturePerson({ name, phone, relationship });
-        const saved = findContactByName(name);
-        if (!saved) {
-          return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
-        }
-        const relPart = relationship ? `, your ${relationship},` : '';
-        const formattedPhone = phone && /^\d{10}$/.test(phone.replace(/\D/g,''))
-          ? `(${phone.replace(/\D/g,'').slice(0,3)}) ${phone.replace(/\D/g,'').slice(3,6)}-${phone.replace(/\D/g,'').slice(6)}`
-          : phone;
-        return { status: 'committed', ack: composeCaptureAck('phone_capture', `${name}${relPart} at ${formattedPhone}.`) };
-      } catch {
-        return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
-      }
+      // D-phone-confirm, 2026-08-13: read back and hold as a candidate —
+      // syntactic validity alone is not sufficient evidence to commit.
+      const relPart = relationship ? `, your ${relationship},` : '';
+      const formattedPhone = formatPhoneForSpeech(phone);
+      return buildPhoneConfirmPending(
+        { name, phone, relationship },
+        {
+          prompt: `Got it — ${name}${relPart} at ${formattedPhone}. Is that right?`,
+          onConfirm: (c) => {
+            try {
+              capturePerson({ name: c.name, phone: c.phone, relationship: c.relationship });
+              const saved = findContactByName(c.name);
+              if (!saved) {
+                return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
+              }
+              const rp = c.relationship ? `, your ${c.relationship},` : '';
+              const fp = formatPhoneForSpeech(c.phone);
+              return { status: 'committed', ack: composeCaptureAck('phone_capture', `${c.name}${rp} at ${fp}.`) };
+            } catch {
+              return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
+            }
+          },
+        },
+      );
     },
     async remove(item: string): Promise<CommitResult> {
       return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
@@ -634,19 +645,36 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       if (!name || name.length < 2) {
         return { status: 'failed', ack: "I didn't catch the name — who's your emergency contact?" };
       }
-      try {
-        setEmergencyContact(name, phone);
-        const saved = getEmergencyContact();
-        if (!saved) {
+      const commitEmergency = (n: string, p?: string): CommitResult => {
+        try {
+          setEmergencyContact(n, p);
+          const saved = getEmergencyContact();
+          if (!saved) {
+            return { status: 'failed', ack: "Something went wrong holding onto that. Try again." };
+          }
+          const ack = composeCaptureAck('emergency_contact', p
+            ? `If you ever need help, I'll reach ${n} at that number.`
+            : `${n} is your emergency contact. Tell me their number when you get a chance.`);
+          return { status: 'committed', ack };
+        } catch {
           return { status: 'failed', ack: "Something went wrong holding onto that. Try again." };
         }
-        const ack = composeCaptureAck('emergency_contact', phone
-          ? `If you ever need help, I'll reach ${name} at that number.`
-          : `${name} is your emergency contact. Tell me their number when you get a chance.`);
-        return { status: 'committed', ack };
-      } catch {
-        return { status: 'failed', ack: "Something went wrong holding onto that. Try again." };
+      };
+      if (!phone) {
+        // No phone spoken — nothing high-entropy to confirm, commit as before.
+        return commitEmergency(name);
       }
+      // D-phone-confirm: the emergency-contact phone number carries the
+      // highest consequence of any phone value in Herald — a wrong-but-
+      // valid number dialed during a real emergency. Confirm before
+      // persistence, identically to phone_capture.
+      return buildPhoneConfirmPending(
+        { name, phone },
+        {
+          prompt: `Got it — ${name} at ${formatPhoneForSpeech(phone)} as your emergency contact. Is that right?`,
+          onConfirm: (c) => commitEmergency(c.name, c.phone),
+        },
+      );
     },
     async remove(item: string): Promise<CommitResult> {
       return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
