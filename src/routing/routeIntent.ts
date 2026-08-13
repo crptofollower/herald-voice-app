@@ -1829,19 +1829,32 @@ export async function routeIntent(
           if (!retry.valid) {
             return { status: 'noop', ack: '' };
           }
-          try {
-            capturePerson({ name: capturedName, phone: retry.normalized });
-            const saved = findContactByName(capturedName);
-            if (!saved) {
-              return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
-            }
-            return {
-              status: 'committed',
-              ack: composeCaptureAck('phone_capture', `${capturedName} at ${retry.spoken}.`),
-            };
-          } catch {
-            return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
-          }
+          // D-phone-repair M1 completion (Fix A), 2026-08-13: a structurally
+          // valid retry is still only a candidate, not evidence it's correct
+          // — same trust boundary the fresh phone_capture path already
+          // enforces via buildPhoneConfirmPending. It must not commit here.
+          const formattedPhone = formatPhoneForSpeech(retry.normalized);
+          return buildPhoneConfirmPending(
+            { name: capturedName, phone: retry.normalized },
+            {
+              prompt: `Got it — ${capturedName} at ${formattedPhone}. Is that right?`,
+              onConfirm: (c) => {
+                try {
+                  capturePerson({ name: c.name, phone: c.phone, relationship: c.relationship });
+                  const saved = findContactByName(c.name);
+                  if (!saved) {
+                    return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
+                  }
+                  return {
+                    status: 'committed',
+                    ack: composeCaptureAck('phone_capture', `${c.name} at ${formatPhoneForSpeech(c.phone)}.`),
+                  };
+                } catch {
+                  return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
+                }
+              },
+            },
+          );
         },
       },
     };

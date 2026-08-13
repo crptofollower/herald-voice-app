@@ -689,10 +689,17 @@ export async function runConversationalRepairTests() {
       (v) => v == null, 'null');
 
     const outcome2 = await processUtterance('972-555-0142', session, deps);
-    assert('D-phone2 valid retry commits', findContactByName('Marcus'),
-      (v) => !!v && (v as any).phone === '9725550142', 'Marcus committed');
-    assert('D-phone2b pending released after commit', session.hasPending(),
-      (v) => v === false, 'released');
+    // Fix A, 2026-08-13: a valid retry is a candidate, not a commit — it must
+    // arm the phone-confirm pending, never write directly (M1 trust boundary).
+    assert('D-phone2 valid retry does not commit — still only a candidate', findContactByName('Marcus'),
+      (v) => v == null, 'null (not yet committed)');
+    assert('D-phone2b pending remains after valid retry (confirm stage armed)', session.hasPending(),
+      (v) => v === true, 'still pending (confirm)');
+    assert('D-phone2c confirm prompt reads back the retried number', outcome2,
+      (v) => typeof (v as any).responseText === 'string'
+        && (v as any).responseText.includes('Marcus')
+        && (v as any).responseText.includes('Is that right?'),
+      'read-back confirm prompt naming Marcus');
   }
   {
     freshDB();
@@ -732,6 +739,79 @@ export async function runConversationalRepairTests() {
     await processUtterance('never mind', session, deps);
     assert('D-phone5 cancel clears pending', session.hasPending(),
       (v) => v === false, 'cancelled');
+  }
+  // ── Fix A regression coverage, 2026-08-13 ────────────────────────────────
+  // Valid retry now arms a phone-confirm pending instead of committing
+  // directly. D-phone6/7/8 prove YES/NO/cancel each behave correctly at
+  // that new confirm stage. D-phone9 proves a cross-name utterance during
+  // repair pending cannot silently commit — it does NOT assert the new
+  // name supersedes the old one (that is Fix B, deferred).
+  {
+    freshDB();
+    const session = new ConversationSession();
+    const deps = {
+      classifyQuery: async () => ({ tier: 3, reason: 'test:fallthrough' }),
+      classifyLLM: null,
+      llmReady: false,
+      captureContext: { contacts: [], lists: [] },
+    };
+    await processUtterance("Marcus's number is 972-55-0142", session, deps);
+    await processUtterance('972-555-0142', session, deps);
+    await processUtterance('yes', session, deps);
+    assert('D-phone6 YES commits the confirmed retry candidate exactly once', findContactByName('Marcus'),
+      (v) => !!v && (v as any).phone === '9725550142', 'Marcus committed');
+    assert('D-phone6b pending released after YES commit', session.hasPending(),
+      (v) => v === false, 'released');
+  }
+  {
+    freshDB();
+    const session = new ConversationSession();
+    const deps = {
+      classifyQuery: async () => ({ tier: 3, reason: 'test:fallthrough' }),
+      classifyLLM: null,
+      llmReady: false,
+      captureContext: { contacts: [], lists: [] },
+    };
+    await processUtterance("Marcus's number is 972-55-0142", session, deps);
+    await processUtterance('972-555-0142', session, deps);
+    await processUtterance('no', session, deps);
+    assert('D-phone7 NO does not commit the retry candidate', findContactByName('Marcus'),
+      (v) => v == null, 'null');
+    assert('D-phone7b pending released after NO', session.hasPending(),
+      (v) => v === false, 'released');
+  }
+  {
+    freshDB();
+    const session = new ConversationSession();
+    const deps = {
+      classifyQuery: async () => ({ tier: 3, reason: 'test:fallthrough' }),
+      classifyLLM: null,
+      llmReady: false,
+      captureContext: { contacts: [], lists: [] },
+    };
+    await processUtterance("Marcus's number is 972-55-0142", session, deps);
+    await processUtterance('972-555-0142', session, deps);
+    await processUtterance('never mind', session, deps);
+    assert('D-phone8 cancel at confirm stage does not commit the retry candidate', findContactByName('Marcus'),
+      (v) => v == null, 'null');
+    assert('D-phone8b pending released after cancel at confirm stage', session.hasPending(),
+      (v) => v === false, 'released');
+  }
+  {
+    freshDB();
+    const session = new ConversationSession();
+    const deps = {
+      classifyQuery: async () => ({ tier: 3, reason: 'test:fallthrough' }),
+      classifyLLM: null,
+      llmReady: false,
+      captureContext: { contacts: [], lists: [] },
+    };
+    await processUtterance("Marcus's number is 972-55-0142", session, deps);
+    await processUtterance("Rachel's number is 214-867-5309", session, deps);
+    assert('D-phone9 cross-name retry during repair pending does not silently commit', findContactByName('Marcus'),
+      (v) => v == null, 'null (must not silently commit under wrong name)');
+    assert('D-phone9b cross-name retry arms confirm pending, not released', session.hasPending(),
+      (v) => v === true, 'still pending (confirm)');
   }
 
   const total = passed + failures.length;
