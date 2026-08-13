@@ -463,17 +463,22 @@ export function detectServiceCapture(text: string): IntentRecord[] {
 
 // Pure detector for contact phone captures — not service providers.
 // No DB write, no ACK. Reuses normalizePhone + the same name guard as captureHousehold.
-export function detectPhoneCapture(text: string, _contacts?: string[]): IntentRecord[] {
+export type PhoneCaptureResult =
+  | { kind: 'no_match' }
+  | { kind: 'valid'; intent: IntentRecord }
+  | { kind: 'matched_invalid'; name: string; rawDigits: string };
+
+export function detectPhoneCapture(text: string, _contacts?: string[]): PhoneCaptureResult {
   const SERVICE_ROLE_GUARD =
     /\b(my|our)\s+(plumber|electrician|hvac|mechanic|roofer|handyman|contractor|painter|landscaper|cleaner|vet|dentist|doctor|pool)\b/i;
-  if (SERVICE_ROLE_GUARD.test(text)) return [];
+  if (SERVICE_ROLE_GUARD.test(text)) return { kind: 'no_match' };
 
   // Possessive name + phone keyword — always a contact capture, never a service provider.
   // "My sister Linda's cell is 469-505-0213" must not be blocked by SERVICE_PATTERNS.
   const POSSESSIVE_PHONE = /\b(?:my|our)\s+(?:\w+\s+)?([\w]+)'s\s+(?:phone|cell|mobile|number)/i;
   if (!POSSESSIVE_PHONE.test(text)) {
     for (const pattern of SERVICE_PATTERNS) {
-      if (pattern.test(text)) return [];
+      if (pattern.test(text)) return { kind: 'no_match' };
     }
   }
 
@@ -494,15 +499,31 @@ export function detectPhoneCapture(text: string, _contacts?: string[]): IntentRe
     /\bmy\s+(?:\w+\s+)([\w\-']+)\s+([\d\s\-\(\)\+\.]{7,})/i,
   ];
 
+  // D-phone-repair, 2026-08-13: track the first real-name-but-invalid-phone
+  // match as a fallback. A fully valid match on ANY pattern still wins
+  // outright — unchanged precedence from before this change. The fallback
+  // only fires when no pattern in the whole list ever produces a valid
+  // capture, preserving today's control flow exactly for every case that
+  // currently succeeds.
+  let invalidAttempt: { name: string; rawDigits: string } | null = null;
+
   for (const pattern of PHONE_CAPTURE_PATTERNS) {
     const m = text.match(pattern);
     if (!m) continue;
     const name = m[1]?.trim() ?? '';
+    if (!isRealName(name)) continue;
     const phoneCheck = normalizePhone(m[2] ?? '');
-    if (!isRealName(name) || !phoneCheck.valid) continue;
-    return [{ type: 'phone_capture', name, phone: phoneCheck.normalized }];
+    if (phoneCheck.valid) {
+      return { kind: 'valid', intent: { type: 'phone_capture', name, phone: phoneCheck.normalized } };
+    }
+    if (!invalidAttempt) {
+      invalidAttempt = { name, rawDigits: phoneCheck.raw };
+    }
   }
-  return [];
+  if (invalidAttempt) {
+    return { kind: 'matched_invalid', name: invalidAttempt.name, rawDigits: invalidAttempt.rawDigits };
+  }
+  return { kind: 'no_match' };
 }
 
 // ─── detectServiceRemove ───────────────────────────────────────────────────────

@@ -11,7 +11,7 @@ import { fileURLToPath } from 'url';
 import { setDB } from '../../src/db/schema.ts';
 import { DOMAIN_WRITERS } from '../../src/routing/routeIntent.ts';
 import type { CommitResult } from '../../src/routing/routeIntent.ts';
-import { applyIntents } from '../../src/routing/processUtterance.ts';
+import { applyIntents, processUtterance } from '../../src/routing/processUtterance.ts';
 import type { IntentRecord } from '../../src/hooks/llmLayers.ts';
 import { ConversationSession } from '../../src/routing/conversationSession.ts';
 import { buildVisitOutcomeAskSlot } from '../../src/routing/medicalVisitOutcomeAsk.ts';
@@ -667,6 +667,66 @@ export async function runConversationalRepairTests() {
 
   // §16.12 device proof — manual; document as skipped gate note (not counted as fail)
   console.log(`${DIM}⊘ SKIP  S16.12 device proof (S24+ offline) — manual per spec; not a gate assert${RESET}`);
+
+  // ── D-phone-repair, 2026-08-13 ──────────────────────────────────────────
+  // matched_invalid phone attempt -> phone_repair_needed -> bounded
+  // ConversationSession pending, per the approved Phone Structured-Input
+  // Repair design. Reuses the standard budget/cancel machinery -- no new
+  // session logic.
+  {
+    freshDB();
+    const session = new ConversationSession();
+    const deps = {
+      classifyQuery: async () => ({ tier: 3, reason: 'test:fallthrough' }),
+      classifyLLM: null,
+      llmReady: false,
+      captureContext: { contacts: [], lists: [] },
+    };
+    const outcome1 = await processUtterance("Marcus's number is 972-55-0142", session, deps);
+    assert('D-phone1 invalid attempt arms pending, no commit', outcome1,
+      (v) => (v as any).handled === true && session.hasPending() === true, 'pending armed');
+    assert('D-phone1b nothing committed on invalid attempt', findContactByName('Marcus'),
+      (v) => v == null, 'null');
+
+    const outcome2 = await processUtterance('972-555-0142', session, deps);
+    assert('D-phone2 valid retry commits', findContactByName('Marcus'),
+      (v) => !!v && (v as any).phone === '9725550142', 'Marcus committed');
+    assert('D-phone2b pending released after commit', session.hasPending(),
+      (v) => v === false, 'released');
+  }
+  {
+    freshDB();
+    const session = new ConversationSession();
+    const deps = {
+      classifyQuery: async () => ({ tier: 3, reason: 'test:fallthrough' }),
+      classifyLLM: null,
+      llmReady: false,
+      captureContext: { contacts: [], lists: [] },
+    };
+    await processUtterance("Marcus's number is 972-55-0142", session, deps);
+    await processUtterance('still not a number', session, deps);
+    assert('D-phone3 first invalid retry stays pending (budget decremented, not released)',
+      session.hasPending(), (v) => v === true, 'still pending');
+    await processUtterance('nope', session, deps);
+    assert('D-phone4 budget exhausted releases cleanly', session.hasPending(),
+      (v) => v === false, 'released, no commit');
+    assert('D-phone4b no malformed number ever reached storage', findContactByName('Marcus'),
+      (v) => v == null, 'null');
+  }
+  {
+    freshDB();
+    const session = new ConversationSession();
+    const deps = {
+      classifyQuery: async () => ({ tier: 3, reason: 'test:fallthrough' }),
+      classifyLLM: null,
+      llmReady: false,
+      captureContext: { contacts: [], lists: [] },
+    };
+    await processUtterance("Marcus's number is 972-55-0142", session, deps);
+    await processUtterance('never mind', session, deps);
+    assert('D-phone5 cancel clears pending', session.hasPending(),
+      (v) => v === false, 'cancelled');
+  }
 
   const total = passed + failures.length;
   console.log(

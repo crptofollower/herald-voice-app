@@ -89,6 +89,21 @@ export async function processUtterance(
   }
   // 2) The single routing authority — called exactly once per utterance.
   const routeDecision = await routeIntent(text, deps);
+  // D-phone-repair, 2026-08-13: processUtterance is the sole boundary that
+  // may call session.setPending (Spine §3a / Law 2) -- routeIntent itself
+  // never touches session. This mirrors applyIntents' existing pending-arm
+  // pattern, just for a RouteDecision-originated signal instead of a
+  // DOMAIN_WRITER-originated one.
+  if (routeDecision.kind === 'phone_repair_needed') {
+    session.setPending({
+      pendingKey: routeDecision.pending.pendingKey,
+      resume: routeDecision.pending.resume,
+      kind: routeDecision.pending.kind,
+      reaskPrompt: routeDecision.pending.reaskPrompt,
+      correctable: routeDecision.pending.correctable,
+    });
+    return { handled: true, source: 'capture', responseText: routeDecision.pending.prompt, commits: [routeDecision.pending] };
+  }
   // 3) Converted-domain capture → commit loop.
   if (routeDecision.kind === 'capture' && allConverted(routeDecision.intents)) {
     const { responseText, commits } = await applyIntents(

@@ -11,6 +11,7 @@ import { getDB } from '../db/schema';
 import { capturePerson } from '../db/capturePerson';
 import { findContactByName, setEmergencyContact, getEmergencyContact, retireRelationshipHolder, RELATIONSHIP_WORDS, resolvePersonIdentity, contactHasCapability, resolvePersonCapability } from '../db/contactsDB';
 import { normalizePersonTarget, liftRelationshipName } from '../utils/personReference';
+import { normalizePhone } from '../utils/phone';
 import { matchCandidateToken } from './conversationSession';
 
 type ActionIntent = NonNullable<TierDecision['actionIntent']>;
@@ -19,6 +20,7 @@ export type RouteDecision =
   | { kind: 'device_read'; tier: 1; response: string; isMedical?: boolean; reason: string }
   | { kind: 'device_action'; tier: 1; actionIntent: ActionIntent; reason: string }
   | { kind: 'capture'; intents: IntentRecord[]; source: 'deterministic' | 'llm'; reason: string }
+  | { kind: 'phone_repair_needed'; pending: Extract<CommitResult, { status: 'pending' }>; reason: string }
   | { kind: 'not_ready'; reason: string }
   | { kind: 'memory_probe'; tier: 2; context: LocalContext; reason: string }
   | { kind: 'backend'; tier: 3; reason: string }
@@ -1750,11 +1752,60 @@ export async function routeIntent(
   // (tier-1/tier-2 already returned above), so the invariant holds: no LLM capture
   // is ever selected when a deterministic result exists.
   const capCtx: CaptureContext = deps.captureContext ?? { contacts: [], lists: [] };
-  for (const capture of DETERMINISTIC_CAPTURERS) {
+  // D-phone-repair, 2026-08-13: computed once, up front, so both the
+  // unchanged-precedence capturer loop below and the repair fallthrough
+  // can consume the same result without a second regex pass.
+  const phoneResult = detectPhoneCapture(text, capCtx.contacts);
+  const CAPTURERS_WITH_PHONE: DeterministicCapturer[] = [
+    (text) => detectDoctorIntroCapture(text),
+    (text) => detectInsuranceCapture(text),
+    (text) => detectServiceCapture(text),
+    () => (phoneResult.kind === 'valid' ? [phoneResult.intent] : []),
+    (text) => detectDiagnosisCapture(text),
+    (text) => detectFamilyCapture(text),
+  ];
+  for (const capture of CAPTURERS_WITH_PHONE) {
     const intents = capture(text, capCtx);
     if (intents.length > 0) {
       return { kind: 'capture', intents, source: 'deterministic', reason: 'deterministic:capture' };
     }
+  }
+
+  // Reached only if nothing above claimed the utterance. A matched-but-
+  // invalid phone attempt is deterministic-only -- it is NEVER represented
+  // as an IntentRecord (not classifier-visible), and this check runs
+  // strictly before the LLM tier-3 branch below, so the LLM can never
+  // trigger phone repair.
+  if (phoneResult.kind === 'matched_invalid') {
+    const capturedName = phoneResult.name;
+    return {
+      kind: 'phone_repair_needed',
+      reason: 'deterministic:phone_repair',
+      pending: {
+        status: 'pending',
+        prompt: 'I may have missed a digit. Can you say the number again?',
+        pendingKey: 'phone_capture_repair',
+        resume: async (userText: string): Promise<CommitResult> => {
+          const retry = normalizePhone(userText);
+          if (!retry.valid) {
+            return { status: 'noop', ack: '' };
+          }
+          try {
+            capturePerson({ name: capturedName, phone: retry.normalized });
+            const saved = findContactByName(capturedName);
+            if (!saved) {
+              return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
+            }
+            return {
+              status: 'committed',
+              ack: composeCaptureAck('phone_capture', `${capturedName} at ${retry.spoken}.`),
+            };
+          } catch {
+            return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
+          }
+        },
+      },
+    };
   }
 
   if (

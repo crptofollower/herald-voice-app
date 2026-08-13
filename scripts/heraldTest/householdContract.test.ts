@@ -72,31 +72,35 @@ export async function runHouseholdContractTests(){
   // length===1 -> read defers, capture wins; length===0 -> read still answers.
   {
     const got=detectPhoneCapture("Sarah's number is 214-505-0100");
-    assert('C11 Sarah number+10digits -> capture',got,(v)=>Array.isArray(v)&&v.length===1&&v[0].name==='Sarah'&&v[0].phone==='2145050100','length 1; Sarah; 2145050100');
+    assert('C11 Sarah number+10digits -> capture',got,(v)=>v.kind==='valid'&&v.intent.name==='Sarah'&&v.intent.phone==='2145050100','kind valid; Sarah; 2145050100');
   }
   {
     const got=detectPhoneCapture("Sarah's phone number is 214-505-0100");
-    assert('C12 Sarah phone number+10digits -> capture',got,(v)=>Array.isArray(v)&&v.length===1&&v[0].name==='Sarah'&&v[0].phone==='2145050100','length 1; Sarah; 2145050100');
+    assert('C12 Sarah phone number+10digits -> capture',got,(v)=>v.kind==='valid'&&v.intent.name==='Sarah'&&v.intent.phone==='2145050100','kind valid; Sarah; 2145050100');
   }
   {
     const got=detectPhoneCapture("My sister Linda's cell is 469-505-0213");
-    assert('C13 Linda cell+10digits -> capture',got,(v)=>Array.isArray(v)&&v.length===1&&v[0].name==='Linda'&&v[0].phone==='4695050213','length 1; Linda; 4695050213');
+    assert('C13 Linda cell+10digits -> capture',got,(v)=>v.kind==='valid'&&v.intent.name==='Linda'&&v.intent.phone==='4695050213','kind valid; Linda; 4695050213');
   }
   {
     const got=detectPhoneCapture("What's Sarah's number");
-    assert('C14 What\'s Sarah\'s number -> no capture (read wins)',got,(v)=>Array.isArray(v)&&v.length===0,'length 0');
+    assert('C14 What\'s Sarah\'s number -> no capture (read wins)',got,(v)=>v.kind==='no_match','kind no_match');
   }
   {
     const got=detectPhoneCapture("Sarah's phone number");
-    assert('C15 Sarah\'s phone number -> no capture (read wins)',got,(v)=>Array.isArray(v)&&v.length===0,'length 0');
+    assert('C15 Sarah\'s phone number -> no capture (read wins)',got,(v)=>v.kind==='no_match','kind no_match');
   }
   {
     const got=detectPhoneCapture("Sarah's number is 214-505-010");
-    assert('C16 Sarah number+9digits -> no capture (read answers honestly)',got,(v)=>Array.isArray(v)&&v.length===0,'length 0');
+    assert('C16 Sarah number+9digits -> matched_invalid (repair, not silent drop)',got,(v)=>v.kind==='matched_invalid'&&v.name==='Sarah'&&v.rawDigits==='214505010','kind matched_invalid; Sarah; 214505010');
+  }
+  {
+    const got=detectPhoneCapture("Marcus's number is 972-55-0142");
+    assert('C17 Marcus number+9digits -> matched_invalid',got,(v)=>v.kind==='matched_invalid'&&v.name==='Marcus'&&v.rawDigits==='972550142','kind matched_invalid; Marcus; 972550142');
   }
 
   const total=passed+failures.length;
-  console.log(`\n${BOLD}Contract: ${passed}/${total} passed${failures.length>0?` ó ${RED}${failures.length} FAILED${RESET}`:` ó ${GREEN}all green${RESET}`}${RESET}\n`);
+  console.log(`\n${BOLD}Contract: ${passed}/${total} passed${failures.length>0?` ù ${RED}${failures.length} FAILED${RESET}`:` ù ${GREEN}all green${RESET}`}${RESET}\n`);
   return {passed,failed:failures.length,total,failures};
 }
 

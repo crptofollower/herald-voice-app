@@ -1694,7 +1694,7 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   // authority for that judgment — no second phone-validity rule lives here. Mirrors the
   // statement guard in detectFamilyRead and CALL_NUMBER_STATEMENT's guard at the call
   // path (line 1039). §4a one-reader.
-  if (POSSESSIVE_CONTACT_STATEMENT.test(msg) && detectPhoneCapture(msg).length === 0) {
+  if (POSSESSIVE_CONTACT_STATEMENT.test(msg) && detectPhoneCapture(msg).kind === 'no_match') {
     const nameMatch = msg.match(/\b(\w+)'s\s+(?:phone|cell|mobile|number)/i);
     const lookupName = nameMatch?.[1]?.trim() ?? '';
     if (lookupName.length >= 2) {
