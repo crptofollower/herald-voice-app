@@ -2778,14 +2778,7 @@ export default function ChatScreen() {
               initializer — nothing added here changes that). Remove in the
               same commit that removes recovery instrumentation. */}
           <TouchableOpacity
-            onPressIn={() => console.log('[conversationalProbe] PRESS_IN')}
-            onPressOut={() => console.log('[conversationalProbe] PRESS_OUT')}
             onPress={() => setHandsFreeMode((v) => !v)}
-            onLongPress={() => {
-              console.log('[conversationalProbe] MANUAL_TRIGGER');
-              runConversationalProbeSet(getCtx(), activeModel).catch((e) =>
-                console.log('[conversationalProbe] SET_FAILED', String(e)));
-            }}
             accessibilityLabel={
               handsFreeMode
                 ? "TEMP DIAGNOSTIC: hands-free is ON, tap to turn off"
@@ -2802,6 +2795,31 @@ export default function ChatScreen() {
           >
             <Text style={{ color: '#fff', fontSize: 11, fontWeight: '600', letterSpacing: 0.5 }}>
               TEMP DIAGNOSTIC — HANDS-FREE: {handsFreeMode ? 'ON' : 'OFF'}
+            </Text>
+          </TouchableOpacity>
+
+          {/* TEMP DIAGNOSTIC — conversational-probe manual trigger, authorized
+              test session 2026-08-14. Single tap only, no long-press. Founder-only,
+              no persistence. Remove after the conversational-model experiment
+              concludes, same commit that removes the hands-free diagnostic above. */}
+          <TouchableOpacity
+            onPress={() => {
+              console.log('[conversationalProbe] MANUAL_TRIGGER');
+              runConversationalProbeSet(getCtx(), activeModel).catch((e) =>
+                console.log('[conversationalProbe] SET_FAILED', String(e)));
+            }}
+            accessibilityLabel="TEMP DIAGNOSTIC: run conversational LLM probe set"
+            style={{
+              alignSelf: 'center',
+              paddingVertical: 4,
+              paddingHorizontal: 10,
+              marginBottom: 4,
+              borderRadius: 6,
+              backgroundColor: 'rgba(26,155,138,0.35)',
+            }}
+          >
+            <Text style={{ color: '#fff', fontSize: 11, fontWeight: '600', letterSpacing: 0.5 }}>
+              TEMP DIAGNOSTIC — RUN LLM PROBE
             </Text>
           </TouchableOpacity>
 
