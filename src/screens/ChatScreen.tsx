@@ -2778,6 +2778,8 @@ export default function ChatScreen() {
               initializer — nothing added here changes that). Remove in the
               same commit that removes recovery instrumentation. */}
           <TouchableOpacity
+            onPressIn={() => console.log('[conversationalProbe] PRESS_IN')}
+            onPressOut={() => console.log('[conversationalProbe] PRESS_OUT')}
             onPress={() => setHandsFreeMode((v) => !v)}
             onLongPress={() => {
               console.log('[conversationalProbe] MANUAL_TRIGGER');
