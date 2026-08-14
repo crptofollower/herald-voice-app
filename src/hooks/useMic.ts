@@ -5,6 +5,7 @@ import {
 } from 'expo-speech-recognition';
 import { createSuspendCoordinator } from './suspendCoordinator';
 import { evaluateEmptySessionRecovery, shouldCancelEmptySessionRecovery, shouldCancelEmptySessionRecoveryOnSpeechStart } from './emptySessionRecoveryDecision';
+import { decideOneShotEnd, decideOneShotNoSpeech } from './oneShotEndDecision';
 import { buildStartConfig } from './recognitionModeConfig';
 import type { RecognitionMode } from './recognitionModeConfig';
 
@@ -23,6 +24,7 @@ export function useMic(
   const turnActiveRef = useRef(false);
   const emptySessionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const emptySessionTokenRef = useRef<number | null>(null);
+  const speechStartedRef = useRef(false);
 
   // Cancels/clears the empty-session recovery timer + its captured token.
   // Called on every path that means "this session is no longer a candidate
@@ -41,7 +43,6 @@ export function useMic(
   // Android recognizer (Listening shown, no results delivered) or fires a
   // non-no-speech error that kills a live turn. One session at a time, always.
   const engineActiveRef = useRef(false);
-  const BUFFER_WINDOW = 2500;
 
   // ── TEMP DIAGNOSTIC — recovery-contract evidence gathering, 2026-08-02 ──
   // Additive only. No control flow depends on micSessionRef or entryPointRef.
@@ -82,6 +83,7 @@ export function useMic(
     }
 
     turnActiveRef.current = false;
+    speechStartedRef.current = false;
     if (bufferTimerRef.current) { clearTimeout(bufferTimerRef.current); bufferTimerRef.current = null; }
     bufferRef.current = '';
     if (maxTimer.current) { clearTimeout(maxTimer.current); maxTimer.current = null; }
@@ -109,20 +111,29 @@ export function useMic(
   const recognitionModeRef = useRef<RecognitionMode>('open');
   const getStartConfig = () => buildStartConfig(recognitionModeRef.current);
 
-  // On-device STT endpoints after ~1-1.5s of silence and stops delivering
-  // speech even with continuous:true. A mid-sentence pause makes it fire
-  // 'end'/'no-speech' before the user is done. While a turn is in progress
-  // (buffered words present) that is a segment boundary, not turn-over:
-  // re-arm and keep accumulating. The 2500ms timer is the ONLY turn-over judge.
-  const restartListening = () => {
-    try {
-      micSessionRef.current += 1;
-      ExpoSpeechRecognitionModule.start(getStartConfig());
-      engineActiveRef.current = true;
-      rlog('NATIVE_START_REQUESTED', { restart: true });
-    } catch (e) {
-      console.error('[useMic] restart failed:', e);
-      rlog('NATIVE_START_FAILED', { error: String(e), restart: true });
+  // One-shot (continuous:false): native 'end' is the flush boundary.
+  // Deliver the buffered transcript without calling native stop() -- the
+  // session has already ended -- and without restartListening(), which
+  // was continuous-mode pause-stitching and created a second recognition
+  // session (and extra Android start/stop tones) per spoken turn.
+  const deliverBufferWithoutNativeStop = (source: string) => {
+    const final = bufferRef.current.trim();
+    bufferRef.current = '';
+    if (bufferTimerRef.current) {
+      clearTimeout(bufferTimerRef.current);
+      bufferTimerRef.current = null;
+    }
+    turnActiveRef.current = false;
+    speechStartedRef.current = false;
+    if (maxTimer.current) { clearTimeout(maxTimer.current); maxTimer.current = null; }
+    setIsRecording(false);
+    if (final) {
+      log('TRANSCRIPT_SELECTED', {
+        digitCount: (final.match(/\d/g) || []).length,
+        charCount: final.length,
+        source,
+      });
+      onTranscript(final);
     }
   };
 
@@ -146,6 +157,7 @@ export function useMic(
   // existing content-cancel call site above.
   useSpeechRecognitionEvent('speechstart', () => {
     rlog('NATIVE_SPEECH_START');
+    speechStartedRef.current = true;
     if (shouldCancelEmptySessionRecoveryOnSpeechStart({ timerArmed: !!emptySessionTimerRef.current })) {
       log('EMPTY_SESSION_TIMER_CANCELLED_SPEECH_START');
       clearEmptySessionRecovery();
@@ -226,37 +238,11 @@ export function useMic(
         ? bufferRef.current + ' ' + text
         : text;
 
-      if (bufferTimerRef.current) clearTimeout(bufferTimerRef.current);
-
-      const wordCount = bufferRef.current.split(' ').length;
-      const delay = wordCount > 12 ? 1500 : BUFFER_WINDOW;
-
-      bufferTimerRef.current = setTimeout(() => {
-        const final = bufferRef.current.trim();
-        bufferRef.current = '';
+      if (bufferTimerRef.current) {
+        clearTimeout(bufferTimerRef.current);
         bufferTimerRef.current = null;
-        turnActiveRef.current = false; // genuine turn-over: the next 'end' must NOT restart
-        log('STOP_REQUEST', { source: 'bufferTimer_turnOver' });
-        rlog('TEARDOWN_REQUESTED', { reason: 'turn_over' });
-        // Turn over: close the mic BEFORE handoff so Herald's spoken reply
-        // isn't captured as the next utterance (continuous-mode feedback loop).
-        try { ExpoSpeechRecognitionModule.stop(); } catch {}
-        if (maxTimer.current) { clearTimeout(maxTimer.current); maxTimer.current = null; }
-        setIsRecording(false);
-        if (final) {
-          // TEMP DIAGNOSTIC — D1 structured-speech integrity, 2026-08-12.
-          // Metadata only, no transcript content. Remove after D1 is classified.
-          log('TRANSCRIPT_SELECTED', {
-            digitCount: (final.match(/\d/g) || []).length,
-            charCount: final.length,
-            source: 'bufferTimer_turnOver',
-          });
-          onTranscript(final);
-        }
-      }, delay);
-
-      // NOTE: do NOT setIsRecording(false) here -- between pause segments the
-      // user is still mid-utterance; the mic stays hot until the window closes.
+      }
+      // One-shot: do not arm BUFFER_WINDOW. Native 'end' flushes once.
     }
   });
 
@@ -265,10 +251,14 @@ export function useMic(
     rlog('NATIVE_ERROR', { code: event.error });
     engineActiveRef.current = false;
     clearEmptySessionRecovery();
-    // no-speech mid-turn = engine timed out on a pause; re-arm, keep the buffer
-    if (event.error === 'no-speech' && turnActiveRef.current && bufferRef.current.trim()) {
-      restartListening();
-      return;
+    // no-speech with a buffered transcript = the one-shot utterance completed
+    // and the engine timed out; flush once. Do not restart.
+    if (event.error === 'no-speech') {
+      if (decideOneShotNoSpeech({ bufferHasContent: !!bufferRef.current.trim() }) === 'flush') {
+        log('ONE_SHOT_FLUSH', { source: 'no_speech' });
+        deliverBufferWithoutNativeStop('no_speech');
+        return;
+      }
     }
     if (event.error !== 'no-speech') {
       console.error('[useMic] Speech recognition error:', event.error);
@@ -289,14 +279,24 @@ export function useMic(
     // dispatched, including after errors -- the one reliable confirmation
     // point that a suspend request actually completed.
     suspendCoordinatorRef.current.onNativeEnd();
-    // Engine ended its segment. If a turn is in progress with buffered words,
-    // this is a mid-utterance pause, not turn-over: re-arm and keep the buffer.
-    if (turnActiveRef.current && bufferRef.current.trim()) {
-      restartListening();
-      return; // do NOT setIsRecording(false), do NOT clear the buffer or its timer
+    // One-shot: native 'end' is turn-over, not a mid-utterance pause.
+    const decision = decideOneShotEnd({
+      bufferHasContent: !!bufferRef.current.trim(),
+      speechStarted: speechStartedRef.current,
+    });
+    if (decision === 'flush') {
+      log('ONE_SHOT_FLUSH', { source: 'native_end' });
+      rlog('TEARDOWN_COMPLETED', { reason: 'one_shot_flush' });
+      deliverBufferWithoutNativeStop('native_end');
+      return;
+    }
+    if (decision === 'heard_unrecognized') {
+      log('HEARD_UNRECOGNIZED');
+      rlog('HEARD_UNRECOGNIZED');
     }
     setIsRecording(false);
     turnActiveRef.current = false;
+    speechStartedRef.current = false;
     if (maxTimer.current) { clearTimeout(maxTimer.current); maxTimer.current = null; }
     if (bufferTimerRef.current) { clearTimeout(bufferTimerRef.current); bufferTimerRef.current = null; }
     bufferRef.current = '';
@@ -314,6 +314,7 @@ export function useMic(
   const stopRecording = useCallback(async () => {
     clearEmptySessionRecovery();
     turnActiveRef.current = false; // manual stop: the resulting 'end' must NOT restart
+    speechStartedRef.current = false;
     if (bufferTimerRef.current) {
       clearTimeout(bufferTimerRef.current);
       bufferTimerRef.current = null;
@@ -365,6 +366,7 @@ export function useMic(
         await ExpoSpeechRecognitionModule.requestPermissionsAsync();
       if (!granted) { console.error('[useMic] Mic permission denied'); return; }
       turnActiveRef.current = false; // clean slate for a new turn
+      speechStartedRef.current = false;
       clearEmptySessionRecovery();
 
       let stateBefore: string = 'unknown';
