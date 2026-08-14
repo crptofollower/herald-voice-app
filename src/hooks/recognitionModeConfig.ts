@@ -45,7 +45,16 @@ export function buildStartConfig(mode: RecognitionMode): SpeechRecognitionStartC
   return {
     lang: 'en-US',
     interimResults: false,
-    continuous: true,
+    // 2026-08-13, AMBIENT_CONTINUOUS short-utterance experiment: continuous:true
+    // put SODA in an ambient-continuous session mode. Device A/B evidence
+    // (same S24+, keyboard voice typing vs Herald, identical short words)
+    // showed Herald selectively failing on "No"/"Mom"/"Dad"/"One" while
+    // succeeding on "Yes"/"Yep"/"Stop" -- a pattern consistent with
+    // AMBIENT_CONTINUOUS treating certain short utterances as non-speech.
+    // false restores a single-utterance recognition session per turn,
+    // matching how keyboard voice typing (and, per SODA's log tag, a
+    // non-ambient domain) behaves. See state doc for the full archaeology.
+    continuous: false,
     requiresOnDeviceRecognition: true,
     ...(contextualStrings ? { contextualStrings } : {}),
   };

@@ -67,17 +67,17 @@ export async function runRecognitionModeConfigTests() {
 
   {
     const got = buildStartConfig('open');
-    assert('buildStartConfig open preserves lang/continuous/requiresOnDeviceRecognition/interimResults', got,
+    assert('buildStartConfig open preserves lang/continuous:false/requiresOnDeviceRecognition/interimResults', got,
       (v) => {
         if (!v || typeof v !== 'object') return false;
         const o = v as Record<string, unknown>;
         return o.lang === 'en-US'
           && o.interimResults === false
-          && o.continuous === true
+          && o.continuous === false
           && o.requiresOnDeviceRecognition === true
           && ('contextualStrings' in o) === false;
       },
-      "{ lang: 'en-US', interimResults: false, continuous: true, requiresOnDeviceRecognition: true } (no contextualStrings key)");
+      "{ lang: 'en-US', interimResults: false, continuous: false, requiresOnDeviceRecognition: true } (no contextualStrings key)");
   }
 
   {
@@ -89,7 +89,7 @@ export async function runRecognitionModeConfigTests() {
         return JSON.stringify(o.contextualStrings) === JSON.stringify(CONTROL_CONFIRMATION_STRINGS)
           && o.lang === 'en-US'
           && o.interimResults === false
-          && o.continuous === true
+          && o.continuous === false
           && o.requiresOnDeviceRecognition === true;
       },
       'base config unchanged + contextualStrings === CONTROL_CONFIRMATION_STRINGS');
