@@ -70,6 +70,7 @@ import { useDeviceMemory } from "../hooks/useDeviceMemory";
 import { useLocalLLM } from '../hooks/useLocalLLM';
 import { runConversationalProbeSet } from '../dev/conversationalProbe';
 import { classifyWithLLM } from '../hooks/llmLayers';
+import { generateEphemeralConversation, canRunEphemeralConversation } from '../utils/ephemeralConversation';
 import { answerFromDevice } from '../utils/localAnswers';
 import { parseTimeFromText } from '../utils/parseTime';
 import { detectFamilyRead, answerFamilyRead } from '../utils/familyRead';
@@ -387,6 +388,13 @@ export default function ChatScreen() {
   // the next user message resolves this and executes the original intent.
   const pendingContactCollectRef = useRef<{ action: 'call' | 'navigate' | 'text' | 'confirm_phone' | 'confirm_call'; name: string; body?: string; phone?: string } | null>(null);
   const sessionRef = useRef<ConversationSession>(new ConversationSession());
+
+  // Ephemeral conversation's bounded context: current interaction plus AT
+  // MOST the immediately preceding ephemeral turn pair. In-memory only, no
+  // persistence, overwritten every ephemeral exchange, never accumulates.
+  // Per Conversational Architecture Constitution §2 (2026-08-14 addition):
+  // this is NOT Memory and carries no authority.
+  const ephemeralContextRef = useRef<{ user: string; assistant: string } | null>(null);
 
   // ── Scroll snap prevention ────────────────────────────────────────────────
   // Only auto-scroll to bottom when user is already near the bottom.
@@ -1625,7 +1633,35 @@ export default function ChatScreen() {
           ];
           offlineReply = offlineReplies[Math.floor(Math.random() * offlineReplies.length)];
         } else {
-          offlineReply = "I'm not sure I'm following you — can you help me understand?";
+          // EPHEMERAL CONVERSATION SEAM (Constitution §2, 2026-08-14 addition).
+          // Reached only when: rdTier===3, structured classifier found nothing
+          // (llmCaptures.length===0, established above), llmStatus==='ready'.
+          // Defensive re-checks here (never trust the outer scope alone):
+          // Law 5 personal-capture-risk fence and pending-workflow ownership.
+          const canConverse = canRunEphemeralConversation({
+            rdTier,
+            hasStructuredCaptures: false, // this branch is only reached when it was false
+            isPersonalCaptureRisk,
+            hasPending: sessionRef.current.hasPending(),
+            llmStatus,
+            classifierBusy: false, // re-verified inside generateEphemeralConversation itself
+            ephemeralBusy: false,  // re-verified inside generateEphemeralConversation itself
+          });
+          if (canConverse) {
+            const ephemeral = await generateEphemeralConversation(
+              text,
+              getCtx(),
+              ephemeralContextRef.current ?? undefined,
+            );
+            if (ephemeral.status === 'ok') {
+              ephemeralContextRef.current = { user: text, assistant: ephemeral.text };
+              offlineReply = ephemeral.text;
+            } else {
+              offlineReply = "I'm not sure I'm following you — can you help me understand?";
+            }
+          } else {
+            offlineReply = "I'm not sure I'm following you — can you help me understand?";
+          }
         }
         addMessage({ id: generateId('msg'), role: 'user',
           content: text, timestamp: Date.now() });
@@ -1805,6 +1841,45 @@ export default function ChatScreen() {
     const activeTopicsList = getActiveTopics();
     const activeTopicsParam =
       activeTopicsList.length > 0 ? activeTopicsList.join(",") : undefined;
+
+    // EPHEMERAL CONVERSATION SEAM — ONLINE PATH (Constitution §2, 2026-08-14).
+    // Mirrors the offline seam. Fires only for genuinely unclaimed ordinary
+    // conversation (routeDecision.reason === 'default') -- never for explicit
+    // live/world-data requests (reason === 'live:data'), which continue to
+    // askHeraldStream unchanged below.
+    if (
+      routeDecision.kind === 'backend' &&
+      routeDecision.reason === 'default' &&
+      !isPersonalCaptureRisk
+    ) {
+      const canConverse = canRunEphemeralConversation({
+        rdTier: 3,
+        hasStructuredCaptures: false,
+        isPersonalCaptureRisk,
+        hasPending: sessionRef.current.hasPending(),
+        llmStatus,
+        classifierBusy: false,
+        ephemeralBusy: false,
+      });
+      if (canConverse) {
+        const ephemeral = await generateEphemeralConversation(
+          text,
+          getCtx(),
+          ephemeralContextRef.current ?? undefined,
+        );
+        if (ephemeral.status === 'ok') {
+          ephemeralContextRef.current = { user: text, assistant: ephemeral.text };
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          addMessage({ id: generateId('msg'), role: 'assistant', content: ephemeral.text, timestamp: Date.now() });
+          speak(ephemeral.text);
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+        // Falls through to the existing askHeraldStream call below, unchanged,
+        // on any decline -- never redirects to an unrelated deterministic reader.
+      }
+    }
 
     const abortController = askHeraldStream(
       {

@@ -66,6 +66,15 @@ export type ClassifyOutcome =
 // classifyInFlight = true, killing the classifier for the whole session.
 let classifyInFlight = false;
 
+// Exposed read-only so other LLM consumers (ephemeral conversation) can
+// avoid starting a competing ctx.completion() call on the same LlamaContext
+// while the classifier (including its warmup) is mid-generation. Device-
+// proven necessary 2026-08-14: two concurrent completion() calls on one
+// context produced llama.rn HostFunction errors.
+export function isClassifierBusy(): boolean {
+  return classifyInFlight;
+}
+
 function extractJsonObject(raw: string): string | null {
   const m = raw.match(/\{[\s\S]*\}/);
   return m?.[0] ?? null;

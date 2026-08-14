@@ -409,8 +409,25 @@ const TIER2_SIGNALS = [
 // store, not SQLite rows) and is a separate future item, deliberately not caught here.
 const TEMPORAL_RECALL_MARKER =
   /\b(earlier|recently|today|this (?:morning|afternoon|evening)|just now|a (?:minute|moment|little while|bit) ago|lately)\b/i;
+// SESSION 2026-08-14: narrowed from bare reported-speech verbs (which matched
+// third-person narrative like "he said", "she told me") to require the verb
+// be anchored to the USER as speaker (first-person "I said/told/mentioned")
+// or phrased as an explicit question to Herald ("what did I say", "did I
+// mention"). Bare third-person reported speech inside an ordinary personal
+// narrative must never satisfy this gate — see Rung-4 false-positive fix,
+// mechanism-tier per Engineering Principles Rule 11 (routing is in scope).
 const TEMPORAL_RECALL_VERB =
-  /\b(mention(?:ed)?|tell|told|say|said|saying|talk(?:ed|ing)?\s+about|bring(?:ing)?\s+up|brought\s+up|discuss(?:ed)?)\b/i;
+  /\b(?:i\s+(?:mention(?:ed)?|told\s+you|brought\s+up|was\s+saying|said)|did\s+i\s+(?:mention|say|tell\s+you|bring\s+up)|what\s+did\s+i\s+(?:say|mention|tell\s+you|bring\s+up)|remind\s+me\s+what\s+i(?:'ve| have)?\s+(?:said|told|mentioned))\b/i;
+
+// Pure predicate, exported for unit testing. Encapsulates the exact
+// three-part gate previously inlined at the temporal-recall tier-1 check.
+export function isTemporalRecallRequest(msg: string): boolean {
+  return (
+    TEMPORAL_RECALL_MARKER.test(msg) &&
+    TEMPORAL_RECALL_VERB.test(msg) &&
+    !RECALL_UNCOVERED_DOMAIN.test(msg)
+  );
+}
 // Domains recall can't yet see — if named, bail so that domain's reader answers.
 const RECALL_UNCOVERED_DOMAIN =
   /\b(medication|medications|meds|pills?|prescriptions?|doctor|physician|insurance|policy|appointment|calendar|plumber|hvac|electrician|roofer|lawn|mechanic)\b/i;
@@ -1644,11 +1661,7 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   // BEFORE medical/family/profile/TIER2 so a recall phrasing naming a domain resolves
   // correctly; uncovered-domain guard bails to the real reader (recall must never say
   // "nothing" for a domain it can't see). Grocery-scoped phrasing = honest single-domain.
-  if (
-    TEMPORAL_RECALL_MARKER.test(msg) &&
-    TEMPORAL_RECALL_VERB.test(msg) &&
-    !RECALL_UNCOVERED_DOMAIN.test(msg)
-  ) {
+  if (isTemporalRecallRequest(msg)) {
     const n = new Date();
     const startOfDay = new Date(n.getFullYear(), n.getMonth(), n.getDate()).getTime();
     return { tier: 1, tier1Response: formatRecentMentions(getRecentMentions(startOfDay)), reason: 'recall:temporal' };
