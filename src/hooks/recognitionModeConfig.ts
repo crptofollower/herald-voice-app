@@ -20,3 +20,33 @@ export const CONTROL_CONFIRMATION_STRINGS = ['yes', 'no', 'yep', 'nope', 'cancel
 export function getContextualStringsForMode(mode: RecognitionMode): string[] | undefined {
   return mode === 'control_confirmation' ? CONTROL_CONFIRMATION_STRINGS : undefined;
 }
+
+export type SpeechRecognitionStartConfig = {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  requiresOnDeviceRecognition: boolean;
+  contextualStrings?: string[];
+};
+
+/**
+ * Pure function: builds the exact options object passed to
+ * ExpoSpeechRecognitionModule.start() for a given recognition mode.
+ *
+ * 2026-08-13, July-behavior restoration experiment: no EXTRA_LANGUAGE_MODEL
+ * override -- native default (free_form) restored, matching the July 17/18
+ * device-proven config that successfully transcribed a bare "No". The
+ * web_search override (commit a0a5bd70, Aug 5) is removed as the sole
+ * changed variable; contextualStrings behavior (control_confirmation mode)
+ * is unaffected and layers on top independently.
+ */
+export function buildStartConfig(mode: RecognitionMode): SpeechRecognitionStartConfig {
+  const contextualStrings = getContextualStringsForMode(mode);
+  return {
+    lang: 'en-US',
+    interimResults: false,
+    continuous: true,
+    requiresOnDeviceRecognition: true,
+    ...(contextualStrings ? { contextualStrings } : {}),
+  };
+}

@@ -5,7 +5,7 @@ import {
 } from 'expo-speech-recognition';
 import { createSuspendCoordinator } from './suspendCoordinator';
 import { evaluateEmptySessionRecovery, shouldCancelEmptySessionRecovery, shouldCancelEmptySessionRecoveryOnSpeechStart } from './emptySessionRecoveryDecision';
-import { getContextualStringsForMode } from './recognitionModeConfig';
+import { buildStartConfig } from './recognitionModeConfig';
 import type { RecognitionMode } from './recognitionModeConfig';
 
 export { evaluateEmptySessionRecovery } from './emptySessionRecoveryDecision';
@@ -107,19 +107,7 @@ export function useMic(
   // getContextualStringsForMode returns undefined, the spread below adds
   // no key at all.
   const recognitionModeRef = useRef<RecognitionMode>('open');
-  const getStartConfig = () => {
-    const contextualStrings = getContextualStringsForMode(recognitionModeRef.current);
-    return {
-      lang: 'en-US',
-      interimResults: false,
-      continuous: true,
-      requiresOnDeviceRecognition: true,
-      androidIntentOptions: {
-        EXTRA_LANGUAGE_MODEL: 'web_search',
-      },
-      ...(contextualStrings ? { contextualStrings } : {}),
-    } as const;
-  };
+  const getStartConfig = () => buildStartConfig(recognitionModeRef.current);
 
   // On-device STT endpoints after ~1-1.5s of silence and stops delivering
   // speech even with continuous:true. A mid-sentence pause makes it fire
