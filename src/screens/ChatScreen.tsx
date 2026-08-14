@@ -68,6 +68,7 @@ import { useMic } from "../hooks/useMic";
 import { useRaiseToWake } from "../hooks/useRaiseToWake";
 import { useDeviceMemory } from "../hooks/useDeviceMemory";
 import { useLocalLLM } from '../hooks/useLocalLLM';
+import { runConversationalProbeSet } from '../dev/conversationalProbe';
 import { classifyWithLLM } from '../hooks/llmLayers';
 import { answerFromDevice } from '../utils/localAnswers';
 import { parseTimeFromText } from '../utils/parseTime';
@@ -2778,6 +2779,11 @@ export default function ChatScreen() {
               same commit that removes recovery instrumentation. */}
           <TouchableOpacity
             onPress={() => setHandsFreeMode((v) => !v)}
+            onLongPress={() => {
+              console.log('[conversationalProbe] MANUAL_TRIGGER');
+              runConversationalProbeSet(getCtx(), activeModel).catch((e) =>
+                console.log('[conversationalProbe] SET_FAILED', String(e)));
+            }}
             accessibilityLabel={
               handsFreeMode
                 ? "TEMP DIAGNOSTIC: hands-free is ON, tap to turn off"
