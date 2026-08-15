@@ -433,6 +433,23 @@ export function captureHousehold(text: string): HouseholdCaptureResult | Househo
   return null;
 }
 
+// Small closed set of reporting/speech verbs that can occupy the trailing
+// name slot of a service-provider pattern without ever being a person's
+// name -- e.g. "my doctor said" matches SERVICE_PATTERNS' generic "(my|our)
+// <category> <word>" shape with name="said". Structural word-class
+// exclusion, not a sentence list -- same technique already used for the
+// named-doctor guard in tierRouter.ts (DOCTOR_NAME_CONTINUATION_EXCLUSIONS).
+// Deliberately small and closed; never grown to cover an actual name.
+const REPORTING_VERB_NAMES = new Set([
+  'said', 'says', 'saying', 'say',
+  'tell', 'tells', 'telling', 'told',
+  'mentioned', 'mentions', 'mentioning',
+  'asked', 'asks', 'asking',
+  'replied', 'replies', 'replying',
+  'answered', 'answers', 'answering',
+  'thinks', 'thought', 'think',
+]);
+
 // Pure detector for the routing authority's deterministic capture floor (spec §2.3 step 3).
 // No DB write, no ACK — emits IntentRecord[] only. The DOMAIN_WRITERS.service_capture
 // writer owns the commit + the missing-name pending flow. Reuses the SAME patterns/
@@ -445,6 +462,18 @@ export function detectServiceCapture(text: string): IntentRecord[] {
   if (READ_GUARD.test(text)) return [];
   const REPLACE_GUARD = /\b(remove|replace|switch|change|update)\b.{1,60}\b(replace|with|to)\b/i;
   if (REPLACE_GUARD.test(text)) return [];
+  // Recall/question-shaped language must never become a capture, even when
+  // it happens to contain a service-provider category word and end in a
+  // reporting verb ("Do you remember anything about what my doctor said").
+  // Same structural idiom as tierRouter.ts's OUTCOME_CUE ("what did ...
+  // say/tell"), extended here with the "do you remember/recall/know" and
+  // "did i tell/mention" recall-question openers this capture boundary
+  // also needs to reject. Category-agnostic by construction -- mentions no
+  // specific category, so it covers "what did my plumber say" the same way
+  // it covers the doctor case.
+  const RECALL_QUESTION_RE =
+    /\b(?:do\s+you\s+(?:remember|recall|know)|did\s+i\s+(?:tell|mention)|what\s+did\b[\s\S]*?\b(?:say|tell)\b)\b/i;
+  if (RECALL_QUESTION_RE.test(text)) return [];
 
   for (const pattern of SERVICE_PATTERNS) {
     const m = text.match(pattern);
@@ -454,6 +483,11 @@ export function detectServiceCapture(text: string): IntentRecord[] {
     if (!resolved || resolved.length === 0) continue; // not a service category → defer (LLM/backend)
     const category = resolved[0];                      // canonical head — aligns writes with reads
     const name = m[2]?.trim() ?? '';                   // '' is fine — writer asks for the name
+    // Defense-in-depth: a reporting/speech verb in the name slot is never a
+    // real name, regardless of which pattern or category produced it. Try
+    // the next pattern rather than accepting -- if nothing else matches,
+    // the loop falls through to the empty/defer return below.
+    if (name && REPORTING_VERB_NAMES.has(name.toLowerCase())) continue;
     const phoneCheck = m[3] ? normalizePhone(m[3]) : null;
     const phone = phoneCheck?.valid ? phoneCheck.normalized : undefined;
     return [{ type: 'service_capture', category, name, phone }];

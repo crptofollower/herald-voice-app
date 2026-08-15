@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { setDB } from '../../src/db/schema.ts';
-import { writeServiceProvider, captureHousehold, detectPhoneCapture } from '../../src/utils/householdCapture.ts';
+import { writeServiceProvider, captureHousehold, detectPhoneCapture, detectServiceCapture } from '../../src/utils/householdCapture.ts';
 import { answerHouseholdRead, detectHouseholdRead } from '../../src/utils/householdRead.ts';
 import { processUtterance } from '../../src/routing/processUtterance.ts';
 import { ConversationSession } from '../../src/routing/conversationSession.ts';
@@ -99,6 +99,48 @@ export async function runHouseholdContractTests(){
   {
     const got=detectPhoneCapture("Marcus's number is 972-55-0142");
     assert('C17 Marcus number+9digits -> matched_invalid',got,(v)=>v.kind==='matched_invalid'&&v.name==='Marcus'&&v.rawDigits==='972550142','kind matched_invalid; Marcus; 972550142');
+  }
+
+  // ── DSC1-DSC6: detectServiceCapture guard, direct detector assertions
+  // (same style as C11-C17's detectPhoneCapture calls above) — Fix 2, false
+  // service-provider write repair. Pure function, no DB/session needed.
+  // DSC1-4 prove the recall/question guard is category-agnostic (fires on
+  // doctor AND plumber AND electrician, not a doctor-specific patch) and
+  // covers both the "do you remember/recall" opener and the "what did...
+  // say/tell" shape. DSC5-6 prove legitimate capture is unaffected.
+  {
+    const got = detectServiceCapture('Do you remember anything about what my doctor said');
+    assert('DSC1 recall question about doctor -> no capture', got,
+      (v) => Array.isArray(v) && v.length === 0, '[]');
+  }
+  {
+    const got = detectServiceCapture('What did my doctor say?');
+    assert('DSC2 what-did-doctor-say -> no capture', got,
+      (v) => Array.isArray(v) && v.length === 0, '[]');
+  }
+  {
+    const got = detectServiceCapture('What did my plumber say?');
+    assert('DSC3 what-did-plumber-say -> no capture (category-agnostic proof)', got,
+      (v) => Array.isArray(v) && v.length === 0, '[]');
+  }
+  {
+    const got = detectServiceCapture('Do you remember what my electrician told me?');
+    assert('DSC4 recall question, electrician told -> no capture (recall-opener proof)', got,
+      (v) => Array.isArray(v) && v.length === 0, '[]');
+  }
+  {
+    const got = detectServiceCapture('My plumber is Bob');
+    assert('DSC5 legitimate plumber capture preserved', got,
+      (v) => Array.isArray(v) && v.length === 1 && v[0].type === 'service_capture'
+        && v[0].category === 'plumber' && v[0].name === 'Bob',
+      'one service_capture; category plumber; name Bob');
+  }
+  {
+    const got = detectServiceCapture('my electrician is Ed');
+    assert('DSC6 legitimate electrician capture preserved', got,
+      (v) => Array.isArray(v) && v.length === 1 && v[0].type === 'service_capture'
+        && v[0].category === 'electrician' && v[0].name === 'Ed',
+      'one service_capture; category electrician; name Ed');
   }
 
   // ── M1 completion, 2026-08-13: service_capture phone confirm gate ────────

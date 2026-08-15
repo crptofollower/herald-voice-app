@@ -225,7 +225,7 @@ const RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", BOLD = "\x1b[1m",
 let passed = 0;
 const failures = [];
 const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length + 11; // +1 list_todo+medical intercept, +3 classifier tri-state, +1 Law 5 positive control, +6 Law 5 regression fence
-const EXPECTED_TOTAL = 1452;  // 2026-08-15: +9 — doctor-recall Fix 1 (DR17–DR20 tell-cue + unresolved-name fail-closed), gate 1443->1452
+const EXPECTED_TOTAL = 1458;  // 2026-08-15: +6 — service-capture Fix 2 (DSC1–DSC6 recall-question guard + preserve), gate 1452->1458
 
 console.log(`\n${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  HERALD ROUTER + PHONE TEST SUITE — ${TOTAL} tests${RESET}`);
