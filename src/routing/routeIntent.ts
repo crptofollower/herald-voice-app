@@ -22,6 +22,7 @@ export type RouteDecision =
   | { kind: 'device_action'; tier: 1; actionIntent: ActionIntent; reason: string }
   | { kind: 'capture'; intents: IntentRecord[]; source: 'deterministic' | 'llm'; reason: string }
   | { kind: 'phone_repair_needed'; pending: Extract<CommitResult, { status: 'pending' }>; reason: string }
+  | { kind: 'medical_read_pending'; pending: Extract<CommitResult, { status: 'pending' }>; reason: string }
   | { kind: 'not_ready'; reason: string }
   | { kind: 'memory_probe'; tier: 2; context: LocalContext; reason: string }
   | { kind: 'backend'; tier: 3; reason: string }
@@ -1741,6 +1742,19 @@ export async function routeIntent(
 ): Promise<RouteDecision> {
   const decision = await deps.classifyQuery(text);
   console.log('[classifyQuery]', JSON.stringify({ tier: decision.tier, actionIntent: decision.actionIntent, reason: decision.reason }));
+
+  // NEW: medical visit-outcome disambiguation pending. Intercepts before
+  // the generic device_read mapping below so this one reason arms a
+  // resumable pending instead of a one-shot read. tierRouter/classifyQuery
+  // itself is untouched.
+  if (decision.tier === 1 && decision.reason === 'medical:visit_outcome_multiple_doctors') {
+    const { buildMedicalVisitOutcomePending } = await import('./medicalVisitOutcomeDisambiguate');
+    return {
+      kind: 'medical_read_pending',
+      pending: buildMedicalVisitOutcomePending(),
+      reason: decision.reason,
+    };
+  }
 
   if (decision.tier === 1 && typeof decision.tier1Response === 'string') {
     return {

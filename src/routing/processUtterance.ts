@@ -104,6 +104,18 @@ export async function processUtterance(
     });
     return { handled: true, source: 'capture', responseText: routeDecision.pending.prompt, commits: [routeDecision.pending] };
   }
+  // NEW — second occurrence of this exact arm pattern (phone_repair_needed
+  // is the first). Not factored out yet — rule of three not met.
+  if (routeDecision.kind === 'medical_read_pending') {
+    session.setPending({
+      pendingKey: routeDecision.pending.pendingKey,
+      resume: routeDecision.pending.resume,
+      kind: routeDecision.pending.kind,
+      reaskPrompt: routeDecision.pending.reaskPrompt,
+      correctable: routeDecision.pending.correctable,
+    });
+    return { handled: true, source: 'capture', responseText: routeDecision.pending.prompt, commits: [routeDecision.pending] };
+  }
   // 3) Converted-domain capture → commit loop.
   if (routeDecision.kind === 'capture' && allConverted(routeDecision.intents)) {
     const { responseText, commits } = await applyIntents(

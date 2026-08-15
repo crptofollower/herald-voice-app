@@ -415,6 +415,33 @@ export function isUnhintedVisitOutcomeAmbiguous(): boolean {
   return distinctDoctors.size >= 2;
 }
 
+/**
+ * Distinct NAMED doctors participating in an ambiguous unhinted
+ * visit-outcome query, for pending-slot candidate payload only.
+ * Deliberately duplicates isUnhintedVisitOutcomeAmbiguous's WHERE
+ * clause rather than sharing it, to avoid rippling into DR21-30's
+ * existing assertions. Never returns a name for an unattributed
+ * (doctor_name IS NULL) row -- that row still counts toward triggering
+ * ambiguity (see isUnhintedVisitOutcomeAmbiguous) but is never invented
+ * a name here.
+ */
+export function getAmbiguousDoctorCandidates(): string[] {
+  const db = getDB();
+  const rows = db.getAllSync<{ doctor_name: string | null }>(
+    `SELECT doctor_name FROM medical_records
+      WHERE visit_outcome IS NOT NULL AND trim(visit_outcome) != '' AND removed_at IS NULL
+        AND visit_date IS NOT NULL;`
+  );
+  const seen = new Map<string, string>(); // normalized -> first-seen display form
+  for (const r of rows) {
+    const name = r.doctor_name?.trim();
+    if (!name) continue;
+    const norm = normalizeDoctorNameForMatch(name);
+    if (!seen.has(norm)) seen.set(norm, name);
+  }
+  return [...seen.values()];
+}
+
 /** Deterministic read-back for device-prove recall. Memory Language Rule compliant. */
 export function getLastVisitOutcomeSummary(doctorHint?: string): string {
   const v = getLastVisitOutcome(doctorHint);

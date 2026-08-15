@@ -12,6 +12,7 @@ import { applyIntents, processUtterance } from '../../src/routing/processUtteran
 import { ConversationSession } from '../../src/routing/conversationSession.ts';
 import { classifyQuery } from '../../src/routing/tierRouter.ts';
 import { DOMAIN_WRITERS } from '../../src/routing/routeIntent.ts';
+import { writeMedicalRecord, attachVisitOutcome, getAmbiguousDoctorCandidates } from '../../src/db/medicalDB.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
 
@@ -26,6 +27,22 @@ const SCHEMA_SQL = `
     id TEXT PRIMARY KEY, fact TEXT NOT NULL, category TEXT,
     confidence TEXT, source_date TEXT, use_count INTEGER DEFAULT 0,
     last_used TEXT, context_type TEXT, valid_until TEXT, importance_score INTEGER
+  );
+  CREATE TABLE IF NOT EXISTS medical_records (
+    id TEXT PRIMARY KEY,
+    visit_date TEXT,
+    doctor_name TEXT,
+    facility TEXT,
+    reason TEXT,
+    diagnosis TEXT,
+    follow_up TEXT,
+    notes TEXT,
+    status TEXT DEFAULT 'noted',
+    surfaced_at TEXT,
+    visit_outcome TEXT,
+    outcome_asked_at TEXT,
+    removed_at TEXT,
+    created_at TEXT
   );
 `;
 
@@ -325,6 +342,101 @@ export async function runPipelineTests() {
     } finally {
       DOMAIN_WRITERS.family_capture.add = originalAdd;
     }
+  }
+
+  // ── P6: medical read pending continuation (2026-08-15) ──
+  function seedTwoDoctorOutcomes() {
+    const patelId = writeMedicalRecord({ doctor_name: 'Dr. Patel', notes: 'visit', visit_date: '2026-05-01' });
+    attachVisitOutcome(patelId, 'Patel said the labs were unremarkable.');
+    const smithId = writeMedicalRecord({ doctor_name: 'Dr. Smith', notes: 'visit', visit_date: '2026-07-20' });
+    attachVisitOutcome(smithId, 'Smith said to continue the current dose.');
+  }
+
+  {
+    const { say, session } = freshPipeline();
+    seedTwoDoctorOutcomes();
+    const tA = await say('What did my doctor tell me?');
+    assert('P6a ambiguous trigger asks which doctor', tA,
+      (v) => v.handled === true && v.source === 'capture' && v.responseText === 'Which doctor do you mean?',
+      "handled:true source:capture 'Which doctor do you mean?'");
+    assert('P6b pending armed', session.hasPending(), (v) => v === true, 'true');
+
+    const tB = await say('Patel');
+    assert('P6c resumes to Patel outcome', tB,
+      (v) => v.handled === true && v.source === 'pending_resume'
+        && v.responseText.includes('labs were unremarkable')
+        && !v.responseText.includes('continue the current dose'),
+      'Patel outcome, pending_resume, no Smith leak');
+    assert('P6d pending cleared after resolve', session.hasPending(), (v) => v === false, 'false');
+  }
+
+  {
+    const { say, session } = freshPipeline();
+    seedTwoDoctorOutcomes();
+    await say('What did my doctor tell me?');
+    const tC = await say('Smith');
+    assert('P6e resumes to Smith outcome', tC,
+      (v) => v.handled === true && v.source === 'pending_resume'
+        && v.responseText.includes('continue the current dose'),
+      'Smith outcome, pending_resume');
+    assert('P6f Smith path does not leak Patel', tC,
+      (v) => v.handled === true && !v.responseText.includes('labs were unremarkable'),
+      'excludes Patel outcome');
+    assert('P6f2 pending cleared after Smith resolve', session.hasPending(), (v) => v === false, 'false');
+  }
+
+  {
+    const { say, session } = freshPipeline();
+    seedTwoDoctorOutcomes();
+    await say('What did my doctor tell me?');
+    const tD = await say('banana');
+    assert('P6g invalid reply re-asks and retains pending', tD,
+      (v) => v.handled === true && v.source === 'pending_resume'
+        && v.responseText === 'I mean Dr. Patel or Dr. Smith — which one?',
+      'named-pair reask');
+    assert('P6g2 pending retained after invalid reply', session.hasPending(), (v) => v === true, 'true');
+  }
+
+  {
+    const { say, session } = freshPipeline();
+    seedTwoDoctorOutcomes();
+    await say('What did my doctor tell me?');
+    const tE = await say('never mind');
+    assert('P6h cancel clears pending', session.hasPending(), (v) => v === false, 'false');
+    assert('P6h2 cancel does not speak an outcome', tE,
+      (v) => v.handled === true && v.source === 'pending_resume'
+        && !v.responseText.includes('labs were unremarkable')
+        && !v.responseText.includes('continue the current dose'),
+      'no outcome text');
+  }
+
+  {
+    const { say, session } = freshPipeline();
+    const namedId = writeMedicalRecord({ doctor_name: 'Dr. Alvarez', notes: 'named visit', visit_date: '2026-05-01' });
+    attachVisitOutcome(namedId, 'Alvarez said the blood pressure was improved.');
+    const nullId = writeMedicalRecord({ notes: 'unattributed visit', visit_date: '2026-07-20' });
+    attachVisitOutcome(nullId, 'Unattributed follow-up notes, no doctor recorded.');
+
+    const tF = await say('What did my doctor tell me?');
+    assert('P6i named+unattributed asks which doctor and does not auto-commit', tF,
+      (v) => v.handled === true && v.source === 'capture'
+        && v.responseText === 'Which doctor do you mean?'
+        && !v.responseText.includes('blood pressure was improved')
+        && !v.responseText.includes('Unattributed follow-up'),
+      "clarify only; no named or unattributed outcome");
+    assert('P6i2 pending armed without auto-commit', session.hasPending(), (v) => v === true, 'true');
+    assert('P6i3 candidate set is exactly the one nameable doctor',
+      getAmbiguousDoctorCandidates(),
+      (v) => Array.isArray(v) && v.length === 1 && v[0] === 'Dr. Alvarez',
+      "['Dr. Alvarez']");
+
+    const tG = await say('Alvarez');
+    assert('P6j resumes to Alvarez outcome without unattributed leak', tG,
+      (v) => v.handled === true && v.source === 'pending_resume'
+        && v.responseText.includes('blood pressure was improved')
+        && !v.responseText.includes('Unattributed follow-up'),
+      'Alvarez outcome, pending_resume, no unattributed leak');
+    assert('P6j2 pending cleared after named+unattributed resolve', session.hasPending(), (v) => v === false, 'false');
   }
 
   // P5d: REQUIRED-source compile pin — NOT CHECKABLE in this harness.
