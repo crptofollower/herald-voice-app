@@ -1457,6 +1457,21 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
       };
     }
 
+    // NEW: unhinted-ambiguity check (2026-08-15 multi-doctor mechanism).
+    // Only runs when doctorHint is falsy; hinted/explicit asks are
+    // unaffected and fall through below unchanged.
+    if (!doctorHint) {
+      const { isUnhintedVisitOutcomeAmbiguous } = await import('../db/medicalDB');
+      if (isUnhintedVisitOutcomeAmbiguous()) {
+        return {
+          tier: 1,
+          tier1Response: "Which doctor do you mean?",
+          isMedical: true,
+          reason: "medical:visit_outcome_multiple_doctors",
+        };
+      }
+    }
+
     const { getLastVisitOutcomeSummary } = await import('../db/medicalDB');
     const response = getLastVisitOutcomeSummary(doctorHint);
     return { tier: 1, tier1Response: response, isMedical: true, reason: "medical:visit_outcome_read" };

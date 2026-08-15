@@ -376,6 +376,45 @@ export function getLastVisitOutcome(doctorHint?: string): {
   };
 }
 
+/**
+ * Determines whether an UNHINTED visit-outcome query is safe to answer via
+ * the existing latest-globally reader, or must clarify. Reuses the same
+ * base query shape as getLastVisitOutcome (non-null/non-empty outcome,
+ * non-removed, visit_date present) -- no new query semantics, only a
+ * grouping pass. Never called when doctorHint is present; hinted asks are
+ * unaffected and continue through the unchanged reader below.
+ *
+ * DECISION (2026-08-15, medical multi-doctor ambiguity mechanism):
+ * - 0 or 1 qualifying rows total -> always safe
+ * - 2+ rows, all one normalized doctor, zero unattributed rows -> safe
+ *   (existing latest-for-that-doctor semantics already correct, since the
+ *   full row set is one doctor)
+ * - 2+ rows AND (2+ distinct named doctors OR any row missing doctor_name)
+ *   -> ambiguous. An unattributed row is never assumed to belong to the
+ *   sole named doctor -- that would be an inferred substitution, forbidden
+ *   by Spine §3/Law 4 -- and is never promoted into a fake "Unknown
+ *   Doctor" entity. It simply forces clarify.
+ */
+export function isUnhintedVisitOutcomeAmbiguous(): boolean {
+  const db = getDB();
+  const rows = db.getAllSync<{ doctor_name: string | null }>(
+    `SELECT doctor_name FROM medical_records
+      WHERE visit_outcome IS NOT NULL AND trim(visit_outcome) != '' AND removed_at IS NULL
+        AND visit_date IS NOT NULL;`
+  );
+  if (rows.length <= 1) return false;
+
+  let hasUnattributed = false;
+  const distinctDoctors = new Set<string>();
+  for (const r of rows) {
+    const name = r.doctor_name?.trim();
+    if (!name) hasUnattributed = true;
+    else distinctDoctors.add(normalizeDoctorNameForMatch(name));
+  }
+  if (hasUnattributed) return true;
+  return distinctDoctors.size >= 2;
+}
+
 /** Deterministic read-back for device-prove recall. Memory Language Rule compliant. */
 export function getLastVisitOutcomeSummary(doctorHint?: string): string {
   const v = getLastVisitOutcome(doctorHint);

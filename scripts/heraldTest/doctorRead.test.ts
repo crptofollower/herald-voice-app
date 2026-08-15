@@ -12,13 +12,16 @@
 // ("doctor Smith") fails closed rather than silently returning a
 // different doctor's outcome. Real repo coverage for tierRouter.ts's
 // OUTCOME_CUE/APPOINTMENT_CONTEXT/NAMED_BUT_UNRESOLVED_DOCTOR_RE changes.
+// DR21-DR30 (2026-08-15, medical multi-doctor ambiguity): unhinted
+// visit-outcome clarify when 2+ distinct named doctors or any
+// unattributed outcome row; hinted/unresolved-name paths unchanged.
 //
 // Runner: npx tsx scripts/heraldTest/doctorRead.test.ts
 // Gate:   wired from run.mjs — must be green before Build 72 closes.
 
 import Database from 'better-sqlite3';
 import { setDB } from '../../src/db/schema.ts';
-import { writeMedicalContact, writeMedication, writeMedicalRecord, attachVisitOutcome } from '../../src/db/medicalDB.ts';
+import { writeMedicalContact, writeMedication, writeMedicalRecord, attachVisitOutcome, getMedicalSummary } from '../../src/db/medicalDB.ts';
 import { classifyQuery } from '../../src/routing/tierRouter.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
@@ -433,6 +436,161 @@ export async function runDoctorReadTests() {
       (v) => typeof v === 'string' && !v.includes('elevated'), 'excludes Foster outcome text');
     assert('DR20c response does NOT silently return Smith\'s outcome either (genuine fail-closed, not a lucky match)', d.tier1Response,
       (v) => typeof v === 'string' && !v.includes('looked normal'), 'excludes Smith outcome text');
+  }
+
+  // ── DR21: zero outcomes, unhinted query. 0 qualifying rows is always
+  // safe (helper shortcut). Existing miss text, existing read reason.
+  {
+    freshDB();
+    const d = await classifyQuery('What did my doctor tell me?');
+    assert('DR21 routes medical:visit_outcome_read', d.reason,
+      (v) => v === 'medical:visit_outcome_read', 'medical:visit_outcome_read');
+    assert('DR21 returns existing miss text', d.tier1Response,
+      (v) => v === "I don't have anything from your last visit yet.",
+      'existing miss text');
+  }
+
+  // ── DR22: one named doctor, one outcome, unhinted. Safe singleton.
+  {
+    freshDB();
+    const id = writeMedicalRecord({ doctor_name: 'Dr. Alvarez', notes: 'visit', visit_date: '2026-07-20' });
+    attachVisitOutcome(id, 'Blood work looked good, no medication changes, follow up in six months');
+    const d = await classifyQuery('What did my doctor tell me?');
+    assert('DR22 routes medical:visit_outcome_read', d.reason,
+      (v) => v === 'medical:visit_outcome_read', 'medical:visit_outcome_read');
+    assert('DR22 response includes stored outcome (not a clarify)', d.tier1Response,
+      (v) => typeof v === 'string'
+        && v.includes('Blood work looked good, no medication changes, follow up in six months')
+        && v !== 'Which doctor do you mean?',
+      'includes stored outcome, not clarify');
+  }
+
+  // ── DR23: one doctor, multiple outcome rows for that same doctor,
+  // unhinted. Same-doctor multiplicity is NOT ambiguous — latest wins.
+  {
+    freshDB();
+    const olderId = writeMedicalRecord({ doctor_name: 'Dr. Alvarez', notes: 'older visit', visit_date: '2026-05-01' });
+    attachVisitOutcome(olderId, 'Older checkup notes, not the latest.');
+    const newerId = writeMedicalRecord({ doctor_name: 'Dr. Alvarez', notes: 'newer visit', visit_date: '2026-07-20' });
+    attachVisitOutcome(newerId, 'Blood work looked good, no medication changes, follow up in six months');
+    const d = await classifyQuery('What did my doctor tell me?');
+    assert('DR23 routes medical:visit_outcome_read', d.reason,
+      (v) => v === 'medical:visit_outcome_read', 'medical:visit_outcome_read');
+    assert('DR23 returns the latest Alvarez outcome, not the older one', d.tier1Response,
+      (v) => typeof v === 'string'
+        && v.includes('Blood work looked good, no medication changes, follow up in six months')
+        && !v.includes('Older checkup notes'),
+      'latest Alvarez outcome only');
+  }
+
+  // ── DR24: two named doctors, unhinted. Must clarify; leak-proof.
+  {
+    freshDB();
+    const patelId = writeMedicalRecord({ doctor_name: 'Dr. Patel', notes: 'visit', visit_date: '2026-05-01' });
+    attachVisitOutcome(patelId, 'Patel said the labs were unremarkable.');
+    const smithId = writeMedicalRecord({ doctor_name: 'Dr. Smith', notes: 'visit', visit_date: '2026-07-20' });
+    attachVisitOutcome(smithId, 'Smith said to continue the current dose.');
+    const d = await classifyQuery('What did my doctor tell me?');
+    assert('DR24 routes medical:visit_outcome_multiple_doctors', d.reason,
+      (v) => v === 'medical:visit_outcome_multiple_doctors', 'medical:visit_outcome_multiple_doctors');
+    assert('DR24 clarify copy is exact', d.tier1Response,
+      (v) => v === 'Which doctor do you mean?', 'Which doctor do you mean?');
+    assert('DR24 response does not leak Patel outcome', d.tier1Response,
+      (v) => typeof v === 'string' && !v.includes('labs were unremarkable'), 'excludes Patel outcome');
+    assert('DR24 response does not leak Smith outcome', d.tier1Response,
+      (v) => typeof v === 'string' && !v.includes('continue the current dose'), 'excludes Smith outcome');
+  }
+
+  // ── DR25: one named doctor's outcome PLUS one unattributed outcome
+  // (doctor_name = null), unhinted. Unattributed is never assumed to
+  // belong to the named doctor — clarify. Leak-proof on outcome and name.
+  {
+    freshDB();
+    const namedId = writeMedicalRecord({ doctor_name: 'Dr. Alvarez', notes: 'named visit', visit_date: '2026-05-01' });
+    attachVisitOutcome(namedId, 'Alvarez said the blood pressure was improved.');
+    const nullId = writeMedicalRecord({ notes: 'unattributed visit', visit_date: '2026-07-20' });
+    attachVisitOutcome(nullId, 'Unattributed follow-up notes, no doctor recorded.');
+    const d = await classifyQuery('What did my doctor tell me?');
+    assert('DR25 routes medical:visit_outcome_multiple_doctors', d.reason,
+      (v) => v === 'medical:visit_outcome_multiple_doctors', 'medical:visit_outcome_multiple_doctors');
+    assert('DR25 clarify copy is exact', d.tier1Response,
+      (v) => v === 'Which doctor do you mean?', 'Which doctor do you mean?');
+    assert('DR25 does not leak named-doctor outcome', d.tier1Response,
+      (v) => typeof v === 'string' && !v.includes('blood pressure was improved'), 'excludes Alvarez outcome');
+    assert('DR25 does not leak unattributed outcome or doctor name', d.tier1Response,
+      (v) => typeof v === 'string'
+        && !v.includes('Unattributed follow-up')
+        && !v.includes('Alvarez'),
+      'excludes unattributed outcome and doctor name');
+  }
+
+  // ── DR26: exactly ONE outcome row total, doctor_name = null, unhinted.
+  // rows.length <= 1 shortcut fires before any ambiguity check.
+  {
+    freshDB();
+    const id = writeMedicalRecord({ notes: 'unattributed visit', visit_date: '2026-07-20' });
+    attachVisitOutcome(id, 'Follow up in six months, no medication changes.');
+    const d = await classifyQuery('What did my doctor tell me?');
+    assert('DR26 routes medical:visit_outcome_read', d.reason,
+      (v) => v === 'medical:visit_outcome_read', 'medical:visit_outcome_read');
+    assert('DR26 returns existing single-answer text', d.tier1Response,
+      (v) => v === 'Last time, you mentioned: Follow up in six months, no medication changes.',
+      'existing unattributed single-answer text');
+  }
+
+  // ── DR27: explicit "Dr Smith" query with 2+ doctors present. Hinted
+  // path — new branch never fires when doctorHint is truthy.
+  {
+    freshDB();
+    const smithId = writeMedicalRecord({ doctor_name: 'Dr. Smith', notes: 'smith visit', visit_date: '2026-05-01' });
+    attachVisitOutcome(smithId, 'Everything from your last checkup looked normal.');
+    const patelId = writeMedicalRecord({ doctor_name: 'Dr. Patel', notes: 'patel visit', visit_date: '2026-07-20' });
+    attachVisitOutcome(patelId, 'Patel said the labs were unremarkable.');
+    const d = await classifyQuery('What did Dr Smith say at my last appointment');
+    assert('DR27 routes medical:visit_outcome_read', d.reason,
+      (v) => v === 'medical:visit_outcome_read', 'medical:visit_outcome_read');
+    assert('DR27 returns Smith\'s outcome specifically', d.tier1Response,
+      (v) => typeof v === 'string'
+        && v.includes('Everything from your last checkup looked normal.')
+        && !v.includes('labs were unremarkable')
+        && v !== 'Which doctor do you mean?',
+      'Smith outcome only');
+  }
+
+  // ── DR28: "my doctor Smith" (unresolved name shape) with 2+ doctors.
+  // Fix 1's existing guard still runs BEFORE the new branch.
+  {
+    freshDB();
+    const smithId = writeMedicalRecord({ doctor_name: 'Dr. Smith', notes: 'older visit', visit_date: '2026-05-01' });
+    attachVisitOutcome(smithId, 'Everything from your last checkup looked normal.');
+    const fosterId = writeMedicalRecord({ doctor_name: 'Dr. Foster', notes: 'newer visit', visit_date: '2026-07-20' });
+    attachVisitOutcome(fosterId, 'Your blood pressure reading was elevated, follow up in a month.');
+    const d = await classifyQuery('What did my doctor Smith tell me at my appointment');
+    assert('DR28 still fails closed on unresolved doctor (Fix 1 before new branch)', d.reason,
+      (v) => v === 'medical:visit_outcome_unresolved_doctor', 'medical:visit_outcome_unresolved_doctor');
+  }
+
+  // ── DR29: regression — DR17, DR18, DR19, DR20 above are unmodified
+  // and already ran. No new assertions; those four must still pass
+  // exactly as before (getLastVisitOutcome / getLastVisitOutcomeSummary
+  // are byte-unchanged).
+
+  // ── DR30: getMedicalSummary() against a DB with active medications
+  // AND multiple ambiguous doctor-outcome rows. Medication list and
+  // primary-doctor line must be unaffected (no cross-contamination).
+  {
+    freshDB();
+    writeMedication({ name: 'Aspirin', dosage: '81mg', is_active: 1 });
+    writeMedicalContact({ name: 'Dr. Sarver', is_primary: 1 });
+    const patelId = writeMedicalRecord({ doctor_name: 'Dr. Patel', notes: 'visit', visit_date: '2026-05-01' });
+    attachVisitOutcome(patelId, 'Patel said the labs were unremarkable.');
+    const smithId = writeMedicalRecord({ doctor_name: 'Dr. Smith', notes: 'visit', visit_date: '2026-07-20' });
+    attachVisitOutcome(smithId, 'Smith said to continue the current dose.');
+    const summary = getMedicalSummary();
+    assert('DR30 medication list is unaffected', summary,
+      (v) => v.includes('Aspirin') && v.includes('81mg'), 'includes Aspirin 81mg');
+    assert('DR30 primary-doctor line is unaffected', summary,
+      (v) => v.includes('Dr. Sarver'), 'includes Dr. Sarver');
   }
 
   const total = passed + failures.length;
