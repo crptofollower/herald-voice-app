@@ -1,8 +1,9 @@
 // scripts/heraldTest/appOpenSignals.test.ts
 // Deterministic Tier-1 app-open extractor — discourse prefix, request-frame,
 // stop-word boundary, and live ai_name wake-word (never hardcoded).
-// Also owns the shared launch ACK seam (composeLaunchAck / launchAppAndCompose)
-// and a ChatScreen executeIntent source-lock: false launch cannot reach "done".
+// Also owns the shared launch ACK seam (composeLaunchAck / launchAppAndCompose),
+// a ChatScreen executeIntent source-lock: false launch cannot reach "done",
+// and app-launch identity (canonicalKey: Uber Eats, + → plus).
 //
 // Runner: npx tsx scripts/heraldTest/appOpenSignals.test.ts
 // Gate:   wired from run.mjs
@@ -12,6 +13,7 @@ import { setDB } from '../../src/db/schema.ts';
 import { setProfileField } from '../../src/db/profileDB.ts';
 import { classifyQuery } from '../../src/routing/tierRouter.ts';
 import { composeLaunchAck, launchAppAndCompose } from '../../src/screens/chat/dispatch.ts';
+import { canonicalKey } from '../../src/screens/chat/launchIdentity.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -238,6 +240,21 @@ export async function runAppOpenSignalsTests() {
       },
       'false launch throws into existing catch/error; cannot reach done',
     );
+  }
+
+  // ── App-launch identity (2026-08-15): real canonicalKey, not a mirror ──
+  {
+    assert('id Uber → uber', canonicalKey('Uber'), (v) => v === 'uber', 'uber');
+    assert('id Uber Eats → ubereats', canonicalKey('Uber Eats'), (v) => v === 'ubereats', 'ubereats');
+    assert('id Disney+ → disneyplus', canonicalKey('Disney+'), (v) => v === 'disneyplus', 'disneyplus');
+    assert('id Disney Plus → disneyplus', canonicalKey('Disney Plus'), (v) => v === 'disneyplus', 'disneyplus');
+    assert('id Paramount+ → paramountplus', canonicalKey('Paramount+'), (v) => v === 'paramountplus', 'paramountplus');
+    assert('id Paramount Plus → paramountplus', canonicalKey('Paramount Plus'), (v) => v === 'paramountplus', 'paramountplus');
+    assert('id Apple TV+ → appletv', canonicalKey('Apple TV+'), (v) => v === 'appletv', 'appletv');
+    assert('id Disney remains disney, never disneyplus', canonicalKey('Disney'),
+      (v) => v === 'disney' && v !== 'disneyplus', 'disney');
+    assert('id Frobnicator remains frobnicator', canonicalKey('Frobnicator'),
+      (v) => v === 'frobnicator', 'frobnicator');
   }
 
   const total = passed + failures.length;

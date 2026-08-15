@@ -85,6 +85,7 @@ import { detectEmergency } from '../routing/emergencySignals';
 import type { IntentRecord } from '../hooks/llmLayers';
 import { dispatchRead, dispatchAction, launchAppAndCompose } from './chat/dispatch';
 import type { DispatchDeps } from './chat/dispatch';
+import { canonicalKey } from './chat/launchIdentity';
 import { handleTier1, buildTier2DeviceContext, buildAmbientDeviceContext, writeProfileFromOnboarding } from "../routing/tier1Responses";
 import { refreshCalendarCache } from "../db/calendarCacheDB";
 import { initDB, isDBReady } from "../db/useDeviceDB";
@@ -2426,34 +2427,6 @@ export default function ChatScreen() {
         timestamp: Date.now(),
       });
     }
-  };
-
-  // Canonical key map — aliases that should share the same permission
-  const CANONICAL_KEYS: Record<string, string> = {
-    aa: 'americanairlines',
-    bofa: 'bankofamerica',
-    amex: 'americanexpress',
-    max: 'hbomax',
-    marriott: 'marriottbonvoy',
-    shealth: 'health',
-    samsunghealth: 'health',
-    samsungwallet: 'samsungpay',
-    ubereats: 'uber',
-    x: 'twitter',
-    express_scripts: 'expressscripts',
-    expressscripts_app: 'expressscripts',
-    mail: 'email',
-    inbox: 'email',
-    myemail: 'email',
-    myinbox: 'email',
-    mymail: 'email',
-  };
-
-  const canonicalKey = (k: string): string => {
-    const base = k.toLowerCase().trim()
-      .replace(/\s+/g, '')
-      .replace(/[_+]/g, '');
-    return CANONICAL_KEYS[base] ?? base;
   };
 
   const handleLaunchAction = async (appName: string): Promise<boolean> => {
