@@ -6,6 +6,12 @@
 // phrasing still routes medical:summary (regression on the removed patterns).
 // DR7/DR8 (added later): visit-outcome recall — schema updated to v21 shape
 // (visit_outcome/outcome_asked_at) to support attachVisitOutcome.
+// DR17-DR20 (Fix 1, doctor-recall ownership repair): tell-cue coverage
+// (bare, singular-visit, plural-visits) plus the two-doctor trust
+// differential proving an explicitly-named-but-unresolved doctor
+// ("doctor Smith") fails closed rather than silently returning a
+// different doctor's outcome. Real repo coverage for tierRouter.ts's
+// OUTCOME_CUE/APPOINTMENT_CONTEXT/NAMED_BUT_UNRESOLVED_DOCTOR_RE changes.
 //
 // Runner: npx tsx scripts/heraldTest/doctorRead.test.ts
 // Gate:   wired from run.mjs — must be green before Build 72 closes.
@@ -360,6 +366,73 @@ export async function runDoctorReadTests() {
       const d = await classifyQuery(text);
       assert(label, d.reason, (v) => v === 'medical:doctor_summary', 'medical:doctor_summary');
     }
+  }
+
+  // ── DR17: bare "what did my doctor tell me" — Fix 1 Part A, no visit/
+  // appointment noun at all. Before Fix 1 this fell through to medical:summary
+  // (OUTCOME_CUE only recognized "say"; APPOINTMENT_CONTEXT had no bare-"tell
+  // me" alternative). Same seed shape as DR7/DR8.
+  {
+    freshDB();
+    const id = writeMedicalRecord({ doctor_name: 'Dr. Alvarez', notes: 'visit', visit_date: '2026-07-20' });
+    attachVisitOutcome(id, 'Blood work looked good, no medication changes, follow up in six months');
+    const d = await classifyQuery('What did my doctor tell me?');
+    assert('DR17 routes medical:visit_outcome_read', d.reason,
+      (v) => v === 'medical:visit_outcome_read', 'medical:visit_outcome_read');
+    assert('DR17 response includes exact stored outcome verbatim', d.tier1Response,
+      (v) => typeof v === 'string' && v.includes('Blood work looked good, no medication changes, follow up in six months'),
+      'includes stored outcome');
+  }
+
+  // ── DR18: "what did my doctor tell me about my visit" — singular visit noun,
+  // Fix 1 Part A tell-cue.
+  {
+    freshDB();
+    const id = writeMedicalRecord({ doctor_name: 'Dr. Alvarez', notes: 'visit', visit_date: '2026-07-20' });
+    attachVisitOutcome(id, 'Blood work looked good, no medication changes, follow up in six months');
+    const d = await classifyQuery('What did my doctor tell me about my visit?');
+    assert('DR18 routes medical:visit_outcome_read', d.reason,
+      (v) => v === 'medical:visit_outcome_read', 'medical:visit_outcome_read');
+    assert('DR18 response includes exact stored outcome verbatim', d.tier1Response,
+      (v) => typeof v === 'string' && v.includes('Blood work looked good, no medication changes, follow up in six months'),
+      'includes stored outcome');
+  }
+
+  // ── DR19: "what did my doctor tell me about my visits" — plural. Fix 1 Part A
+  // also fixed a word-boundary bug (/\bvisit\b/ never matched "visits") found
+  // independently while tracing this exact required case.
+  {
+    freshDB();
+    const id = writeMedicalRecord({ doctor_name: 'Dr. Alvarez', notes: 'visit', visit_date: '2026-07-20' });
+    attachVisitOutcome(id, 'Blood work looked good, no medication changes, follow up in six months');
+    const d = await classifyQuery('What did my doctor tell me about my visits?');
+    assert('DR19 routes medical:visit_outcome_read', d.reason,
+      (v) => v === 'medical:visit_outcome_read', 'medical:visit_outcome_read');
+    assert('DR19 response includes exact stored outcome verbatim', d.tier1Response,
+      (v) => typeof v === 'string' && v.includes('Blood work looked good, no medication changes, follow up in six months'),
+      'includes stored outcome');
+  }
+
+  // ── DR20: two-doctor trust differential — Fix 1 Part B. "doctor Smith"
+  // (spelled-out "doctor", not "Dr") is explicitly named but NOT resolved by
+  // extractDoctorName (Dr/Dr.-only). Foster's visit is newer, so an undefined
+  // hint routed to the ordinary unhinted-latest reader (old behavior) would
+  // silently return Foster's outcome under Smith's name — the exact trust
+  // failure Fix 1 Part B exists to close. Same differential-seeding shape as
+  // DR11, applied to the outcome reader instead of the visit-history reader.
+  {
+    freshDB();
+    const smithId = writeMedicalRecord({ doctor_name: 'Dr. Smith', visit_date: '2026-05-01', notes: 'older visit' });
+    attachVisitOutcome(smithId, 'Everything from your last checkup looked normal.');
+    const fosterId = writeMedicalRecord({ doctor_name: 'Dr. Foster', visit_date: '2026-07-20', notes: 'newer visit' });
+    attachVisitOutcome(fosterId, 'Your blood pressure reading was elevated, follow up in a month.');
+    const d = await classifyQuery('What did my doctor Smith tell me at my appointment');
+    assert('DR20a fails closed — does not route to medical:visit_outcome_read', d.reason,
+      (v) => v === 'medical:visit_outcome_unresolved_doctor', 'medical:visit_outcome_unresolved_doctor');
+    assert('DR20b response does NOT leak Foster\'s (newer, wrong-doctor) outcome', d.tier1Response,
+      (v) => typeof v === 'string' && !v.includes('elevated'), 'excludes Foster outcome text');
+    assert('DR20c response does NOT silently return Smith\'s outcome either (genuine fail-closed, not a lucky match)', d.tier1Response,
+      (v) => typeof v === 'string' && !v.includes('looked normal'), 'excludes Smith outcome text');
   }
 
   const total = passed + failures.length;

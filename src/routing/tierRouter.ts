@@ -379,9 +379,44 @@ const UPCOMING_MEDICAL_SINGLE = [
 // (Spine §3 — medical reads never route through generative phrasing).
 // Three independent signals ANDed — order-independent so phrase reorderings
 // like "how did my doctor's appointment go with Dr X" still match.
-const OUTCOME_CUE = /\b(?:how did|how was|what happened)\b|\bwhat did\b[\s\S]*?\bsay\b/i;
-const APPOINTMENT_CONTEXT = /\b(?:appointment|visit|check-?up|last time)\b/i;
+// 2026-08-XX amendment (Fix 1, doctor-recall ownership repair):
+// - OUTCOME_CUE now also recognizes "tell" alongside "say" -- "what did my
+//   doctor tell me" reached medical:summary before this because the cue
+//   only knew "say". No sentences enumerated; this is one verb added to
+//   the existing alternation.
+// - APPOINTMENT_CONTEXT had two gaps, both source-traced, not assumed:
+//   (1) /\bvisit\b/ cannot match "visits" -- the trailing "s" breaks the
+//   word boundary the pattern requires immediately after "visit", so
+//   "about my visits" never satisfied this conjunct. Widened to visits?.
+//   (2) bare "what did my doctor tell me?" carries no appointment/visit
+//   noun at all, so the conjunct always failed it. "tell me"/"told me" is
+//   added as its own alternative: the reporting-verb-plus-object shape
+//   IS the evidence of an actual doctor encounter, doing the same
+//   evidentiary job as "appointment"/"visit" for this cue.
+const OUTCOME_CUE = /\b(?:how did|how was|what happened)\b|\bwhat did\b[\s\S]*?\b(?:say|tell)\b/i;
+const APPOINTMENT_CONTEXT = /\b(?:appointment|visits?|check-?up|last time|tell\s+me|told\s+me)\b/i;
 const DOCTOR_REFERENCE = /\b(?:dr\.?\s*\w+|(?:the|my) doctor)\b/i;
+
+// Fix 1 Part B -- explicit-name guard (source-confirmed facts this guard
+// depends on: extractDoctorName() resolves only "Dr"/"Dr." forms and
+// returns undefined for spelled-out "doctor <name>"; getLastVisitOutcomeSummary
+// intentionally returns the latest outcome globally when called with an
+// undefined hint -- correct for a genuinely unhinted "my/the doctor" ask).
+// The gap: an utterance can explicitly name a doctor in a form
+// extractDoctorName doesn't parse ("my doctor Smith"), producing the same
+// falsy doctorHint as a genuinely unhinted ask -- silently calling the
+// unhinted reader in that case can return a DIFFERENT doctor's outcome.
+// This is a SHAPE check only, never a name resolver: "(my|the) doctor
+// <token>" where <token> is not one of a small closed set of reporting/
+// function words that legitimately follow "doctor" without naming anyone.
+// Anything not in that excluded set is treated, conservatively, as a
+// possible name -- biased toward failing closed, never toward guessing.
+const DOCTOR_NAME_CONTINUATION_EXCLUSIONS =
+  '(?:said|says|say|tell|tells|told|mentioned|thinks|thought|wants|wanted|recommended|prescribed|is|was|has|had|will|would)';
+const NAMED_BUT_UNRESOLVED_DOCTOR_RE = new RegExp(
+  `\\b(?:my|the)\\s+doctor\\s+(?!${DOCTOR_NAME_CONTINUATION_EXCLUSIONS}\\b)[a-z']+\\b`,
+  'i'
+);
 
 function isVisitOutcomeRead(msg: string): boolean {
   return (
@@ -1404,9 +1439,25 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   // medical_visit_upcoming. Same §4a reader as the prior later placement;
   // doctor hint still via extractDoctorName (unchanged for existing patterns).
   if (isVisitOutcomeRead(msg)) {
-    const { getLastVisitOutcomeSummary } = await import('../db/medicalDB');
     const { extractDoctorName } = await import('../utils/detectMedicalEvent');
     const doctorHint = extractDoctorName(msg);
+
+    // Explicit-name guard: doctorHint can be falsy for two structurally
+    // different reasons -- a genuinely unhinted "my/the doctor" ask (fine,
+    // the unhinted-latest reader is correct for this) or an utterance that
+    // named a doctor in a form extractDoctorName can't parse (must NOT
+    // silently fall back to latest-globally). NAMED_BUT_UNRESOLVED_DOCTOR_RE
+    // distinguishes the two by shape only -- see its definition above.
+    if (!doctorHint && NAMED_BUT_UNRESOLVED_DOCTOR_RE.test(msg)) {
+      return {
+        tier: 1,
+        tier1Response: "I'm not sure which doctor you mean — can you say their name again?",
+        isMedical: true,
+        reason: "medical:visit_outcome_unresolved_doctor",
+      };
+    }
+
+    const { getLastVisitOutcomeSummary } = await import('../db/medicalDB');
     const response = getLastVisitOutcomeSummary(doctorHint);
     return { tier: 1, tier1Response: response, isMedical: true, reason: "medical:visit_outcome_read" };
   }
