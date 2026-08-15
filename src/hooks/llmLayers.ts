@@ -134,18 +134,74 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// Unicode-aware "independent token/phrase" boundary. NOT native \b (ASCII-\w
+// only). Token-internal set: letters, combining marks (so a decomposed
+// accented character like e + U+0301 cannot leave a false boundary
+// mid-character), digits, connector punctuation, and the Unicode DASH
+// PUNCTUATION category (covers ASCII hyphen plus en/em dash and other
+// Unicode dash forms as one category, not an enumerated list) -- so
+// "Connor" cannot ground against "O'Connor" and "law"/"Smith" cannot ground
+// against "father-in-law"/"Smith-Jones". Apostrophe forms are the one
+// enumerated exception (no punctuation category isolates them without also
+// swallowing real sentence punctuation). A period/comma/colon/slash is only
+// non-boundary between two digits (preserves "20" failing to ground against
+// "20.5" -- dosage-truncation safety).
+//
+// FAILS CLOSED if this runtime's regex engine doesn't support the full set
+// of features the matcher below depends on: grounding is refused entirely
+// (findStandardSpan returns null for everything) rather than silently
+// falling back to unguarded substring matching. A legitimate capture may be
+// lost on an unsupported runtime; a fabricated/partial capture may never
+// gain authority. The feature check below exercises the SAME WORD_CHAR /
+// boundaryWrap construction production actually uses -- not a minimal proxy
+// -- so a partial-feature-support runtime (e.g. \p{L} works but \p{Pd} or
+// lookbehind doesn't) is caught before findStandardSpan ever runs.
+const WORD_CHAR = "[\\p{L}\\p{M}\\p{N}\\p{Pc}\\p{Pd}'\u2019\u02BC]";
+const NUMERIC_JOIN = '[.,:/]';
+
+// Trailing possessive-clitic exception: a candidate may end immediately
+// before 's / 's when that apostrophe sequence is a closed, complete
+// English possessive suffix followed by a genuine outer boundary -- not a
+// general apostrophe relaxation. The LEADING boundary is unchanged and
+// stays fully strict (apostrophe remains token-internal there), which is
+// what continues to block "Connor" from grounding inside "O'Connor" --
+// that check never consults this exception, since it only inspects what
+// follows a match, never what precedes it. See design review 2026-08-15
+// (possessive-apostrophe revision) for the full adversarial matrix.
+function boundaryWrap(pattern: string): string {
+  const trailingBoundary =
+    `(?:(?!${WORD_CHAR})` +
+    `|(?=['\\u2019\\u02BC]s?(?!${WORD_CHAR}))` +
+    `|(?=s(?!${WORD_CHAR})))`;
+  return `(?<!${WORD_CHAR}|\\d${NUMERIC_JOIN})(?:${pattern})${trailingBoundary}(?!${NUMERIC_JOIN}\\d)`;
+}
+
+function checkUnicodeBoundarySupport(): boolean {
+  try {
+    // Exercises every construct findStandardSpan's regexes below actually
+    // use: \p{L}, \p{M}, \p{N}, \p{Pc}, \p{Pd}, apostrophe literals,
+    // negative lookbehind, negative lookahead, and the u flag together --
+    // via the real boundaryWrap function, not a hand-simplified stand-in.
+    const probe = new RegExp(boundaryWrap('a'), 'iu');
+    return probe.test('a') && !probe.test('ab');
+  } catch {
+    return false;
+  }
+}
+export const UNICODE_BOUNDARY_SUPPORTED = checkUnicodeBoundarySupport();
+
 /** Standard verbatim span: whitespace-flexible word join; raw span wins (W3d). */
-function findStandardSpan(rawUtterance: string, value: string): string | null {
+export function findStandardSpan(rawUtterance: string, value: string): string | null {
+  if (!UNICODE_BOUNDARY_SUPPORTED) return null;
   const trimmed = value.trim();
   if (!trimmed) return null;
   const parts = trimmed.split(/\s+/).filter(Boolean).map(escapeRegExp);
-  const re = new RegExp(parts.join('\\s+'), 'i');
+  const re = new RegExp(boundaryWrap(parts.join('\\s+')), 'iu');
   const hit = rawUtterance.match(re);
   if (hit) return hit[0];
-  // Model may collapse whitespace ("10mg" vs "10 mg") — still ground to utterance span.
   const collapsed = trimmed.replace(/\s+/g, '');
   if (collapsed.length === 0) return null;
-  const soft = new RegExp(collapsed.split('').map(escapeRegExp).join('\\s*'), 'i');
+  const soft = new RegExp(boundaryWrap(collapsed.split('').map(escapeRegExp).join('\\s*')), 'iu');
   const softHit = rawUtterance.match(soft);
   return softHit ? softHit[0] : null;
 }
