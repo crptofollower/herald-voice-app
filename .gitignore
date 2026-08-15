@@ -3,6 +3,7 @@ node_modules/
 dist/
 CLAUDE.md
 HERALD_CURRENT_STATE*.md
+!HERALD_CURRENT_STATE.md
 *.md.txt
 docs/MEMORY_LIFECYCLE_SPEC.md
 _tmp_handoff/

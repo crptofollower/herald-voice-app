@@ -1,9 +1,8 @@
 // scripts/heraldTest/conversationOwnershipFence.test.ts
 // Conversation Ownership Fence, design review 2026-08-15 (three rounds).
 // Pure-function tests against isEligibleForEphemeralConversation only --
-// no classifyQuery, no ctx, no routing. Route-level regression proof that
-// the four call examples never reach this predicate at all lives in
-// personReference.test.ts, not here.
+// no classifyQuery, no ctx, no routing. Call-routing expectations are out
+// of scope for this file and are not proven here.
 
 import { isEligibleForEphemeralConversation } from '../../src/utils/ephemeralConversation.ts';
 
