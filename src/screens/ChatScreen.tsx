@@ -83,7 +83,7 @@ import { ConversationSession } from '../routing/conversationSession';
 import { processUtterance, applyIntents } from '../routing/processUtterance';
 import { detectEmergency } from '../routing/emergencySignals';
 import type { IntentRecord } from '../hooks/llmLayers';
-import { dispatchRead, dispatchAction } from './chat/dispatch';
+import { dispatchRead, dispatchAction, launchAppAndCompose } from './chat/dispatch';
 import type { DispatchDeps } from './chat/dispatch';
 import { handleTier1, buildTier2DeviceContext, buildAmbientDeviceContext, writeProfileFromOnboarding } from "../routing/tier1Responses";
 import { refreshCalendarCache } from "../db/calendarCacheDB";
@@ -945,12 +945,11 @@ export default function ChatScreen() {
         }
         case 'app_open': {
           const appName = intent.appName ?? 'app';
-          try {
-            await handleLaunchActionRef.current?.(appName);
-            replyAndReset(`Opening ${appName}.`);
-          } catch {
-            replyAndReset(`I couldn't open ${appName} — try opening it manually.`);
-          }
+          const { ack } = await launchAppAndCompose(
+            appName,
+            handleLaunchActionRef.current,
+          );
+          replyAndReset(ack);
           return true;
         }
         default:
@@ -2189,9 +2188,23 @@ export default function ChatScreen() {
           }
           break;
         }
-        case "launch":
-          await handleLaunchAction(action.value);
+        case "launch": {
+          const { opened, ack } = await launchAppAndCompose(
+            action.value,
+            handleLaunchAction,
+          );
+          addMessage({
+            id: generateId("msg"),
+            role: "assistant",
+            content: ack,
+            timestamp: Date.now(),
+          });
+          speak(ack);
+          if (!opened) {
+            throw new Error("launch_failed");
+          }
           break;
+        }
         case "music":
           await Linking.openURL(
             `https://open.spotify.com/search/${encodeURIComponent(action.value)}`

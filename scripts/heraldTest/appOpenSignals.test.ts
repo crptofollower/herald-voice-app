@@ -1,6 +1,8 @@
 // scripts/heraldTest/appOpenSignals.test.ts
 // Deterministic Tier-1 app-open extractor — discourse prefix, request-frame,
 // stop-word boundary, and live ai_name wake-word (never hardcoded).
+// Also owns the shared launch ACK seam (composeLaunchAck / launchAppAndCompose)
+// and a ChatScreen executeIntent source-lock: false launch cannot reach "done".
 //
 // Runner: npx tsx scripts/heraldTest/appOpenSignals.test.ts
 // Gate:   wired from run.mjs
@@ -9,6 +11,10 @@ import Database from 'better-sqlite3';
 import { setDB } from '../../src/db/schema.ts';
 import { setProfileField } from '../../src/db/profileDB.ts';
 import { classifyQuery } from '../../src/routing/tierRouter.ts';
+import { composeLaunchAck, launchAppAndCompose } from '../../src/screens/chat/dispatch.ts';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
 
@@ -132,6 +138,106 @@ export async function runAppOpenSignalsTests() {
     freshDB();
     const d = await classifyQuery(phrase);
     assert(`cam "${phrase}" → app_open`, actionType(d), (v) => v === 'app_open', 'app_open');
+  }
+
+  // ── Shared launch ACK seam (2026-08-15 truthful ACK / status convergence) ──
+  const FAIL_COPY = "I don't have YouTube set up to open yet — try it manually.";
+  {
+    assert(
+      'composeLaunchAck(YouTube, true) → Opening YouTube.',
+      composeLaunchAck('YouTube', true),
+      (v) => v === 'Opening YouTube.',
+      'Opening YouTube.',
+    );
+    assert(
+      'composeLaunchAck(YouTube, false) → honest fail copy',
+      composeLaunchAck('YouTube', false),
+      (v) => v === FAIL_COPY,
+      FAIL_COPY,
+    );
+  }
+  {
+    const ok = await launchAppAndCompose('YouTube', async () => true);
+    assert(
+      'launchAppAndCompose(...true) → opened true + success ACK',
+      ok,
+      (v) => (v as { opened: boolean; ack: string }).opened === true
+        && (v as { opened: boolean; ack: string }).ack === 'Opening YouTube.',
+      'opened true + Opening YouTube.',
+    );
+  }
+  {
+    const miss = await launchAppAndCompose('YouTube', async () => false);
+    assert(
+      'launchAppAndCompose(...false) → opened false + fail ACK',
+      miss,
+      (v) => (v as { opened: boolean; ack: string }).opened === false
+        && (v as { opened: boolean; ack: string }).ack === FAIL_COPY,
+      'opened false + honest fail copy',
+    );
+  }
+  {
+    const threw = await launchAppAndCompose('YouTube', async () => {
+      throw new Error('blocked');
+    });
+    assert(
+      'launchAppAndCompose(...throw) → opened false + fail ACK',
+      threw,
+      (v) => (v as { opened: boolean; ack: string }).opened === false
+        && (v as { opened: boolean; ack: string }).ack === FAIL_COPY,
+      'opened false + honest fail copy',
+    );
+  }
+  {
+    const miss = await launchAppAndCompose('YouTube', async () => false);
+    const threw = await launchAppAndCompose('YouTube', async () => {
+      throw new Error('blocked');
+    });
+    assert(
+      'false/throw ACK cannot contain Opening',
+      { miss: miss.ack, threw: threw.ack },
+      (v) => {
+        const o = v as { miss: string; threw: string };
+        return !o.miss.includes('Opening') && !o.threw.includes('Opening');
+      },
+      'no Opening in fail ACKs',
+    );
+  }
+  {
+    const chatSrc = fs.readFileSync(
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src/screens/ChatScreen.tsx'),
+      'utf8',
+    );
+    const executeStart = chatSrc.indexOf('const executeIntent = async');
+    const executeEnd = chatSrc.indexOf('const handleCalendarAction');
+    const executeSrc = executeStart >= 0 && executeEnd > executeStart
+      ? chatSrc.slice(executeStart, executeEnd)
+      : '';
+    const launchStart = executeSrc.indexOf('case "launch"');
+    const launchEnd = executeSrc.indexOf('case "music"');
+    const launchCase = launchStart >= 0 && launchEnd > launchStart
+      ? executeSrc.slice(launchStart, launchEnd)
+      : '';
+    const doneIdx = executeSrc.indexOf('setActionStatus("done")');
+    const catchIdx = executeSrc.indexOf('} catch (err)');
+    const errorIdx = executeSrc.indexOf('setActionStatus("error")');
+    assert(
+      'executeIntent launch: !opened throws before done; catch sets error',
+      {
+        usesSeam: launchCase.includes('launchAppAndCompose'),
+        throwsOnFalse: /if\s*\(\s*!opened\s*\)/.test(launchCase) && launchCase.includes('throw'),
+        doneNotInLaunchCase: !launchCase.includes('setActionStatus("done")'),
+        doneAfterLaunchCase: doneIdx > launchEnd,
+        doneBeforeCatch: doneIdx >= 0 && catchIdx > doneIdx,
+        catchSetsError: errorIdx > catchIdx && catchIdx >= 0,
+      },
+      (v) => {
+        const o = v as Record<string, boolean>;
+        return o.usesSeam && o.throwsOnFalse && o.doneNotInLaunchCase
+          && o.doneAfterLaunchCase && o.doneBeforeCatch && o.catchSetsError;
+      },
+      'false launch throws into existing catch/error; cannot reach done',
+    );
   }
 
   const total = passed + failures.length;

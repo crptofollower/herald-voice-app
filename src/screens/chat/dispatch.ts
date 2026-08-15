@@ -49,6 +49,35 @@ export interface DispatchDeps extends DispatchPendingRefs {
   openURL: (url: string) => Promise<void>;
 }
 
+/** Shared launch ACK. True → success copy. False/throw → honest fail. Never "Opening" on fail. */
+export function composeLaunchAck(appName: string, opened: boolean): string {
+  return opened
+    ? `Opening ${appName}.`
+    : `I don't have ${appName} set up to open yet — try it manually.`;
+}
+
+type LaunchFn = (appName: string) => Promise<unknown>;
+
+/**
+ * Run a launcher and compose the ACK from the boolean outcome. Thrown errors
+ * are fail-closed (opened=false) — same copy as an explicit false return.
+ * Only an explicit `true` counts as opened (void/undefined/false → fail).
+ */
+export async function launchAppAndCompose(
+  appName: string,
+  launch?: LaunchFn | null,
+): Promise<{ opened: boolean; ack: string }> {
+  let opened = false;
+  try {
+    if (launch) {
+      opened = (await launch(appName)) === true;
+    }
+  } catch {
+    opened = false;
+  }
+  return { opened, ack: composeLaunchAck(appName, opened) };
+}
+
 // Tier-1 READ dispatch (calendar/medical/family/profile). Filled in Stage 1.3.
 // ALL reads are spoken verbatim from the deterministic layer. No generative
 // wrapping path exists (Spine §3 — phrase-out removed, LLM_LIVE P2 / Build A).
@@ -405,20 +434,15 @@ export async function dispatchAction(
             rawAppName.toLowerCase().includes('camera') ||
             /\b(selfie|picture|photo|photograph|pic)\b/i.test(text);
           const appName = isCameraPhrase ? 'camera' : rawAppName;
-          let opened = false;
-          try {
+          const { ack } = await launchAppAndCompose(appName, async (name) => {
             if (isCameraPhrase) {
               await IntentLauncher.startActivityAsync('android.media.action.IMAGE_CAPTURE', {});
-              opened = true;
-            } else {
-              opened = await handleLaunchActionRef.current?.(appName) ?? false;
+              return true;
             }
-          } catch { /* fall through */ }
-          const reply = opened
-            ? `Opening ${appName}.`
-            : `I don't have ${appName} set up to open yet — try it manually.`;
-          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-          speak(reply);
+            return await handleLaunchActionRef.current?.(name) ?? false;
+          });
+          addMessage({ id: generateId('msg'), role: 'assistant', content: ack, timestamp: Date.now() });
+          speak(ack);
           return;
         }
 
