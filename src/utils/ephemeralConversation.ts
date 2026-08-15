@@ -15,6 +15,102 @@
 import type { LlamaContext } from 'llama.rn';
 import { isClassifierBusy } from '../hooks/llmLayers';
 
+// Conversation Ownership Fence (design review 2026-08-15, three rounds;
+// amended same day -- Gap A / Gap B corrections below).
+// Distinguishes utterances safe for ephemeral conversation from those that
+// implicitly request authoritative truth or an unresolved action. Neither
+// check enumerates topics/vocabulary -- both look only at grammatical/
+// speech-act shape.
+//
+// IMPERATIVE_ACTION_RE is defense-in-depth: every case it would catch is
+// already claimed upstream by tier-1 action routing (action:call has no
+// anchor and matches "call NAME" anywhere in an utterance -- confirmed by
+// source trace, see design review; personReference.test.ts extends this
+// regression proof). This check only fires if that upstream routing
+// somehow misses a case; it never duplicates authority.
+//
+// OPINION_SEEKING_RE narrows INTERROGATIVE_RE: a question addressed at
+// Herald's judgment/reaction ("do you think", "what would you do", "how
+// does that sound") is conversational, not fact-seeking. "do you
+// remember/know" is deliberately excluded -- that's a factual-recall verb.
+const OPINION_SEEKING_RE =
+  /\b(do|don'?t)\s+you\s+(think|believe|feel|reckon|suppose)\b|\bwhat\s+would\s+you\s+do\b|\bhow\s+does\s+(?:that|this|it)\s+sound\b|\bcan\s+you\s+believe\b|\bwasn'?t\s+(?:that|it)\b|\bwouldn'?t\s+(?:that|it)\s+be\b/i;
+
+const INTERROGATIVE_RE =
+  /\?\s*$|^\s*(who|what|when|where|why|how|do|does|did|is|are|was|were|can|could|would|will|should)\b/i;
+
+const IMPERATIVE_ACTION_RE =
+  /^\s*(please\s+)?(remind\s+me|don'?t\s+let\s+me\s+forget|make\s+sure\s+i|call|text|add|schedule|set|cancel|delete|remove)\b/i;
+
+// --- 2026-08-15 amendment: Gap A (tell-me framing) and Gap B (embedded
+// action clauses). Both were named gaps in the original design review, not
+// new authority -- see the session handoff. Neither introduces topic/
+// vocabulary knowledge; both stay structural.
+
+// Gap B: IMPERATIVE_ACTION_RE was start-of-utterance-anchored only, so an
+// action request hidden after a narrative clause ("Hunter's coming
+// Saturday, remind me to call him Friday.") was missed. The fix is not a
+// broader verb list -- it's evaluating the existing action check at the
+// start of EACH clause, using the narrowest safe clause boundary (comma /
+// semicolon only). This still catches nothing that isn't already an
+// IMPERATIVE_ACTION_RE match; it only widens WHERE in the utterance that
+// match is allowed to start. A bare reference to a past/reported action
+// ("Hunter reminded me to call him.") is untouched, because "reminded"
+// does not satisfy "remind\s+me" and no clause begins with an action verb.
+
+// Gap A: a "tell me" / "can you tell me" / "please tell me" request is
+// fact-seeking-shaped, not conversational-shaped, but was previously
+// invisible to both IMPERATIVE_ACTION_RE (doesn't start with a routing
+// verb) and INTERROGATIVE_RE (rarely ends in "?"), so it fell through to
+// the eligible default. The fix strips the wrapper and classifies only the
+// complement -- and fails CLOSED: a complement is eligible only if it
+// positively matches a recognized conversational shape. This is
+// deliberately the inverse of the rest of the predicate (which defaults
+// open) because "tell me X" is structurally a request, and an
+// unrecognized request defaults to ineligible, not eligible.
+//
+// COMPLEMENT_OPINION_RE covers judgment/reaction complements ("what you
+// think", "what you would do", "how that sounds"). COMPLEMENT_SOCIAL_RE is
+// the one deliberately small, explicitly-enumerated exception this
+// mechanism needs ("about yourself/your day", "something funny/
+// interesting/nice") -- these are open-ended small-talk requests with no
+// factual-question grammar to generalize from. Per session discipline: if
+// this list starts needing to grow to cover new failures, that is a signal
+// to stop and report back, not to keep appending phrases.
+const TELL_ME_WRAPPER_RE =
+  /^\s*(please\s+)?(can\s+you\s+)?tell\s+me\b\s*/i;
+
+const COMPLEMENT_OPINION_RE =
+  /\bwhat\s+you\s+(think|feel|believe|would\s+do)\b|\bhow\s+(?:that|this|it)\s+sounds?(?:\s+to\s+you)?\b/i;
+
+const COMPLEMENT_SOCIAL_RE =
+  /^(about\s+(yourself|your\s+day)|something\s+(funny|interesting|nice))\b/i;
+
+/** Pure predicate -- no I/O. True if this otherwise-unclaimed utterance is
+ *  safe to hand to ephemeral conversation. */
+export function isEligibleForEphemeralConversation(text: string): boolean {
+  const t = text.trim();
+
+  // Gap B: action-imperative check now runs per clause, not just at the
+  // start of the whole utterance. Bounded separators only.
+  const clauses = t.split(/[,;]/);
+  for (const clause of clauses) {
+    if (IMPERATIVE_ACTION_RE.test(clause.trim())) return false;
+  }
+
+  // Gap A: tell-me wrapper is evaluated on its own, fail-closed on the
+  // complement, before falling through to the general interrogative/
+  // opinion check below.
+  const tellMeMatch = t.match(TELL_ME_WRAPPER_RE);
+  if (tellMeMatch) {
+    const complement = t.slice(tellMeMatch[0].length).trim();
+    return COMPLEMENT_OPINION_RE.test(complement) || COMPLEMENT_SOCIAL_RE.test(complement);
+  }
+
+  if (INTERROGATIVE_RE.test(t) && !OPINION_SEEKING_RE.test(t)) return false;
+  return true;
+}
+
 const EPHEMERAL_SYSTEM_PROMPT = `You are Herald, a warm and knowledgeable personal companion -- a friend, not a professional.
 Respond naturally and briefly to what the person says, usually in one or two sentences.
 Be interested without being needy -- do not ask a question after every statement. Sometimes simple acknowledgment is enough.

@@ -70,7 +70,7 @@ import { useDeviceMemory } from "../hooks/useDeviceMemory";
 import { useLocalLLM } from '../hooks/useLocalLLM';
 import { runConversationalProbeSet } from '../dev/conversationalProbe';
 import { classifyWithLLM } from '../hooks/llmLayers';
-import { generateEphemeralConversation, canRunEphemeralConversation } from '../utils/ephemeralConversation';
+import { generateEphemeralConversation, canRunEphemeralConversation, isEligibleForEphemeralConversation } from '../utils/ephemeralConversation';
 import { answerFromDevice } from '../utils/localAnswers';
 import { parseTimeFromText } from '../utils/parseTime';
 import { detectFamilyRead, answerFamilyRead } from '../utils/familyRead';
@@ -1280,7 +1280,53 @@ export default function ChatScreen() {
       return;
     }
     if (outcome.routeDecision.kind === 'needs_clarification') {
-      const reply = "I'm not sure I'm following you — can you help me understand?";
+      // EPHEMERAL CONVERSATION SEAM (Constitution §2; ownership fence 2026-08-15).
+      // This is the real leftover: classifyQuery reason:'default' becomes
+      // needs_clarification. The later backend && reason==='default' block is
+      // unreachable on this path (source-proven, design review). Only
+      // reason:'default' may attempt conversation; any other needs_clarification
+      // reason keeps the canned line. isEligibleForEphemeralConversation
+      // declines fact-seeking interrogatives and unmatched leading imperatives
+      // -- canned clarification is the honest tail, never a different reader.
+      const canned = "I'm not sure I'm following you — can you help me understand?";
+      let reply = canned;
+      if (
+        outcome.routeDecision.reason === 'default' &&
+        isEligibleForEphemeralConversation(text)
+      ) {
+        const canConverse = canRunEphemeralConversation({
+          rdTier: 3,
+          hasStructuredCaptures: false,
+          isPersonalCaptureRisk: false,
+          hasPending: sessionRef.current.hasPending(),
+          llmStatus,
+          classifierBusy: false,
+          ephemeralBusy: false,
+        });
+        console.log('[ephemeralConversation] GATE', JSON.stringify({
+          canConverse,
+          rdTier: 3,
+          hasStructuredCaptures: false,
+          isPersonalCaptureRisk: false,
+          hasPending: sessionRef.current.hasPending(),
+          llmStatus,
+          classifierBusy: false,
+          ephemeralBusy: false,
+        }));
+        if (canConverse) {
+          const ephemeral = await generateEphemeralConversation(
+            text,
+            getCtx(),
+            ephemeralContextRef.current ?? undefined,
+          );
+          if (ephemeral.status === 'ok') {
+            ephemeralContextRef.current = { user: text, assistant: ephemeral.text };
+            reply = ephemeral.text;
+          }
+          // Decline/empty/error keeps the canned line below -- never redirects
+          // to an unrelated deterministic reader or to askHeraldStream.
+        }
+      }
       addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
       addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
       speak(reply);
@@ -1841,55 +1887,6 @@ export default function ChatScreen() {
     const activeTopicsList = getActiveTopics();
     const activeTopicsParam =
       activeTopicsList.length > 0 ? activeTopicsList.join(",") : undefined;
-
-    // EPHEMERAL CONVERSATION SEAM — ONLINE PATH (Constitution §2, 2026-08-14).
-    // Mirrors the offline seam. Fires only for genuinely unclaimed ordinary
-    // conversation (routeDecision.reason === 'default') -- never for explicit
-    // live/world-data requests (reason === 'live:data'), which continue to
-    // askHeraldStream unchanged below.
-    if (
-      routeDecision.kind === 'backend' &&
-      routeDecision.reason === 'default' &&
-      !isPersonalCaptureRisk
-    ) {
-      const canConverse = canRunEphemeralConversation({
-        rdTier: 3,
-        hasStructuredCaptures: false,
-        isPersonalCaptureRisk,
-        hasPending: sessionRef.current.hasPending(),
-        llmStatus,
-        classifierBusy: false,
-        ephemeralBusy: false,
-      });
-      console.log('[ephemeralConversation] GATE', JSON.stringify({
-        canConverse,
-        rdTier: 3,
-        hasStructuredCaptures: false,
-        isPersonalCaptureRisk,
-        hasPending: sessionRef.current.hasPending(),
-        llmStatus,
-        classifierBusy: false,
-        ephemeralBusy: false,
-      }));
-      if (canConverse) {
-        const ephemeral = await generateEphemeralConversation(
-          text,
-          getCtx(),
-          ephemeralContextRef.current ?? undefined,
-        );
-        if (ephemeral.status === 'ok') {
-          ephemeralContextRef.current = { user: text, assistant: ephemeral.text };
-          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-          addMessage({ id: generateId('msg'), role: 'assistant', content: ephemeral.text, timestamp: Date.now() });
-          speak(ephemeral.text);
-          sendingRef.current = false;
-          setInputText('');
-          return;
-        }
-        // Falls through to the existing askHeraldStream call below, unchanged,
-        // on any decline -- never redirects to an unrelated deterministic reader.
-      }
-    }
 
     const abortController = askHeraldStream(
       {
