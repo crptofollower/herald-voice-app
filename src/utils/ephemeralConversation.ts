@@ -64,8 +64,16 @@ export async function generateEphemeralConversation(
   ctx: LlamaContext | null,
   priorTurn?: EphemeralTurn,
 ): Promise<EphemeralResult> {
-  if (!ctx) return { status: 'unavailable', reason: 'no-ctx' };
-  if (isClassifierBusy() || ephemeralInFlight) return { status: 'unavailable', reason: 'busy' };
+  console.log('[ephemeralConversation] ENTER');
+  if (!ctx) {
+    console.log('[ephemeralConversation] UNAVAILABLE_NO_CTX');
+    return { status: 'unavailable', reason: 'no-ctx' };
+  }
+  const classifierBusy = isClassifierBusy();
+  if (classifierBusy || ephemeralInFlight) {
+    console.log('[ephemeralConversation] UNAVAILABLE_BUSY', JSON.stringify({ classifierBusy, ephemeralInFlight }));
+    return { status: 'unavailable', reason: 'busy' };
+  }
 
   ephemeralInFlight = true;
   try {
@@ -78,18 +86,27 @@ export async function generateEphemeralConversation(
     }
     messages.push({ role: 'user', content: userText });
 
+    console.log('[ephemeralConversation] COMPLETION_START');
+    const t0 = Date.now();
     const result = await ctx.completion({
       messages,
       n_predict: 128,
       temperature: 0.6,
       top_p: 0.9,
     });
+    const ms = Date.now() - t0;
     const text = result?.text?.trim();
-    if (!text) return { status: 'unavailable', reason: 'empty-output' };
+    if (!text) {
+      console.log('[ephemeralConversation] UNAVAILABLE_EMPTY_OUTPUT', JSON.stringify({ ms }));
+      return { status: 'unavailable', reason: 'empty-output' };
+    }
+    console.log('[ephemeralConversation] OK', JSON.stringify({ ms, len: text.length }));
     return { status: 'ok', text };
-  } catch {
+  } catch (e) {
+    console.log('[ephemeralConversation] ERROR', JSON.stringify({ error: String(e) }));
     return { status: 'unavailable', reason: 'error' };
   } finally {
     ephemeralInFlight = false;
+    console.log('[ephemeralConversation] EXIT');
   }
 }

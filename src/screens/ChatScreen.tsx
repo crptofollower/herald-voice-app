@@ -1861,6 +1861,16 @@ export default function ChatScreen() {
         classifierBusy: false,
         ephemeralBusy: false,
       });
+      console.log('[ephemeralConversation] GATE', JSON.stringify({
+        canConverse,
+        rdTier: 3,
+        hasStructuredCaptures: false,
+        isPersonalCaptureRisk,
+        hasPending: sessionRef.current.hasPending(),
+        llmStatus,
+        classifierBusy: false,
+        ephemeralBusy: false,
+      }));
       if (canConverse) {
         const ephemeral = await generateEphemeralConversation(
           text,
