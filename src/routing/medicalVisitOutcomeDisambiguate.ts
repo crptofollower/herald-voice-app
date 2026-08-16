@@ -29,16 +29,12 @@ export function buildMedicalVisitOutcomePending(): Extract<CommitResult, { statu
   };
 }
 
-// Names candidates only when EXACTLY 2+ are all nameable. Never invents a
-// name for an unattributed row. See DECISION 2 above for the 1-nameable
-// case default.
+// Names both candidates only when EXACTLY 2 are nameable. Never invents a
+// name for an unattributed row (DECISION 2, 1-nameable default). Above two
+// uses the same generic one-question reask as 0/1 — never a spoken roster.
 function buildReaskPrompt(candidates: string[]): string {
   if (candidates.length === 2) {
     return `I mean ${candidates[0]} or ${candidates[1]} — which one?`;
-  }
-  if (candidates.length > 2) {
-    const allButLast = candidates.slice(0, -1).join(', ');
-    return `I mean ${allButLast}, or ${candidates[candidates.length - 1]} — which one?`;
   }
   return "I'm not sure I'm following — can you say the doctor's name again?";
 }

@@ -439,6 +439,93 @@ export async function runPipelineTests() {
     assert('P6j2 pending cleared after named+unattributed resolve', session.hasPending(), (v) => v === false, 'false');
   }
 
+  // ── P6k–P6o: >2 named candidates — generic reask, never a roster (2026-08-16)
+  const GENERIC_DOCTOR_REASK =
+    "I'm not sure I'm following — can you say the doctor's name again?";
+  const PATEL_OUTCOME = 'Patel said the labs were unremarkable.';
+  const SMITH_OUTCOME = 'Smith said to continue the current dose.';
+  const FOSTER_OUTCOME = 'Foster said blood pressure was elevated.';
+
+  function seedThreeDoctorOutcomes() {
+    const patelId = writeMedicalRecord({ doctor_name: 'Dr. Patel', notes: 'visit', visit_date: '2026-05-01' });
+    attachVisitOutcome(patelId, PATEL_OUTCOME);
+    const smithId = writeMedicalRecord({ doctor_name: 'Dr. Smith', notes: 'visit', visit_date: '2026-06-01' });
+    attachVisitOutcome(smithId, SMITH_OUTCOME);
+    const fosterId = writeMedicalRecord({ doctor_name: 'Dr. Foster', notes: 'visit', visit_date: '2026-07-20' });
+    attachVisitOutcome(fosterId, FOSTER_OUTCOME);
+  }
+
+  function hasRosterOrOutcome(text: string): boolean {
+    return /I mean Dr/i.test(text)
+      || text.includes(PATEL_OUTCOME)
+      || text.includes(SMITH_OUTCOME)
+      || text.includes(FOSTER_OUTCOME);
+  }
+
+  {
+    const { say, session } = freshPipeline();
+    seedThreeDoctorOutcomes();
+    const tK = await say('What did my doctor say?');
+    assert('P6k first ask remains Which doctor do you mean?', tK,
+      (v) => v.handled === true && v.source === 'capture'
+        && v.responseText === 'Which doctor do you mean?',
+      "Which doctor do you mean?");
+    assert('P6k2 pending armed', session.hasPending(), (v) => v === true, 'true');
+
+    const tL = await say('Dr Sarver');
+    assert('P6l Dr Sarver → generic one-question reask', tL,
+      (v) => v.handled === true && v.source === 'pending_resume'
+        && v.responseText === GENERIC_DOCTOR_REASK
+        && !hasRosterOrOutcome(v.responseText),
+      GENERIC_DOCTOR_REASK);
+    assert('P6l2 pending remains active after Dr Sarver', session.hasPending(),
+      (v) => v === true, 'true');
+  }
+
+  {
+    const { say, session } = freshPipeline();
+    seedThreeDoctorOutcomes();
+    await say('What did my doctor say?');
+    const tM = await say('Sarver');
+    assert('P6m bare Sarver → same generic non-menu reask', tM,
+      (v) => v.handled === true && v.source === 'pending_resume'
+        && v.responseText === GENERIC_DOCTOR_REASK
+        && !hasRosterOrOutcome(v.responseText),
+      GENERIC_DOCTOR_REASK);
+    assert('P6m2 pending remains active after Sarver', session.hasPending(),
+      (v) => v === true, 'true');
+  }
+
+  {
+    const { say, session } = freshPipeline();
+    seedThreeDoctorOutcomes();
+    await say('What did my doctor say?');
+    const tN = await say('Dr Patel');
+    assert('P6n Dr Patel resolves Patel outcome only', tN,
+      (v) => v.handled === true && v.source === 'pending_resume'
+        && v.responseText.includes(PATEL_OUTCOME)
+        && !v.responseText.includes(SMITH_OUTCOME)
+        && !v.responseText.includes(FOSTER_OUTCOME),
+      'Patel outcome, no Smith/Foster leak');
+    assert('P6n2 pending cleared after Dr Patel', session.hasPending(),
+      (v) => v === false, 'false');
+  }
+
+  {
+    const { say, session } = freshPipeline();
+    seedThreeDoctorOutcomes();
+    await say('What did my doctor say?');
+    const tO = await say('Patel');
+    assert('P6o bare Patel resolves Patel outcome only', tO,
+      (v) => v.handled === true && v.source === 'pending_resume'
+        && v.responseText.includes(PATEL_OUTCOME)
+        && !v.responseText.includes(SMITH_OUTCOME)
+        && !v.responseText.includes(FOSTER_OUTCOME),
+      'Patel outcome, no Smith/Foster leak');
+    assert('P6o2 pending cleared after Patel', session.hasPending(),
+      (v) => v === false, 'false');
+  }
+
   // P5d: REQUIRED-source compile pin — NOT CHECKABLE in this harness.
   // source is now required (no default). run.mjs is tsx-only and never runs
   // tsc, so @ts-expect-error on an omitted 5th arg is still not validated here:
