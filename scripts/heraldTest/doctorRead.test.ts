@@ -15,6 +15,10 @@
 // DR21-DR30 (2026-08-15, medical multi-doctor ambiguity): unhinted
 // visit-outcome clarify when 2+ distinct named doctors or any
 // unattributed outcome row; hinted/unresolved-name paths unchanged.
+// DR31-DR44 (2026-08-16, doctor-communication ownership): "what did
+// my/the/Dr X say" is visit-outcome, never medical:summary; speaker-
+// span rejects "What did I tell my doctor?"; Fix 1 unresolved +
+// retrospective how-did remain unchanged.
 //
 // Runner: npx tsx scripts/heraldTest/doctorRead.test.ts
 // Gate:   wired from run.mjs — must be green before Build 72 closes.
@@ -591,6 +595,200 @@ export async function runDoctorReadTests() {
       (v) => v.includes('Aspirin') && v.includes('81mg'), 'includes Aspirin 81mg');
     assert('DR30 primary-doctor line is unaffected', summary,
       (v) => v.includes('Dr. Sarver'), 'includes Dr. Sarver');
+  }
+
+  // ── DR31–DR44: doctor-communication ownership (2026-08-16) ────────────────
+  // Device-proven: "What did my doctor say?" was stolen by medical:summary.
+  // Communication-shaped asks now share the visit-outcome reader; summary
+  // no longer owns /what did (my|the) doctor/. Existing Fix 1 reasons,
+  // miss text, and disambiguation are reused — no new response types.
+
+  const SMITH_OUTCOME = 'Everything from your last checkup looked normal.';
+  const FOSTER_OUTCOME = 'Your blood pressure reading was elevated, follow up in a month.';
+  const ALVAREZ_OUTCOME = 'Blood work looked good, no medication changes, follow up in six months';
+  const VISIT_OUTCOME_MISS = "I don't have anything from your last visit yet.";
+
+  // DR31: device failure — "What did my doctor say?" + one stored outcome
+  {
+    freshDB();
+    const id = writeMedicalRecord({ doctor_name: 'Dr. Alvarez', notes: 'visit', visit_date: '2026-07-20' });
+    attachVisitOutcome(id, ALVAREZ_OUTCOME);
+    const d = await classifyQuery('What did my doctor say?');
+    assert('DR31a routes medical:visit_outcome_read', d.reason,
+      (v) => v === 'medical:visit_outcome_read', 'medical:visit_outcome_read');
+    assert('DR31b response includes exact stored outcome', d.tier1Response,
+      (v) => typeof v === 'string' && v.includes(ALVAREZ_OUTCOME), 'includes stored outcome');
+    assert('DR31c is not medical:summary', d.reason,
+      (v) => v !== 'medical:summary', 'not medical:summary');
+  }
+
+  // DR32: known-good — "What did my doctor tell me?" remains visit-outcome
+  {
+    freshDB();
+    const id = writeMedicalRecord({ doctor_name: 'Dr. Alvarez', notes: 'visit', visit_date: '2026-07-20' });
+    attachVisitOutcome(id, ALVAREZ_OUTCOME);
+    const d = await classifyQuery('What did my doctor tell me?');
+    assert('DR32 routes medical:visit_outcome_read', d.reason,
+      (v) => v === 'medical:visit_outcome_read', 'medical:visit_outcome_read');
+  }
+
+  // DR33: "What did the doctor say?" — unhinted communication, not summary
+  {
+    freshDB();
+    const id = writeMedicalRecord({ doctor_name: 'Dr. Alvarez', notes: 'visit', visit_date: '2026-07-20' });
+    attachVisitOutcome(id, ALVAREZ_OUTCOME);
+    const d = await classifyQuery('What did the doctor say?');
+    assert('DR33a routes medical:visit_outcome_read', d.reason,
+      (v) => v === 'medical:visit_outcome_read', 'medical:visit_outcome_read');
+    assert('DR33b is not medical:summary', d.reason,
+      (v) => v !== 'medical:summary', 'not medical:summary');
+    assert('DR33c response includes exact stored outcome', d.tier1Response,
+      (v) => typeof v === 'string' && v.includes(ALVAREZ_OUTCOME), 'includes stored outcome');
+  }
+
+  // DR34: named "What did Dr Smith say?" — Smith outcome, newer other doctor
+  {
+    freshDB();
+    const smithId = writeMedicalRecord({ doctor_name: 'Dr. Smith', visit_date: '2026-05-01', notes: 'older visit' });
+    attachVisitOutcome(smithId, SMITH_OUTCOME);
+    const fosterId = writeMedicalRecord({ doctor_name: 'Dr. Foster', visit_date: '2026-07-20', notes: 'newer visit' });
+    attachVisitOutcome(fosterId, FOSTER_OUTCOME);
+    const d = await classifyQuery('What did Dr Smith say?');
+    assert('DR34a routes medical:visit_outcome_read', d.reason,
+      (v) => v === 'medical:visit_outcome_read', 'medical:visit_outcome_read');
+    assert('DR34b returns Smith outcome', d.tier1Response,
+      (v) => typeof v === 'string' && v.includes(SMITH_OUTCOME), 'includes Smith outcome');
+    assert('DR34c does not leak Foster (newer) outcome', d.tier1Response,
+      (v) => typeof v === 'string' && !v.includes('elevated'), 'excludes Foster outcome');
+  }
+
+  // DR35: named miss — "What did Dr Smith say?" with only another doctor's outcome
+  {
+    freshDB();
+    const fosterId = writeMedicalRecord({ doctor_name: 'Dr. Foster', visit_date: '2026-07-20', notes: 'visit' });
+    attachVisitOutcome(fosterId, FOSTER_OUTCOME);
+    const d = await classifyQuery('What did Dr Smith say?');
+    assert('DR35a routes medical:visit_outcome_read', d.reason,
+      (v) => v === 'medical:visit_outcome_read', 'medical:visit_outcome_read');
+    assert('DR35b honest miss', d.tier1Response,
+      (v) => v === VISIT_OUTCOME_MISS, VISIT_OUTCOME_MISS);
+    assert('DR35c does not leak Foster outcome', d.tier1Response,
+      (v) => typeof v === 'string' && !v.includes('elevated'), 'excludes Foster outcome');
+  }
+
+  // DR36: no stored outcome — honest miss, not medical:summary
+  {
+    freshDB();
+    const d = await classifyQuery('What did my doctor say?');
+    assert('DR36a routes medical:visit_outcome_read', d.reason,
+      (v) => v === 'medical:visit_outcome_read', 'medical:visit_outcome_read');
+    assert('DR36b honest miss', d.tier1Response,
+      (v) => v === VISIT_OUTCOME_MISS, VISIT_OUTCOME_MISS);
+    assert('DR36c is not medical:summary', d.reason,
+      (v) => v !== 'medical:summary', 'not medical:summary');
+  }
+
+  // DR37: multiple doctors, unhinted "What did my doctor say?"
+  {
+    freshDB();
+    const patelId = writeMedicalRecord({ doctor_name: 'Dr. Patel', notes: 'visit', visit_date: '2026-05-01' });
+    attachVisitOutcome(patelId, 'Patel said the labs were unremarkable.');
+    const smithId = writeMedicalRecord({ doctor_name: 'Dr. Smith', notes: 'visit', visit_date: '2026-07-20' });
+    attachVisitOutcome(smithId, 'Smith said to continue the current dose.');
+    const d = await classifyQuery('What did my doctor say?');
+    assert('DR37a routes medical:visit_outcome_multiple_doctors', d.reason,
+      (v) => v === 'medical:visit_outcome_multiple_doctors', 'medical:visit_outcome_multiple_doctors');
+    assert('DR37b clarify copy is exact', d.tier1Response,
+      (v) => v === 'Which doctor do you mean?', 'Which doctor do you mean?');
+    assert('DR37c does not leak either outcome', d.tier1Response,
+      (v) => typeof v === 'string'
+        && !v.includes('labs were unremarkable')
+        && !v.includes('continue the current dose'),
+      'excludes Patel and Smith outcomes');
+  }
+
+  // DR38: Fix 1 unresolved lock — spelled-out "my doctor Smith" + tell me
+  {
+    freshDB();
+    const smithId = writeMedicalRecord({ doctor_name: 'Dr. Smith', visit_date: '2026-05-01', notes: 'older visit' });
+    attachVisitOutcome(smithId, SMITH_OUTCOME);
+    const fosterId = writeMedicalRecord({ doctor_name: 'Dr. Foster', visit_date: '2026-07-20', notes: 'newer visit' });
+    attachVisitOutcome(fosterId, FOSTER_OUTCOME);
+    const d = await classifyQuery('What did my doctor Smith tell me at my appointment');
+    assert('DR38a still medical:visit_outcome_unresolved_doctor', d.reason,
+      (v) => v === 'medical:visit_outcome_unresolved_doctor', 'medical:visit_outcome_unresolved_doctor');
+    assert('DR38b does not leak Foster outcome', d.tier1Response,
+      (v) => typeof v === 'string' && !v.includes('elevated'), 'excludes Foster outcome');
+    assert('DR38c does not leak Smith outcome', d.tier1Response,
+      (v) => typeof v === 'string' && !v.includes('looked normal'), 'excludes Smith outcome');
+  }
+
+  // DR39: new unresolved sibling — "What did my doctor Smith say?"
+  {
+    freshDB();
+    const smithId = writeMedicalRecord({ doctor_name: 'Dr. Smith', visit_date: '2026-05-01', notes: 'older visit' });
+    attachVisitOutcome(smithId, SMITH_OUTCOME);
+    const fosterId = writeMedicalRecord({ doctor_name: 'Dr. Foster', visit_date: '2026-07-20', notes: 'newer visit' });
+    attachVisitOutcome(fosterId, FOSTER_OUTCOME);
+    const d = await classifyQuery('What did my doctor Smith say?');
+    assert('DR39a routes medical:visit_outcome_unresolved_doctor', d.reason,
+      (v) => v === 'medical:visit_outcome_unresolved_doctor', 'medical:visit_outcome_unresolved_doctor');
+    assert('DR39b does not leak Foster outcome', d.tier1Response,
+      (v) => typeof v === 'string' && !v.includes('elevated'), 'excludes Foster outcome');
+    assert('DR39c does not leak Smith outcome', d.tier1Response,
+      (v) => typeof v === 'string' && !v.includes('looked normal'), 'excludes Smith outcome');
+  }
+
+  // DR40: speaker-direction negative — doctor is addressee, not speaker
+  {
+    freshDB();
+    const id = writeMedicalRecord({ doctor_name: 'Dr. Alvarez', notes: 'visit', visit_date: '2026-07-20' });
+    attachVisitOutcome(id, ALVAREZ_OUTCOME);
+    const d = await classifyQuery('What did I tell my doctor?');
+    assert('DR40a is not medical:visit_outcome_read', d.reason,
+      (v) => v !== 'medical:visit_outcome_read', 'not medical:visit_outcome_read');
+    assert('DR40b is not medical:summary', d.reason,
+      (v) => v !== 'medical:summary', 'not medical:summary');
+  }
+
+  // DR41: medication positive control
+  {
+    freshDB();
+    const d = await classifyQuery('What medications am I on?');
+    assert('DR41 routes medical:summary', d.reason,
+      (v) => v === 'medical:summary', 'medical:summary');
+  }
+
+  // DR42: doctor-identity positive control
+  {
+    freshDB();
+    const d = await classifyQuery('Who is my doctor?');
+    assert('DR42 routes medical:doctor_read', d.reason,
+      (v) => v === 'medical:doctor_read', 'medical:doctor_read');
+  }
+
+  // DR43: "Who is my primary doctor?" coverage lock — do not repair here.
+  // Current owner is fallthrough (reason "default"); must not become
+  // visit-outcome or medical:summary.
+  {
+    freshDB();
+    const d = await classifyQuery('Who is my primary doctor?');
+    assert('DR43a is not medical:visit_outcome_read', d.reason,
+      (v) => v !== 'medical:visit_outcome_read', 'not medical:visit_outcome_read');
+    assert('DR43b is not medical:summary', d.reason,
+      (v) => v !== 'medical:summary', 'not medical:summary');
+    assert('DR43c preserves current fallthrough owner', d.reason,
+      (v) => v === 'default', 'default');
+  }
+
+  // DR44: retrospective how-did lock — still visit-outcome
+  {
+    freshDB();
+    const id = writeMedicalRecord({ doctor_name: 'Dr. Hexagon', notes: 'visit', visit_date: '2026-07-20' });
+    attachVisitOutcome(id, 'He said keep taking the blood pressure medicine.');
+    const d = await classifyQuery('How did my appointment with Dr. Hexagon go?');
+    assert('DR44 routes medical:visit_outcome_read', d.reason,
+      (v) => v === 'medical:visit_outcome_read', 'medical:visit_outcome_read');
   }
 
   const total = passed + failures.length;

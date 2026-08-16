@@ -247,7 +247,6 @@ const TIER1_SIGNALS = {
   medical: [
     /what (medication|medications|meds|pills) am i (on|taking)/i,
     /my (medication|medications|meds|prescriptions)/i,
-    /what did (my|the) doctor/i,
     /medical (history|records|info)/i,
     /what do you (have|know) about my (health|medical|medications|meds)/i,
     /what (medication|medications|meds|pills|prescriptions) do you (have|know)/i,
@@ -372,28 +371,25 @@ const UPCOMING_MEDICAL_SINGLE = [
   /\bappointment\s+with\s+dr\.?\s/i,
 ];
 
-// Visit OUTCOME read — retrospective "how did / how was / what did … say"
-// about an appointment/visit with a doctor. Distinct §4a reader from visit_read
-// (who) and VISIT_HISTORY_READ (when/why); reads medical_records.visit_outcome
-// via getLastVisitOutcomeSummary. Deterministic, offline, never the LLM
-// (Spine §3 — medical reads never route through generative phrasing).
-// Three independent signals ANDed — order-independent so phrase reorderings
-// like "how did my doctor's appointment go with Dr X" still match.
-// 2026-08-XX amendment (Fix 1, doctor-recall ownership repair):
-// - OUTCOME_CUE now also recognizes "tell" alongside "say" -- "what did my
-//   doctor tell me" reached medical:summary before this because the cue
-//   only knew "say". No sentences enumerated; this is one verb added to
-//   the existing alternation.
-// - APPOINTMENT_CONTEXT had two gaps, both source-traced, not assumed:
-//   (1) /\bvisit\b/ cannot match "visits" -- the trailing "s" breaks the
-//   word boundary the pattern requires immediately after "visit", so
-//   "about my visits" never satisfied this conjunct. Widened to visits?.
-//   (2) bare "what did my doctor tell me?" carries no appointment/visit
-//   noun at all, so the conjunct always failed it. "tell me"/"told me" is
-//   added as its own alternative: the reporting-verb-plus-object shape
-//   IS the evidence of an actual doctor encounter, doing the same
-//   evidentiary job as "appointment"/"visit" for this cue.
-const OUTCOME_CUE = /\b(?:how did|how was|what happened)\b|\bwhat did\b[\s\S]*?\b(?:say|tell)\b/i;
+// Visit OUTCOME read — two speech-act paths, OR'd. Distinct §4a reader from
+// visit_read (who) and VISIT_HISTORY_READ (when/why); reads
+// medical_records.visit_outcome via getLastVisitOutcomeSummary. Deterministic,
+// offline, never the LLM (Spine §3).
+//
+// 2026-08-16 (doctor-communication ownership): one AND-formula cannot govern
+// both speech acts. Communication ("what did the doctor say/tell") does not
+// require an appointment noun; retrospective ("how did/was / what happened")
+// still does. The existing `what did … say|tell` and `how did|how was|what
+// happened` alternatives are split, not expanded. DOCTOR_REFERENCE on the
+// communication path is tested against the matched cue SPAN so the doctor is
+// the speaker ("What did my doctor say?") and "What did I tell my doctor?"
+// does not steal visit-outcome.
+//
+// Fix 1 history, kept:
+// - communication cue recognizes "tell" alongside "say"
+// - APPOINTMENT_CONTEXT: visits? ; tell me / told me (retrospective path only)
+const DOCTOR_COMMUNICATION_CUE = /\bwhat did\b[\s\S]*?\b(?:say|tell)\b/i;
+const APPOINTMENT_RETROSPECTIVE_CUE = /\b(?:how did|how was|what happened)\b/i;
 const APPOINTMENT_CONTEXT = /\b(?:appointment|visits?|check-?up|last time|tell\s+me|told\s+me)\b/i;
 const DOCTOR_REFERENCE = /\b(?:dr\.?\s*\w+|(?:the|my) doctor)\b/i;
 
@@ -418,12 +414,22 @@ const NAMED_BUT_UNRESOLVED_DOCTOR_RE = new RegExp(
   'i'
 );
 
-function isVisitOutcomeRead(msg: string): boolean {
+function isDoctorCommunicationRead(msg: string): boolean {
+  const cue = msg.match(DOCTOR_COMMUNICATION_CUE);
+  if (!cue?.[0]) return false;
+  return DOCTOR_REFERENCE.test(cue[0]);
+}
+
+function isAppointmentRetrospectiveRead(msg: string): boolean {
   return (
-    OUTCOME_CUE.test(msg) &&
+    APPOINTMENT_RETROSPECTIVE_CUE.test(msg) &&
     APPOINTMENT_CONTEXT.test(msg) &&
     DOCTOR_REFERENCE.test(msg)
   );
+}
+
+function isVisitOutcomeRead(msg: string): boolean {
+  return isDoctorCommunicationRead(msg) || isAppointmentRetrospectiveRead(msg);
 }
 
 const TIER2_SIGNALS = [
