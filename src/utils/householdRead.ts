@@ -324,6 +324,64 @@ export function answerHouseholdRead(intent: HouseholdReadIntent): string {
   return `I don't have that one saved yet.`;
 }
 
+export type HouseholdProviderMatch = {
+  entityId: string;
+  displayName: string;
+  category: string;
+};
+
+export type ServiceProviderRow = {
+  id: string;
+  name: string | null;
+  phone: string | null;
+  category: string;
+};
+
+export function getServiceProviderById(id: string): ServiceProviderRow | null {
+  const db = getDB();
+  try {
+    return db.getFirstSync<ServiceProviderRow>(
+      `SELECT id, name, phone, category FROM service_providers
+       WHERE id = ? AND removed_at IS NULL
+       LIMIT 1;`,
+      [id]
+    ) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Flow C establishment resolver. Exactly one live named service_provider
+ * with a stable id, or none. Insurance/legal reads return null.
+ * Duplicate same-turn SQL vs answerHouseholdRead is acceptable.
+ */
+export function resolveHouseholdProvider(intent: HouseholdReadIntent): HouseholdProviderMatch | null {
+  if (intent.type !== 'service_provider') return null;
+  const db = getDB();
+  try {
+    const placeholders = intent.categories.map(() => '?').join(',');
+    const rows = db.getAllSync<ServiceProviderRow>(
+      `SELECT id, name, phone, category FROM service_providers
+       WHERE category IN (${placeholders}) AND removed_at IS NULL
+       ORDER BY updated_at DESC;`,
+      intent.categories
+    );
+    if (rows.length !== 1) return null;
+    const r = rows[0];
+    const entityId = r.id?.trim();
+    const displayName = r.name?.trim() ?? '';
+    if (!entityId || displayName.length < 2) return null;
+    return {
+      entityId,
+      displayName,
+      category: r.category,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // ─── joinNaturally ────────────────────────────────────────────────────────────
 // ["A", "B", "C"] → "A, B, and C"  |  ["A", "B"] → "A and B"  |  ["A"] → "A"
 function joinNaturally(items: string[]): string {

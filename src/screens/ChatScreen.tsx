@@ -80,6 +80,7 @@ import { allConverted, mapCallIntents, resolveContactCallIntent, isUnresolvedPer
 import { writeCalendarCore, buildCalendarCollectSlot } from '../routing/calendarWrite';
 import { runCommitEffects } from '../utils/commitEffects';
 import { ConversationSession } from '../routing/conversationSession';
+import { ConversationalSubjectHolder } from '../routing/conversationalSubject';
 import { processUtterance, applyIntents } from '../routing/processUtterance';
 import { detectEmergency } from '../routing/emergencySignals';
 import type { IntentRecord } from '../hooks/llmLayers';
@@ -389,6 +390,7 @@ export default function ChatScreen() {
   // the next user message resolves this and executes the original intent.
   const pendingContactCollectRef = useRef<{ action: 'call' | 'navigate' | 'text' | 'confirm_phone' | 'confirm_call'; name: string; body?: string; phone?: string } | null>(null);
   const sessionRef = useRef<ConversationSession>(new ConversationSession());
+  const subjectRef = useRef<ConversationalSubjectHolder>(new ConversationalSubjectHolder());
 
   // Ephemeral conversation's bounded context: current interaction plus AT
   // MOST the immediately preceding ephemeral turn pair. In-memory only, no
@@ -1023,6 +1025,7 @@ export default function ChatScreen() {
     if (detectEmergency(text)) {
       pendingContactCollectRef.current = null;
       if (sessionRef.current.hasPending()) sessionRef.current.clearPending();
+      subjectRef.current.clear();
       await dispatchEmergency(text);
       setInputText('');
       return;
@@ -1048,6 +1051,7 @@ export default function ChatScreen() {
 
     // ── Pending contact collection — user is providing a number or address ──
     if (pendingContactCollectRef.current) {
+      subjectRef.current.clear();
       const pending = pendingContactCollectRef.current;
       const phoneMatch = text.match(/([\d\s\-\(\)\+\.]{7,})/);
       const isLikelyAddress = text.length > 8 && /\d/.test(text) && /\b(st|ave|blvd|rd|dr|ln|way|ct|pl|circle|drive|street|road|court|lane|avenue)\b/i.test(text);
@@ -1247,7 +1251,7 @@ export default function ChatScreen() {
         lists: getKnownListNames(),
       },
       resolveContact: resolveContactPhoneRef.current ?? undefined,
-    });
+    }, subjectRef.current);
     if (outcome.handled && outcome.source === 'emergency') {
       await dispatchEmergency(text);
       sendingRef.current = false;

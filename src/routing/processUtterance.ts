@@ -3,6 +3,13 @@ import type { RouteDecision, CommitResult, ResolveContactFn } from './routeInten
 import type { IntentRecord } from '../hooks/llmLayers';
 import { ConversationSession, CONFIRM_YES_RE, CONFIRM_NO_RE } from './conversationSession';
 import { detectEmergency } from './emergencySignals';
+import {
+  ConversationalSubjectHolder,
+  isReferentPhoneQuestion,
+  answerReferentPhone,
+} from './conversationalSubject';
+import { detectFamilyRead, resolveFamilyRead } from '../utils/familyRead';
+import { resolveHouseholdProvider } from '../utils/householdRead';
 
 // D0 commit 2 (S54 addendum): the headless pipeline seam. UI (ChatScreen) calls
 // this and renders the result; P-tests call it directly. No React, no UI, no TTS.
@@ -16,9 +23,31 @@ import { detectEmergency } from './emergencySignals';
 export type RouteDeps = Parameters<typeof routeIntent>[1];
 
 export type UtteranceOutcome =
-  | { handled: true; source: 'pending_resume' | 'capture'; responseText: string; commits: CommitResult[] }
+  | { handled: true; source: 'pending_resume' | 'capture' | 'referent_resume'; responseText: string; commits: CommitResult[] }
   | { handled: true; source: 'emergency' }
   | { handled: false; routeDecision: RouteDecision };
+
+function maybeEstablishConversationalSubject(
+  text: string,
+  routeDecision: RouteDecision,
+  holder: ConversationalSubjectHolder,
+): void {
+  if (routeDecision.kind === 'device_read' && routeDecision.reason === 'family:read') {
+    const intent = detectFamilyRead(text);
+    if (!intent) return;
+    const match = resolveFamilyRead(intent);
+    if (match) holder.establishFamily(match);
+    return;
+  }
+  if (
+    routeDecision.kind === 'device_action' &&
+    routeDecision.actionIntent.type === 'household_read' &&
+    routeDecision.actionIntent.intent.type === 'service_provider'
+  ) {
+    const match = resolveHouseholdProvider(routeDecision.actionIntent.intent);
+    if (match) holder.establishHousehold(match);
+  }
+}
 
 /** The single commit loop: run intents through domain writers, arm the session
  *  if a writer returned pending. Returns the composed ACK and raw results.
@@ -69,7 +98,9 @@ export async function processUtterance(
   text: string,
   session: ConversationSession,
   deps: RouteDeps,
+  subject?: ConversationalSubjectHolder | null,
 ): Promise<UtteranceOutcome> {
+  subject?.beginUserTurn();
   // 0) Law 0 — emergency preempts everything (Spine §3a). Checked before pending
   //    resolution, before routing, before any classifier. A held pending is
   //    RELEASED, never resumed — no re-ask, no ladder, no ack generated here
@@ -77,15 +108,35 @@ export async function processUtterance(
   //    ever computed for an emergency utterance.
   if (detectEmergency(text)) {
     if (session.hasPending()) session.clearPending();
+    subject?.clear();
     return { handled: true, source: 'emergency' };
   }
   // 1) Pending continuation — the confirm-primitive (Law 2: a pending state
   //    never leaks). resolvePending owns cancel-escape, the domain resume,
   //    the re-ask ladder, and release — it never falls through to fresh
   //    routing. Every call returns a terminal result for this turn.
+  //    PendingSlot is ABSOLUTE vs Flow C: do not evaluate the referent
+  //    speech-act or re-read by id while a pending owns the turn.
   if (session.hasPending()) {
+    subject?.clear();
     const result = await session.resolvePending(text);
     return { handled: true, source: 'pending_resume', responseText: composeAck([result]), commits: [result] };
+  }
+  // 1b) Flow C — closed pronoun-phone speech act against the one-turn
+  //     conversational subject. Eligible referent consumes and clears.
+  //     Any other next turn clears as unused. Explicit named asks are
+  //     not this speech act and fall through to routeIntent.
+  if (subject?.hasLive()) {
+    subject.markReferentEvaluated();
+    if (isReferentPhoneQuestion(text)) {
+      const live = subject.peek();
+      const responseText = live
+        ? answerReferentPhone(live)
+        : `I don't have a number for them yet.`;
+      subject.clear();
+      return { handled: true, source: 'referent_resume', responseText, commits: [] };
+    }
+    subject.clear();
   }
   // 2) The single routing authority — called exactly once per utterance.
   const routeDecision = await routeIntent(text, deps);
@@ -95,6 +146,7 @@ export async function processUtterance(
   // pattern, just for a RouteDecision-originated signal instead of a
   // DOMAIN_WRITER-originated one.
   if (routeDecision.kind === 'phone_repair_needed') {
+    subject?.clear();
     session.setPending({
       pendingKey: routeDecision.pending.pendingKey,
       resume: routeDecision.pending.resume,
@@ -107,6 +159,7 @@ export async function processUtterance(
   // NEW — second occurrence of this exact arm pattern (phone_repair_needed
   // is the first). Not factored out yet — rule of three not met.
   if (routeDecision.kind === 'medical_read_pending') {
+    subject?.clear();
     session.setPending({
       pendingKey: routeDecision.pending.pendingKey,
       resume: routeDecision.pending.resume,
@@ -127,5 +180,9 @@ export async function processUtterance(
     );
     return { handled: true, source: 'capture', responseText, commits };
   }
+  // Flow C establishment — single owner. Immediately after routeIntent,
+  // before returning the route decision to ChatScreen. ChatScreen must
+  // not add family/household establishment fallbacks.
+  if (subject) maybeEstablishConversationalSubject(text, routeDecision, subject);
   return { handled: false, routeDecision };
 }

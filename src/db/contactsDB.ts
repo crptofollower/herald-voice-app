@@ -208,6 +208,22 @@ export function normalizeAddressInput(raw: string): string {
 // "text my daughter" → findContactByRelationship('daughter')
 // Returns highest-importance match. Multiple daughters? Returns primary one.
 
+// Flow C: authoritative re-read of a live contact row by stable id.
+// Removed rows are excluded. Phone is never served from a cached subject.
+export function findContactById(id: string): Contact | null {
+  const db = getDB();
+  try {
+    return db.getFirstSync<Contact>(
+      `SELECT * FROM contacts
+       WHERE id = ? AND removed_at IS NULL
+       LIMIT 1;`,
+      [id]
+    ) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function findContactByRelationship(relationship: string): Contact | null {
   const db = getDB();
   try {

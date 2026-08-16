@@ -171,6 +171,73 @@ export function answerFamilyRead(intent: FamilyReadIntent): string {
   }
 }
 
+export type FamilyReadMatch = {
+  entityId: string;
+  displayName: string;
+  relationship: string | null;
+};
+
+type FamilyResolveRow = {
+  id: string;
+  name: string;
+  relationship: string | null;
+};
+
+/**
+ * Flow C establishment resolver. Exactly one live named contact with a
+ * stable id, or none. Duplicate same-turn SQL vs answerFamilyRead is
+ * acceptable — RouteDecision is not widened to carry structured rows.
+ */
+export function resolveFamilyRead(intent: FamilyReadIntent): FamilyReadMatch | null {
+  const db = getDB();
+  try {
+    let rows: FamilyResolveRow[];
+    if (intent.relation === null) {
+      rows = db.getAllSync<FamilyResolveRow>(
+        `SELECT id, name, relationship FROM contacts
+         WHERE relationship IN
+           ('wife','husband','spouse','partner','son','daughter','child',
+            'mom','mother','dad','father','brother','sister','grandson','granddaughter',
+            'father-in-law','mother-in-law','brother-in-law','sister-in-law',
+            'son-in-law','daughter-in-law')
+           AND removed_at IS NULL
+         ORDER BY importance DESC, name ASC;`,
+      );
+    } else {
+      const canon = FAMILY_SYNONYMS[intent.relation] ?? [intent.relation];
+      const placeholders = canon.map(() => '?').join(',');
+      rows = db.getAllSync<FamilyResolveRow>(
+        `SELECT id, name, relationship FROM contacts
+         WHERE LOWER(relationship) IN (${placeholders})
+           AND removed_at IS NULL
+         ORDER BY importance DESC, name ASC;`,
+        canon.map(c => c.toLowerCase()),
+      );
+    }
+
+    const seen = new Set<string>();
+    const people = rows.filter(r => {
+      const k = `${r.name.trim().toLowerCase()}|${(r.relationship ?? '').trim().toLowerCase()}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+
+    if (people.length !== 1) return null;
+    const p = people[0];
+    const entityId = p.id?.trim();
+    const displayName = p.name?.trim();
+    if (!entityId || !displayName || displayName.length < 2) return null;
+    return {
+      entityId,
+      displayName,
+      relationship: p.relationship?.trim() || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // ─── joinNaturally ────────────────────────────────────────────────────────────
 // ["A", "B", "C"] → "A, B, and C"  |  ["A", "B"] → "A and B"  |  ["A"] → "A"
 function joinNaturally(items: string[]): string {
