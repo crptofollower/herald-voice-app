@@ -64,14 +64,27 @@ export function extractCorrection(userText: string): string | null {
 }
 
 // Deterministic candidate matcher (Pending Disambiguation, Commit 1 — spec
-// PENDING_DISAMBIGUATION_DESIGN_SPEC.md §3). Exact normalized match wins;
-// otherwise a single distinct token hit wins; anything else is ambiguous or
-// no-match and must re-ask, never guess. No substring/fuzzy matching in v1 —
-// a false-positive match is a fabrication-class trust failure (spec §3).
+// PENDING_DISAMBIGUATION_DESIGN_SPEC.md §3). Exact normalized match wins.
+// Partial match uses unique remaining-token overlap after stripping the
+// closed honorific/title set (founder-ratified 2026-08-16). Title-only
+// replies are no-match. Anything else is ambiguous or no-match and must
+// re-ask, never guess. No substring/fuzzy matching in v1 — a false-positive
+// match is a fabrication-class trust failure (spec §3).
 export type MatchableCandidate = { label: string; ref: string; phone?: string };
 
 const normalizeForMatch = (s: string): string =>
   s.trim().toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ');
+
+// Closed title/honorific set — NON-IDENTITY-BEARING for partial match only.
+// Exact full-label match still sees these tokens. Do not widen without a
+// founder decision; this is not a general stopword list.
+const NON_IDENTITY_TOKENS = new Set([
+  'dr', 'doctor', 'mr', 'mrs', 'ms', 'miss', 'mister',
+]);
+
+function identityTokens(normalized: string): string[] {
+  return normalized.split(' ').filter(tok => tok.length > 0 && !NON_IDENTITY_TOKENS.has(tok));
+}
 
 export function matchCandidateToken(
   replyText: string,
@@ -79,13 +92,16 @@ export function matchCandidateToken(
 ): MatchableCandidate | 'ambiguous' | 'none' {
   const t = normalizeForMatch(replyText);
   if (!t) return 'none';
-  const tTokens = new Set(t.split(' '));
 
   const exact = candidates.filter(c => normalizeForMatch(c.label) === t);
   if (exact.length === 1) return exact[0];
 
+  const identityReply = identityTokens(t);
+  if (identityReply.length === 0) return 'none';
+  const identityReplySet = new Set(identityReply);
+
   const hits = candidates.filter(c =>
-    normalizeForMatch(c.label).split(' ').some(tok => tTokens.has(tok)),
+    identityTokens(normalizeForMatch(c.label)).some(tok => identityReplySet.has(tok)),
   );
   if (hits.length === 1) return hits[0];
   if (hits.length > 1) return 'ambiguous';
