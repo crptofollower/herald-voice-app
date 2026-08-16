@@ -343,6 +343,26 @@ export function attachVisitOutcome(id: string, outcome: string, rawPhrase?: stri
 }
 
 /**
+ * Store a verbatim return/recheck timing instruction on an existing visit.
+ * Structurally separate from attachVisitOutcome — this UPDATE touches
+ * follow_up only. Substring Gate: the value is its own provenance
+ * (unextracted dedicated reply). Empty text is a no-op, never a NULL wipe.
+ */
+export function attachFollowUp(id: string, text: string, rawPhrase?: string): void {
+  const trimmed = text.trim();
+  if (!trimmed) return;
+  const raw = rawPhrase ?? text; // follow_up is its own provenance (unextracted)
+  if (!passesSubstringGate(trimmed, raw)) throw new SubstringGateRejection(trimmed, raw);
+  const db = getDB();
+  db.runSync(
+    `UPDATE medical_records
+        SET follow_up = ?
+      WHERE id = ? AND removed_at IS NULL;`,
+    [trimmed, id]
+  );
+}
+
+/**
  * Most recent visit with a non-empty outcome, optionally filtered by doctor
  * name (substring match, case-insensitive — same behavior as getLastVisit).
  */

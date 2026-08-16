@@ -114,7 +114,9 @@ export async function runMedicalVisitOutcomeAskTests() {
     const stage1 = await slot.resume('  He adjusted my blood pressure medicine.  ');
     const confirmResume = (stage1 as any).resume as (t: string) => Promise<CommitResult>;
     const result = await confirmResume('yes');
-    assert('T3a yes → committed', result, v => (v as any).status === 'committed', 'committed');
+    assert('T3a yes → follow-up existence pending (outcome already written)', result,
+      v => (v as any).status === 'pending' && (v as any).pendingKey === 'medical_visit_follow_up_existence',
+      'pending / medical_visit_follow_up_existence');
     assert('T3b stored value is the UNTRIMMED candidate (attachVisitOutcome does its own internal trim)',
       readOutcome(db, awaiting.id),
       v => (v as { visit_outcome: string | null }).visit_outcome === 'He adjusted my blood pressure medicine.',

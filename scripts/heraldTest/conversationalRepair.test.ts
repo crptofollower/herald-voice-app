@@ -348,7 +348,9 @@ export async function runConversationalRepairTests() {
     await armMedicalConfirm(session, awaiting, 'Blood pressure was high.');
     await session.resolvePending("actually He adjusted my meds.");
     const result = await session.resolvePending('yes');
-    assert('M2a yes → committed', result, v => (v as any).status === 'committed', 'committed');
+    assert('M2a yes → follow-up existence pending (outcome committed)', result,
+      v => (v as any).status === 'pending' && (v as any).pendingKey === 'medical_visit_follow_up_existence',
+      'pending / medical_visit_follow_up_existence');
     assert('M2b attachVisitOutcome stored corrected text only', readOutcome(db, awaiting.id),
       v => (v as any).visit_outcome === 'He adjusted my meds.',
       'He adjusted my meds.');

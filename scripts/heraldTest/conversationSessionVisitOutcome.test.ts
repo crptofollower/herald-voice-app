@@ -143,11 +143,13 @@ export async function runConversationSessionVisitOutcomeTests() {
     armOutcomeSlot(session, awaiting);
     await session.resolvePending('He adjusted my blood pressure medicine.');
     const result = await session.resolvePending('yes');
-    assert('V5a yes commits', result, v => (v as any).status === 'committed', 'committed');
+    assert('V5a yes writes outcome then chains to follow-up existence', result,
+      v => (v as any).status === 'pending' && (v as any).pendingKey === 'medical_visit_follow_up_existence',
+      'pending / medical_visit_follow_up_existence');
     assert('V5b visit_outcome written', readOutcome(db, awaiting.id),
       v => (v as { visit_outcome: string | null }).visit_outcome === 'He adjusted my blood pressure medicine.',
       'He adjusted my blood pressure medicine.');
-    assert('V5c pending cleared after commit', session.hasPending(), v => v === false, 'false');
+    assert('V5c pending retained for follow-up existence (outcome already committed)', session.hasPending(), v => v === true, 'true');
   }
 
   // ── V6: no clears pending without writing ───────────────────────────────────
