@@ -9,6 +9,7 @@ import { generateId } from './id';
 import { normalizePhone } from './phone';
 import { SERVICE_SYNONYMS, LEGAL_TYPES } from './householdRead';
 import type { IntentRecord } from '../hooks/llmLayers';
+import { isPersonalMemoryRecallQuestion } from '../routing/personalMemoryRecall';
 
 export type HouseholdCaptureType = 'service_provider' | 'insurance' | 'legal_document';
 
@@ -464,16 +465,9 @@ export function detectServiceCapture(text: string): IntentRecord[] {
   if (REPLACE_GUARD.test(text)) return [];
   // Recall/question-shaped language must never become a capture, even when
   // it happens to contain a service-provider category word and end in a
-  // reporting verb ("Do you remember anything about what my doctor said").
-  // Same structural idiom as tierRouter.ts's OUTCOME_CUE ("what did ...
-  // say/tell"), extended here with the "do you remember/recall/know" and
-  // "did i tell/mention" recall-question openers this capture boundary
-  // also needs to reject. Category-agnostic by construction -- mentions no
-  // specific category, so it covers "what did my plumber say" the same way
-  // it covers the doctor case.
-  const RECALL_QUESTION_RE =
-    /\b(?:do\s+you\s+(?:remember|recall|know)|did\s+i\s+(?:tell|mention)|what\s+did\b[\s\S]*?\b(?:say|tell)\b)\b/i;
-  if (RECALL_QUESTION_RE.test(text)) return [];
+  // reporting verb. Shared with routeIntent's Site-A fence — one definition
+  // in personalMemoryRecall.ts, not a household-owned regex.
+  if (isPersonalMemoryRecallQuestion(text)) return [];
 
   for (const pattern of SERVICE_PATTERNS) {
     const m = text.match(pattern);

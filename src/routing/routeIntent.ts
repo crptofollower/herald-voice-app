@@ -14,6 +14,7 @@ import { normalizePersonTarget, liftRelationshipName } from '../utils/personRefe
 import { normalizePhone } from '../utils/phone';
 import { buildPhoneConfirmPending, formatPhoneForSpeech } from '../utils/phoneConfirm';
 import { matchCandidateToken } from './conversationSession';
+import { isPersonalMemoryRecallQuestion } from './personalMemoryRecall';
 
 type ActionIntent = NonNullable<TierDecision['actionIntent']>;
 
@@ -1937,6 +1938,14 @@ export async function routeIntent(
       source: 'deterministic',
       reason: 'tier1:visit_intercept',
     };
+  }
+
+  // Site-A fence: a recall/question speech-act that every deterministic
+  // personal-memory authority already declined must not be resurrected as
+  // an LLM write. Existing claimed reads/actions/capturers returned above
+  // and are unchanged. Fail-closed shape is the existing honest tail.
+  if (isPersonalMemoryRecallQuestion(text)) {
+    return { kind: 'needs_clarification', reason: 'personal_memory:recall_declined' };
   }
 
   if (deps.llmReady && deps.classifyLLM) {
