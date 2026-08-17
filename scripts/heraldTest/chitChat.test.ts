@@ -46,6 +46,7 @@ function freshDB() {
 const IDENTITY_RESPONSE = "I'm Kit, your personal memory companion. I help you remember what matters and find it when you need it.";
 const SOCIAL_RESPONSE = "I'm here and ready. How are you doing?";
 const AVAILABILITY_RESPONSE = "That's okay. We can just talk.";
+const CAPABILITY_RESPONSE = "You can just talk to me. I can remember useful things you tell me about your family, doctors, and medications, help with lists, and call or text people for you. If you're not sure where to start, just tell me what's going on.";
 
 export async function runChitChatTests() {
   const failures: { label: string; got: unknown; expected: string }[] = [];
@@ -114,6 +115,25 @@ export async function runChitChatTests() {
       (v) => v === 1, '1');
   }
 
+  // ── Category 5: capability discovery (Sub-arc 7a, 2026-08-17) ──
+  const CAPABILITY_PHRASES = [
+    'What can you do?',
+    'What can I ask you?',
+    'Can you help me?',
+    'Can you help me with my phone?',
+    "I don't know what to ask.",
+    "I don't know what to do.",
+    "I don't know what to do with this.",
+  ];
+  for (const [i, phrase] of CAPABILITY_PHRASES.entries()) {
+    freshDB();
+    const d = await classifyQuery(phrase);
+    assert(`CC-capability-${i + 1} "${phrase}" → chit_chat:capability`, d.reason,
+      (v) => v === 'chit_chat:capability', 'chit_chat:capability');
+    assert(`CC-capability-${i + 1} "${phrase}" → exact response`, d.tier1Response,
+      (v) => v === CAPABILITY_RESPONSE, CAPABILITY_RESPONSE);
+  }
+
   // ── Negative / collision guards — the exact traps named in the session
   // spec. Each must NOT match the identity or social_checkin category. ──
   {
@@ -139,6 +159,25 @@ export async function runChitChatTests() {
     const d = await classifyQuery('How are you getting the weather?');
     assert('CC-neg-4 "How are you getting the weather?" hits the TIER3 weather signal first, not social_checkin', d.reason,
       (v) => v === 'live:data', 'live:data');
+  }
+
+  {
+    freshDB();
+    const d = await classifyQuery('Can you help me call my daughter?');
+    assert('CC-neg-5 "Can you help me call my daughter?" routes to call action, not capability', d.actionIntent?.type,
+      (v) => v === 'call', 'call');
+  }
+  {
+    freshDB();
+    const d = await classifyQuery('Can you help me text my son?');
+    assert('CC-neg-6 "Can you help me text my son?" routes to sms action, not capability', d.actionIntent?.type,
+      (v) => v === 'sms', 'sms');
+  }
+  {
+    freshDB();
+    const d = await classifyQuery('Can you help me set an alarm?');
+    assert('CC-neg-7 "Can you help me set an alarm?" does NOT become capability chit-chat', d.reason,
+      (v) => v !== 'chit_chat:capability', 'not chit_chat:capability');
   }
 
   // ── Retained-route spot checks (existing categories, adjacent to the new

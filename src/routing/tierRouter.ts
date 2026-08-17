@@ -511,7 +511,18 @@ const CHIT_CHAT_RESPONSES = {
   social_checkin: "I'm here and ready. How are you doing?",
   availability: "That's okay. We can just talk.",
   identity: "I'm Kit, your personal memory companion. I help you remember what matters and find it when you need it.",
+  capability: "You can just talk to me. I can remember useful things you tell me about your family, doctors, and medications, help with lists, and call or text people for you. If you're not sure where to start, just tell me what's going on.",
 } as const;
+
+const CHIT_CHAT_CAPABILITY: RegExp[] = [
+  /^what can you do\s*[?.!]*$/i,
+  /^what can i ask you\s*[?.!]*$/i,
+  /^can you help me\s*[?.!]*$/i,
+  /^can you help me with my phone\s*[?.!]*$/i,
+  /^i don'?t know what to ask\s*[?.!]*$/i,
+  /^i don'?t know what to do\s*[?.!]*$/i,
+  /^i don'?t know what to do with this\s*[?.!]*$/i,
+];
 
 const WHATS_UP_PATTERN = /^what(?:'s| is) up\s*[?.!]*$/i;
 
@@ -1848,6 +1859,9 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   }
   if (CHIT_CHAT_IDENTITY.some((p) => p.test(msg))) {
     return { tier: 1, tier1Response: CHIT_CHAT_RESPONSES.identity, reason: 'chit_chat:identity' };
+  }
+  if (CHIT_CHAT_CAPABILITY.some((p) => p.test(msg))) {
+    return { tier: 1, tier1Response: CHIT_CHAT_RESPONSES.capability, reason: 'chit_chat:capability' };
   }
 
   return { tier: 3, reason: "default" };
