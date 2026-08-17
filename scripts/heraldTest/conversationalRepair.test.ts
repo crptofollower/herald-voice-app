@@ -13,7 +13,7 @@ import { DOMAIN_WRITERS } from '../../src/routing/routeIntent.ts';
 import type { CommitResult } from '../../src/routing/routeIntent.ts';
 import { applyIntents, processUtterance } from '../../src/routing/processUtterance.ts';
 import type { IntentRecord } from '../../src/hooks/llmLayers.ts';
-import { ConversationSession } from '../../src/routing/conversationSession.ts';
+import { ConversationSession, extractCorrection } from '../../src/routing/conversationSession.ts';
 import { buildVisitOutcomeAskSlot } from '../../src/routing/medicalVisitOutcomeAsk.ts';
 import { writeMedicalRecord, markAppointmentSurfaced } from '../../src/db/medicalDB.ts';
 import { findContactByName } from '../../src/db/contactsDB.ts';
@@ -814,6 +814,25 @@ export async function runConversationalRepairTests() {
       (v) => v == null, 'null (must not silently commit under wrong name)');
     assert('D-phone9b cross-name retry arms confirm pending, not released', session.hasPending(),
       (v) => v === true, 'still pending (confirm)');
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Shared parser — "actually" marker punctuation equivalence (2026-08-17)
+  // ═══════════════════════════════════════════════════════════════════════════
+  {
+    assert('AC1 "actually three months" → "three months"', extractCorrection('actually three months'),
+      v => v === 'three months', 'three months');
+    assert('AC2 "actually, three months" → "three months"', extractCorrection('actually, three months'),
+      v => v === 'three months', 'three months');
+    assert('AC3 "actually it\'s three months" → "three months"', extractCorrection("actually it's three months"),
+      v => v === 'three months', 'three months');
+    assert('AC4 "actually, it\'s three months" → "three months" (not "it\'s three months")',
+      extractCorrection("actually, it's three months"),
+      v => v === 'three months', 'three months');
+    assert('AC5 S16.13a unaffected: "No, that\'s fine." still extracts null',
+      extractCorrection("No, that's fine."), v => v === null, 'null');
+    assert('AC6 S16.13b unaffected: "No, I don\'t think so." still extracts null',
+      extractCorrection("No, I don't think so."), v => v === null, 'null');
   }
 
   const total = passed + failures.length;

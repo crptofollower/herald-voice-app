@@ -126,7 +126,7 @@ export async function runConversationSessionVisitOutcomeTests() {
       v => (v as any).pendingKey === 'medical_visit_outcome_confirm', 'medical_visit_outcome_confirm');
     assert('V4c prompt is the CANDIDATE-SPECIFIC reaskPrompt — repeats the exact candidate and asks yes/no; not DEFAULT_REASK, not empty',
       result,
-      v => (v as any).prompt === 'Please say yes or no. Should I remember "He adjusted my blood pressure medicine." from your appointment with Dr. Patel?',
+      v => (v as any).prompt === 'Please say yes or no. Should I remember "He adjusted my blood pressure medicine." from your appointment with Dr. Patel? If I got it wrong, just say "Actually..." and tell me the correction.',
       'candidate-specific reaskPrompt, not the generic "can you say that again?"');
     assert('V4d prompt is NOT the generic DEFAULT_REASK', result,
       v => (v as any).prompt !== "I'm not sure I'm following — can you say that again?",

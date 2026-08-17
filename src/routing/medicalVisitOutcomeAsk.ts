@@ -93,7 +93,7 @@ function buildFollowUpConfirmStage(
   const build = (v: string): ReturnType<CorrectableField['buildCorrected']> => ({
     pendingKey: 'medical_visit_follow_up_confirm',
     prompt: `Should I remember "${v}" as your follow-up${fromWho}?`,
-    reaskPrompt: `Please say yes or no. Should I remember "${v}" as your follow-up${fromWho}?`,
+    reaskPrompt: `Please say yes or no. Should I remember "${v}" as your follow-up${fromWho}? If I got it wrong, just say "Actually..." and tell me the correction.`,
     resume: async (confirmText: string): Promise<CommitResult> => {
       const t = confirmText.trim();
       if (CONFIRM_NO_RE.test(t) || CANCEL_RE.test(t)) {
@@ -112,7 +112,7 @@ function buildFollowUpConfirmStage(
     status: 'pending',
     pendingKey: slot.pendingKey,
     prompt: confirmPrompt,
-    reaskPrompt: `Please say yes or no. ${confirmPrompt}`,
+    reaskPrompt: `Please say yes or no. ${confirmPrompt} If I got it wrong, just say "Actually..." and tell me the correction.`,
     resume: slot.resume,
     correctable: slot.correctable,
   };
@@ -220,7 +220,7 @@ export function buildVisitOutcomeAskSlot(awaiting: {
         // ambiguous reply re-asks THIS exact question, not a generic
         // "say that again," and never falls back to the original
         // "how did it go" question.
-        reaskPrompt: `Please say yes or no. ${confirmPrompt}`,
+        reaskPrompt: `Please say yes or no. ${confirmPrompt} If I got it wrong, just say "Actually..." and tell me the correction.`,
         resume: async (confirmText: string): Promise<CommitResult> => {
           const t = confirmText.trim();
           if (CONFIRM_NO_RE.test(t)) {
@@ -241,7 +241,7 @@ export function buildVisitOutcomeAskSlot(awaiting: {
             const build = (v: string): ReturnType<CorrectableField['buildCorrected']> => ({
               pendingKey: 'medical_visit_outcome_confirm',
               prompt: `Should I remember "${v}" from your appointment${who}?`,
-              reaskPrompt: `Please say yes or no. Should I remember "${v}" from your appointment${who}?`,
+              reaskPrompt: `Please say yes or no. Should I remember "${v}" from your appointment${who}? If I got it wrong, just say "Actually..." and tell me the correction.`,
               resume: async (confirmText: string): Promise<CommitResult> => {
                 const t = confirmText.trim();
                 if (CONFIRM_NO_RE.test(t)) {

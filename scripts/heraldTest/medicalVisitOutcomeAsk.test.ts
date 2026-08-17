@@ -100,7 +100,7 @@ export async function runMedicalVisitOutcomeAskTests() {
       v => (v as any).prompt === 'Should I remember "He adjusted my blood pressure medicine." from your appointment with Dr. Patel?',
       'exact verbatim read-back prompt');
     assert('T2c reaskPrompt is candidate-specific — repeats the exact candidate and asks yes/no', result,
-      v => (v as any).reaskPrompt === 'Please say yes or no. Should I remember "He adjusted my blood pressure medicine." from your appointment with Dr. Patel?',
+      v => (v as any).reaskPrompt === 'Please say yes or no. Should I remember "He adjusted my blood pressure medicine." from your appointment with Dr. Patel? If I got it wrong, just say "Actually..." and tell me the correction.',
       'candidate-specific reaskPrompt, not undefined, not generic');
     assert('T2d visit_outcome still null — candidate not yet written', readOutcome(db, awaiting.id),
       v => (v as { visit_outcome: string | null }).visit_outcome === null, 'null');

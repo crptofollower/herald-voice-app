@@ -49,7 +49,7 @@ export const CONFIRM_NO_RE  = /^(no|nope|not yet|negative)[\s.,!]*$/i;
 // the existing unresolved/re-ask ladder, same as any other unparseable
 // reply — it never mis-fires as a false-positive correction.
 const CORRECTION_MARKER_RE =
-  /^(?:no,?\s+it'?s|that'?s\s+wrong,?\s+it'?s|actually\s+it'?s|actually|i\s+meant|rather)\s+(.+)$/i;
+  /^(?:no,?\s+it'?s|that'?s\s+wrong,?\s+it'?s|actually,?(?:\s+it'?s)?|i\s+meant|rather)\s+(.+)$/i;
 
 export function extractCorrection(userText: string): string | null {
   const trimmed = userText.trim();

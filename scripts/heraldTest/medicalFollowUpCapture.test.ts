@@ -271,6 +271,49 @@ export async function runMedicalFollowUpCaptureTests() {
     assert('FU5e correction YES committed', committed, v => (v as any).status === 'committed', 'committed');
   }
 
+  // ── 5b. BOUNDARY — plain "no" still declines (unaffected by grammar change) ──
+  {
+    const db = freshDB();
+    const awaiting = makeAwaitingVisit(db);
+    const session = new ConversationSession();
+    await commitOutcome(session, awaiting, 'Looks good.');
+    await session.resolvePending('yes');
+    await session.resolvePending('in six weeks');
+    const declined = await session.resolvePending('no');
+    assert('FU5j bare "no" alone still declines, not treated as correction', declined,
+      v => (v as any).status === 'noop' && (v as any).ack === 'Okay.',
+      'noop / Okay. (unchanged decline path)');
+    assert('FU5k follow_up NULL after plain no', readRow(db, awaiting.id).follow_up, v => v === null, 'null');
+  }
+
+  // ── 5d. RECOVERY — unrecognized "No, X" teaches the supported repair grammar ──
+  {
+    const db = freshDB();
+    const awaiting = makeAwaitingVisit(db);
+    const session = new ConversationSession();
+    await commitOutcome(session, awaiting, 'Looks good.');
+    await session.resolvePending('yes');
+    await session.resolvePending('in six months');
+    const reask = await session.resolvePending('No, in 3 months');
+    assert('FU5l unrecognized "No, X" stays pending, no bare-no correction, no write', readRow(db, awaiting.id).follow_up,
+      v => v === null, 'null');
+    assert('FU5m reask teaches the supported "Actually" repair form', reask,
+      v => (v as any).status === 'pending'
+        && (v as any).pendingKey === 'medical_visit_follow_up_confirm'
+        && typeof (v as any).prompt === 'string' && /Actually/i.test((v as any).prompt),
+      'pending / same stage / prompt mentions Actually');
+    const corrected = await session.resolvePending('Actually, in 3 months');
+    assert('FU5n taught phrasing triggers correction', corrected,
+      v => (v as any).status === 'pending'
+        && (v as any).pendingKey === 'medical_visit_follow_up_confirm'
+        && (v as any).prompt === 'Should I remember "in 3 months" as your follow-up from Dr. Patel?',
+      'reconfirm in 3 months');
+    const committed = await session.resolvePending('yes');
+    assert('FU5o commit stores taught-phrasing value only', readRow(db, awaiting.id).follow_up,
+      v => v === 'in 3 months', 'in 3 months');
+    assert('FU5p commit status', committed, v => (v as any).status === 'committed', 'committed');
+  }
+
   // ── 6. SAME VISIT ID — no latest-visit re-resolution ───────────────────────
   {
     const db = freshDB();
