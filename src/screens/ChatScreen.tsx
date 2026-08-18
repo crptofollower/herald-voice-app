@@ -1413,20 +1413,15 @@ export default function ChatScreen() {
             setInputText('');
             return;
           }
-          const handled = await dispatchLocalIntent(
-            llmCaptures[0] as Record<string, string | undefined>,
-            text,
-          );
-          if (handled && llmCaptures.length > 1) {
-            const tailReply = "I got the first part — say the rest once more and I'll get that too?";
-            addMessage({ id: generateId('msg'), role: 'assistant', content: tailReply, timestamp: Date.now() });
-            speak(tailReply);
-          }
-          if (handled) {
-            sendingRef.current = false;
-            setInputText('');
-            return;
-          }
+          // PRE-B F2: unconverted classifier capture — fail-closed locally (never
+          // dispatchLocalIntent; never fall through toward askHeraldStream).
+          const unconvertedReply = "I'm not sure I'm following you — can you help me understand?";
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          addMessage({ id: generateId('msg'), role: 'assistant', content: unconvertedReply, timestamp: Date.now() });
+          speak(unconvertedReply);
+          sendingRef.current = false;
+          setInputText('');
+          return;
         }
       } catch {
         // Law 5 fail-closed fence: an exception while reclassifying an
@@ -1669,14 +1664,14 @@ export default function ChatScreen() {
                 setInputText('');
                 return;
               }
-              addMessage({ id: generateId('msg'), role: 'user',
-                content: text, timestamp: Date.now() });
-              await dispatchLocalIntent(results[0] as Record<string, string | undefined>, text);
-              if (results.length > 1) {
-                const tailReply = "I got the first part — say the rest once more and I'll get that too?";
-                addMessage({ id: generateId('msg'), role: 'assistant', content: tailReply, timestamp: Date.now() });
-                speak(tailReply);
-              }
+              // PRE-B F2: unconverted classifier capture — fail-closed locally (never
+              // dispatchLocalIntent; never fall through toward offline/network tail).
+              const unconvertedReply = "I'm not sure I'm following you — can you help me understand?";
+              addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+              addMessage({ id: generateId('msg'), role: 'assistant', content: unconvertedReply, timestamp: Date.now() });
+              speak(unconvertedReply);
+              sendingRef.current = false;
+              setInputText('');
               return;
             }
           } catch {
