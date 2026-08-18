@@ -11,6 +11,24 @@
 // the helper, not the screen (EEC-10 skipped; no ChatScreen harness).
 //
 // Runner: npx tsx --tsconfig ./tsconfig.json ./emergencyCallConfirm.test.ts
+//
+// RESPONSE-TEXT COVERAGE NOTE (2026-08-18):
+// classifyEmergencyCallReply's classification is unchanged by this session
+// and remains fully covered by EEC-1..9 above. The ChatScreen response TEXT
+// for 'no' and 'reject_with_content' (merged into one reply in
+// ChatScreen.tsx after this session) is NOT exercised by this file or any
+// other automated suite — there is no ChatScreen-level test harness in this
+// codebase (same gap phoneConfirm.test.ts has for its own screen callers).
+// Coverage for the following is device-proof only, S24+, manual per spec,
+// not a gate assert:
+//   - bare "No"          → decline ack, no alternate-contact question
+//   - "Never mind"        → same
+//   - "Cancel"            → same
+//   - "No, I was talking to someone else" → same (contextual rejection)
+//   - "Maybe"             → still re-asks (classifier-level: EEC-7)
+//   - "Yes"               → still dials 911 (classifier-level: EEC-5/6)
+// If a ChatScreen test harness is ever built, promote these to real
+// asserts at that time — do not fabricate a passing assertion here.
 
 import { classifyEmergencyCallReply } from '../../src/utils/emergencyCallConfirm.ts';
 

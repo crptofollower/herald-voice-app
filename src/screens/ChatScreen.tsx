@@ -1115,17 +1115,17 @@ export default function ChatScreen() {
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
           }
-        } else if (replyClass === 'no') {
-          pendingContactCollectRef.current = null;
-          const reply = `No problem — who were you trying to reach?`;
-          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-          speak(reply);
-        } else if (replyClass === 'reject_with_content') {
-          // A leading no/cancel token carrying its own conversational
-          // content (e.g. "No, I was talking to someone else") is still a
-          // decline — but assuming a specific alternate call target is
-          // fabricated context (Spine §3 verbatim rule; CLAUDE.md Trust
-          // First). Release the 911-offer pending plainly instead.
+        } else if (replyClass === 'no' || replyClass === 'reject_with_content') {
+          // Any bounded decline of the 911 offer — bare ("No" / "Cancel" /
+          // "Never mind") or carrying trailing content ("No, I was talking
+          // to someone else") — releases the pending the same way. Neither
+          // case may assume a specific alternate call target; that
+          // assumption is fabricated context (Spine §3 verbatim rule;
+          // CLAUDE.md Trust First). Device proof 2026-08-18 showed the
+          // bare-decline path still carried the old "who were you trying
+          // to reach?" text after the classifier fix — merging the two
+          // branches retires that response for both cases at once, since
+          // the correct behavior was always identical.
           pendingContactCollectRef.current = null;
           const reply = `No problem — I won't call 911.`;
           addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
