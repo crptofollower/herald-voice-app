@@ -108,6 +108,48 @@ export async function runConversationOwnershipFenceTests() {
   assert('54: talked about alarm', 'We talked about setting an alarm.', true);
   assert('55: shannon texted', 'Shannon texted me that she\'ll call later.', true);
 
+  // ── 7b-A: Herald-response-meta leftover interrogative ────────────────────
+  // Exception lives inside the existing interrogative rejection path.
+  // Requires authorized immediate context AND verb∧manner. Default (no
+  // second arg / false) must keep every existing case identical.
+  const META_POS = [
+    'Are you going to answer the same way each time?',
+    'Do you always answer like that?',
+    'Why did you say it that way?',
+    'Are you always going to respond like that?',
+  ];
+  for (const [i, phrase] of META_POS.entries()) {
+    assert(`56.${i + 1}a no-context "${phrase}" stays blocked`, phrase, false);
+    const got = isEligibleForEphemeralConversation(phrase, true);
+    if (got === true) {
+      console.log(`${GREEN}✓ PASS${RESET}  56.${i + 1}b with-context "${phrase}" eligible`);
+      passed++;
+    } else {
+      console.log(`${RED}✗ FAIL${RESET}  56.${i + 1}b with-context "${phrase}" eligible\n       got: ${DIM}${got}${RESET}\n       expected: ${DIM}true${RESET}`);
+      failures.push({ label: `56.${i + 1}b with-context`, got, expected: 'true' });
+    }
+  }
+  const META_NEG = [
+    'What do you remember about me?',
+    'What did my doctor say?',
+    "What's Hunter's phone number?",
+    'Are you going to call my daughter?',
+    'Will you text my son?',
+    'Did you say the doctor told me to come back?',
+    'What did you say about Hunter?',
+    'Are you saying Sarah texted?',
+  ];
+  for (const [i, phrase] of META_NEG.entries()) {
+    const got = isEligibleForEphemeralConversation(phrase, true);
+    if (got === false) {
+      console.log(`${GREEN}✓ PASS${RESET}  57.${i + 1} with-context "${phrase}" still blocked`);
+      passed++;
+    } else {
+      console.log(`${RED}✗ FAIL${RESET}  57.${i + 1} with-context "${phrase}" still blocked\n       got: ${DIM}${got}${RESET}\n       expected: ${DIM}false${RESET}`);
+      failures.push({ label: `57.${i + 1} with-context still blocked`, got, expected: 'false' });
+    }
+  }
+
   const total = passed + failures.length;
   console.log(
     `\n${BOLD}ConversationOwnershipFence: ${passed}/${total} passed` +

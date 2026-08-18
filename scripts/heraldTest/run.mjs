@@ -225,7 +225,7 @@ const RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", BOLD = "\x1b[1m",
 let passed = 0;
 const failures = [];
 const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length + 11; // +1 list_todo+medical intercept, +3 classifier tri-state, +1 Law 5 positive control, +6 Law 5 regression fence
-const EXPECTED_TOTAL = 1768;  // 2026-08-17: +17 — Sub-arc 7a capability-discovery chit-chat category (chitChat.test.ts CC-capability-1..7, CC-neg-5..7)
+const EXPECTED_TOTAL = 1784;  // 2026-08-17: +16 — 7b-A Herald-response-meta leftover (conversationOwnershipFence 56.1–4 a/b + 57.1–8)
 
 console.log(`\n${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  HERALD ROUTER + PHONE TEST SUITE — ${TOTAL} tests${RESET}`);

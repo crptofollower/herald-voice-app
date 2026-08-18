@@ -86,9 +86,27 @@ const COMPLEMENT_OPINION_RE =
 const COMPLEMENT_SOCIAL_RE =
   /^(about\s+(yourself|your\s+day)|something\s+(funny|interesting|nice))\b/i;
 
+// 7b-A — Herald-response-meta speech act (2026-08-17). Closed conjunction:
+// a response verb AND a manner/anaphoric adjunct. Never OR, never verb-only,
+// never manner-only. Word-bounded so "say" does not match "saying".
+// Do not grow these sets to chase new phrasings — stop and report.
+const HERALD_RESPONSE_META_VERB_RE = /\b(?:answer|respond|say|said)\b/i;
+const HERALD_RESPONSE_META_MANNER_RE =
+  /\b(?:the same way|the same thing|like that|like this|that way|this way)\b/i;
+
+function isHeraldResponseMetaQuestion(text: string): boolean {
+  return HERALD_RESPONSE_META_VERB_RE.test(text) && HERALD_RESPONSE_META_MANNER_RE.test(text);
+}
+
 /** Pure predicate -- no I/O. True if this otherwise-unclaimed utterance is
- *  safe to hand to ephemeral conversation. */
-export function isEligibleForEphemeralConversation(text: string): boolean {
+ *  safe to hand to ephemeral conversation.
+ *  hasAuthorizedImmediateContext: the one-slot prior pair is populated
+ *  (ephemeral success or authorized chit_chat device_read). Default false
+ *  preserves the original one-argument fence. */
+export function isEligibleForEphemeralConversation(
+  text: string,
+  hasAuthorizedImmediateContext = false,
+): boolean {
   const t = text.trim();
 
   // Gap B: action-imperative check now runs per clause, not just at the
@@ -107,7 +125,12 @@ export function isEligibleForEphemeralConversation(text: string): boolean {
     return COMPLEMENT_OPINION_RE.test(complement) || COMPLEMENT_SOCIAL_RE.test(complement);
   }
 
-  if (INTERROGATIVE_RE.test(t) && !OPINION_SEEKING_RE.test(t)) return false;
+  if (INTERROGATIVE_RE.test(t) && !OPINION_SEEKING_RE.test(t)) {
+    // 7b-A: leftover interrogative about Herald's own immediately preceding
+    // reply. Requires authorized context AND verb∧manner. Context alone or
+    // interrogative alone is not enough. Action / tell-me already returned.
+    return hasAuthorizedImmediateContext && isHeraldResponseMetaQuestion(t);
+  }
   return true;
 }
 

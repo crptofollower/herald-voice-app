@@ -1296,7 +1296,7 @@ export default function ChatScreen() {
       let reply = canned;
       if (
         outcome.routeDecision.reason === 'default' &&
-        isEligibleForEphemeralConversation(text)
+        isEligibleForEphemeralConversation(text, ephemeralContextRef.current != null)
       ) {
         const canConverse = canRunEphemeralConversation({
           rdTier: 3,
@@ -1353,6 +1353,12 @@ export default function ChatScreen() {
       routeDecision.kind === 'device_read' ? routeDecision.response : undefined;
     const rdLocalContext =
       routeDecision.kind === 'memory_probe' ? routeDecision.context : undefined;
+
+    const noteDeterministicChitChatContext = (assistantText: string) => {
+      if (routeDecision.kind !== 'device_read') return;
+      if (!routeDecision.reason.startsWith('chit_chat:') || routeDecision.isMedical) return;
+      ephemeralContextRef.current = { user: text, assistant: assistantText };
+    };
 
     // Law 5 fail-closed fence (LLM_LIVE Build D, Spine §3a). True only when
     // this utterance reached tier 3 via an unresolved PERSONAL capture (no
@@ -1562,6 +1568,7 @@ export default function ChatScreen() {
             text,
             buildDispatchDeps(),
           );
+          noteDeterministicChitChatContext(rdTier1Response);
           setInputText('');
           sendingRef.current = false;
           return;
@@ -1758,6 +1765,7 @@ export default function ChatScreen() {
           text,
           buildDispatchDeps(),
         );
+        noteDeterministicChitChatContext(rdTier1Response);
         sendingRef.current = false;
         setInputText('');
         return;
