@@ -16,7 +16,6 @@ import { getSurfaceForms, IN_SCOPE_FIELDS, type RoutingFieldName } from '../util
 
 export type IntentRecord =
   | { type: 'list_add'; items: string[]; listName: string }
-  | { type: 'list_remove'; item: string; listName: string }
   | { type: 'insurance_capture'; insType: string; carrier: string; agent?: string; phone?: string }
   | { type: 'medical_capture'; drug?: string; dosage?: string; frequency?: string; raw: string }
   | { type: 'medical_visit'; doctor_name?: string; specialty?: string; advice?: string; raw: string }
@@ -33,16 +32,15 @@ export type IntentRecord =
       phonelessNames?: string[];
       devicePhone?: string; deviceName?: string; raw: string }
   | { type: 'todo_add'; body: string }
-  | { type: 'todo_complete'; hint: string }
   | { type: 'pass' };
 
 // Keep in sync with every type literal in IntentRecord above — cannot drift apart.
 const KNOWN_TYPES = new Set<IntentRecord['type']>([
-  'list_add', 'list_remove', 'insurance_capture', 'medical_capture',
+  'list_add', 'insurance_capture', 'medical_capture',
   'medical_visit', 'medical_visit_upcoming', 'doctor_intro_capture',
   'service_capture', 'family_capture', 'phone_capture', 'address_capture',
   'emergency_contact', 'diagnosis_capture', 'contact_call',
-  'todo_add', 'todo_complete', 'pass',
+  'todo_add', 'pass',
 ]);
 
 const STEP_FORMS = [
@@ -364,10 +362,8 @@ function isCaptureComplete(rec: IntentRecord): boolean {
     case 'medical_capture':   return !!rec.drug?.trim();
     case 'medical_visit':     return !!(rec.doctor_name?.trim() || rec.specialty?.trim());
     case 'list_add':          return Array.isArray(rec.items) && rec.items.some(i => !!i?.trim());
-    case 'list_remove':       return !!rec.item?.trim();
     case 'insurance_capture': return !!rec.carrier?.trim() && !!rec.insType?.trim();
     case 'todo_add':          return !!rec.body?.trim();
-    case 'todo_complete':     return !!rec.hint?.trim();
     case 'phone_capture':
       return !!(rec.name?.trim() && rec.phone?.trim());
     case 'address_capture':
@@ -409,10 +405,6 @@ LIST ADD — ALWAYS split items into separate array entries, never one string:
 "I need apples oranges and milk" → {"type":"list_add","items":["apples","oranges","milk"],"listName":"grocery"}
 "add pay bills and call mom to my to-do list" → {"type":"list_add","items":["pay bills","call mom"],"listName":"todo"}
 
-LIST REMOVE — single item removal:
-{"type":"list_remove","item":"milk","listName":"grocery"}
-"I got the milk" → {"type":"list_remove","item":"milk","listName":"grocery"}
-
 INSURANCE CAPTURE — replacing, updating, or stating insurance carrier:
 {"type":"insurance_capture","insType":"car","carrier":"Allstate"}
 "my car insurance is Allstate" → {"type":"insurance_capture","insType":"car","carrier":"Allstate"}
@@ -444,10 +436,6 @@ TODO ADD:
 {"type":"todo_add","body":"call the dentist"}
 "remind me to call the dentist" → {"type":"todo_add","body":"call the dentist"}
 
-TODO COMPLETE:
-{"type":"todo_complete","hint":"called dentist"}
-"I called the dentist" → {"type":"todo_complete","hint":"called dentist"}
-
 PASS — use when live data needed, unclear, or none of the above:
 {"type":"pass"}
 
@@ -463,8 +451,7 @@ CRITICAL RULES:
 - ALWAYS split list items into array — "apples oranges milk" = ["apples","oranges","milk"], NEVER one string
 - Drug names and dosages: copy VERBATIM from speech, never guess or correct spelling
 - A visit specialty (cardiologist, dentist, doctor) is NEVER a doctor_name — put it in the specialty field, never invent a "Dr." name
-- "remove X replace with Y" for insurance = insurance_capture with new carrier Y, never list_remove
-- "got X" or "picked up X" = list_remove
+- "remove X replace with Y" for insurance = insurance_capture with new carrier Y
 - If user says "add X to my list" or "put X on my list" = ALWAYS list_add, never service_capture or todo_add — even if X sounds like a provider (dentist, plumber, doctor)
 - todo_add only when no list name mentioned: "remind me to call dentist", "add pay bills to my to-do"
 - Known contacts: ${hints.contacts.slice(0, 15).join(', ') || 'none'}
