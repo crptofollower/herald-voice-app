@@ -269,6 +269,39 @@ export async function runClassifierParseTests() {
       && todoDone.reason === 'action:todo_complete');
   }
 
+  // ── PRE-C: family_capture name-slot legality (relation token ≠ name) ───────
+  check('60. PRE-C relation token as name rejected (brother/brother)',
+    parseClassifierOutput(
+      '{"type":"family_capture","relation":"brother","name":"brother"}',
+      'My brother called me today.',
+      vocab,
+    ).length === 0);
+  check('61. PRE-C real name accepted when grounded (brother/Josh)',
+    (() => {
+      const out = parseClassifierOutput(
+        '{"type":"family_capture","relation":"brother","name":"Josh"}',
+        'My brother Josh called me today.',
+        vocab,
+      );
+      return out.length === 1
+        && out[0].type === 'family_capture'
+        && out[0].relation === 'brother'
+        && out[0].name === 'Josh';
+    })());
+  check('62. PRE-C explicit capture accepted (brother/Josh)',
+    (() => {
+      const utt = "Remember my brother's name is Josh.";
+      const out = parseClassifierOutput(
+        '{"type":"family_capture","relation":"brother","name":"Josh"}',
+        utt,
+        vocab,
+      );
+      return out.length === 1
+        && out[0].type === 'family_capture'
+        && out[0].relation === 'brother'
+        && out[0].name === 'Josh';
+    })());
+
   const total = passed + failures.length;
   if (failures.length) {
     console.log(`\x1b[31m❌ classifierParse: ${failures.length} failed\x1b[0m`);

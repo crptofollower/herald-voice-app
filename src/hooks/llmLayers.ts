@@ -322,6 +322,7 @@ export function parseClassifierOutput(
       if (!rec.type || rec.type === 'pass') continue;
       if (!KNOWN_TYPES.has(rec.type)) continue;
       if (!isCaptureComplete(rec)) continue;
+      if (!passesFamilyNameSlotLegality(rec, vocab)) continue;
       if (!passesRoutingVocab(rec, vocab)) continue;
       const verified = verifyVerbatim(rec, rawUtterance);
       if (!verified) continue;
@@ -344,6 +345,14 @@ function isRealName(v: unknown): v is string {
   if (typeof v !== 'string') return false;
   const t = v.trim();
   return t.length >= 2 && !PLACEHOLDER_NAMES.has(t.toLowerCase());
+}
+
+/** family_capture.name must not be a relationship token (parity with familyCapture.ts). */
+function passesFamilyNameSlotLegality(rec: IntentRecord, vocab: ClassifierVocab): boolean {
+  if (rec.type !== 'family_capture') return true;
+  const name = rec.name?.trim().toLowerCase();
+  if (!name) return false;
+  return !vocab.relations.has(name);
 }
 
 // Guard: a capture is only complete when all required slots have real values.
