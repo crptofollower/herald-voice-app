@@ -80,6 +80,7 @@ import { allConverted, mapCallIntents, resolveContactCallIntent, isUnresolvedPer
 import { writeCalendarCore, buildCalendarCollectSlot } from '../routing/calendarWrite';
 import { runCommitEffects } from '../utils/commitEffects';
 import { ConversationSession } from '../routing/conversationSession';
+import { classifyEmergencyCallReply } from '../utils/emergencyCallConfirm';
 import { ConversationalSubjectHolder } from '../routing/conversationalSubject';
 import { processUtterance, applyIntents } from '../routing/processUtterance';
 import { detectEmergency } from '../routing/emergencySignals';
@@ -1094,9 +1095,8 @@ export default function ChatScreen() {
       // Confirm device-contact call — user answering "yes/no" to "Found X in contacts"
       if (pending.action === 'confirm_call') {
         addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-        const isYes = /^\s*(yes|yeah|yep|sure|ok|okay|go ahead|call them|do it)\b/i.test(text.trim());
-        const isNo = /^\s*(no|nope|cancel|never mind|nevermind|don't|dont|stop)\b/i.test(text.trim());
-        if (isYes) {
+        const replyClass = classifyEmergencyCallReply(text);
+        if (replyClass === 'yes') {
           pendingContactCollectRef.current = null;
           // Persistence — best-effort, isolated so it can NEVER block the dial.
           // (§5: action authority is separate from persistence authority.)
@@ -1115,9 +1115,19 @@ export default function ChatScreen() {
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
           }
-        } else if (isNo) {
+        } else if (replyClass === 'no') {
           pendingContactCollectRef.current = null;
           const reply = `No problem — who were you trying to reach?`;
+          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+          speak(reply);
+        } else if (replyClass === 'reject_with_content') {
+          // A leading no/cancel token carrying its own conversational
+          // content (e.g. "No, I was talking to someone else") is still a
+          // decline — but assuming a specific alternate call target is
+          // fabricated context (Spine §3 verbatim rule; CLAUDE.md Trust
+          // First). Release the 911-offer pending plainly instead.
+          pendingContactCollectRef.current = null;
+          const reply = `No problem — I won't call 911.`;
           addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
           speak(reply);
         } else {
