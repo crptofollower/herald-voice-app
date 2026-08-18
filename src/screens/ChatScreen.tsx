@@ -105,10 +105,10 @@ import {
   normalizeAddressInput,
   setOsPersonCapabilitySearch,
 } from "../db/contactsDB";
-import { writeMedicalFact, writeMedicalRecord, writeMedication, writeMedicalContact, guessMedicationName, confirmMedicationCapture, deactivateMedicationByName } from "../db/medicalDB";
+import { writeMedicalRecord, writeMedication, writeMedicalContact, guessMedicationName, confirmMedicationCapture, deactivateMedicationByName } from "../db/medicalDB";
 import { extractDosage } from "../utils/detectMedicalEvent";
 import { drainPendingWrites, getPendingCount, queueWrite } from "../db/pendingWritesDB";
-import { _registerContactExtractor, writeFacts, extractFactsLocally, getFactCount, isMedicalCaptureIntent, isMedicationCorroborated, medicalCategoryFromText } from "../db/factDB";
+import { _registerContactExtractor, isMedicalCaptureIntent, isMedicationCorroborated, medicalCategoryFromText } from "../db/factDB";
 import { getActiveTopics, extractTopicsFromMessage, recordTopicMention } from "../db/topicDB";
 import { launchAndroidTimer } from "../utils/androidClock";
 import { captureHousehold } from '../utils/householdCapture';
@@ -1431,8 +1431,9 @@ export default function ChatScreen() {
     let localFactsWritten = false;
     const isTier1Read = rdTier === 1 && !!rdTier1Response;
 
-    // Household capture — runs before extractFactsLocally
-    // Same order rule as phone/address/emergency capture — never move below extractFactsLocally
+    // Household capture — runs before leftover medical capture.
+    // Same order rule as phone/address/emergency capture — never move below
+    // the leftover medical branches.
     // captureHousehold: insurance + legal document captures (unconverted domains)
     const householdResult = captureHousehold(text);
 
@@ -1449,14 +1450,10 @@ export default function ChatScreen() {
     }
 
     if (!rdActionIntent && !isTier1Read) {
-      // Extract facts locally — skip calendar/medical/profile reads (Bug 1)
-      try {
-        const beforeCount = getFactCount();
-        extractFactsLocally(text);
-        const afterCount = getFactCount();
-        if (afterCount > beforeCount) localFactsWritten = true;
-      } catch {}
-      if (!localFactsWritten && isMedicalCaptureIntent(text) && userId) {
+      // G1: do not silently persist local regex extraction. Medication and
+      // visit leftover still use confirm-gated DOMAIN_WRITERS. Generic
+      // medical leftover must not write medical_records.
+      if (isMedicalCaptureIntent(text) && userId) {
           const medCategory = medicalCategoryFromText(text);
           if (medCategory === 'medication') {
             const guessedName = guessMedicationName(text);
@@ -1517,18 +1514,6 @@ export default function ChatScreen() {
             setInputText('');
             return;
           }
-          try {
-            writeMedicalFact(medCategory, text);
-            localFactsWritten = true;
-          } catch {}
-      }
-      if (!localFactsWritten) {
-        const isPersonalWrite =
-          /\bmy (wife|husband|spouse|partner|son|daughter|child|kids?|brother|sister|mom|dad|mother|father)('?s name)? is\b/i.test(text) ||
-          /\bmy name is\b/i.test(text) ||
-          /\bi('?m| am) [\d]+ years? old\b/i.test(text) ||
-          /\bi live in\b/i.test(text);
-        if (isPersonalWrite) localFactsWritten = true;
       }
     }
     // Profile update — local SQLite, runs before offline gate
@@ -1955,30 +1940,9 @@ export default function ChatScreen() {
           setPendingAction(action as IntentAction);
           setActionStatus("confirming");
         },
-        onFacts: (facts) => {
-          // Write to structured factDB — temporal detection, dedup, importance scoring
-          writeFacts(facts);
-
-          // Route to typed device tables (medicalDB, contactsDB)
-          for (const fact of facts) {
-            if (!fact.value?.trim()) continue;
-
-            const MEDICAL_CATEGORIES = new Set([
-              'medication', 'medications', 'medical', 'visit',
-              'doctor', 'diagnosis', 'symptom', 'procedure',
-              'allergy', 'condition', 'lab', 'test', 'health'
-            ]);
-
-            if (MEDICAL_CATEGORIES.has(fact.category)) {
-              // Never auto-write a medication from backend fact-extraction — meds
-              // are correction-prone and must be confirmed (Spine §4, Jun-20).
-              // Mirror only non-medication medical notes here; medications flow
-              // through the confirm-gated capture paths.
-              if (fact.category !== 'medication' && fact.category !== 'medications') {
-                writeMedicalFact('medical', fact.value);
-              }
-            }
-          }
+        onFacts: (_facts) => {
+          // G1: backend harvest must not persist personal memory. Extraction
+          // may arrive on the stream; it is not confirmation. Drop candidates.
         },
         onDone: (fullText) => {
           if (batchTimerRef.current) {
