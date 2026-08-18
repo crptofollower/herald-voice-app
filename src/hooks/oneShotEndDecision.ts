@@ -1,4 +1,4 @@
-export type OneShotEndDecision = 'flush' | 'silence' | 'heard_unrecognized';
+export type OneShotEndDecision = 'flush' | 'flush_partial' | 'silence' | 'heard_unrecognized';
 export type OneShotNoSpeechDecision = 'flush' | 'teardown';
 
 /**
@@ -19,8 +19,14 @@ export type OneShotNoSpeechDecision = 'flush' | 'teardown';
 export function decideOneShotEnd(snapshot: {
   bufferHasContent: boolean;
   speechStarted: boolean;
+  // Optional -- omitted or false preserves prior behavior byte-for-byte.
+  // A genuine final always wins (checked first, unconditionally); this is
+  // consulted only when the final buffer is empty. Session 2026-08-18,
+  // STT partial-only recovery arc.
+  bestPartialHasContent?: boolean;
 }): OneShotEndDecision {
   if (snapshot.bufferHasContent) return 'flush';
+  if (snapshot.bestPartialHasContent) return 'flush_partial';
   if (snapshot.speechStarted) return 'heard_unrecognized';
   return 'silence';
 }

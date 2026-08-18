@@ -56,6 +56,39 @@ export async function runOneShotEndDecisionTests() {
       (v) => v === 'flush', 'flush');
   }
 
+  {
+    const got = decideOneShotEnd({ bufferHasContent: false, speechStarted: true, bestPartialHasContent: true });
+    assert('F: empty buffer + contentful partial + speech started → flush_partial (recovery)', got,
+      (v) => v === 'flush_partial', 'flush_partial');
+  }
+
+  {
+    const got = decideOneShotEnd({ bufferHasContent: true, speechStarted: true, bestPartialHasContent: true });
+    assert('G: buffered FINAL content wins over a retained partial -- flush, never flush_partial', got,
+      (v) => v === 'flush', 'flush');
+  }
+
+  {
+    const got = decideOneShotEnd({ bufferHasContent: false, speechStarted: true, bestPartialHasContent: false });
+    assert('H: no final, no partial, speech started -- unchanged heard_unrecognized', got,
+      (v) => v === 'heard_unrecognized', 'heard_unrecognized');
+  }
+
+  {
+    const got = decideOneShotEnd({ bufferHasContent: false, speechStarted: false, bestPartialHasContent: false });
+    assert('I: no final, no partial, no speech -- unchanged silence', got,
+      (v) => v === 'silence', 'silence');
+  }
+
+  // NOTE: repeated-partial overwrite-not-concatenate behavior, and the
+  // suspendForSpeech cancellation-clears-latestPartialRef invariant, are
+  // NOT exercised here or by any automated suite -- both are useMic.ts
+  // integration/lifecycle behavior this pure seam structurally cannot
+  // observe (decideOneShotEnd only ever receives booleans, and case I's
+  // input shape is identical whether or not suspendForSpeech actually ran
+  // -- asserting it again would not be diagnostic). Coverage for both is
+  // device-proof only, S24+, manual per spec, not a gate assert.
+
   const total = passed + failures.length;
   console.log(
     `\n${BOLD}OneShotEndDecision: ${passed}/${total} passed` +

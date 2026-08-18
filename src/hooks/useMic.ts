@@ -20,6 +20,18 @@ export function useMic(
   const [isRecording, setIsRecording] = useState(false);
   const maxTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bufferRef = useRef<string>('');
+  // STT partial-only recovery (2026-08-18): tracks the latest CONTENTFUL
+  // non-final transcript. Overwrite only, never concatenate. Consulted
+  // ONLY at the 'end' handler, and ONLY when bufferRef (a genuine final)
+  // is empty -- a real final always wins. Cleared inside
+  // deliverBufferWithoutNativeStop, in suspendForSpeech (cancellation
+  // boundary -- see that function below), and in startRecording/
+  // stopRecording, so it can never leak between turns or survive a
+  // TTS-preemption cancellation. Deliberately NOT cleared in the error
+  // handler's no-speech/teardown fallthrough -- it must survive into the
+  // guaranteed subsequent 'end' event, exactly like speechStartedRef
+  // already does today.
+  const latestPartialRef = useRef<string>('');
   const bufferTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const turnActiveRef = useRef(false);
   const emptySessionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -84,6 +96,15 @@ export function useMic(
 
     turnActiveRef.current = false;
     speechStartedRef.current = false;
+    // suspendForSpeech is cancellation, not pause-and-resume -- Herald is
+    // taking the audio channel to speak (ensureTurnStarted in useSpeech.ts
+    // fails closed on this exact call before any TTS audio plays). No code
+    // path anywhere delivers a transcript from a suspended-for-TTS session
+    // -- startRecording() after resolve always begins a brand-new session.
+    // A retained partial must be abandoned here exactly like bufferRef, or
+    // the native 'end' this function's own stop() call triggers could
+    // incorrectly flush_partial a fragment from a turn Herald just cancelled.
+    latestPartialRef.current = '';
     if (bufferTimerRef.current) { clearTimeout(bufferTimerRef.current); bufferTimerRef.current = null; }
     bufferRef.current = '';
     if (maxTimer.current) { clearTimeout(maxTimer.current); maxTimer.current = null; }
@@ -119,6 +140,11 @@ export function useMic(
   const deliverBufferWithoutNativeStop = (source: string) => {
     const final = bufferRef.current.trim();
     bufferRef.current = '';
+    // Any delivery (final OR partial-recovered) supersedes any retained
+    // partial for this turn -- clear here so a guaranteed follow-up 'end'
+    // event (e.g. after an error-path flush) can never re-deliver stale
+    // partial content as a duplicate turn.
+    latestPartialRef.current = '';
     if (bufferTimerRef.current) {
       clearTimeout(bufferTimerRef.current);
       bufferTimerRef.current = null;
@@ -243,6 +269,13 @@ export function useMic(
         bufferTimerRef.current = null;
       }
       // One-shot: do not arm BUFFER_WINDOW. Native 'end' flushes once.
+    } else {
+      // Non-final partial carrying real content -- retain for terminal-
+      // event recovery only. Overwrite, never concatenate.
+      const partialText = event.results[0]?.transcript?.trim();
+      if (partialText) {
+        latestPartialRef.current = partialText;
+      }
     }
   });
 
@@ -283,11 +316,23 @@ export function useMic(
     const decision = decideOneShotEnd({
       bufferHasContent: !!bufferRef.current.trim(),
       speechStarted: speechStartedRef.current,
+      bestPartialHasContent: !!latestPartialRef.current.trim(),
     });
     if (decision === 'flush') {
       log('ONE_SHOT_FLUSH', { source: 'native_end' });
       rlog('TEARDOWN_COMPLETED', { reason: 'one_shot_flush' });
       deliverBufferWithoutNativeStop('native_end');
+      return;
+    }
+    if (decision === 'flush_partial') {
+      // No genuine final ever arrived, but a contentful partial did --
+      // recover it through the SAME delivery path as a real final (copy
+      // into bufferRef, reuse deliverBufferWithoutNativeStop unchanged).
+      // No second routing path.
+      log('ONE_SHOT_FLUSH_PARTIAL', { source: 'native_end' });
+      rlog('TEARDOWN_COMPLETED', { reason: 'one_shot_flush_partial' });
+      bufferRef.current = latestPartialRef.current;
+      deliverBufferWithoutNativeStop('native_end_partial');
       return;
     }
     if (decision === 'heard_unrecognized') {
@@ -297,6 +342,7 @@ export function useMic(
     setIsRecording(false);
     turnActiveRef.current = false;
     speechStartedRef.current = false;
+    latestPartialRef.current = '';
     if (maxTimer.current) { clearTimeout(maxTimer.current); maxTimer.current = null; }
     if (bufferTimerRef.current) { clearTimeout(bufferTimerRef.current); bufferTimerRef.current = null; }
     bufferRef.current = '';
@@ -322,6 +368,7 @@ export function useMic(
     if (bufferRef.current.trim()) {
       const final = bufferRef.current.trim();
       bufferRef.current = '';
+      latestPartialRef.current = '';
       if (maxTimer.current) { clearTimeout(maxTimer.current); maxTimer.current = null; }
       rlog('TEARDOWN_REQUESTED', { reason: 'manual_stop' });
       try { ExpoSpeechRecognitionModule.stop(); } catch (e) { console.error('[useMic] stop failed:', e); }
@@ -337,6 +384,7 @@ export function useMic(
       return;
     }
     if (maxTimer.current) { clearTimeout(maxTimer.current); maxTimer.current = null; }
+    latestPartialRef.current = '';
     rlog('TEARDOWN_REQUESTED', { reason: 'manual_stop' });
     try {
       ExpoSpeechRecognitionModule.stop();
@@ -367,6 +415,7 @@ export function useMic(
       if (!granted) { console.error('[useMic] Mic permission denied'); return; }
       turnActiveRef.current = false; // clean slate for a new turn
       speechStartedRef.current = false;
+      latestPartialRef.current = '';
       clearEmptySessionRecovery();
 
       let stateBefore: string = 'unknown';
