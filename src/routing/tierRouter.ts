@@ -18,6 +18,14 @@ import { PERSON_RELATIONSHIP_ALTERNATION, normalizePersonTarget, liftRelationshi
 import { detectHouseholdRead, type HouseholdReadIntent } from "../utils/householdRead";
 import { detectServiceRemove, detectPhoneCapture } from "../utils/householdCapture";
 import { detectFamilyRead, answerFamilyRead } from "../utils/familyRead";
+import {
+  REMINDER_SIGNALS,
+  NOTE_CAPTURE_SIGNALS,
+  LIST_ADD_SIGNALS,
+  TODO_ADD_SIGNALS,
+  TODO_ADD_PREFIX,
+  COMPLETED_PAST_FIRST_PERSON_RE,
+} from "../utils/instructionSignals";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -584,25 +592,6 @@ const POSSESSIVE_CONTACT_STATEMENT = /\b\w+'s\s+(?:phone|cell|mobile|number)/i;
  *  Robust to STT omitting apostrophes (Samsung on-device engine). */
 const READ_QUERY_PREFIX = /^\s*(what|who|where|when|do you|can you tell|have you|is there|how|which|tell me|do i)\b/i;
 
-const REMINDER_SIGNALS = [
-  /\bremind me\b/i,
-  /\bdon't let me forget\b/i,
-  /\bremember to\b/i,
-  /\bdon't forget to\b/i,
-  /\bcan you set a reminder\b/i,
-  /\bset a reminder\b/i,
-];
-
-const NOTE_CAPTURE_SIGNALS = [
-  /\b(note|jot|write down|record) (this|that)\b/i,
-  /\bnote that\b/i,
-  /\bjot this down\b/i,
-  /^remember that\b/i,
-  /\bcan you make a note\b/i,
-  /\bmake a note (to|that|about)\b/i,
-  /\bcan you note\b/i,
-];
-
 const NOTE_READ_SIGNALS = [
   /\bwhat are my notes\b/i,
   /\bshow (me )?my notes\b/i,
@@ -615,13 +604,6 @@ const NOTE_READ_SIGNALS = [
   /\bany notes\b/i,
 ];
 
-const LIST_ADD_SIGNALS = [
-  /\badd (.+) to (my |the )?(grocery |shopping |to.?do |)\blist\b/i,
-  /\bput (.+) on (my |the )?(grocery |shopping |to.?do |)\blist\b/i,
-  /\badd to (my |the )?(grocery |shopping |to.?do )?\blist\b (.+)/i,
-  /\bcan you add (.+?) to (my |the )?(grocery |shopping |to.?do |)?\blist\b/i,
-];
-
 const LIST_READ_SIGNALS = [
   /\b(tell|read\s+me|show)\s+(me\s+)?(my|the)\s+(\w+\s+)?list\b/i,
   /\bwhat('s| is) on my (grocery |shopping |to.?do )?\blist\b/i,
@@ -632,16 +614,6 @@ const LIST_READ_SIGNALS = [
   /\bcheck my (grocery |shopping |to.?do )?\blist\b/i,
   /\bdo i have (anything|something) on my (grocery |shopping |to.?do )?\blist\b/i,
   /\bdo i have a (grocery |shopping |to.?do )?\blist\b/i,
-];
-
-const TODO_ADD_SIGNALS = [
-  /\bI need to\b/i,
-  /\bI have to\b/i,
-  /\bI gotta\b/i,
-  /\bI've got to\b/i,
-  /\bdon't let me forget\b/i,
-  /\bI should\b/i,
-  /\bI must\b/i,
 ];
 
 // Dates that route to reminder/calendar instead of todo
@@ -669,12 +641,10 @@ const TODO_READ_SIGNALS = [
 ];
 
 const TODO_COMPLETE_SIGNALS = [
-  /\bI (?:already )?(called|finished|completed|did|done|took care of|handled)\b/i,
+  COMPLETED_PAST_FIRST_PERSON_RE,
   /\bcross (off|that off)\b/i,
   /\bmark (that |it )?done\b/i,
   /\bthat('s| is) done\b/i,
-  /\bI (?:already )?(picked up|dropped off|returned|sent|submitted|paid|filed|bought|got|grabbed)\b/i,
-  /\bI (?:already )?(went to|made it to|got to|stopped by)\b/i,
 ];
 
 const PHOTO_SIGNALS = [
@@ -1104,7 +1074,6 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   }
 
   // Device: call — resolves contact on device, fires tel: intent
-  const TODO_ADD_PREFIX = /^(I need to|I have to|I gotta|I've got to|don't let me forget|I should|I must)\s+/i;
   if (CALL_SIGNALS.some((p) => p.test(msg)) && !REMINDER_SIGNALS.some((p) => p.test(msg)) && !CALL_NUMBER_STATEMENT.test(msg) && !POSSESSIVE_CONTACT_STATEMENT.test(msg) && !TODO_ADD_PREFIX.test(msg) && !READ_QUERY_PREFIX.test(msg)) {
     const CALL_EXCLUDE = /^(me|you|back|again|later|now|soon|ahead|us|them|it|that|help|ambulance|backup|someone|anyone|911|emergency)$/i;
     // Name token: letters + optional hyphen/apostrophe (O'Brien, Anne-Marie).

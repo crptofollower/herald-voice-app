@@ -15,6 +15,7 @@ import { normalizePhone } from '../utils/phone';
 import { buildPhoneConfirmPending, formatPhoneForSpeech } from '../utils/phoneConfirm';
 import { matchCandidateToken } from './conversationSession';
 import { isPersonalMemoryRecallQuestion } from './personalMemoryRecall';
+import { shouldRefuseLlmCaptureProposal } from './speechActAuthority';
 
 type ActionIntent = NonNullable<TierDecision['actionIntent']>;
 
@@ -1980,7 +1981,8 @@ export async function routeIntent(
     const llmResult = (
       await mapCallIntents(out.intents, text, deps)
     ).filter(i => i.type !== 'pass');
-    if (llmResult.length > 0) {
+    // CONV-C1: narration must not acquire capture authority from structural validity alone.
+    if (llmResult.length > 0 && !shouldRefuseLlmCaptureProposal(text, llmResult)) {
       return { kind: 'capture', intents: llmResult, source: 'llm', reason: 'llm:capture' };
     }
   }

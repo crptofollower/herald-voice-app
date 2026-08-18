@@ -14,6 +14,7 @@
 
 import type { LlamaContext } from 'llama.rn';
 import { isClassifierBusy } from '../hooks/llmLayers';
+import { IMPERATIVE_ACTION_RE } from './instructionSignals';
 
 // Conversation Ownership Fence (design review 2026-08-15, three rounds;
 // amended same day -- Gap A / Gap B corrections below).
@@ -38,9 +39,6 @@ const OPINION_SEEKING_RE =
 
 const INTERROGATIVE_RE =
   /\?\s*$|^\s*(who|what|when|where|why|how|do|does|did|is|are|was|were|can|could|would|will|should)\b/i;
-
-const IMPERATIVE_ACTION_RE =
-  /^\s*(please\s+)?(remind\s+me|don'?t\s+let\s+me\s+forget|make\s+sure\s+i|call|text|add|schedule|set|cancel|delete|remove)\b/i;
 
 // --- 2026-08-15 amendment: Gap A (tell-me framing) and Gap B (embedded
 // action clauses). Both were named gaps in the original design review, not
