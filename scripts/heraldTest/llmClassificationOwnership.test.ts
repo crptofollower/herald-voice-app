@@ -6,7 +6,7 @@
 //
 // Runner: npx tsx --tsconfig ./tsconfig.json ./llmClassificationOwnership.test.ts
 
-import { alreadyClassifiedByRouteIntent } from '../../src/utils/llmClassificationOwnership.ts';
+import { alreadyClassifiedByRouteIntent, mayInvokeBackendStream } from '../../src/utils/llmClassificationOwnership.ts';
 import type { RouteDecision } from '../../src/routing/routeIntent.ts';
 import type { CommitResult } from '../../src/routing/routeIntent.ts';
 
@@ -70,6 +70,39 @@ export async function runLlmClassificationOwnershipTests() {
 
   check('LCO-12 medical_read_pending → false',
     { kind: 'medical_read_pending', pending: dummyPending, reason: '' }, false);
+
+  console.log(`\n${BOLD}-- Backend Stream Authority (PRE-B F1) -------------------${RESET}\n`);
+
+  function checkStream(label: string, decision: RouteDecision, expected: boolean) {
+    assert(label, mayInvokeBackendStream(decision), v => v === expected, String(expected));
+  }
+
+  checkStream('MIB-1 backend → true',
+    { kind: 'backend', tier: 3, reason: 'live:data' }, true);
+
+  checkStream('MIB-2 device_read → false',
+    { kind: 'device_read', tier: 1, response: '', reason: '' }, false);
+
+  checkStream('MIB-3 device_action → false',
+    { kind: 'device_action', tier: 1, actionIntent: { type: 'time' }, reason: '' }, false);
+
+  checkStream('MIB-4 capture → false',
+    { kind: 'capture', intents: [], source: 'llm', reason: '' }, false);
+
+  checkStream('MIB-5 phone_repair_needed → false',
+    { kind: 'phone_repair_needed', pending: dummyPending, reason: '' }, false);
+
+  checkStream('MIB-6 medical_read_pending → false',
+    { kind: 'medical_read_pending', pending: dummyPending, reason: '' }, false);
+
+  checkStream('MIB-7 not_ready → false',
+    { kind: 'not_ready', reason: '' }, false);
+
+  checkStream('MIB-8 memory_probe → false',
+    { kind: 'memory_probe', tier: 2, context: {}, reason: '' }, false);
+
+  checkStream('MIB-9 needs_clarification → false',
+    { kind: 'needs_clarification', reason: 'default' }, false);
 
   const total = passed + failures.length;
   console.log(

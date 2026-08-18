@@ -83,7 +83,7 @@ import { ConversationSession } from '../routing/conversationSession';
 import { classifyEmergencyCallReply } from '../utils/emergencyCallConfirm';
 import { ConversationalSubjectHolder } from '../routing/conversationalSubject';
 import { processUtterance, applyIntents } from '../routing/processUtterance';
-import { alreadyClassifiedByRouteIntent } from '../utils/llmClassificationOwnership';
+import { alreadyClassifiedByRouteIntent, mayInvokeBackendStream } from '../utils/llmClassificationOwnership';
 import { detectEmergency } from '../routing/emergencySignals';
 import type { IntentRecord } from '../hooks/llmLayers';
 import { dispatchRead, dispatchAction, launchAppAndCompose } from './chat/dispatch';
@@ -1839,6 +1839,18 @@ export default function ChatScreen() {
       setInputText("");
       return;
     }
+
+    // PRE-B F1: explicit backend authority — fallthrough is never network permission.
+    if (!mayInvokeBackendStream(routeDecision)) {
+      const reply = "I'm not sure I'm following you — can you help me understand?";
+      addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: now });
+      addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: now + 1 });
+      speak(reply);
+      sendingRef.current = false;
+      setInputText('');
+      return;
+    }
+
     lastInteractionRef.current = now;
 
     addMessage({

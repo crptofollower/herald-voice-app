@@ -20,3 +20,11 @@ export function alreadyClassifiedByRouteIntent(routeDecision: RouteDecision): bo
   if (routeDecision.kind === 'backend' && routeDecision.llmAlreadyClassified === true) return true;
   return false;
 }
+
+// PRE-B F1 (2026-08-18): positive backend-stream authority only. ChatScreen
+// must call this immediately before any askHeraldStream setup — fallthrough
+// is never network authority. Does not interpret utterances; enforces the
+// RouteDecision kind routeIntent already emitted upstream.
+export function mayInvokeBackendStream(routeDecision: RouteDecision): boolean {
+  return routeDecision.kind === 'backend';
+}
