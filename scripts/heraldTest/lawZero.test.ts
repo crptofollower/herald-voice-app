@@ -100,6 +100,33 @@ export async function runLawZeroTests() {
     assert('L5b domain resume was invoked normally — Law 0 does not over-fire', resumeSpy.called, v => v === true, 'resume called');
   }
 
+  // ── L6: LAW0-K1 — capability "How can you help me with my phone?" reaches routing ──
+  {
+    const session = new ConversationSession();
+    const { deps, spy } = makeDeps();
+    const outcome = await processUtterance('How can you help me with my phone?', session, deps as any);
+    assert('L6a How-phone is not seized by Law 0', outcome, v => v.source !== 'emergency', "source !== 'emergency'");
+    assert('L6b classifyQuery runs — utterance reaches its downstream owner', spy.called, v => v === true, 'classifyQuery called');
+  }
+
+  // ── L7: LAW0-K1 — bare "Can you help me?" remains Law 0 on the live boundary ──
+  {
+    const session = new ConversationSession();
+    const { deps, spy } = makeDeps();
+    const outcome = await processUtterance('Can you help me?', session, deps as any);
+    assert('L7a bare Can you help me? remains emergency', outcome, v => v.handled === true && v.source === 'emergency', "{ handled: true, source: 'emergency' }");
+    assert('L7b classifyQuery never invoked for bare addressee plea', spy.called, v => v === false, 'classifyQuery never called');
+  }
+
+  // ── L8: LAW0-K1 — unknown remainder stays emergency; classifier does not run ──
+  {
+    const session = new ConversationSession();
+    const { deps, spy } = makeDeps();
+    const outcome = await processUtterance('Can you help me breathe?', session, deps as any);
+    assert('L8a Can you help me breathe? remains emergency', outcome, v => v.handled === true && v.source === 'emergency', "{ handled: true, source: 'emergency' }");
+    assert('L8b classifyQuery never invoked for unknown help-me remainder', spy.called, v => v === false, 'classifyQuery never called');
+  }
+
   const total = passed + failures.length;
   console.log(`\n${BOLD}Law 0: ${passed}/${total} passed${failures.length > 0 ? ` — ${RED}${failures.length} FAILED${RESET}` : ` — ${GREEN}all green${RESET}`}${RESET}\n`);
   return { passed, failed: failures.length, total, failures };

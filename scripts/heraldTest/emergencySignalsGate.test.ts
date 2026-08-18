@@ -82,6 +82,32 @@ export async function runEmergencySignalsGateTests() {
   assert('41: son said he could help me tomorrow (single clause)', "My son said he could help me tomorrow.", false);
   assert('42: she would help me and daughter would help me too', "She said she'd help me and my daughter said she would help me too.", false);
 
+  // LAW0-K1 (2026-08-17) — mundane assistance is not emergency; unknown remainder is.
+  assert('K1-1 How can you help me? is not emergency', 'How can you help me?', false);
+  assert('K1-2 How can you help me with my phone? is not emergency', 'How can you help me with my phone?', false);
+  assert('K1-3 What can you help me with? is not emergency', 'What can you help me with?', false);
+  assert('K1-4 Can you help me with my phone? is not emergency', 'Can you help me with my phone?', false);
+  assert('K1-5 Can you help me set an alarm? is not emergency', 'Can you help me set an alarm?', false);
+  assert('K1-6 Can you help me call my daughter? is not emergency', 'Can you help me call my daughter?', false);
+  assert('K1-7 Can you help me? remains emergency', 'Can you help me?', true);
+  assert('K1-8 Can you help me get up? remains emergency', 'Can you help me get up?', true);
+  assert('K1-9 Can you help me, I fell? remains emergency', 'Can you help me, I fell?', true);
+  assert('K1-10 How can you help me, I\'ve fallen? remains emergency', "How can you help me, I've fallen?", true);
+  assert('K1-11 Can you help me because I\'m scared? remains emergency', "Can you help me because I'm scared?", true);
+  assert('K1-12 Can you help me breathe? remains emergency', 'Can you help me breathe?', true);
+  assert('K1-13 Can you help me stop the bleeding? remains emergency', 'Can you help me stop the bleeding?', true);
+  assert('K1-14 Can you help me stand up? remains emergency', 'Can you help me stand up?', true);
+  assert('K1-15 Can you help me get out of bed? remains emergency', 'Can you help me get out of bed?', true);
+  assert('K1-16 Can you help me because I\'m choking? remains emergency', "Can you help me because I'm choking?", true);
+  assert('K1-17 Can you help me, my chest hurts? remains emergency', 'Can you help me, my chest hurts?', true);
+  assert('K1-18 Can you help me, I can\'t breathe? remains emergency', "Can you help me, I can't breathe?", true);
+  assert('K1-19 How can you help me if I\'m having trouble breathing? remains emergency', "How can you help me if I'm having trouble breathing?", true);
+  assert('K1-20 Can you help me with breathing? remains emergency', 'Can you help me with breathing?', true);
+  assert('K1-21 Can you help me with this bleeding? remains emergency', 'Can you help me with this bleeding?', true);
+  assert('K1-22 Can you help me set an alarm because I\'m having a heart attack? remains emergency', "Can you help me set an alarm because I'm having a heart attack?", true);
+  assert('K1-23 Can you help me call an ambulance? remains emergency', 'Can you help me call an ambulance?', true);
+  assert('K1-24 Can you help me call 911? remains emergency', 'Can you help me call 911?', true);
+
   const total = passed + failures.length;
   console.log(
     `\n${BOLD}EmergencySignalsGate: ${passed}/${total} passed` +
