@@ -83,6 +83,7 @@ import { ConversationSession } from '../routing/conversationSession';
 import { classifyEmergencyCallReply } from '../utils/emergencyCallConfirm';
 import { ConversationalSubjectHolder } from '../routing/conversationalSubject';
 import { processUtterance, applyIntents } from '../routing/processUtterance';
+import { alreadyClassifiedByRouteIntent } from '../utils/llmClassificationOwnership';
 import { detectEmergency } from '../routing/emergencySignals';
 import type { IntentRecord } from '../hooks/llmLayers';
 import { dispatchRead, dispatchAction, launchAppAndCompose } from './chat/dispatch';
@@ -1377,7 +1378,12 @@ export default function ChatScreen() {
     const isPersonalCaptureRisk = isUnresolvedPersonalCapture(routeDecision);
 
     // LLM capture — fallback classifier for the ambiguous tier-3 gap ONLY.
-    if (llmStatus === 'ready' && rdTier === 3) {
+    // LAT-ARC-B: skip if routeIntent already ran a real classifyWithLLM
+    // completion for this exact utterance (proven duplicate paths:
+    // 'backend'/live:data, and 'capture' source:'llm' with an unconverted
+    // intent type). Deterministic classifier — a second call reproduces
+    // the first call's result at pure latency cost, no new information.
+    if (llmStatus === 'ready' && rdTier === 3 && !alreadyClassifiedByRouteIntent(routeDecision)) {
       try {
         const llmOut = await classifyWithLLM(text, getCtx(), {
           contacts: getKnownContactNames(),
@@ -1626,7 +1632,12 @@ export default function ChatScreen() {
         // Tier 1.5: on-device LLM capture — ONLY for the tier-3 gap (deterministic-first).
         // A tier-1 read/action must never be re-captured here (e.g. "who is my wife" is a
         // family READ, not a family_capture). Matches the online gate.
-        if (llmStatus === 'ready' && rdTier === 3) {
+        // LAT-ARC-B: same skip as the online site above -- this offline
+        // fallback is reachable AFTER the online site already ran and found
+        // nothing (llmCaptures.length===0), so without this guard an
+        // offline 'backend'/unconverted-capture turn could pay for a THIRD
+        // classifyWithLLM call on the identical utterance.
+        if (llmStatus === 'ready' && rdTier === 3 && !alreadyClassifiedByRouteIntent(routeDecision)) {
           try {
             const contacts = getKnownContactNames();
             const lists = getKnownListNames();

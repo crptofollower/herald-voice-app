@@ -26,7 +26,7 @@ export type RouteDecision =
   | { kind: 'medical_read_pending'; pending: Extract<CommitResult, { status: 'pending' }>; reason: string }
   | { kind: 'not_ready'; reason: string }
   | { kind: 'memory_probe'; tier: 2; context: LocalContext; reason: string }
-  | { kind: 'backend'; tier: 3; reason: string }
+  | { kind: 'backend'; tier: 3; reason: string; llmAlreadyClassified?: boolean }
   | { kind: 'needs_clarification'; guess?: string; reason: string }
 
 // ─── Routing authority scaffolding (Commit 1) ────────────────────────────────
@@ -1948,6 +1948,16 @@ export async function routeIntent(
     return { kind: 'needs_clarification', reason: 'personal_memory:recall_declined' };
   }
 
+  // LAT-ARC-B: tracks whether a REAL classifyLLM completion happened for
+  // this utterance (never set for a not_ready/never-attempted classifier).
+  // Carried only onto the 'backend' return below — 'capture'/source:'llm'
+  // already carries an equally explicit, pre-existing signal (source) and
+  // needs no new field. Read by ChatScreen to skip a redundant
+  // re-classification of the identical utterance (proven duplicate paths:
+  // 'backend'/live:data, and 'capture' source:'llm' with an unconverted
+  // intent type — see session investigation, 2026-08-18).
+  let llmAlreadyClassified = false;
+
   if (deps.llmReady && deps.classifyLLM) {
     const out = await deps.classifyLLM(text);
     // A busy or absent classifier is NOT "found nothing" — it never ran. Returning
@@ -1957,6 +1967,7 @@ export async function routeIntent(
     if (out.status === 'not_ready') {
       return { kind: 'not_ready', reason: `llm:not_ready:${out.reason}` };
     }
+    llmAlreadyClassified = true;
     // 'pass' is the classifier's own honest "unclear / none of the above"
     // signal (llmLayers.ts prompt: "When genuinely unclear → pass"). It is
     // NOT a capture instruction and has no DOMAIN_WRITERS entry — letting it
@@ -1975,7 +1986,7 @@ export async function routeIntent(
   }
 
   if (decision.reason === 'live:data') {
-    return { kind: 'backend', tier: 3, reason: decision.reason };
+    return { kind: 'backend', tier: 3, reason: decision.reason, llmAlreadyClassified };
   }
   return { kind: 'needs_clarification', reason: decision.reason };
 }
