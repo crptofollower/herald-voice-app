@@ -1018,6 +1018,8 @@ export async function runContactCallTests() {
       "I'm not sure, it's in my phone contacts — Josh Duran",
       'Look in my contacts for Josh Duran',
       'Look in my phone contacts for Josh Duran',
+      "It's in my phone contacts Josh Duran",
+      "I'm not sure it's in my phone contacts Josh Duran",
     ];
     for (const utterance of POSITIVE_FRAMED) {
       const db = freshDB();
@@ -1112,6 +1114,27 @@ export async function runContactCallTests() {
         && v.capturedArg === 'Josh Duran'
         && /No problem — who were you trying to reach/i.test(v.ack),
       'noop ack; extracted Josh Duran; no dial');
+  }
+  {
+    const db = freshDB();
+    insertContact(db, { id: 'c_bro', name: 'Josh', relationship: 'brother', importance: 7 });
+    const intent = await resolveContactCallIntent('brother', 'call my brother', { resolveContact: async () => null });
+    let capturedArg: string | undefined;
+    const collect = await addPending(intent, {
+      resolveContact: async (n: string) => {
+        capturedArg = n;
+        return n.trim().toLowerCase() === 'josh duran'
+          ? { phone: '5557778888', name: 'Josh Durand', source: 'device' as const }
+          : null;
+      },
+    });
+    const result = await collect.resume('check my contacts real quick');
+    assert('T-CT-W6b loose separator "check my contacts real quick" → noop downstream, no dial',
+      { status: result.status, phone: dialPhone(result), capturedArg },
+      v => v.status === 'noop'
+        && !v.phone
+        && v.capturedArg === 'real quick',
+      'extracts trailing span but OS lookup rejects; no authority leak');
   }
   {
     const FAIL_CLOSED = [

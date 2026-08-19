@@ -245,7 +245,7 @@ function extractCollectContactNameReference(reply: string): string | null {
   const lookFor = trimmed.match(/^look in my (?:phone )?contacts for\s+(.+)$/i);
   if (lookFor) return normalizeNameSpan(lookFor[1]);
 
-  const afterContacts = trimmed.match(/(?:phone )?contacts\s*(?:[—\-:,]\s*|\s+for\s+)(.+)$/i);
+  const afterContacts = trimmed.match(/(?:phone )?contacts(?:\s*(?:[—\-:,]\s*|\s+for\s+)|\s+)(.+)$/i);
   if (afterContacts) return normalizeNameSpan(afterContacts[1]);
 
   const itsName = trimmed.match(/^it'?s\s+(?!in\s+my\s+(?:phone\s+)?contacts\b)(.+)$/i);
