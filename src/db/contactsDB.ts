@@ -436,7 +436,9 @@ export type OsPersonCapabilitySearch = (
 
 let _osPersonCapabilitySearch: OsPersonCapabilitySearch | null = null;
 
-/** Register (or clear) the OS capability search used by resolvePersonCapability. */
+/** Register (or clear) the OS capability search hook.
+ * Reserved for future deterministic os_contact_id binding. Name-only
+ * capability fill-in in resolvePersonCapability is forbidden. */
 export function setOsPersonCapabilitySearch(fn: OsPersonCapabilitySearch | null): void {
   _osPersonCapabilitySearch = fn;
 }
@@ -454,10 +456,17 @@ function capabilityValue(
 }
 
 /**
- * Capability provider for an already-resolved contact. Herald field first;
- * OS only when Herald lacks the field, searched by that contact's identity
- * attributes (never the original utterance). Does not call
- * resolvePersonIdentity and never silently picks among OS multiples.
+ * Capability provider for an already-resolved Herald contact.
+ *
+ * Herald field first. When Herald lacks the field, fail closed as missing
+ * (known-person collect upstream). Name similarity alone cannot establish
+ * that an unlinked OS contact is the same person — without a stable
+ * os_contact_id (or equivalent) binding, OS search must not silently supply
+ * phone/address authority for a known Herald identity.
+ *
+ * Does not call resolvePersonIdentity. setOsPersonCapabilitySearch remains
+ * registered for future deterministic OS-contact linking; it is not used for
+ * name-only capability fill-in.
  */
 export async function resolvePersonCapability(
   contact: Contact,
@@ -472,36 +481,8 @@ export async function resolvePersonCapability(
     return { status: 'available', value: heraldValue, source: 'herald' };
   }
 
-  if (!_osPersonCapabilitySearch) return { status: 'missing' };
-
-  const osMatches = await _osPersonCapabilitySearch(
-    { name: contact.name, relationship: contact.relationship },
-    capability,
-  );
-
-  const withCap = osMatches.filter(m => !!capabilityValue(m, capability));
-  if (withCap.length === 0) return { status: 'missing' };
-  if (withCap.length === 1) {
-    return {
-      status: 'available',
-      value: capabilityValue(withCap[0], capability)!,
-      source: 'os',
-    };
-  }
-
-  return {
-    status: 'ambiguous',
-    candidates: withCap.map((m, i) => ({
-      id: `os:${i}:${m.name}`,
-      name: m.name,
-      phone: m.phone,
-      address: m.address,
-      email: m.email,
-      importance: 5,
-      created_at: '',
-      updated_at: '',
-    })),
-  };
+  // Known person, missing Herald capability: never adopt unlinked OS by name.
+  return { status: 'missing' };
 }
 
 // ─── getImportantContacts ─────────────────────────────────────────────────────

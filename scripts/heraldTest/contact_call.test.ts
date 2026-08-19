@@ -10,7 +10,7 @@ import type { CommitResult } from '../../src/routing/routeIntent.ts';
 import { ConversationSession } from '../../src/routing/conversationSession.ts';
 import type { IntentRecord } from '../../src/hooks/llmLayers.ts';
 import type { Contact } from '../../src/db/contactsDB.ts';
-import { findContactByName, findContactByRelationship } from '../../src/db/contactsDB.ts';
+import { findContactByName, findContactByRelationship, setOsPersonCapabilitySearch } from '../../src/db/contactsDB.ts';
 
 const BOLD='\x1b[1m',RED='\x1b[31m',GREEN='\x1b[32m',DIM='\x1b[2m',RESET='\x1b[0m';
 
@@ -805,6 +805,101 @@ export async function runContactCallTests() {
         && v.prior.relationship == null
         && v.prior.removed_at == null,
       'Durand → pending no dial; Josh → dials 9725550101; one son holder; prior tag cleared');
+  }
+
+  // ── T-CT-W: weak OS namesake must not silently dial known Herald person ──
+  {
+    const db = freshDB();
+    insertContact(db, { id: 'c_bro', name: 'Josh', relationship: 'brother', importance: 7 });
+    setOsPersonCapabilitySearch(async (identity) => {
+      if (identity.name !== 'Josh') return [];
+      return [{ name: 'Josh Boss', phone: '5559990000' }];
+    });
+    const intent = await resolveContactCallIntent('brother', 'call my brother', {
+      resolveContact: async () => null,
+    });
+    const result = await DOMAIN_WRITERS['contact_call']!.add(intent, '');
+    setOsPersonCapabilitySearch(null);
+    assert('T-CT-W1 Call my brother: phoneless Josh + OS Josh Boss → known-person collect, no dial',
+      {
+        status: result.status,
+        phone: dialPhone(result),
+        prompt: result.status === 'pending' ? result.prompt : '',
+        cands: (intent as { candidates?: Array<{ name: string; phone?: string }> }).candidates,
+      },
+      v => v.status === 'pending'
+        && !v.phone
+        && /I know Josh/i.test(v.prompt)
+        && /don't have a phone number/i.test(v.prompt)
+        && Array.isArray(v.cands)
+        && v.cands!.length === 1
+        && v.cands![0].name === 'Josh'
+        && !(v.cands![0].phone ?? '').trim(),
+      'pending known-person collect; empty phone; no tel');
+  }
+  {
+    const db = freshDB();
+    insertContact(db, { id: 'c_bro', name: 'Josh', relationship: 'brother', importance: 7 });
+    setOsPersonCapabilitySearch(async () => ([
+      { name: 'Josh Boss', phone: '5559990000' },
+      { name: 'Josh Durand', phone: '5558887777' },
+    ]));
+    const intent = await resolveContactCallIntent('brother', 'call my brother', {
+      resolveContact: async () => null,
+    });
+    const result = await DOMAIN_WRITERS['contact_call']!.add(intent, '');
+    setOsPersonCapabilitySearch(null);
+    assert('T-CT-W2 Call my brother: multi OS Joshes → collect, never silent top-1 dial',
+      { status: result.status, phone: dialPhone(result) },
+      v => v.status === 'pending' && !v.phone,
+      'pending collect; no dial');
+  }
+  {
+    const db = freshDB();
+    insertContact(db, {
+      id: 'c_bro',
+      name: 'Josh',
+      relationship: 'brother',
+      phone: '555-111-2222',
+      importance: 7,
+    });
+    setOsPersonCapabilitySearch(async () => {
+      throw new Error('OS must not be consulted when Herald brother has phone');
+    });
+    const intent = await resolveContactCallIntent('brother', 'call my brother', {
+      resolveContact: async () => null,
+    });
+    const result = await DOMAIN_WRITERS['contact_call']!.add(intent, '');
+    setOsPersonCapabilitySearch(null);
+    assert('T-CT-W3 Call my brother: Herald phone authoritative → dial Herald, OS unused',
+      { status: result.status, phone: dialPhone(result), ack: result.status === 'committed' ? result.ack : '' },
+      v => v.status === 'committed'
+        && v.phone === '5551112222'
+        && /Calling Josh/i.test(v.ack),
+      'Calling Josh from Herald phone');
+  }
+  {
+    const db = freshDB();
+    insertContact(db, { id: 'c_plumb', name: 'John Smith', relationship: 'plumber', importance: 5 });
+    setOsPersonCapabilitySearch(async () => ([
+      { name: 'John Smith', phone: '5554443333' },
+    ]));
+    const intent = await resolveContactCallIntent('plumber', 'call my plumber', {
+      resolveContact: async () => null,
+    });
+    const result = await DOMAIN_WRITERS['contact_call']!.add(intent, '');
+    setOsPersonCapabilitySearch(null);
+    assert('T-CT-W4 Call my plumber: phoneless John Smith + exact OS John Smith → collect, no dial',
+      {
+        status: result.status,
+        phone: dialPhone(result),
+        prompt: result.status === 'pending' ? result.prompt : '',
+      },
+      v => v.status === 'pending'
+        && !v.phone
+        && /I know John Smith/i.test(v.prompt)
+        && /don't have a phone number/i.test(v.prompt),
+      'pending known-person collect; exact name match never silent OS dial');
   }
 
   const total = passed + failures.length;

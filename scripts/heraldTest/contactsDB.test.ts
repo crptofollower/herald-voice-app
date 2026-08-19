@@ -680,67 +680,195 @@ export async function runContactsDBTests() {
     setOsPersonCapabilitySearch(null);
   }
 
-  // ── T-CAP-02: Herald missing, exactly one OS match → available/os ─────────
+  // ── T-CAP-02: single-token Herald + one OS namesake → missing ─────────────
   {
+    let osCalls = 0;
     setOsPersonCapabilitySearch(async (identity) => {
+      osCalls++;
       if (identity.name !== 'Shannon') return [];
       return [{ name: 'Shannon Martys', phone: '5551112222' }];
     });
     const r = await resolvePersonCapability(phonelessWife(), 'phone');
-    assert('T-CAP-02 Herald miss + one OS → available/os',
-      r,
+    assert('T-CAP-02 Herald single-token + one OS namesake → missing (no silent OS bind)',
+      { r, osCalls },
       v => typeof v === 'object' && v !== null
-        && (v as { status: string }).status === 'available'
-        && (v as { source?: string }).source === 'os'
-        && (v as { value?: string }).value === '5551112222',
-      "{ status: 'available', value: '5551112222', source: 'os' }");
+        && (v as { r: { status: string }; osCalls: number }).r.status === 'missing'
+        && (v as { osCalls: number }).osCalls === 0,
+      "{ status: 'missing' }; OS not consulted");
     setOsPersonCapabilitySearch(null);
   }
 
-  // ── T-CAP-03: Herald missing, multiple OS matches → ambiguous (no top-1) ──
+  // ── T-CAP-02b: exact multi-token name match still must not adopt OS phone ─
+  {
+    let osCalls = 0;
+    setOsPersonCapabilitySearch(async () => {
+      osCalls++;
+      return [{ name: 'John Smith', phone: '5551112222' }];
+    });
+    const contact: Contact = {
+      id: 'c_plumber',
+      name: 'John Smith',
+      relationship: 'plumber',
+      importance: 5,
+      created_at: '',
+      updated_at: '',
+    };
+    const r = await resolvePersonCapability(contact, 'phone');
+    assert('T-CAP-02b phoneless plumber John Smith + exact OS John Smith → missing',
+      { r, osCalls },
+      v => typeof v === 'object' && v !== null
+        && (v as { r: { status: string } }).r.status === 'missing'
+        && (v as { osCalls: number }).osCalls === 0,
+      "{ status: 'missing' }; name match alone never authorizes OS");
+    setOsPersonCapabilitySearch(null);
+  }
+
+  // ── T-CAP-03: single-token Herald + multi OS → missing (not ambiguous) ────
   {
     setOsPersonCapabilitySearch(async () => ([
       { name: 'Shannon A', phone: '5551111111' },
       { name: 'Shannon B', phone: '5552222222' },
     ]));
     const r = await resolvePersonCapability(phonelessWife(), 'phone');
-    assert('T-CAP-03 Herald miss + multi OS → ambiguous with all candidates',
+    assert('T-CAP-03 Herald single-token + multi OS namesakes → missing (no top-1)',
       r,
       v => typeof v === 'object' && v !== null
-        && (v as { status: string }).status === 'ambiguous'
-        && Array.isArray((v as { candidates?: Contact[] }).candidates)
-        && (v as { candidates: Contact[] }).candidates.length === 2
-        && (v as { candidates: Contact[] }).candidates.map(c => c.name).sort().join('|') === 'Shannon A|Shannon B',
-      "{ status: 'ambiguous', candidates: [Shannon A, Shannon B] }");
+        && (v as { status: string }).status === 'missing',
+      "{ status: 'missing' }");
     setOsPersonCapabilitySearch(null);
   }
 
-  // ── T-CAP-04: Herald missing, OS none / no phones → missing ───────────────
+  // ── T-CAP-03b: insurance agent exact OS name match → missing ──────────────
   {
-    setOsPersonCapabilitySearch(async () => ([{ name: 'Shannon', phone: '' }]));
-    const r = await resolvePersonCapability(phonelessWife(), 'phone');
-    assert('T-CAP-04 Herald miss + OS none with capability → missing',
+    setOsPersonCapabilitySearch(async () => ([
+      { name: 'Jane Miller', phone: '5553334444' },
+    ]));
+    const contact: Contact = {
+      id: 'c_ins',
+      name: 'Jane Miller',
+      relationship: 'insurance agent',
+      importance: 5,
+      created_at: '',
+      updated_at: '',
+    };
+    const r = await resolvePersonCapability(contact, 'phone');
+    assert('T-CAP-03b phoneless insurance agent Jane Miller + exact OS Jane Miller → missing',
+      r,
+      v => typeof v === 'object' && v !== null
+        && (v as { status: string }).status === 'missing',
+      "{ status: 'missing' }");
+    setOsPersonCapabilitySearch(null);
+  }
+
+  // ── T-CAP-W1: brother Josh + OS Josh Boss → missing (device wrong-call) ───
+  {
+    setOsPersonCapabilitySearch(async (identity) => {
+      if (identity.name !== 'Josh') return [];
+      return [{ name: 'Josh Boss', phone: '5559990000' }];
+    });
+    const brother: Contact = {
+      id: 'c_bro',
+      name: 'Josh',
+      relationship: 'brother',
+      importance: 7,
+      created_at: '',
+      updated_at: '',
+    };
+    const r = await resolvePersonCapability(brother, 'phone');
+    assert('T-CAP-W1 phoneless brother Josh + OS Josh Boss → missing (no silent dial bind)',
       r,
       v => typeof v === 'object' && v !== null && (v as { status: string }).status === 'missing',
       "{ status: 'missing' }");
     setOsPersonCapabilitySearch(null);
   }
 
-  // ── T-CAP-05: OS search receives resolved identity attrs, never utterance ─
+  // ── T-CAP-W2: brother Josh + multiple OS Joshes → missing (never top-1) ──
   {
-    const seen: Array<{ name: string; relationship?: string }> = [];
-    setOsPersonCapabilitySearch(async (identity) => {
-      seen.push({ name: identity.name, relationship: identity.relationship });
-      return [];
+    setOsPersonCapabilitySearch(async () => ([
+      { name: 'Josh Boss', phone: '5559990000' },
+      { name: 'Josh Durand', phone: '5558887777' },
+    ]));
+    const brother: Contact = {
+      id: 'c_bro2',
+      name: 'Josh',
+      relationship: 'brother',
+      importance: 7,
+      created_at: '',
+      updated_at: '',
+    };
+    const r = await resolvePersonCapability(brother, 'phone');
+    assert('T-CAP-W2 phoneless Josh + multi OS Joshes → missing (never top-1)',
+      r,
+      v => typeof v === 'object' && v !== null && (v as { status: string }).status === 'missing',
+      "{ status: 'missing' }");
+    setOsPersonCapabilitySearch(null);
+  }
+
+  // ── T-CAP-W3: address capability — no name-only OS adoption ──────────────
+  {
+    setOsPersonCapabilitySearch(async () => ([
+      { name: 'Josh Boss', address: '1 Boss Lane' },
+    ]));
+    const brother: Contact = {
+      id: 'c_bro3',
+      name: 'Josh',
+      relationship: 'brother',
+      importance: 7,
+      created_at: '',
+      updated_at: '',
+    };
+    const r = await resolvePersonCapability(brother, 'address');
+    assert('T-CAP-W3 phoneless Josh address + OS Josh Boss → missing',
+      r,
+      v => typeof v === 'object' && v !== null && (v as { status: string }).status === 'missing',
+      "{ status: 'missing' }");
+    setOsPersonCapabilitySearch(null);
+  }
+
+  // ── T-CAP-W4: SMS phone capability — same fail-closed (shared function) ──
+  {
+    setOsPersonCapabilitySearch(async () => ([
+      { name: 'John Smith', phone: '5557778888' },
+    ]));
+    const contact: Contact = {
+      id: 'c_plumber_sms',
+      name: 'John Smith',
+      relationship: 'plumber',
+      importance: 5,
+      created_at: '',
+      updated_at: '',
+    };
+    const r = await resolvePersonCapability(contact, 'phone');
+    assert('T-CAP-W4 SMS: phoneless known person must not inherit unlinked OS number',
+      r,
+      v => typeof v === 'object' && v !== null && (v as { status: string }).status === 'missing',
+      "{ status: 'missing' }");
+    setOsPersonCapabilitySearch(null);
+  }
+
+  // ── T-CAP-04: Herald missing, OS registered but unused → missing ──────────
+  {
+    setOsPersonCapabilitySearch(async () => ([{ name: 'Shannon', phone: '' }]));
+    const r = await resolvePersonCapability(phonelessWife(), 'phone');
+    assert('T-CAP-04 Herald miss + OS registered → missing (no name-only fill-in)',
+      r,
+      v => typeof v === 'object' && v !== null && (v as { status: string }).status === 'missing',
+      "{ status: 'missing' }");
+    setOsPersonCapabilitySearch(null);
+  }
+
+  // ── T-CAP-05: unlinked OS search must not be consulted for authority ─────
+  {
+    let osCalls = 0;
+    setOsPersonCapabilitySearch(async () => {
+      osCalls++;
+      return [{ name: 'Shannon', phone: '5550001111' }];
     });
     await resolvePersonCapability(phonelessWife(), 'phone');
-    assert('T-CAP-05 OS constrained to contact.name/relationship (not utterance)',
-      seen,
-      v => Array.isArray(v) && v.length === 1
-        && v[0].name === 'Shannon'
-        && v[0].relationship === 'wife'
-        && !JSON.stringify(v).toLowerCase().includes('my wife'),
-      "[{ name: 'Shannon', relationship: 'wife' }]");
+    assert('T-CAP-05 OS capability search not consulted without identity binding',
+      osCalls,
+      v => v === 0,
+      '0 OS calls');
     setOsPersonCapabilitySearch(null);
   }
 
