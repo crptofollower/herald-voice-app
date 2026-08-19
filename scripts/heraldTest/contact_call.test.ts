@@ -10,7 +10,7 @@ import type { CommitResult } from '../../src/routing/routeIntent.ts';
 import { ConversationSession } from '../../src/routing/conversationSession.ts';
 import type { IntentRecord } from '../../src/hooks/llmLayers.ts';
 import type { Contact } from '../../src/db/contactsDB.ts';
-import { findContactByName, findContactByRelationship, setOsPersonCapabilitySearch } from '../../src/db/contactsDB.ts';
+import { findContactByName, findContactByRelationship, setOsPersonCapabilitySearch, attachPhoneToContactById } from '../../src/db/contactsDB.ts';
 
 const BOLD='\x1b[1m',RED='\x1b[31m',GREEN='\x1b[32m',DIM='\x1b[2m',RESET='\x1b[0m';
 
@@ -1071,29 +1071,70 @@ export async function runContactCallTests() {
     setOsPersonCapabilitySearch(async () => {
       throw new Error('OS must not be consulted when Herald brother has phone');
     });
-    let resolveContactCalledInAdd = false;
-    const intent2 = await resolveContactCallIntent('brother', 'call my brother', {
-      resolveContact: async () => null,
+    try {
+      let resolveContactCalledInAdd = false;
+      const intent2 = await resolveContactCallIntent('brother', 'call my brother', {
+        resolveContact: async () => null,
+      });
+      const result2 = await DOMAIN_WRITERS['contact_call']!.add(intent2, '', {
+        resolveContact: async () => {
+          resolveContactCalledInAdd = true;
+          throw new Error('resolveContact must not be called in writer when Herald phone is stored');
+        },
+      });
+      assert('T-CT-W5f second brother call → immediate Herald dial, no OS lookup',
+        {
+          status: result2.status,
+          phone: dialPhone(result2),
+          resolveContactCalledInAdd,
+          heraldPhone: (db.prepare(`SELECT phone FROM contacts WHERE id = 'c_bro'`).get() as { phone: string | null }).phone,
+        },
+        v => v.status === 'committed'
+          && v.phone === '5557778888'
+          && !v.resolveContactCalledInAdd
+          && v.heraldPhone === '5557778888',
+        'immediate dial from stored Herald phone; writer resolveContact not invoked');
+    } finally {
+      setOsPersonCapabilitySearch(null);
+    }
+  }
+
+  // ── T-CT-W5h: attachPhoneToContactById is fill-only — never clobbers phone ─
+  {
+    const db = freshDB();
+    insertContact(db, {
+      id: 'c_bro',
+      name: 'Josh',
+      relationship: 'brother',
+      phone: '5551112222',
+      importance: 7,
     });
-    const result2 = await DOMAIN_WRITERS['contact_call']!.add(intent2, '', {
-      resolveContact: async () => {
-        resolveContactCalledInAdd = true;
-        throw new Error('resolveContact must not be called in writer when Herald phone is stored');
-      },
-    });
-    setOsPersonCapabilitySearch(null);
-    assert('T-CT-W5f second brother call → immediate Herald dial, no OS lookup',
+    const before = contactCount(db);
+    const attachResult = attachPhoneToContactById('c_bro', '5557778888');
+    const after = contactCount(db);
+    const row = db.prepare(`SELECT phone, name, relationship FROM contacts WHERE id = 'c_bro'`).get() as {
+      phone: string | null;
+      name: string;
+      relationship: string | null;
+    };
+    assert('T-CT-W5h attachPhoneToContactById fill-only → existing phone unchanged',
       {
-        status: result2.status,
-        phone: dialPhone(result2),
-        resolveContactCalledInAdd,
-        heraldPhone: (db.prepare(`SELECT phone FROM contacts WHERE id = 'c_bro'`).get() as { phone: string | null }).phone,
+        attachOk: attachResult.ok,
+        attachReason: attachResult.ok ? undefined : attachResult.reason,
+        before,
+        after,
+        rowPhone: row.phone,
+        rowName: row.name,
+        rowRelationship: row.relationship,
       },
-      v => v.status === 'committed'
-        && v.phone === '5557778888'
-        && !v.resolveContactCalledInAdd
-        && v.heraldPhone === '5557778888',
-      'immediate dial from stored Herald phone; writer resolveContact not invoked');
+      v => v.attachOk === false
+        && v.attachReason === 'no_rows_updated'
+        && v.before === 1
+        && v.after === 1
+        && v.rowPhone === '5551112222'
+        && v.rowName === 'Josh'
+        && v.rowRelationship === 'brother',
+      'no overwrite; no duplicate row; writer reports no_rows_updated');
   }
 
   // ── T-CT-W5g: attach failure is non-blocking and non-destructive ──────────

@@ -680,7 +680,7 @@ export function getEmergencyContact(): Contact | null {
 
 // ─── attachPhoneToContactById ─────────────────────────────────────────────
 // Id-targeted phone fill-in for confirmed OS contact on a known Herald person.
-// Never overwrites an existing non-empty phone (COALESCE precedent).
+// Fill-only: updates only when the row's existing phone is NULL/empty/whitespace.
 export function attachPhoneToContactById(
   id: string,
   phone: string,
@@ -689,7 +689,8 @@ export function attachPhoneToContactById(
   const now = new Date().toISOString();
   try {
     const result = db.runSync(
-      'UPDATE contacts SET phone = COALESCE(?, phone), updated_at = ? WHERE id = ?;',
+      `UPDATE contacts SET phone = ?, updated_at = ?
+       WHERE id = ? AND (phone IS NULL OR TRIM(phone) = '');`,
       [phone, now, id],
     );
     if (result.changes === 0) {
