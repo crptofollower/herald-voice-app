@@ -1007,6 +1007,142 @@ export async function runContactCallTests() {
       'dial only; existing brother row still phoneless; no merge/write');
   }
 
+  // ── T-CT-W6: bounded name extraction — framed replies reach OS-single confirm ─
+  {
+    const POSITIVE_FRAMED = [
+      'Josh Duran',
+      "It's Josh Duran",
+      "It's in my contacts — Josh Duran",
+      "It's in my phone contacts — Josh Duran",
+      "I don't know, it's in my contacts — Josh Duran",
+      "I'm not sure, it's in my phone contacts — Josh Duran",
+      'Look in my contacts for Josh Duran',
+      'Look in my phone contacts for Josh Duran',
+    ];
+    for (const utterance of POSITIVE_FRAMED) {
+      const db = freshDB();
+      insertContact(db, { id: 'c_bro', name: 'Josh', relationship: 'brother', importance: 7 });
+      const intent = await resolveContactCallIntent('brother', 'call my brother', { resolveContact: async () => null });
+      let capturedArg: string | undefined;
+      const collect = await addPending(intent, {
+        resolveContact: async (n: string) => {
+          capturedArg = n;
+          return n.trim().toLowerCase() === 'josh duran'
+            ? { phone: '5557778888', name: 'Josh Durand', source: 'device' as const }
+            : null;
+        },
+      });
+      const confirm = await collect.resume(utterance);
+      assert(`T-CT-W6 framed "${utterance}" → OS-single confirm pending`,
+        {
+          status: confirm.status,
+          phone: dialPhone(confirm),
+          prompt: confirm.status === 'pending' ? confirm.prompt : '',
+          capturedArg,
+        },
+        v => v.status === 'pending'
+          && !v.phone
+          && v.capturedArg === 'Josh Duran'
+          && /I found Josh Durand in your contacts/i.test(v.prompt)
+          && /is that who you meant/i.test(v.prompt),
+        'confirm pending; extracted Josh Duran; no immediate dial');
+    }
+  }
+  {
+    const db = freshDB();
+    insertContact(db, { id: 'c_bro', name: 'Josh', relationship: 'brother', importance: 7 });
+    const intent = await resolveContactCallIntent('brother', 'call my brother', { resolveContact: async () => null });
+    let capturedArg: string | undefined;
+    const collect = await addPending(intent, {
+      resolveContact: async (n: string) => {
+        capturedArg = n;
+        return n.trim().toLowerCase() === 'josh duran'
+          ? { phone: '5557778888', name: 'Josh Durand', source: 'device' as const }
+          : null;
+      },
+    });
+    const framed = "I'm not sure, it's in my phone contacts — Josh Duran";
+    const confirm = await collect.resume(framed);
+    const before = contactCount(db);
+    const joshBefore = db.prepare(`SELECT phone FROM contacts WHERE id = 'c_bro'`).get() as { phone: string | null };
+    const yesResult = confirm.status === 'pending' ? await confirm.resume('yes') : confirm;
+    const after = contactCount(db);
+    const joshAfter = db.prepare(`SELECT phone FROM contacts WHERE id = 'c_bro'`).get() as { phone: string | null };
+    assert('T-CT-W7 framed reply YES → dial only, no durable Herald write',
+      {
+        status: yesResult.status,
+        phone: dialPhone(yesResult),
+        before,
+        after,
+        joshPhoneBefore: joshBefore.phone,
+        joshPhoneAfter: joshAfter.phone,
+        capturedArg,
+      },
+      v => v.status === 'committed'
+        && v.phone === '5557778888'
+        && v.capturedArg === 'Josh Duran'
+        && v.before === 1
+        && v.after === 1
+        && !(v.joshPhoneBefore ?? '').trim()
+        && !(v.joshPhoneAfter ?? '').trim(),
+      'dial Josh Durand; extracted Josh Duran; Herald Josh unchanged');
+    const db2 = freshDB();
+    insertContact(db2, { id: 'c_bro2', name: 'Josh', relationship: 'brother', importance: 7 });
+    const intent2 = await resolveContactCallIntent('brother', 'call my brother', { resolveContact: async () => null });
+    let capturedArg2: string | undefined;
+    const collect2 = await addPending(intent2, {
+      resolveContact: async (n: string) => {
+        capturedArg2 = n;
+        return n.trim().toLowerCase() === 'josh duran'
+          ? { phone: '5557778888', name: 'Josh Durand', source: 'device' as const }
+          : null;
+      },
+    });
+    const confirm2 = await collect2.resume(framed);
+    const noResult = confirm2.status === 'pending' ? await confirm2.resume('no') : confirm2;
+    assert('T-CT-W8 framed reply NO → ack, no dial',
+      {
+        status: noResult.status,
+        phone: dialPhone(noResult),
+        ack: noResult.status === 'noop' ? noResult.ack : '',
+        capturedArg: capturedArg2,
+      },
+      v => v.status === 'noop'
+        && !v.phone
+        && v.capturedArg === 'Josh Duran'
+        && /No problem — who were you trying to reach/i.test(v.ack),
+      'noop ack; extracted Josh Duran; no dial');
+  }
+  {
+    const FAIL_CLOSED = [
+      "I don't know",
+      "I'm not sure",
+      "It's in my contacts",
+      "It's in my phone contacts",
+      'Look in my contacts',
+      'Look in my phone contacts',
+      'Maybe',
+      "I can't remember",
+    ];
+    for (const utterance of FAIL_CLOSED) {
+      const db = freshDB();
+      insertContact(db, { id: 'c_bro', name: 'Josh', relationship: 'brother', importance: 7 });
+      const intent = await resolveContactCallIntent('brother', 'call my brother', { resolveContact: async () => null });
+      const collect = await addPending(intent, {
+        resolveContact: async () => ({
+          phone: '5557778888',
+          name: 'Josh Durand',
+          source: 'device' as const,
+        }),
+      });
+      const result = await collect.resume(utterance);
+      assert(`T-CT-W9 fail-closed "${utterance}" → noop, no OS adoption`,
+        { status: result.status, phone: dialPhone(result) },
+        v => v.status === 'noop' && !v.phone,
+        'noop re-ask path; no dial');
+    }
+  }
+
   const total = passed + failures.length;
   console.log(`\n${BOLD}ContactCall: ${passed}/${total} passed${failures.length > 0 ? ` — ${RED}${failures.length} FAILED${RESET}` : ` — ${GREEN}all green${RESET}`}${RESET}\n`);
   return { passed, failed: failures.length, total, failures };

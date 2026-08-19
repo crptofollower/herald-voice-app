@@ -205,6 +205,55 @@ export async function mapCallIntents(
   return out;
 }
 
+/**
+ * Derive a bounded contact-name reference from a free-form known-person collect
+ * reply. Returns null when no name span is present (fail-closed). Extraction
+ * does not prove identity, select an OS contact, authorize a call, or write memory.
+ */
+function extractCollectContactNameReference(reply: string): string | null {
+  const trimmed = reply.trim().replace(/[.!?]+$/, '').trim();
+  if (!trimmed) return null;
+
+  const lower = trimmed.toLowerCase();
+  const FRAMING_ONLY = [
+    /^i don'?t know$/,
+    /^i'?m not sure$/,
+    /^maybe$/,
+    /^i can'?t remember$/,
+    /^it'?s in my contacts$/,
+    /^it'?s in my phone contacts$/,
+    /^look in my contacts$/,
+    /^look in my phone contacts$/,
+    /^never\s*mind$/,
+    /^nevermind$/,
+  ];
+  if (FRAMING_ONLY.some(re => re.test(lower))) return null;
+
+  const normalizeNameSpan = (span: string): string | null => {
+    const s = span.trim().replace(/[.!?]+$/, '').trim();
+    if (!s || s.length < 2 || s.length > 80 || !/[A-Za-z]/.test(s)) return null;
+    const spanLower = s.toLowerCase();
+    if (/^(?:i don'?t know|i'?m not sure|maybe|i can'?t remember|never\s*mind|nevermind|cancel|stop)$/i.test(spanLower)) {
+      return null;
+    }
+    const CONVERSATION_ONLY = /^(?:in|my|phone|contacts|not|sure|don'?t|know|maybe|it'?s|i'?m|look|for|the|a|an)$/i;
+    const tokens = s.split(/\s+/).filter(Boolean);
+    if (tokens.length === 0 || tokens.every(tok => CONVERSATION_ONLY.test(tok))) return null;
+    return s;
+  };
+
+  const lookFor = trimmed.match(/^look in my (?:phone )?contacts for\s+(.+)$/i);
+  if (lookFor) return normalizeNameSpan(lookFor[1]);
+
+  const afterContacts = trimmed.match(/(?:phone )?contacts\s*(?:[—\-:,]\s*|\s+for\s+)(.+)$/i);
+  if (afterContacts) return normalizeNameSpan(afterContacts[1]);
+
+  const itsName = trimmed.match(/^it'?s\s+(?!in\s+my\s+(?:phone\s+)?contacts\b)(.+)$/i);
+  if (itsName) return normalizeNameSpan(itsName[1]);
+
+  return normalizeNameSpan(trimmed);
+}
+
 // Registry: empty now. One domain added per conversion commit.
 export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
   service_capture: {
@@ -1330,7 +1379,11 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
                   : `Calling your ${contactLabel} now. Tell me their name sometime and I'll remember them for next time.`,
               );
             }
-            const replyIdentity = resolvePersonIdentity(reply);
+            const lookupTarget = known ? extractCollectContactNameReference(reply) : reply;
+            if (known && !lookupTarget) {
+              return { status: 'noop', ack: '' };
+            }
+            const replyIdentity = resolvePersonIdentity(lookupTarget!);
             if (replyIdentity.status === 'single' && contactHasCapability(replyIdentity.contact, 'phone')) {
               const match = replyIdentity.contact;
 
@@ -1346,7 +1399,7 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
             // initial routing. Reached here because the first ask had zero
             // candidates of either kind.
             if (ctx?.resolveContact) {
-              const device = await ctx.resolveContact(reply);
+              const device = await ctx.resolveContact(lookupTarget!);
               if (device && device.phone) {
 
                 if (known) {
