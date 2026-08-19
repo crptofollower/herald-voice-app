@@ -43,31 +43,39 @@ export async function runListeningSpeakingMirrorTests() {
   const chatSrc = fs.readFileSync(chatPath, 'utf8');
 
   assert(
-    'LSM-1 listening presence halo gated on isRecording',
-    /\{isRecording\s*&&[\s\S]*?presenceHalo/.test(chatSrc),
+    'LSM-1 scanner track gated on isRecording or isSpeaking',
+    /\{\(isRecording\s*\|\|\s*isSpeaking\)\s*&&[\s\S]*?scannerTrack/.test(chatSrc),
     (v) => v === true,
-    'isRecording conditional wraps presenceHalo',
+    '(isRecording || isSpeaking) conditional wraps scannerTrack',
   );
 
   assert(
-    'LSM-2 listening pulse animation effect depends on isRecording',
-    effectBodyWithMarker(chatSrc, 'isRecording', 'listenGlowAnim'),
-    (body) => typeof body === 'string' && body.includes('pulseAnim'),
-    'isRecording effect drives pulseAnim + listenGlowAnim',
+    'LSM-2 scanner animation effect depends on isRecording; halo refs absent',
+    {
+      body: effectBodyWithMarker(chatSrc, 'isRecording', 'scannerX'),
+      noHaloRefs: !/\blistenGlowAnim\b/.test(chatSrc) && !/\bpulseAnim\b/.test(chatSrc),
+    },
+    (v) => {
+      const { body, noHaloRefs } = v as { body: string | null; noHaloRefs: boolean };
+      return typeof body === 'string' && body.includes('Animated.loop') && noHaloRefs;
+    },
+    'isRecording effect drives scannerX loop; listenGlowAnim/pulseAnim removed',
   );
 
   assert(
-    'LSM-3 speaking presence halo gated on isSpeaking',
-    /\{isSpeaking\s*&&[\s\S]*?presenceHalo/.test(chatSrc),
+    'LSM-3 scanner track reflects isSpeaking authority',
+    /\{\(isRecording\s*\|\|\s*isSpeaking\)\s*&&[\s\S]*?scannerBar/.test(chatSrc),
     (v) => v === true,
-    'isSpeaking conditional wraps presenceHalo',
+    'isSpeaking participates in scanner visibility gate',
   );
 
   assert(
-    'LSM-4 speaking pulse animation effect depends on isSpeaking',
-    effectBodyWithMarker(chatSrc, 'isSpeaking', 'speakPulseAnim'),
-    (body) => typeof body === 'string' && !/\b(startRecording|stopRecording|speak|enqueueSentence)\s*\(/.test(body),
-    'isSpeaking presence effect drives speakPulseAnim only',
+    'LSM-4 speaking scanner animation effect depends on isSpeaking',
+    effectBodyWithMarker(chatSrc, 'isSpeaking', 'scannerX'),
+    (body) => typeof body === 'string'
+      && !/\b(startRecording|stopRecording|speak|enqueueSentence)\s*\(/.test(body)
+      && !/\bspeakPulseAnim\b/.test(chatSrc),
+    'isSpeaking presence effect drives scannerX only; speakPulseAnim removed',
   );
 
   assert(
@@ -89,15 +97,12 @@ export async function runListeningSpeakingMirrorTests() {
     'useMic + useSpeech destructuring intact',
   );
 
-  const recordingEffect = effectBodyWithMarker(chatSrc, 'isRecording', 'listenGlowAnim') ?? '';
-  const speakingEffect = effectBodyWithMarker(chatSrc, 'isSpeaking', 'speakPulseAnim') ?? '';
+  const scannerEffect = effectBodyWithMarker(chatSrc, 'scannerX', 'Animated.loop') ?? '';
   assert(
     'LSM-7 presentation animation effects do not invoke STT/TTS',
-    [recordingEffect, speakingEffect].every(
-      (body) => !/\b(startRecording|stopRecording|speak|enqueueSentence)\s*\(/.test(body),
-    ),
+    !/\b(startRecording|stopRecording|speak|enqueueSentence)\s*\(/.test(scannerEffect),
     (v) => v === true,
-    'no startRecording/stopRecording/speak/enqueueSentence in presence effects',
+    'no startRecording/stopRecording/speak/enqueueSentence in scanner presence effect',
   );
 
   assert(
@@ -105,6 +110,27 @@ export async function runListeningSpeakingMirrorTests() {
     /if\s*\(\s*isStreaming\s*\|\|\s*isWaiting\s*\|\|\s*isSpeakingRef\.current\s*\)\s*return/.test(chatSrc),
     (v) => v === true,
     'mic tap block reads isSpeakingRef from useSpeech',
+  );
+
+  const forbiddenCaptionHit = [
+    /['"]LISTENING['"]/i,
+    /['"]SPEAKING['"]/i,
+    /['"]THINKING['"]/i,
+    /['"]STANDING BY['"]/i,
+    /['"]YOUR MOVE['"]/i,
+    />\s*LISTENING\s*</i,
+    />\s*SPEAKING\s*</i,
+    />\s*THINKING\s*</i,
+    />\s*STANDING BY\s*</i,
+    />\s*YOUR MOVE\s*</i,
+    /IS SPEAKING/i,
+  ].some((p) => p.test(chatSrc));
+
+  assert(
+    'LSM-9 no forbidden status caption strings in ChatScreen',
+    forbiddenCaptionHit,
+    (v) => v === false,
+    'no LISTENING/SPEAKING/THINKING/STANDING BY/YOUR MOVE UI captions',
   );
 
   const total = passed + failures.length;

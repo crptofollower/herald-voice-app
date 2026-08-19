@@ -225,7 +225,7 @@ const RESET = "\x1b[0m", GREEN = "\x1b[32m", RED = "\x1b[31m", BOLD = "\x1b[1m",
 let passed = 0;
 const failures = [];
 const TOTAL = TESTS.length + PHONE_TESTS.length + NORMALIZE_TESTS.length + DOSAGE_TESTS.length + 11; // +1 list_todo+medical intercept, +3 classifier tri-state, +1 Law 5 positive control, +6 Law 5 regression fence
-const EXPECTED_TOTAL = 1953;  // 2026-08-19: +8 — Listening + Speaking presence mirror source-lock (LSM)
+const EXPECTED_TOTAL = 1954;  // 2026-08-19: +1 — Presence V1 scanner mirror + forbidden-caption guard (LSM-9)
 
 console.log(`\n${BOLD}═══════════════════════════════════════════════════${RESET}`);
 console.log(`${BOLD}  HERALD ROUTER + PHONE TEST SUITE — ${TOTAL} tests${RESET}`);

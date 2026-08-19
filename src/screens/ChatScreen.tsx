@@ -385,9 +385,8 @@ export default function ChatScreen() {
   const liveGreetingAddedRef = useRef(false);
   const greetingIdRef = useRef<string>("");
   const autoOpenAppsRef = useRef<Set<string>>(new Set());
-  const pulseAnim = useRef(new Animated.Value(1)).current;
-  const listenGlowAnim = useRef(new Animated.Value(0)).current;
-  const speakPulseAnim = useRef(new Animated.Value(1)).current;
+  const scannerX = useRef(new Animated.Value(0)).current;
+  const [scannerTrackWidth, setScannerTrackWidth] = useState(0);
   const tokenBatchRef = useRef<string>('');
   const batchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Pending contact collection — when Herald asks "what's their number/address?"
@@ -2098,77 +2097,23 @@ export default function ChatScreen() {
   }, [isSpeaking, isStreaming, startRecording]);
 
   useEffect(() => {
-    if (!isRecording) {
-      pulseAnim.setValue(1);
-      listenGlowAnim.setValue(0);
+    if (!isRecording && !isSpeaking) {
+      scannerX.setValue(0);
       return;
     }
-
-    listenGlowAnim.setValue(0.35);
-    const pulseLoop = Animated.loop(
+    const duration = isRecording ? 1400 : 900;
+    const loop = Animated.loop(
       Animated.sequence([
-        Animated.timing(pulseAnim, {
-          toValue: 1.12,
-          duration: 700,
-          useNativeDriver: true,
-        }),
-        Animated.timing(pulseAnim, {
-          toValue: 1,
-          duration: 700,
-          useNativeDriver: true,
-        }),
+        Animated.timing(scannerX, { toValue: 1, duration, useNativeDriver: true }),
+        Animated.timing(scannerX, { toValue: 0, duration: 0, useNativeDriver: true }),
       ])
     );
-    const glowLoop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(listenGlowAnim, {
-          toValue: 0.85,
-          duration: 700,
-          useNativeDriver: true,
-        }),
-        Animated.timing(listenGlowAnim, {
-          toValue: 0.35,
-          duration: 700,
-          useNativeDriver: true,
-        }),
-      ])
-    );
-    pulseLoop.start();
-    glowLoop.start();
+    loop.start();
     return () => {
-      pulseLoop.stop();
-      glowLoop.stop();
-      pulseAnim.setValue(1);
-      listenGlowAnim.setValue(0);
+      loop.stop();
+      scannerX.setValue(0);
     };
-  }, [isRecording, listenGlowAnim, pulseAnim]);
-
-  useEffect(() => {
-    if (!isSpeaking) {
-      speakPulseAnim.setValue(1);
-      return;
-    }
-
-    const speakLoop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(speakPulseAnim, {
-          toValue: 1.35,
-          duration: 800,
-          useNativeDriver: true,
-        }),
-        Animated.timing(speakPulseAnim, {
-          toValue: 1,
-          duration: 800,
-          useNativeDriver: true,
-        }),
-      ])
-    );
-    speakLoop.start();
-    return () => {
-      speakLoop.stop();
-      speakPulseAnim.setValue(1);
-    };
-  }, [isSpeaking, speakPulseAnim]);
+  }, [isRecording, isSpeaking, scannerX]);
 
   // ── Intent execution ──────────────────────────────────────────────────────
 
@@ -2725,6 +2670,10 @@ export default function ChatScreen() {
 
   // ── Render ────────────────────────────────────────────────────────────────
 
+  const aiInitial = (aiName || 'Herald').trim().charAt(0).toUpperCase();
+  const scannerBarWidth = 40;
+  const scannerTravel = Math.max(0, scannerTrackWidth - scannerBarWidth);
+
   return (
     <PersonaBackground persona={personaKey}>
       <SafeAreaView style={styles.safe}>
@@ -2734,35 +2683,37 @@ export default function ChatScreen() {
           keyboardVerticalOffset={0}
         >
           <View style={styles.header}>
-            <Text style={[styles.wordmark, { color: persona.colors.text }]}>
-              {aiName || "Herald"}
-            </Text>
+            <View style={styles.headerLeft}>
+              <View
+                style={[
+                  styles.aiInitialBadge,
+                  {
+                    backgroundColor: persona.colors.accentMuted,
+                    borderColor: persona.colors.accent + '55',
+                  },
+                ]}
+              >
+                <Text style={[styles.aiInitialText, { color: persona.colors.accent }]}>
+                  {aiInitial}
+                </Text>
+              </View>
+              <Text style={[styles.wordmark, { color: persona.colors.text }]}>
+                {aiName || "Herald"}
+              </Text>
+            </View>
             <View style={styles.headerRight}>
               {isSpeaking && (
                 <TouchableOpacity
                   onPress={stop}
-                  style={styles.speakingIndicator}
+                  style={[
+                    styles.stopSpeakingBtn,
+                    { borderColor: persona.colors.accent },
+                  ]}
                   accessibilityLabel="Stop speaking"
                 >
-                  <Animated.View
-                    style={[
-                      styles.presenceHalo,
-                      {
-                        borderColor: persona.colors.accent,
-                        opacity: speakPulseAnim.interpolate({
-                          inputRange: [1, 1.35],
-                          outputRange: [0.45, 0.9],
-                        }),
-                        transform: [{ scale: speakPulseAnim }],
-                      },
-                    ]}
-                  />
-                  <View
-                    style={[
-                      styles.speakingDot,
-                      { backgroundColor: persona.colors.accent },
-                    ]}
-                  />
+                  <Text style={[styles.stopSpeakingIcon, { color: persona.colors.accent }]}>
+                    ⏹
+                  </Text>
                 </TouchableOpacity>
               )}
               {unreadCount > 0 && (
@@ -2972,6 +2923,29 @@ export default function ChatScreen() {
               },
             ]}
           >
+            {(isRecording || isSpeaking) && (
+              <View
+                style={styles.scannerTrack}
+                onLayout={(e) => setScannerTrackWidth(e.nativeEvent.layout.width)}
+              >
+                {scannerTravel > 0 && (
+                  <Animated.View
+                    style={[
+                      styles.scannerBar,
+                      {
+                        backgroundColor: persona.colors.accent,
+                        transform: [{
+                          translateX: scannerX.interpolate({
+                            inputRange: [0, 1],
+                            outputRange: [0, scannerTravel],
+                          }),
+                        }],
+                      },
+                    ]}
+                  />
+                )}
+              </View>
+            )}
             <TextInput
               style={[styles.textInput, { color: "#FFFFFF" }]}
               placeholder="Ask anything..."
@@ -2995,26 +2969,7 @@ export default function ChatScreen() {
                 stop();
               }}
             />
-            <Animated.View style={{ alignItems: 'center' }}>
-            {isRecording && (
-              <Animated.View
-                style={[
-                  styles.presenceHalo,
-                  styles.micPresenceHalo,
-                  {
-                    borderColor: persona.colors.accent,
-                    opacity: listenGlowAnim,
-                    transform: [{
-                      scale: listenGlowAnim.interpolate({
-                        inputRange: [0.35, 0.85],
-                        outputRange: [1.05, 1.28],
-                      }),
-                    }],
-                  },
-                ]}
-              />
-            )}
-            <Animated.View style={{ transform: [{ scale: pulseAnim }], alignItems: 'center' }}>
+            <View style={{ alignItems: 'center' }}>
             <TouchableOpacity
               style={[
                 styles.sendBtn,
@@ -3061,8 +3016,7 @@ export default function ChatScreen() {
                 tap to speak
               </Text>
             )}
-            </Animated.View>
-            </Animated.View>
+            </View>
             <TouchableOpacity
               style={[
                 styles.sendBtn,
@@ -3099,28 +3053,40 @@ const styles = StyleSheet.create({
     paddingTop: Platform.OS === "android" ? 40 : 12,
     paddingBottom: 8,
   },
+  headerLeft: { flexDirection: "row", alignItems: "center", gap: 10 },
   wordmark: { fontSize: 20, fontWeight: "700", letterSpacing: -0.3 },
-  headerRight: { flexDirection: "row", alignItems: "center", gap: 10 },
-  speakingIndicator: {
-    width: 32,
-    height: 32,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  presenceHalo: {
-    position: "absolute",
+  aiInitialBadge: {
     width: 28,
     height: 28,
     borderRadius: 14,
-    borderWidth: 2,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  micPresenceHalo: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    marginBottom: 2,
+  aiInitialText: { fontSize: 13, fontWeight: "700" },
+  headerRight: { flexDirection: "row", alignItems: "center", gap: 10 },
+  stopSpeakingBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
   },
-  speakingDot: { width: 10, height: 10, borderRadius: 5, opacity: 0.95 },
+  stopSpeakingIcon: { fontSize: 14, fontWeight: "700" },
+  scannerTrack: {
+    width: "100%",
+    height: 3,
+    marginBottom: 8,
+    overflow: "hidden",
+    backgroundColor: "rgba(255,255,255,0.12)",
+    borderRadius: 2,
+  },
+  scannerBar: {
+    width: 40,
+    height: 3,
+    borderRadius: 2,
+  },
   badge: {
     minWidth: 26,
     height: 26,
