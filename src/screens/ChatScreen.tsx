@@ -386,6 +386,8 @@ export default function ChatScreen() {
   const greetingIdRef = useRef<string>("");
   const autoOpenAppsRef = useRef<Set<string>>(new Set());
   const pulseAnim = useRef(new Animated.Value(1)).current;
+  const listenGlowAnim = useRef(new Animated.Value(0)).current;
+  const speakPulseAnim = useRef(new Animated.Value(1)).current;
   const tokenBatchRef = useRef<string>('');
   const batchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Pending contact collection — when Herald asks "what's their number/address?"
@@ -2096,25 +2098,77 @@ export default function ChatScreen() {
   }, [isSpeaking, isStreaming, startRecording]);
 
   useEffect(() => {
-    if (isRecording) {
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(pulseAnim, {
-            toValue: 1.15,
-            duration: 600,
-            useNativeDriver: true,
-          }),
-          Animated.timing(pulseAnim, {
-            toValue: 1,
-            duration: 600,
-            useNativeDriver: true,
-          }),
-        ])
-      ).start();
-    } else {
+    if (!isRecording) {
       pulseAnim.setValue(1);
+      listenGlowAnim.setValue(0);
+      return;
     }
-  }, [isRecording]);
+
+    listenGlowAnim.setValue(0.35);
+    const pulseLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 1.12,
+          duration: 700,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 1,
+          duration: 700,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    const glowLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(listenGlowAnim, {
+          toValue: 0.85,
+          duration: 700,
+          useNativeDriver: true,
+        }),
+        Animated.timing(listenGlowAnim, {
+          toValue: 0.35,
+          duration: 700,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    pulseLoop.start();
+    glowLoop.start();
+    return () => {
+      pulseLoop.stop();
+      glowLoop.stop();
+      pulseAnim.setValue(1);
+      listenGlowAnim.setValue(0);
+    };
+  }, [isRecording, listenGlowAnim, pulseAnim]);
+
+  useEffect(() => {
+    if (!isSpeaking) {
+      speakPulseAnim.setValue(1);
+      return;
+    }
+
+    const speakLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(speakPulseAnim, {
+          toValue: 1.35,
+          duration: 800,
+          useNativeDriver: true,
+        }),
+        Animated.timing(speakPulseAnim, {
+          toValue: 1,
+          duration: 800,
+          useNativeDriver: true,
+        }),
+      ])
+    );
+    speakLoop.start();
+    return () => {
+      speakLoop.stop();
+      speakPulseAnim.setValue(1);
+    };
+  }, [isSpeaking, speakPulseAnim]);
 
   // ── Intent execution ──────────────────────────────────────────────────────
 
@@ -2690,6 +2744,19 @@ export default function ChatScreen() {
                   style={styles.speakingIndicator}
                   accessibilityLabel="Stop speaking"
                 >
+                  <Animated.View
+                    style={[
+                      styles.presenceHalo,
+                      {
+                        borderColor: persona.colors.accent,
+                        opacity: speakPulseAnim.interpolate({
+                          inputRange: [1, 1.35],
+                          outputRange: [0.45, 0.9],
+                        }),
+                        transform: [{ scale: speakPulseAnim }],
+                      },
+                    ]}
+                  />
                   <View
                     style={[
                       styles.speakingDot,
@@ -2928,6 +2995,25 @@ export default function ChatScreen() {
                 stop();
               }}
             />
+            <Animated.View style={{ alignItems: 'center' }}>
+            {isRecording && (
+              <Animated.View
+                style={[
+                  styles.presenceHalo,
+                  styles.micPresenceHalo,
+                  {
+                    borderColor: persona.colors.accent,
+                    opacity: listenGlowAnim,
+                    transform: [{
+                      scale: listenGlowAnim.interpolate({
+                        inputRange: [0.35, 0.85],
+                        outputRange: [1.05, 1.28],
+                      }),
+                    }],
+                  },
+                ]}
+              />
+            )}
             <Animated.View style={{ transform: [{ scale: pulseAnim }], alignItems: 'center' }}>
             <TouchableOpacity
               style={[
@@ -2976,6 +3062,7 @@ export default function ChatScreen() {
               </Text>
             )}
             </Animated.View>
+            </Animated.View>
             <TouchableOpacity
               style={[
                 styles.sendBtn,
@@ -3020,7 +3107,20 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  speakingDot: { width: 10, height: 10, borderRadius: 5, opacity: 0.85 },
+  presenceHalo: {
+    position: "absolute",
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 2,
+  },
+  micPresenceHalo: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    marginBottom: 2,
+  },
+  speakingDot: { width: 10, height: 10, borderRadius: 5, opacity: 0.95 },
   badge: {
     minWidth: 26,
     height: 26,
