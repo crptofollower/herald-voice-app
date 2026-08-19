@@ -9,7 +9,7 @@ import { detectDiagnosisCapture, detectDoctorIntroCapture, detectMedicalEvent } 
 import { detectFamilyCapture } from '../utils/familyCapture';
 import { getDB } from '../db/schema';
 import { capturePerson } from '../db/capturePerson';
-import { findContactByName, setEmergencyContact, getEmergencyContact, retireRelationshipHolder, RELATIONSHIP_WORDS, resolvePersonIdentity, contactHasCapability, resolvePersonCapability } from '../db/contactsDB';
+import { findContactByName, setEmergencyContact, getEmergencyContact, retireRelationshipHolder, RELATIONSHIP_WORDS, resolvePersonIdentity, contactHasCapability, resolvePersonCapability, attachPhoneToContactById } from '../db/contactsDB';
 import { normalizePersonTarget, liftRelationshipName } from '../utils/personReference';
 import { normalizePhone } from '../utils/phone';
 import { buildPhoneConfirmPending, formatPhoneForSpeech } from '../utils/phoneConfirm';
@@ -1403,7 +1403,9 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
               if (device && device.phone) {
 
                 if (known) {
-                  return knownPersonOsConfirmStage(device.name, device.phone);
+                  const herald = resolvePersonIdentity(contact);
+                  const heraldContactId = herald.status === 'single' ? herald.contact.id : undefined;
+                  return knownPersonOsConfirmStage(device.name, device.phone, heraldContactId);
                 }
                 if (RELATIONSHIP_WORDS.test(contactLabel.trim())) {
                   retireRelationshipHolder(contactLabel, device.name);
@@ -1452,7 +1454,7 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
         };
       }
 
-      function knownPersonOsConfirmStage(name: string, phone: string): CommitResult {
+      function knownPersonOsConfirmStage(name: string, phone: string, heraldContactId?: string): CommitResult {
         const LOOSE_YES_RE = /^\s*(yes|yeah|yep|sure|ok|okay|go ahead|call them|do it)\b/i;
         const LOOSE_NO_RE = /^\s*(no|nope|cancel|never mind|nevermind|don't|dont|stop)\b/i;
         const confirmPrompt = `I found ${name} in your contacts — is that who you meant?`;
@@ -1467,6 +1469,12 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
 
             const trimmed = reply.trim();
             if (LOOSE_YES_RE.test(trimmed)) {
+              if (heraldContactId) {
+                const attachResult = attachPhoneToContactById(heraldContactId, phone);
+                if (!attachResult.ok) {
+                  console.warn('[contact_call] attachPhoneToContactById failed:', attachResult.reason);
+                }
+              }
               return commitDial(name, phone);
             }
             if (LOOSE_NO_RE.test(trimmed)) {

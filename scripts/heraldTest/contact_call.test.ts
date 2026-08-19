@@ -930,8 +930,9 @@ export async function runContactCallTests() {
     const joshBefore = db.prepare(`SELECT phone FROM contacts WHERE id = 'c_bro'`).get() as { phone: string | null };
     const yesResult = confirm.status === 'pending' ? await confirm.resume('yes') : confirm;
     const after = contactCount(db);
-    const joshAfter = db.prepare(`SELECT phone FROM contacts WHERE id = 'c_bro'`).get() as { phone: string | null };
-    assert('T-CT-W5b known-person OS confirm YES → dial only, no durable write',
+    const joshAfter = db.prepare(`SELECT phone, name, relationship FROM contacts WHERE id = 'c_bro'`).get() as { phone: string | null; name: string; relationship: string | null };
+    // CONTRACT CHANGE 2026-08-19: previously asserted no write; now asserts phone IS persisted, per confirmed-phone-attachment design.
+    assert('T-CT-W5b known-person OS confirm YES → dial AND persists phone on existing Herald row',
       {
         status: yesResult.status,
         phone: dialPhone(yesResult),
@@ -939,14 +940,18 @@ export async function runContactCallTests() {
         after,
         joshPhoneBefore: joshBefore.phone,
         joshPhoneAfter: joshAfter.phone,
+        joshName: joshAfter.name,
+        joshRelationship: joshAfter.relationship,
       },
       v => v.status === 'committed'
         && v.phone === '5557778888'
         && v.before === 1
         && v.after === 1
         && !(v.joshPhoneBefore ?? '').trim()
-        && !(v.joshPhoneAfter ?? '').trim(),
-      'dial Josh Durand; Herald Josh row unchanged; no new contact row');
+        && v.joshPhoneAfter === '5557778888'
+        && v.joshName === 'Josh'
+        && v.joshRelationship === 'brother',
+      'dial Josh Durand; phone persisted on c_bro; no new contact row');
     const db2 = freshDB();
     insertContact(db2, { id: 'c_bro2', name: 'Josh', relationship: 'brother', importance: 7 });
     const intent2 = await resolveContactCallIntent('brother', 'call my brother', { resolveContact: async () => null });
@@ -989,6 +994,7 @@ export async function runContactCallTests() {
     const yesResult = confirm.status === 'pending' ? await confirm.resume('yes') : confirm;
     const after = contactCount(db);
     const holder = findContactByRelationship('brother');
+    // W5d: capturePerson/name-shadowing checks unchanged; phone now persisted by id attach (same contract as W5b).
     assert('T-CT-W5d known-person OS confirm YES: no capturePerson even when contactLabel is relationship word',
       {
         status: yesResult.status,
@@ -1003,8 +1009,133 @@ export async function runContactCallTests() {
         && v.before === 1
         && v.after === 1
         && v.holderName === 'brother'
-        && !(v.holderPhone ?? '').trim(),
-      'dial only; existing brother row still phoneless; no merge/write');
+        && v.holderPhone === '5556667777',
+      'no capturePerson/name shadowing; phone persisted on c_rel by id attach');
+  }
+
+  // ── T-CT-W5e: YES persists confirmed device phone on Herald row by id ─────
+  {
+    const db = freshDB();
+    insertContact(db, { id: 'c_bro', name: 'Josh', relationship: 'brother', importance: 7 });
+    const intent = await resolveContactCallIntent('brother', 'call my brother', { resolveContact: async () => null });
+    const collect = await addPending(intent, {
+      resolveContact: async () => ({
+        phone: '5557778888',
+        name: 'Josh Durand',
+        source: 'device' as const,
+      }),
+    });
+    const confirm = await collect.resume('Josh Durand');
+    const before = contactCount(db);
+    const yesResult = confirm.status === 'pending' ? await confirm.resume('yes') : confirm;
+    const after = contactCount(db);
+    const row = db.prepare(`SELECT phone, name, relationship FROM contacts WHERE id = 'c_bro'`).get() as {
+      phone: string | null;
+      name: string;
+      relationship: string | null;
+    };
+    assert('T-CT-W5e known-person OS confirm YES → phone on c_bro by id',
+      {
+        status: yesResult.status,
+        phone: dialPhone(yesResult),
+        before,
+        after,
+        rowPhone: row.phone,
+        rowName: row.name,
+        rowRelationship: row.relationship,
+      },
+      v => v.status === 'committed'
+        && v.phone === '5557778888'
+        && v.before === 1
+        && v.after === 1
+        && v.rowPhone === '5557778888'
+        && v.rowName === 'Josh'
+        && v.rowRelationship === 'brother',
+      'confirmed phone on existing Herald row; row count unchanged');
+  }
+
+  // ── T-CT-W5f: second call dials Herald phone without resolveContact ───────
+  {
+    const db = freshDB();
+    insertContact(db, { id: 'c_bro', name: 'Josh', relationship: 'brother', importance: 7 });
+    const intent1 = await resolveContactCallIntent('brother', 'call my brother', { resolveContact: async () => null });
+    const collect1 = await addPending(intent1, {
+      resolveContact: async () => ({
+        phone: '5557778888',
+        name: 'Josh Durand',
+        source: 'device' as const,
+      }),
+    });
+    const confirm1 = await collect1.resume('Josh Durand');
+    await (confirm1.status === 'pending' ? confirm1.resume('yes') : confirm1);
+    setOsPersonCapabilitySearch(async () => {
+      throw new Error('OS must not be consulted when Herald brother has phone');
+    });
+    let resolveContactCalledInAdd = false;
+    const intent2 = await resolveContactCallIntent('brother', 'call my brother', {
+      resolveContact: async () => null,
+    });
+    const result2 = await DOMAIN_WRITERS['contact_call']!.add(intent2, '', {
+      resolveContact: async () => {
+        resolveContactCalledInAdd = true;
+        throw new Error('resolveContact must not be called in writer when Herald phone is stored');
+      },
+    });
+    setOsPersonCapabilitySearch(null);
+    assert('T-CT-W5f second brother call → immediate Herald dial, no OS lookup',
+      {
+        status: result2.status,
+        phone: dialPhone(result2),
+        resolveContactCalledInAdd,
+        heraldPhone: (db.prepare(`SELECT phone FROM contacts WHERE id = 'c_bro'`).get() as { phone: string | null }).phone,
+      },
+      v => v.status === 'committed'
+        && v.phone === '5557778888'
+        && !v.resolveContactCalledInAdd
+        && v.heraldPhone === '5557778888',
+      'immediate dial from stored Herald phone; writer resolveContact not invoked');
+  }
+
+  // ── T-CT-W5g: attach failure is non-blocking and non-destructive ──────────
+  {
+    const db = freshDB();
+    insertContact(db, { id: 'c_bro', name: 'Josh', relationship: 'brother', importance: 7 });
+    const intent = await resolveContactCallIntent('brother', 'call my brother', { resolveContact: async () => null });
+    const collect = await addPending(intent, {
+      resolveContact: async () => ({
+        phone: '5557778888',
+        name: 'Josh Durand',
+        source: 'device' as const,
+      }),
+    });
+    const confirm = await collect.resume('Josh Durand');
+    const beforeRow = db.prepare(`SELECT phone, name, relationship FROM contacts WHERE id = 'c_bro'`).get() as {
+      phone: string | null;
+      name: string;
+      relationship: string | null;
+    };
+    // Stale id in confirm closure — attach fails cleanly; Herald row unchanged.
+    db.prepare(`UPDATE contacts SET id = 'c_bro_moved' WHERE id = 'c_bro'`).run();
+    const yesResult = confirm.status === 'pending' ? await confirm.resume('yes') : confirm;
+    const afterRow = db.prepare(`SELECT phone, name, relationship FROM contacts WHERE id = 'c_bro_moved'`).get() as {
+      phone: string | null;
+      name: string;
+      relationship: string | null;
+    };
+    assert('T-CT-W5g attach failure → dial still commits; Herald row unchanged',
+      {
+        status: yesResult.status,
+        phone: dialPhone(yesResult),
+        beforeRow,
+        afterRow,
+      },
+      v => v.status === 'committed'
+        && v.phone === '5557778888'
+        && v.beforeRow.phone === v.afterRow.phone
+        && v.beforeRow.name === v.afterRow.name
+        && v.beforeRow.relationship === v.afterRow.relationship
+        && !(v.afterRow.phone ?? '').trim(),
+      'commitDial on YES despite attach failure; no partial write or corruption');
   }
 
   // ── T-CT-W6: bounded name extraction — framed replies reach OS-single confirm ─
@@ -1070,7 +1201,8 @@ export async function runContactCallTests() {
     const yesResult = confirm.status === 'pending' ? await confirm.resume('yes') : confirm;
     const after = contactCount(db);
     const joshAfter = db.prepare(`SELECT phone FROM contacts WHERE id = 'c_bro'`).get() as { phone: string | null };
-    assert('T-CT-W7 framed reply YES → dial only, no durable Herald write',
+    // CONTRACT CHANGE 2026-08-19: same as W5b — YES persists phone on existing Herald row.
+    assert('T-CT-W7 framed reply YES → dial AND persists phone on existing Herald row',
       {
         status: yesResult.status,
         phone: dialPhone(yesResult),
@@ -1086,8 +1218,8 @@ export async function runContactCallTests() {
         && v.before === 1
         && v.after === 1
         && !(v.joshPhoneBefore ?? '').trim()
-        && !(v.joshPhoneAfter ?? '').trim(),
-      'dial Josh Durand; extracted Josh Duran; Herald Josh unchanged');
+        && v.joshPhoneAfter === '5557778888',
+      'dial Josh Durand; extracted Josh Duran; phone persisted on Herald Josh');
     const db2 = freshDB();
     insertContact(db2, { id: 'c_bro2', name: 'Josh', relationship: 'brother', importance: 7 });
     const intent2 = await resolveContactCallIntent('brother', 'call my brother', { resolveContact: async () => null });

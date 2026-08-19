@@ -678,6 +678,29 @@ export function getEmergencyContact(): Contact | null {
   }
 }
 
+// ─── attachPhoneToContactById ─────────────────────────────────────────────
+// Id-targeted phone fill-in for confirmed OS contact on a known Herald person.
+// Never overwrites an existing non-empty phone (COALESCE precedent).
+export function attachPhoneToContactById(
+  id: string,
+  phone: string,
+): { ok: true } | { ok: false; reason: 'no_rows_updated' | 'db_error' } {
+  const db = getDB();
+  const now = new Date().toISOString();
+  try {
+    const result = db.runSync(
+      'UPDATE contacts SET phone = COALESCE(?, phone), updated_at = ? WHERE id = ?;',
+      [phone, now, id],
+    );
+    if (result.changes === 0) {
+      return { ok: false, reason: 'no_rows_updated' };
+    }
+    return { ok: true };
+  } catch {
+    return { ok: false, reason: 'db_error' };
+  }
+}
+
 // ─── setEmergencyContact ──────────────────────────────────────────────────
 // Clears any existing emergency flag, then sets it on the named contact.
 // Creates the contact if not found.
