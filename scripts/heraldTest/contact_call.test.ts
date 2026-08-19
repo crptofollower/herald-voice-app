@@ -901,6 +901,111 @@ export async function runContactCallTests() {
         && /don't have a phone number/i.test(v.prompt),
       'pending known-person collect; exact name match never silent OS dial');
   }
+  {
+    const db = freshDB();
+    insertContact(db, { id: 'c_bro', name: 'Josh', relationship: 'brother', importance: 7 });
+    const intent = await resolveContactCallIntent('brother', 'call my brother', {
+      resolveContact: async () => null,
+    });
+    const collect = await addPending(intent, {
+      resolveContact: async () => ({
+        phone: '5557778888',
+        name: 'Josh Durand',
+        source: 'device' as const,
+      }),
+    });
+    const confirm = await collect.resume('Josh Durand');
+    assert('T-CT-W5a known-person OS single → confirm pending, not immediate dial',
+      {
+        status: confirm.status,
+        phone: dialPhone(confirm),
+        prompt: confirm.status === 'pending' ? confirm.prompt : '',
+      },
+      v => v.status === 'pending'
+        && !v.phone
+        && /I found Josh Durand in your contacts/i.test(v.prompt)
+        && /is that who you meant/i.test(v.prompt),
+      'confirm pending; no dial yet');
+    const before = contactCount(db);
+    const joshBefore = db.prepare(`SELECT phone FROM contacts WHERE id = 'c_bro'`).get() as { phone: string | null };
+    const yesResult = confirm.status === 'pending' ? await confirm.resume('yes') : confirm;
+    const after = contactCount(db);
+    const joshAfter = db.prepare(`SELECT phone FROM contacts WHERE id = 'c_bro'`).get() as { phone: string | null };
+    assert('T-CT-W5b known-person OS confirm YES → dial only, no durable write',
+      {
+        status: yesResult.status,
+        phone: dialPhone(yesResult),
+        before,
+        after,
+        joshPhoneBefore: joshBefore.phone,
+        joshPhoneAfter: joshAfter.phone,
+      },
+      v => v.status === 'committed'
+        && v.phone === '5557778888'
+        && v.before === 1
+        && v.after === 1
+        && !(v.joshPhoneBefore ?? '').trim()
+        && !(v.joshPhoneAfter ?? '').trim(),
+      'dial Josh Durand; Herald Josh row unchanged; no new contact row');
+    const db2 = freshDB();
+    insertContact(db2, { id: 'c_bro2', name: 'Josh', relationship: 'brother', importance: 7 });
+    const intent2 = await resolveContactCallIntent('brother', 'call my brother', { resolveContact: async () => null });
+    const collect2 = await addPending(intent2, {
+      resolveContact: async () => ({
+        phone: '5557778888',
+        name: 'Josh Durand',
+        source: 'device' as const,
+      }),
+    });
+    const confirm2 = await collect2.resume('Josh Durand');
+    const noResult = confirm2.status === 'pending' ? await confirm2.resume('no') : confirm2;
+    assert('T-CT-W5c known-person OS confirm NO → ack, no dial',
+      { status: noResult.status, phone: dialPhone(noResult), ack: noResult.status === 'noop' ? noResult.ack : '' },
+      v => v.status === 'noop'
+        && !v.phone
+        && /No problem — who were you trying to reach/i.test(v.ack),
+      'noop ack; no dial');
+  }
+  {
+    // contactLabel matches RELATIONSHIP_WORDS when Herald row name is the rel word
+    // (test DB bypasses write validation). Known-person confirm must not capturePerson.
+    const db = freshDB();
+    insertContact(db, { id: 'c_rel', name: 'brother', relationship: 'brother', importance: 7 });
+    const intent: IntentRecord = {
+      type: 'contact_call',
+      contact: 'brother',
+      candidates: [{ name: 'brother', relationship: 'brother', phone: '', importance: 7 }],
+      raw: 'call my brother',
+    };
+    const collect = await addPending(intent, {
+      resolveContact: async () => ({
+        phone: '5556667777',
+        name: 'Josh Durand',
+        source: 'device' as const,
+      }),
+    });
+    const confirm = await collect.resume('Josh Durand');
+    const before = contactCount(db);
+    const yesResult = confirm.status === 'pending' ? await confirm.resume('yes') : confirm;
+    const after = contactCount(db);
+    const holder = findContactByRelationship('brother');
+    assert('T-CT-W5d known-person OS confirm YES: no capturePerson even when contactLabel is relationship word',
+      {
+        status: yesResult.status,
+        phone: dialPhone(yesResult),
+        before,
+        after,
+        holderPhone: holder?.phone,
+        holderName: holder?.name,
+      },
+      v => v.status === 'committed'
+        && v.phone === '5556667777'
+        && v.before === 1
+        && v.after === 1
+        && v.holderName === 'brother'
+        && !(v.holderPhone ?? '').trim(),
+      'dial only; existing brother row still phoneless; no merge/write');
+  }
 
   const total = passed + failures.length;
   console.log(`\n${BOLD}ContactCall: ${passed}/${total} passed${failures.length > 0 ? ` — ${RED}${failures.length} FAILED${RESET}` : ` — ${GREEN}all green${RESET}`}${RESET}\n`);

@@ -1349,6 +1349,9 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
               const device = await ctx.resolveContact(reply);
               if (device && device.phone) {
 
+                if (known) {
+                  return knownPersonOsConfirmStage(device.name, device.phone);
+                }
                 if (RELATIONSHIP_WORDS.test(contactLabel.trim())) {
                   retireRelationshipHolder(contactLabel, device.name);
                   capturePerson({ name: device.name, relationship: contactLabel, phone: device.phone, importance: 7 });
@@ -1389,6 +1392,32 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
                   },
                 };
               }
+            }
+
+            return { status: 'noop', ack: '' };
+          },
+        };
+      }
+
+      function knownPersonOsConfirmStage(name: string, phone: string): CommitResult {
+        const LOOSE_YES_RE = /^\s*(yes|yeah|yep|sure|ok|okay|go ahead|call them|do it)\b/i;
+        const LOOSE_NO_RE = /^\s*(no|nope|cancel|never mind|nevermind|don't|dont|stop)\b/i;
+        const confirmPrompt = `I found ${name} in your contacts — is that who you meant?`;
+
+        return {
+          status: 'pending',
+          prompt: confirmPrompt,
+          pendingKey: 'contact_call',
+          kind: 'standard',
+          reaskPrompt: `I'm not sure I'm following — is that who you meant?`,
+          resume: async (reply: string): Promise<CommitResult> => {
+
+            const trimmed = reply.trim();
+            if (LOOSE_YES_RE.test(trimmed)) {
+              return commitDial(name, phone);
+            }
+            if (LOOSE_NO_RE.test(trimmed)) {
+              return { status: 'noop', ack: 'No problem — who were you trying to reach?' };
             }
 
             return { status: 'noop', ack: '' };
