@@ -47,6 +47,7 @@ import { Audio } from "expo-av";
 import * as ExpoSpeech from "expo-speech";
 import { API_BASE } from "../constants/api";
 import { createTurnStartGate } from "./turnStartGate";
+import { getActiveTurnId, log as latLog, mono as latMono } from "../utils/latencyInstrument";
 
 const ON_DEVICE_TTS = true;
 
@@ -144,6 +145,8 @@ export function useSpeech(ensureMicSuspendedRef: EnsureMicSuspendedRef) {
 
   const ensureTurnStarted = useCallback((): Promise<boolean> => {
     const gen = genRef.current;
+    const suspendT0 = latMono();
+    latLog('mic suspension START', { turnId: getActiveTurnId(), ttsGen: gen });
     rlog('ENSURE_TURN_STARTED_CALLED', gen);
     const p = turnStartGateRef.current.ensure(
       gen,
@@ -156,6 +159,12 @@ export function useSpeech(ensureMicSuspendedRef: EnsureMicSuspendedRef) {
       },
     );
     p.then((result) => {
+      latLog('mic suspension END', {
+        turnId: getActiveTurnId(),
+        ttsGen: gen,
+        durationMs: Math.round((latMono() - suspendT0) * 100) / 100,
+        confirmed: result,
+      });
       rlog('ENSURE_TURN_STARTED_RESOLVED', gen, { resolution: result ? 'granted' : 'rejected' });
     });
     return p;
@@ -297,6 +306,7 @@ export function useSpeech(ensureMicSuspendedRef: EnsureMicSuspendedRef) {
       return;
     }
     expoSpeakingRef.current = true;
+    latLog('TTS initiation', { turnId: getActiveTurnId(), engine: 'expo-speech' });
     ExpoSpeech.speak(next, {
       rate: 0.9,
       pitch: 1.0,
@@ -318,6 +328,12 @@ export function useSpeech(ensureMicSuspendedRef: EnsureMicSuspendedRef) {
       const clean = cleanForSpeech(text);
       if (!clean) return;
       const gen = genRef.current;
+      latLog('enqueueSentence requested', {
+        turnId: getActiveTurnId(),
+        ttsGen: gen,
+        charLen: clean.length,
+        isLast: !!opts?.isLast,
+      });
 
       (async () => {
         if (turnSuppressedRef.current) return;
@@ -354,6 +370,7 @@ export function useSpeech(ensureMicSuspendedRef: EnsureMicSuspendedRef) {
   // ── speak -- one-shot (greeting / non-streamed / deterministic replies) ────
   const speak = useCallback(
     async (text: string) => {
+      latLog('speak requested', { turnId: getActiveTurnId(), charLen: cleanForSpeech(text).length });
       await stop();
       enqueueSentence(text, { isLast: true });
     },

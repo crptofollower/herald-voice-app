@@ -23,6 +23,7 @@ import {
   OWNER_AUTH_CODE,
   REQUEST_TIMEOUT_MS,
 } from "../constants/api";
+import { getActiveTurnId, log as latLog, mono as latMono } from "../utils/latencyInstrument";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -230,11 +231,15 @@ export function askHeraldStream(
   const body = JSON.stringify(buildAskWireBody(payload));
 
   (async () => {
+    const turnId = getActiveTurnId();
+    const backendT0 = latMono();
+    latLog('backend request START', { turnId, endpoint: '/ask/stream' });
     const streamController = new AbortController();
     outerController.signal.addEventListener("abort", () => streamController.abort());
 
     let firstTokenReceived = false;
     let streamFinished = false;
+    let firstTokenLogged = false;
 
     const firstTokenTimeout = setTimeout(() => {
       if (!firstTokenReceived) streamController.abort();
@@ -273,6 +278,14 @@ export function askHeraldStream(
           if (parsed.typing) {
             firstTokenReceived = true;
             clearTimeout(firstTokenTimeout);
+            if (!firstTokenLogged) {
+              firstTokenLogged = true;
+              latLog('backend FIRST TOKEN', {
+                turnId,
+                durationMs: Math.round((latMono() - backendT0) * 100) / 100,
+                kind: 'typing',
+              });
+            }
             return;
           }
 
@@ -280,6 +293,10 @@ export function askHeraldStream(
             clearTimeout(firstTokenTimeout);
             streamFinished = true;
             flushSentence();
+            latLog('backend DONE', {
+              turnId,
+              durationMs: Math.round((latMono() - backendT0) * 100) / 100,
+            });
             callbacks.onAction(parsed.action as AskResponse["action"]);
             callbacks.onFacts((parsed.facts as ExtractedFact[]) ?? []);
             const full =
@@ -306,6 +323,14 @@ export function askHeraldStream(
             if (!firstTokenReceived) {
               firstTokenReceived = true;
               clearTimeout(firstTokenTimeout);
+            }
+            if (!firstTokenLogged) {
+              firstTokenLogged = true;
+              latLog('backend FIRST TOKEN', {
+                turnId,
+                durationMs: Math.round((latMono() - backendT0) * 100) / 100,
+                kind: 'content',
+              });
             }
             accumulated += t;
             sentenceBuf += t;

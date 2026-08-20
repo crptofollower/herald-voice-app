@@ -84,6 +84,14 @@ import { classifyEmergencyCallReply } from '../utils/emergencyCallConfirm';
 import { ConversationalSubjectHolder } from '../routing/conversationalSubject';
 import { processUtterance, applyIntents } from '../routing/processUtterance';
 import { alreadyClassifiedByRouteIntent, mayInvokeBackendStream } from '../utils/llmClassificationOwnership';
+import {
+  beginChatScreenMount,
+  beginTurn,
+  elapsedFromAppBaseline,
+  getActiveTurnId,
+  getChatScreenMountSeq,
+  log as latLog,
+} from '../utils/latencyInstrument';
 import { detectEmergency } from '../routing/emergencySignals';
 import type { IntentRecord } from '../hooks/llmLayers';
 import { dispatchRead, dispatchAction, launchAppAndCompose } from './chat/dispatch';
@@ -220,7 +228,7 @@ export default function ChatScreen() {
 
   const persona = PERSONAS[personaKey] ?? PERSONAS[DEFAULT_PERSONA];
 
-  const { status: llmStatus, activeModel, getCtx } = useLocalLLM();
+  const { status: llmStatus, activeModel, getCtx, getModelIdentity } = useLocalLLM();
   void activeModel;
 
   type ResolveContactFn = (nameOrRelation: string) => Promise<{ phone: string; name: string; contactId?: string; source: 'herald' | 'device' } | { phone: null; name: string; source: 'device'; candidateNames: string[]; deviceCandidates: { name: string; phone: string }[] } | null>;
@@ -585,6 +593,17 @@ export default function ChatScreen() {
         } catch {}
       }
     });
+  }, []);
+
+  useEffect(() => {
+    const mountSeq = beginChatScreenMount();
+    latLog('ChatScreen MOUNT', {
+      mountSeq,
+      elapsedFromAppMs: elapsedFromAppBaseline(),
+    });
+    return () => {
+      latLog('ChatScreen UNMOUNT', { mountSeq: getChatScreenMountSeq() });
+    };
   }, []);
 
   // Startup-settled beacon: fires ~6s after mount, PAST the window the old
@@ -1031,6 +1050,9 @@ export default function ChatScreen() {
     text = normalizeInput(text);
     if (!text) return;
 
+    const turnId = getActiveTurnId() ?? beginTurn();
+    latLog('sendMessage entry', { turnId, inputSource: 'app' });
+
     // ── Law 0 bridge (interim, Step 3) ─────────────────────────────────────────
     // Catches emergency BEFORE the 1 legacy ref-pending can intercept or
     // misread it. TEMPORARY: delete this block once Step 4 migrates
@@ -1270,8 +1292,9 @@ export default function ChatScreen() {
         contacts: getKnownContactNames(),
         lists: getKnownListNames(),
         name: undefined,
-      }),
+      }, { modelIdentity: getModelIdentity() }),
       llmReady: llmStatus === 'ready',
+      llmStatus,
       captureContext: {
         contacts: getKnownContactNames(),
         lists: getKnownListNames(),
@@ -1404,7 +1427,7 @@ export default function ChatScreen() {
           contacts: getKnownContactNames(),
           lists: getKnownListNames(),
           name: undefined,
-        });
+        }, { modelIdentity: getModelIdentity() });
         const llmCaptures = await mapCallIntents(
           llmOut.status === 'ok' ? llmOut.intents : [],
           text,
@@ -1655,7 +1678,7 @@ export default function ChatScreen() {
               contacts,
               lists,
               name: undefined,
-            });
+            }, { modelIdentity: getModelIdentity() });
             const results = await mapCallIntents(
               offlineOut.status === 'ok' ? offlineOut.intents : [],
               text,
@@ -2068,7 +2091,7 @@ export default function ChatScreen() {
         });
       } catch { /* never block the UI */ }
     }
-  }, [userId, messages, personaKey, lat, lng, locationLabel, getContextBlock, addMessage, setError, resetSpeech, enqueueSentence, resetStreamState, stop, llmStatus, getCtx, dispatchLocalIntent, dispatchEmergency]);
+  }, [userId, messages, personaKey, lat, lng, locationLabel, getContextBlock, addMessage, setError, resetSpeech, enqueueSentence, resetStreamState, stop, llmStatus, getCtx, getModelIdentity, dispatchLocalIntent, dispatchEmergency]);
 
   const handleSend = useCallback(() => {
     sendMessage(inputText.trim());
@@ -2077,9 +2100,11 @@ export default function ChatScreen() {
   const handleTranscript = useCallback((transcript: string) => {
     if (!transcript.trim()) return;
     const trimmed = transcript.trim().slice(0, 2000);
+    latLog('handleTranscript entry', { turnId: getActiveTurnId(), charLen: trimmed.length });
     // Brief display in input bar so user sees what was heard, then send
     setInputText(trimmed);
     setTimeout(() => {
+      latLog('STT handoff timer fired', { turnId: getActiveTurnId(), delayMs: 600 });
       setInputText('');
       sendMessage(trimmed);
     }, 600);

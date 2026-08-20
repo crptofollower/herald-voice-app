@@ -8,6 +8,24 @@
 // MedicalEvent import kept minimal — type only, no runtime dependency.
 
 import type { LlamaContext } from 'llama.rn';
+import {
+  beginCtxCompletion,
+  endCtxCompletion,
+  getActiveTurnId,
+  getPrevCtxCompletionMeta,
+  log as latLog,
+  mono as latMono,
+  type CtxCompletionConsumer,
+} from '../utils/latencyInstrument';
+import {
+  maybeLoadCanonicalClassifierSessionBeforeClassify,
+  saveCanonicalClassifierSessionWhileHoldingExclusive,
+  type CanonicalSessionModelIdentity,
+} from '../utils/canonicalClassifierSession';
+import {
+  isLlamaContextBusy,
+  withLlamaContextExclusive,
+} from '../utils/llamaContextExclusive';
 import { SERVICE_SYNONYMS, INSURANCE_SYNONYMS } from '../utils/householdRead';
 import { FAMILY_SYNONYMS } from '../utils/familyRead';
 import { getSurfaceForms, IN_SCOPE_FIELDS, type RoutingFieldName } from '../utils/evidenceRegistry';
@@ -50,27 +68,22 @@ const STEP_FORMS = [
 
 export type ClassifyOutcome =
   | { status: 'ok'; intents: IntentRecord[] }
-  | { status: 'not_ready'; reason: 'in-flight' | 'no-ctx' };
+  | { status: 'not_ready'; reason: 'in-flight' | 'no-ctx' }
+  | { status: 'failed'; reason: 'completion_error' };
 
-// classifyInFlight is claimed SYNCHRONOUSLY (before the first await in
-// classifyWithLLM). useLocalLLM relies on this: it kicks warmupClassifier
-// before marking a context ready, so warmup owns the cold prefill and any
-// user classify in that window gets not_ready. Do not introduce an await
-// above the classifyInFlight = true assignment.
+// Exclusive ownership of the shared LlamaContext is in llamaContextExclusive.ts.
+// classifyWithLLM claims via withLlamaContextExclusive('classifier','try') —
+// heldBy is set synchronously before any await inside that helper.
 //
 // The timeout was deleted deliberately: stopCompletion is inert during
 // prefill (llama.cpp only checks its stop flag in the token-generation loop).
-// A timeout that cannot cancel only abandons the promise and strands
-// classifyInFlight = true, killing the classifier for the whole session.
-let classifyInFlight = false;
+// A timeout that cannot cancel only abandons the promise and strands the
+// exclusive hold, killing the classifier for the whole session.
 
-// Exposed read-only so other LLM consumers (ephemeral conversation) can
-// avoid starting a competing ctx.completion() call on the same LlamaContext
-// while the classifier (including its warmup) is mid-generation. Device-
-// proven necessary 2026-08-14: two concurrent completion() calls on one
-// context produced llama.rn HostFunction errors.
+// PARKED-FOR-REMOVAL: thin alias for pre-gate call sites / tests. Prefer
+// isLlamaContextBusy(). Do not treat this as the permanent API.
 export function isClassifierBusy(): boolean {
-  return classifyInFlight;
+  return isLlamaContextBusy();
 }
 
 function extractJsonObject(raw: string): string | null {
@@ -391,18 +404,42 @@ export async function classifyWithLLM(
   userText: string,
   ctx: LlamaContext | null,
   hints: { contacts: string[]; lists: string[]; name?: string },
-  opts?: { timeoutMs?: number | null },
+  opts?: {
+    timeoutMs?: number | null;
+    modelIdentity?: CanonicalSessionModelIdentity | null;
+    /** Fired after successful warmup completion, still under classifier hold,
+     *  before nested canonical save. Ready must not wait on snapshot I/O. */
+    onWarmupSucceeded?: () => void;
+  },
 ): Promise<ClassifyOutcome> {
-  if (!ctx) return { status: 'not_ready', reason: 'no-ctx' };
+  const turnId = getActiveTurnId();
+  if (!ctx) {
+    latLog('classifyWithLLM skipped', { turnId, reason: 'no-ctx' });
+    return { status: 'not_ready', reason: 'no-ctx' };
+  }
   const trimmed = userText.trim();
   if (!trimmed) return { status: 'ok', intents: [] };
-  if (classifyInFlight) {
-    console.log('[classifyWithLLM] skipped', JSON.stringify({ reason: 'in-flight' }));
-    return { status: 'not_ready', reason: 'in-flight' };
-  }
-  classifyInFlight = true;
 
-  const prompt = `You are Herald's on-device intent classifier.
+  const gate = await withLlamaContextExclusive('classifier', 'try', async () => {
+    const classifyT0 = latMono();
+    const isWarmup = trimmed === 'warmup ping';
+    const consumer: CtxCompletionConsumer = isWarmup ? 'warmup' : 'classifier';
+    const prevMeta = getPrevCtxCompletionMeta();
+    latLog('classifyWithLLM START', {
+      turnId,
+      warmup: isWarmup,
+      ...prevMeta,
+    });
+
+    // After ephemeral clobbered the shared context, restore the canonical
+    // warmup session before this real classify. Nested under this hold —
+    // loadSession must never acquire the gate independently.
+    // Failure falls through to current full-prefill behavior.
+    if (!isWarmup && prevMeta.prevConsumer === 'ephemeral' && opts?.modelIdentity) {
+      await maybeLoadCanonicalClassifierSessionBeforeClassify(ctx, opts.modelIdentity);
+    }
+
+    const prompt = `You are Herald's on-device intent classifier.
 Respond with a JSON ARRAY of 1-4 intent objects: [{...}]. Always an array,
 even for a single intent. Output the array on ONE LINE. No prose. No
 markdown. No explanation.
@@ -470,36 +507,96 @@ CRITICAL RULES:
 
 User: "${trimmed.replace(/"/g, '\\"')}"`;
 
-  const __t0 = Date.now();
-  try {
-    const result = await ctx.completion({
-      messages: [{ role: 'user', content: prompt }],
-      n_predict: 256,
-      temperature: 0,
-      top_k: 1,
-      seed: 0,
-      stop: ['\n\n', '<|end|>', '<|eot_id|>'],
-    });
+    const __t0 = Date.now();
+    let classifyOutcome: 'ok' | 'empty' | 'error' | 'failed' = 'ok';
+    let completionSeq: number | null = null;
+    let completionEnded = false;
+    try {
+      completionSeq = beginCtxCompletion(consumer);
+      const completionT0 = latMono();
+      const result = await ctx.completion({
+        messages: [{ role: 'user', content: prompt }],
+        n_predict: 256,
+        temperature: 0,
+        top_k: 1,
+        seed: 0,
+        stop: ['\n\n', '<|end|>', '<|eot_id|>'],
+      });
+      endCtxCompletion(completionSeq, consumer, latMono() - completionT0, result);
+      completionEnded = true;
 
-    const raw = result?.text?.trim();
-    console.log('[classifyWithLLM]', JSON.stringify({ ms: Date.now() - __t0, rawLen: raw?.length ?? 0, raw, utterance: trimmed }));
-    if (!raw) return { status: 'ok', intents: [] };
-    const vocab = buildClassifierVocab(hints.lists);
-    return { status: 'ok', intents: parseClassifierOutput(raw, trimmed, vocab) };
-  } catch (e) {
-    console.log('[classifyWithLLM] failed', JSON.stringify({ ms: Date.now() - __t0, error: String(e) }));
-    return { status: 'ok', intents: [] };
-  } finally {
-    classifyInFlight = false;
+      // Canonical warmup → snapshot must share this exclusive hold with no
+      // intervening release. Ready is signaled before optional save I/O.
+      if (isWarmup) {
+        opts?.onWarmupSucceeded?.();
+        if (opts?.modelIdentity) {
+          await saveCanonicalClassifierSessionWhileHoldingExclusive(ctx, opts.modelIdentity);
+        }
+      }
+
+      const raw = result?.text?.trim();
+      console.log('[classifyWithLLM]', JSON.stringify({ ms: Date.now() - __t0, rawLen: raw?.length ?? 0 }));
+      if (!raw) {
+        classifyOutcome = 'empty';
+        return { status: 'ok' as const, intents: [] as IntentRecord[] };
+      }
+      const vocab = buildClassifierVocab(hints.lists);
+      return {
+        status: 'ok' as const,
+        intents: parseClassifierOutput(raw, trimmed, vocab),
+      };
+    } catch (e) {
+      if (completionSeq != null && !completionEnded) {
+        endCtxCompletion(completionSeq, consumer, Date.now() - __t0, undefined);
+      }
+      classifyOutcome = 'failed';
+      console.log('[classifyWithLLM] failed', JSON.stringify({ ms: Date.now() - __t0, error: String(e) }));
+      if (isWarmup) {
+        return { status: 'failed' as const, reason: 'completion_error' as const };
+      }
+      // Real classify: preserve prior degrade-to-empty behavior for routing.
+      classifyOutcome = 'error';
+      return { status: 'ok' as const, intents: [] as IntentRecord[] };
+    } finally {
+      latLog('classifyWithLLM END', {
+        turnId,
+        durationMs: Math.round((latMono() - classifyT0) * 100) / 100,
+        outcome: classifyOutcome,
+        warmup: isWarmup,
+      });
+    }
+  });
+
+  if (!gate.ok) {
+    latLog('classifyWithLLM skipped', { turnId, reason: 'in-flight' });
+    console.log('[classifyWithLLM] skipped', JSON.stringify({ reason: 'in-flight' }));
+    return { status: 'not_ready', reason: 'in-flight' };
   }
+  return gate.value;
 }
 
-export async function warmupClassifier(ctx: LlamaContext | null): Promise<void> {
+/** Warmup must succeed (completion ran) before llmStatus becomes ready.
+ *  Canonical save nests under the same exclusive hold; onWarmupSucceeded fires
+ *  after completion and before save so readiness need not wait on snapshot I/O. */
+export async function warmupClassifier(
+  ctx: LlamaContext | null,
+  identity?: CanonicalSessionModelIdentity | null,
+  hooks?: { onWarmupSucceeded?: () => void },
+): Promise<void> {
   const __t0 = Date.now();
-  try {
-    await classifyWithLLM('warmup ping', ctx, { contacts: [], lists: [] }, { timeoutMs: null });
-  } catch {
-    // never throw — warmup is best-effort
+  if (!ctx) {
+    throw new Error('warmupClassifier: no-ctx');
   }
-  console.log('[warmupClassifier] done', JSON.stringify({ ms: Date.now() - __t0 }));
+  const out = await classifyWithLLM('warmup ping', ctx, { contacts: [], lists: [] }, {
+    timeoutMs: null,
+    modelIdentity: identity ?? null,
+    onWarmupSucceeded: hooks?.onWarmupSucceeded,
+  });
+  console.log('[warmupClassifier] done', JSON.stringify({ ms: Date.now() - __t0, status: out.status }));
+  if (out.status === 'not_ready') {
+    throw new Error(`warmupClassifier: not_ready:${out.reason}`);
+  }
+  if (out.status === 'failed') {
+    throw new Error(`warmupClassifier: ${out.reason}`);
+  }
 }

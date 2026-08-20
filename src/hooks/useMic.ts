@@ -8,6 +8,7 @@ import { evaluateEmptySessionRecovery, shouldCancelEmptySessionRecovery, shouldC
 import { decideOneShotEnd, decideOneShotNoSpeech } from './oneShotEndDecision';
 import { buildStartConfig } from './recognitionModeConfig';
 import type { RecognitionMode } from './recognitionModeConfig';
+import { beginTurn, getActiveTurnId, log as latLog, mono as latMono } from '../utils/latencyInstrument';
 
 export { evaluateEmptySessionRecovery } from './emptySessionRecoveryDecision';
 
@@ -86,6 +87,8 @@ export function useMic(
   const suspendCoordinatorRef = useRef(createSuspendCoordinator(SUSPEND_TIMEOUT_MS));
 
   const suspendForSpeech = useCallback((): Promise<{ confirmed: boolean }> => {
+    const suspendT0 = latMono();
+    latLog('mic suspension START', { turnId: getActiveTurnId(), source: 'suspendForSpeech' });
     rlog('SUSPEND_CALLED');
 
     if (!engineActiveRef.current) {
@@ -114,6 +117,12 @@ export function useMic(
       ExpoSpeechRecognitionModule.stop();
     });
     promise.then((result) => {
+      latLog('mic suspension END', {
+        turnId: getActiveTurnId(),
+        source: 'suspendForSpeech',
+        durationMs: Math.round((latMono() - suspendT0) * 100) / 100,
+        confirmed: result.confirmed,
+      });
       rlog('SUSPEND_RESOLVED', { resolution: result.confirmed ? 'confirmed_end' : 'timeout_fail_closed' });
       rlog('TEARDOWN_COMPLETED', { reason: 'suspend_for_speech', outcome: result.confirmed ? 'confirmed' : 'forced_timeout' });
     });
@@ -157,6 +166,12 @@ export function useMic(
       log('TRANSCRIPT_SELECTED', {
         digitCount: (final.match(/\d/g) || []).length,
         charCount: final.length,
+        source,
+      });
+      const turnId = beginTurn();
+      latLog('STT FINAL available', {
+        turnId,
+        charLen: final.length,
         source,
       });
       onTranscript(final);
@@ -378,6 +393,12 @@ export function useMic(
       log('TRANSCRIPT_SELECTED', {
         digitCount: (final.match(/\d/g) || []).length,
         charCount: final.length,
+        source: 'manual_stop',
+      });
+      const turnId = beginTurn();
+      latLog('STT FINAL available', {
+        turnId,
+        charLen: final.length,
         source: 'manual_stop',
       });
       onTranscript(final);

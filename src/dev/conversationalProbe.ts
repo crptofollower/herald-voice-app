@@ -7,6 +7,7 @@
 // only, for manual read-back during this experiment.
 
 import type { LlamaContext } from 'llama.rn';
+import { withLlamaContextExclusive } from '../utils/llamaContextExclusive';
 
 const CONVERSE_SYSTEM_PROMPT = `You are Herald, a calm conversational companion.
 Respond naturally and briefly to what the person says, in one or two sentences.
@@ -49,12 +50,21 @@ export async function converseProbe(
   console.log('[conversationalProbe] PROBE_STARTED', JSON.stringify({ id, model, input: userText }));
   const t0 = Date.now();
   try {
-    const result = await ctx.completion({
-      messages,
-      n_predict: 128,
-      temperature: 0.6,
-      top_p: 0.9,
+    const gate = await withLlamaContextExclusive('probe', 'wait', async () => {
+      return ctx.completion({
+        messages,
+        n_predict: 128,
+        temperature: 0.6,
+        top_p: 0.9,
+      });
     });
+    if (!gate.ok) {
+      // wait mode never returns busy; defensive
+      const ms = Date.now() - t0;
+      console.log('[conversationalProbe] PROBE_FAILED', JSON.stringify({ id, ms, error: 'exclusive-busy' }));
+      return { input: userText, rawOutput: '[error]', ms };
+    }
+    const result = gate.value;
     const ms = Date.now() - t0;
     const rawOutput = result?.text?.trim() ?? '[empty]';
     console.log('[conversationalProbe] PROBE_COMPLETED', JSON.stringify({ id, ms, rawOutput }));

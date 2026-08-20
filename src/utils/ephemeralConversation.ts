@@ -13,7 +13,8 @@
 // that Conversation never competes with deterministic routing.
 
 import type { LlamaContext } from 'llama.rn';
-import { isClassifierBusy } from '../hooks/llmLayers';
+import { withLlamaContextExclusive } from './llamaContextExclusive';
+import { getActiveTurnId, beginCtxCompletion, endCtxCompletion, log as latLog, mono as latMono } from './latencyInstrument';
 import { IMPERATIVE_ACTION_RE } from './instructionSignals';
 
 // Conversation Ownership Fence (design review 2026-08-15, three rounds;
@@ -145,15 +146,11 @@ export type EphemeralResult =
   | { status: 'ok'; text: string }
   | { status: 'unavailable'; reason: 'no-ctx' | 'busy' | 'empty-output' | 'error' };
 
-// Module-scoped, not exported: this module's own single-flight guard,
-// separate from and in addition to the classifier's isClassifierBusy().
-// Prevents two overlapping ephemeral generations (e.g. a rapid double-tap)
-// from racing each other on the same context.
-let ephemeralInFlight = false;
-
 /** Pure predicate -- no ctx, no I/O. Callers compute the inputs from their
  *  own already-established routing state; this function only encodes the
- *  authority gate itself, so it can be contract-tested in isolation. */
+ *  authority gate itself, so it can be contract-tested in isolation.
+ *  classifierBusy / ephemeralBusy both mean "shared context exclusive hold"
+ *  from the caller's point of view (same isLlamaContextBusy under the hood). */
 export function canRunEphemeralConversation(input: {
   rdTier: 1 | 2 | 3;
   hasStructuredCaptures: boolean;
@@ -181,49 +178,80 @@ export async function generateEphemeralConversation(
   ctx: LlamaContext | null,
   priorTurn?: EphemeralTurn,
 ): Promise<EphemeralResult> {
+  const turnId = getActiveTurnId();
   console.log('[ephemeralConversation] ENTER');
   if (!ctx) {
+    latLog('generateEphemeralConversation skipped', { turnId, reason: 'no-ctx' });
     console.log('[ephemeralConversation] UNAVAILABLE_NO_CTX');
     return { status: 'unavailable', reason: 'no-ctx' };
   }
-  const classifierBusy = isClassifierBusy();
-  if (classifierBusy || ephemeralInFlight) {
-    console.log('[ephemeralConversation] UNAVAILABLE_BUSY', JSON.stringify({ classifierBusy, ephemeralInFlight }));
+
+  const gate = await withLlamaContextExclusive('ephemeral', 'try', async () => {
+    const ephemeralT0 = latMono();
+    latLog('generateEphemeralConversation START', { turnId });
+    let completionSeq: number | null = null;
+    let completionEnded = false;
+    try {
+      const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
+        { role: 'system', content: EPHEMERAL_SYSTEM_PROMPT },
+      ];
+      if (priorTurn) {
+        messages.push({ role: 'user', content: priorTurn.user });
+        messages.push({ role: 'assistant', content: priorTurn.assistant });
+      }
+      messages.push({ role: 'user', content: userText });
+
+      console.log('[ephemeralConversation] COMPLETION_START');
+      const t0 = Date.now();
+      completionSeq = beginCtxCompletion('ephemeral');
+      const completionT0 = latMono();
+      const result = await ctx.completion({
+        messages,
+        n_predict: 128,
+        temperature: 0.6,
+        top_p: 0.9,
+      });
+      endCtxCompletion(completionSeq, 'ephemeral', latMono() - completionT0, result);
+      completionEnded = true;
+      const ms = Date.now() - t0;
+      const text = result?.text?.trim();
+      if (!text) {
+        latLog('generateEphemeralConversation END', {
+          turnId,
+          durationMs: Math.round((latMono() - ephemeralT0) * 100) / 100,
+          outcome: 'empty-output',
+        });
+        console.log('[ephemeralConversation] UNAVAILABLE_EMPTY_OUTPUT', JSON.stringify({ ms }));
+        return { status: 'unavailable' as const, reason: 'empty-output' as const };
+      }
+      latLog('generateEphemeralConversation END', {
+        turnId,
+        durationMs: Math.round((latMono() - ephemeralT0) * 100) / 100,
+        outcome: 'ok',
+        responseLen: text.length,
+      });
+      console.log('[ephemeralConversation] OK', JSON.stringify({ ms, len: text.length }));
+      return { status: 'ok' as const, text };
+    } catch (e) {
+      if (completionSeq != null && !completionEnded) {
+        endCtxCompletion(completionSeq, 'ephemeral', latMono() - ephemeralT0, undefined);
+      }
+      latLog('generateEphemeralConversation END', {
+        turnId,
+        durationMs: Math.round((latMono() - ephemeralT0) * 100) / 100,
+        outcome: 'error',
+      });
+      console.log('[ephemeralConversation] ERROR', JSON.stringify({ error: String(e) }));
+      return { status: 'unavailable' as const, reason: 'error' as const };
+    } finally {
+      console.log('[ephemeralConversation] EXIT');
+    }
+  });
+
+  if (!gate.ok) {
+    latLog('generateEphemeralConversation skipped', { turnId, reason: 'busy' });
+    console.log('[ephemeralConversation] UNAVAILABLE_BUSY', JSON.stringify({ reason: 'exclusive-busy' }));
     return { status: 'unavailable', reason: 'busy' };
   }
-
-  ephemeralInFlight = true;
-  try {
-    const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
-      { role: 'system', content: EPHEMERAL_SYSTEM_PROMPT },
-    ];
-    if (priorTurn) {
-      messages.push({ role: 'user', content: priorTurn.user });
-      messages.push({ role: 'assistant', content: priorTurn.assistant });
-    }
-    messages.push({ role: 'user', content: userText });
-
-    console.log('[ephemeralConversation] COMPLETION_START');
-    const t0 = Date.now();
-    const result = await ctx.completion({
-      messages,
-      n_predict: 128,
-      temperature: 0.6,
-      top_p: 0.9,
-    });
-    const ms = Date.now() - t0;
-    const text = result?.text?.trim();
-    if (!text) {
-      console.log('[ephemeralConversation] UNAVAILABLE_EMPTY_OUTPUT', JSON.stringify({ ms }));
-      return { status: 'unavailable', reason: 'empty-output' };
-    }
-    console.log('[ephemeralConversation] OK', JSON.stringify({ ms, len: text.length }));
-    return { status: 'ok', text };
-  } catch (e) {
-    console.log('[ephemeralConversation] ERROR', JSON.stringify({ error: String(e) }));
-    return { status: 'unavailable', reason: 'error' };
-  } finally {
-    ephemeralInFlight = false;
-    console.log('[ephemeralConversation] EXIT');
-  }
+  return gate.value;
 }

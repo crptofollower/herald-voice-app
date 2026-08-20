@@ -44,6 +44,9 @@ import NetInfo from '@react-native-community/netinfo';
 import { LOCAL_LLM_ENABLED } from './src/constants/features';
 import { ErrorBoundary } from './src/components/ErrorBoundary';
 import { beacon } from './src/utils/diag';
+import { initAppLatencyBaseline, log as latLog, mono as latMono } from './src/utils/latencyInstrument';
+
+initAppLatencyBaseline();
 
 export type RootStackParamList = {
   Onboarding: undefined;
@@ -68,6 +71,9 @@ function Navigation() {
 
   useEffect(() => {
     if (!_hasHydrated) return;
+    const reconcileT0 = latMono();
+    latLog('Navigation hydration/sqlite reconciliation START');
+    let railwayOutcome: 'skipped' | 'attempted' | 'completed' | 'aborted_or_timed_out' | 'network_error' = 'skipped';
     (async () => {
       try {
         const { getProfileField, setProfileField } = require('./src/db/profileDB');
@@ -91,12 +97,14 @@ function Navigation() {
             // If Railway returns 404 or errors, the userId is stale — hard reset.
             const restoredUserId = storeState.userId || sqliteUserId;
             try {
+              railwayOutcome = 'attempted';
               const { API_BASE } = require('./src/constants/api');
               const check = await fetch(
                 `${API_BASE}/user/export/${restoredUserId}?access_code=herald2026`,
                 { signal: AbortSignal.timeout(4000) }
               );
               if (check.ok || check.status === 403) {
+                railwayOutcome = 'completed';
                 // 200 = confirmed. 403 = user exists but code mismatch — still a real user.
                 // Both cases: legitimate existing user, backfill SQLite and trust state.
                 setProfileField('onboarding_complete', 'true');
@@ -105,10 +113,12 @@ function Navigation() {
                 if (storeState.aiName) setProfileField('ai_name', storeState.aiName);
                 console.log('[Herald] Railway profile verified or access mismatch — backfilled SQLite');
               } else if (check.status === 404) {
+                railwayOutcome = 'completed';
                 // User genuinely not found — Samsung restore of a deleted/nonexistent account.
                 console.warn('[Herald] Railway profile not found (404) — resetting to onboarding');
                 hardReset();
               } else {
+                railwayOutcome = 'completed';
                 // Any other status (500, etc) — be safe, trust restored state.
                 setProfileField('onboarding_complete', 'true');
                 setProfileField('user_id', restoredUserId);
@@ -116,7 +126,11 @@ function Navigation() {
                 if (storeState.aiName) setProfileField('ai_name', storeState.aiName);
                 console.log('[Herald] Railway check inconclusive — trusted restored state');
               }
-            } catch {
+            } catch (e) {
+              railwayOutcome =
+                (e instanceof Error && (e.name === 'AbortError' || e.name === 'TimeoutError'))
+                  ? 'aborted_or_timed_out'
+                  : 'network_error';
               // Network unavailable — cannot verify. Trust restored state to avoid
               // forcing re-onboarding on users who are just offline.
               setProfileField('onboarding_complete', 'true');
@@ -130,6 +144,12 @@ function Navigation() {
       } catch {
         // SQLite not ready — pass through, next open will catch it
       }
+      latLog('Navigation hydration/sqlite reconciliation END', {
+        durationMs: Math.round((latMono() - reconcileT0) * 100) / 100,
+        railwayVerification: railwayOutcome,
+        chatScreenEligible: onboardingComplete,
+        screen: onboardingComplete ? 'Chat' : 'Onboarding',
+      });
       setSqliteChecked(true);
     })();
   }, [_hasHydrated]);
@@ -159,6 +179,8 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
     const init = async () => {
+      const dbT0 = latMono();
+      latLog('DB initialization START');
       try {
         await runMigrations();
         await initDB();
@@ -166,9 +188,17 @@ export default function App() {
           throw new Error('Database initialized but not ready');
         }
         if (cancelled) return;
+        latLog('DB initialization END', {
+          durationMs: Math.round((latMono() - dbT0) * 100) / 100,
+          outcome: 'ready',
+        });
         setDbState('ready');
       } catch (e) {
         if (cancelled) return;
+        latLog('DB initialization END', {
+          durationMs: Math.round((latMono() - dbT0) * 100) / 100,
+          outcome: 'error',
+        });
         console.error('[Herald] Startup DB init failed:', e);
         setDbError(e instanceof Error ? e.message : 'Database failed to start');
         setDbState('error');
@@ -181,6 +211,8 @@ export default function App() {
   useEffect(() => {
     if (dbState !== 'ready') return;
     const loadFonts = async () => {
+      const fontT0 = latMono();
+      latLog('Font load START');
       try {
         await Font.loadAsync({
           "SourceSerif4-Light":    SourceSerif4_300Light,
@@ -195,6 +227,9 @@ export default function App() {
       } catch (e) {
         console.warn("[Herald] Font load failed:", e);
       }
+      latLog('Font load END', {
+        durationMs: Math.round((latMono() - fontT0) * 100) / 100,
+      });
       setFontsReady(true);
     };
     loadFonts();

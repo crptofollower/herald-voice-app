@@ -11,6 +11,7 @@ import { getDB } from '../db/schema';
 import { capturePerson } from '../db/capturePerson';
 import { findContactByName, setEmergencyContact, getEmergencyContact, retireRelationshipHolder, RELATIONSHIP_WORDS, resolvePersonIdentity, contactHasCapability, resolvePersonCapability, attachPhoneToContactById } from '../db/contactsDB';
 import { normalizePersonTarget, liftRelationshipName } from '../utils/personReference';
+import { getActiveTurnId, log as latLog, mono as latMono } from '../utils/latencyInstrument';
 import { normalizePhone } from '../utils/phone';
 import { buildPhoneConfirmPending, formatPhoneForSpeech } from '../utils/phoneConfirm';
 import { matchCandidateToken } from './conversationSession';
@@ -1828,10 +1829,16 @@ export async function routeIntent(
     classifyQuery: (msg: string) => Promise<TierDecision>;
     classifyLLM: ((text: string) => Promise<ClassifyOutcome>) | null;
     llmReady: boolean;
+    /** When 'loading', tier-3 fallthrough without classify must be not_ready (honest waking-up), not needs_clarification. */
+    llmStatus?: 'unavailable' | 'loading' | 'ready' | 'error';
     captureContext?: CaptureContext;
     resolveContact?: (nameOrRelation: string) => Promise<{phone:string;name:string;contactId?:string;source:'herald'|'device'}|{phone:null;name:string;source:'device';candidateNames:string[];deviceCandidates:{name:string;phone:string}[]}|null>;
   },
 ): Promise<RouteDecision> {
+  const routeT0 = latMono();
+  const turnId = getActiveTurnId();
+  latLog('routeIntent START', { turnId });
+  try {
   const decision = await deps.classifyQuery(text);
   console.log('[classifyQuery]', JSON.stringify({ tier: decision.tier, actionIntent: decision.actionIntent, reason: decision.reason }));
 
@@ -2058,6 +2065,10 @@ export async function routeIntent(
     if (out.status === 'not_ready') {
       return { kind: 'not_ready', reason: `llm:not_ready:${out.reason}` };
     }
+    if (out.status === 'failed') {
+      // Warmup uses failed; real classify degrades to ok/[]. Defensive.
+      return { kind: 'needs_clarification', reason: 'llm:failed' };
+    }
     llmAlreadyClassified = true;
     // 'pass' is the classifier's own honest "unclear / none of the above"
     // signal (llmLayers.ts prompt: "When genuinely unclear → pass"). It is
@@ -2080,5 +2091,17 @@ export async function routeIntent(
   if (decision.reason === 'live:data') {
     return { kind: 'backend', tier: 3, reason: decision.reason, llmAlreadyClassified };
   }
+  // Deferred-ready window: local LLM is loading/warming. Do not misattribute
+  // as needs_clarification ("I'm not sure I'm following you"). live:data above
+  // still reaches the network without the on-device classifier.
+  if (!deps.llmReady && deps.llmStatus === 'loading') {
+    return { kind: 'not_ready', reason: 'llm:not_ready:loading' };
+  }
   return { kind: 'needs_clarification', reason: decision.reason };
+  } finally {
+    latLog('routeIntent END', {
+      turnId,
+      durationMs: Math.round((latMono() - routeT0) * 100) / 100,
+    });
+  }
 }

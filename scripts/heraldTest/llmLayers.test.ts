@@ -41,11 +41,8 @@ export async function runLlmLayersContractTests(): Promise<{ passed: number; fai
     );
   }
 
-  // classifyWithLLM sets classifyInFlight = true before its first await.
-  // useLocalLLM.ts relies on that: it kicks warmupClassifier before marking a
-  // context ready, so warmup owns the ~26s cold prefill and a user utterance in
-  // that window gets an honest not_ready. If this test fails, that ordering is
-  // broken and the blackout window is back.
+  // classifyWithLLM claims the shared exclusive gate synchronously (try mode
+  // sets heldBy before any await). A concurrent classify must get not_ready.
   {
     let release;
     const gate = new Promise((resolve) => { release = resolve; });
@@ -55,7 +52,7 @@ export async function runLlmLayersContractTests(): Promise<{ passed: number; fai
     const p1 = classifyWithLLM('first', slowCtx as any, { contacts: [], lists: [] });
     const second = await classifyWithLLM('second', slowCtx as any, { contacts: [], lists: [] });
     assert(
-      'classifyInFlight is claimed synchronously — useLocalLLM warmup ordering depends on this',
+      'exclusive gate claimed synchronously — concurrent classify gets in-flight',
       { status: second.status, reason: second.status === 'not_ready' ? second.reason : undefined },
       (v) => v.status === 'not_ready' && v.reason === 'in-flight',
       "{ status: 'not_ready', reason: 'in-flight' }",

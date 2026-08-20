@@ -1,0 +1,112 @@
+// src/utils/llamaContextExclusive.ts
+// Single exclusive owner for the shared LlamaContext. All ctx.completion,
+// saveSession, loadSession, and ctx.release work must run under this gate
+// (load and canonical warmup-save nest inside an already-held classifier
+// acquire — they never acquire alone).
+
+export type LlamaContextExclusiveOwner =
+  | 'classifier'
+  | 'ephemeral'
+  | 'probe'
+  | 'session-save'
+  | 'context-release';
+
+let heldBy: LlamaContextExclusiveOwner | null = null;
+/** When true, try-acquire fails and only context-release may wait-acquire. */
+let retiring = false;
+const waitQueue: Array<() => void> = [];
+
+export function isLlamaContextBusy(): boolean {
+  return heldBy !== null;
+}
+
+export function isLlamaContextRetiring(): boolean {
+  return retiring;
+}
+
+/** Who currently holds the context, or null if idle. Test/diagnostics only. */
+export function getLlamaContextExclusiveOwner(): LlamaContextExclusiveOwner | null {
+  return heldBy;
+}
+
+function wakeWaiters(): void {
+  const pending = waitQueue.splice(0);
+  for (const w of pending) w();
+}
+
+function releaseHold(): void {
+  heldBy = null;
+  wakeWaiters();
+}
+
+/**
+ * Mark the live context as retiring so new try-owners cannot start.
+ * Call after nulling getCtx() refs, before runExclusiveContextRelease.
+ */
+export function beginLlamaContextRetirement(): void {
+  retiring = true;
+  wakeWaiters();
+}
+
+/**
+ * Wait for any current owner to finish, then run release under exclusive
+ * ownership. New try work is refused while retiring. Clears retiring when done.
+ */
+export async function runExclusiveContextRelease(
+  releaseFn: () => Promise<void>,
+): Promise<void> {
+  retiring = true;
+  wakeWaiters();
+  try {
+    const gate = await withLlamaContextExclusive('context-release', 'wait', releaseFn);
+    if (!gate.ok) {
+      // wait mode should not return busy; still attempt release as last resort
+      await releaseFn();
+    }
+  } finally {
+    retiring = false;
+    wakeWaiters();
+  }
+}
+
+/**
+ * Run `fn` while holding exclusive ownership of the shared LlamaContext.
+ *
+ * - `try`: claim synchronously or return busy (no queue). Used by classifier
+ *   and ephemeral so user work never stacks behind another consumer.
+ * - `wait`: enqueue until idle (and until retirement allows this owner), then
+ *   claim. Used by probe and context-release.
+ *
+ * `heldBy` is set before any await when mode is `try`, preserving the
+ * historical sync single-flight property for classify/warmup races.
+ */
+export async function withLlamaContextExclusive<T>(
+  owner: LlamaContextExclusiveOwner,
+  mode: 'try' | 'wait',
+  fn: () => Promise<T>,
+): Promise<{ ok: true; value: T } | { ok: false; reason: 'busy' }> {
+  if (mode === 'try') {
+    if (heldBy !== null || retiring) {
+      return { ok: false, reason: 'busy' };
+    }
+    heldBy = owner;
+  } else {
+    while (true) {
+      const mayAcquire =
+        heldBy === null && (!retiring || owner === 'context-release');
+      if (mayAcquire) {
+        heldBy = owner;
+        break;
+      }
+      await new Promise<void>((resolve) => {
+        waitQueue.push(resolve);
+      });
+    }
+  }
+
+  try {
+    return { ok: true, value: await fn() };
+  } finally {
+    releaseHold();
+  }
+}

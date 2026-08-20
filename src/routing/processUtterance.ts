@@ -10,6 +10,7 @@ import {
 } from './conversationalSubject';
 import { detectFamilyRead, resolveFamilyRead } from '../utils/familyRead';
 import { resolveHouseholdProvider } from '../utils/householdRead';
+import { getActiveTurnId, log as latLog } from '../utils/latencyInstrument';
 
 // D0 commit 2 (S54 addendum): the headless pipeline seam. UI (ChatScreen) calls
 // this and renders the result; P-tests call it directly. No React, no UI, no TTS.
@@ -100,6 +101,8 @@ export async function processUtterance(
   deps: RouteDeps,
   subject?: ConversationalSubjectHolder | null,
 ): Promise<UtteranceOutcome> {
+  const turnId = getActiveTurnId();
+  latLog('processUtterance START', { turnId });
   subject?.beginUserTurn();
   // 0) Law 0 — emergency preempts everything (Spine §3a). Checked before pending
   //    resolution, before routing, before any classifier. A held pending is
