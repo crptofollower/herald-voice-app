@@ -353,7 +353,7 @@ export default function ChatScreen() {
     return () => setOsPersonCapabilitySearch(null);
   }, []);
 
-  const handleLaunchActionRef = useRef<((appName: string) => Promise<void>) | null>(null);
+  const handleLaunchActionRef = useRef<((appName: string) => Promise<boolean>) | null>(null);
 
   const [inputText, setInputText] = useState("");
   const [showProactive, setShowProactive] = useState(false);
@@ -403,9 +403,20 @@ export default function ChatScreen() {
   const ephemeralContextRef = useRef<{ user: string; assistant: string } | null>(null);
 
   // ── Scroll snap prevention ────────────────────────────────────────────────
-  // Only auto-scroll to bottom when user is already near the bottom.
-  // If they've scrolled up to read (Freddie response etc.), leave them there.
+  // Only auto-scroll to bottom when user is already near the bottom, or when
+  // followTranscriptRef is active for the current user turn / streaming reply.
+  // followTranscriptRef is cleared only during user-initiated drag (not
+  // programmatic scrollToEnd). isAtBottomRef tracks near-bottom position.
   const isAtBottomRef = useRef(true);
+  const followTranscriptRef = useRef(true);
+  const userDraggingTranscriptRef = useRef(false);
+
+  const scrollTranscriptToEnd = useCallback(() => {
+    if (!isAtBottomRef.current && !followTranscriptRef.current) return;
+    requestAnimationFrame(() => {
+      flatListRef.current?.scrollToEnd({ animated: false });
+    });
+  }, []);
 
   const suspendForSpeechRef = useRef<(() => Promise<{ confirmed: boolean }>) | null>(null);
   const { speak, enqueueSentence, finishStream, resetSpeech, stop, isSpeaking, isSpeakingRef } = useSpeech(suspendForSpeechRef);
@@ -451,6 +462,7 @@ export default function ChatScreen() {
       sessionStartRef.current = newSessionStart;
       // Scroll back to bottom for fresh session
       isAtBottomRef.current = true;
+      followTranscriptRef.current = true;
       if (!userId) return;
       const local_time = new Date().toLocaleTimeString("en-US", {
         hour: "numeric",
@@ -829,12 +841,12 @@ export default function ChatScreen() {
     };
   }, [available, userId, lat, lng]);
 
-  // ── Auto-scroll (only when user is at bottom) ─────────────────────────────
+  // ── Auto-scroll (at bottom or active turn follow) ─────────────────────────
   useEffect(() => {
-    if ((displayMessages.length > 0 || streamingContent) && isAtBottomRef.current) {
-      flatListRef.current?.scrollToEnd({ animated: false });
+    if (displayMessages.length > 0 || streamingContent) {
+      scrollTranscriptToEnd();
     }
-  }, [displayMessages.length, streamingContent]);
+  }, [displayMessages.length, streamingContent, scrollTranscriptToEnd]);
 
   function getKnownContactNames(): string[] {
     try {
@@ -1036,6 +1048,8 @@ export default function ChatScreen() {
 
     lastSentRef.current = now;
     sendingRef.current = true;
+    followTranscriptRef.current = true;
+    isAtBottomRef.current = true;
     try {
     const historySnapshot = messages.slice(-20).map(({ role, content }) => ({ role, content }));
 
@@ -1898,6 +1912,7 @@ export default function ChatScreen() {
     setIsStreaming(true);
     setStreamingContent("");
     isAtBottomRef.current = true;
+    followTranscriptRef.current = true;
 
     let firstToken = true;
 
@@ -1936,7 +1951,7 @@ export default function ChatScreen() {
             firstToken = false;
             stop();
             setIsWaiting(false);
-            flatListRef.current?.scrollToEnd({ animated: true });
+            scrollTranscriptToEnd();
             const maxStreamTimer = setTimeout(() => {
               if (streamAbortRef.current) {
                 streamAbortRef.current.abort();
@@ -2661,7 +2676,10 @@ export default function ChatScreen() {
     handleCalendarAction,
     handleMapsAction,
     launchAndroidTimer,
-    handleLaunchActionRef,
+    // DispatchDeps types void, but launch helpers treat explicit true as success.
+    handleLaunchActionRef: handleLaunchActionRef as React.MutableRefObject<
+      ((appName: string) => Promise<void>) | null
+    >,
     pendingContactCollectRef,
     session: sessionRef.current,
     platformOS: Platform.OS,
@@ -2809,15 +2827,25 @@ export default function ChatScreen() {
               showsVerticalScrollIndicator={false}
               // ── Scroll snap fix: track position, only auto-scroll at bottom ──
               scrollEventThrottle={100}
+              onScrollBeginDrag={() => {
+                userDraggingTranscriptRef.current = true;
+              }}
+              onScrollEndDrag={() => {
+                userDraggingTranscriptRef.current = false;
+              }}
+              onMomentumScrollEnd={() => {
+                userDraggingTranscriptRef.current = false;
+              }}
               onScroll={({ nativeEvent: { layoutMeasurement, contentOffset, contentSize } }) => {
                 const distFromBottom =
                   contentSize.height - contentOffset.y - layoutMeasurement.height;
                 isAtBottomRef.current = distFromBottom < 80;
+                if (userDraggingTranscriptRef.current) {
+                  followTranscriptRef.current = distFromBottom < 80;
+                }
               }}
               onContentSizeChange={() => {
-                if (isAtBottomRef.current) {
-                  flatListRef.current?.scrollToEnd({ animated: false });
-                }
+                scrollTranscriptToEnd();
               }}
               ListFooterComponent={
                 <>
@@ -2867,6 +2895,7 @@ export default function ChatScreen() {
               every launch (relies on handsFreeMode's existing useState(false)
               initializer — nothing added here changes that). Remove in the
               same commit that removes recovery instrumentation. */}
+          {isOwner && (
           <TouchableOpacity
             onPress={() => setHandsFreeMode((v) => !v)}
             accessibilityLabel={
@@ -2887,11 +2916,13 @@ export default function ChatScreen() {
               TEMP DIAGNOSTIC — HANDS-FREE: {handsFreeMode ? 'ON' : 'OFF'}
             </Text>
           </TouchableOpacity>
+          )}
 
           {/* TEMP DIAGNOSTIC — conversational-probe manual trigger, authorized
               test session 2026-08-14. Single tap only, no long-press. Founder-only,
               no persistence. Remove after the conversational-model experiment
               concludes, same commit that removes the hands-free diagnostic above. */}
+          {isOwner && (
           <TouchableOpacity
             onPress={() => {
               console.log('[conversationalProbe] MANUAL_TRIGGER');
@@ -2912,22 +2943,14 @@ export default function ChatScreen() {
               TEMP DIAGNOSTIC — RUN LLM PROBE
             </Text>
           </TouchableOpacity>
+          )}
 
           <View
-            style={[
-              styles.inputBar,
-              {
-                backgroundColor: "rgba(0,0,0,0.75)",
-                borderTopColor: persona.colors.border,
-                paddingBottom: insets.bottom + 10,
-              },
-            ]}
+            style={styles.scannerSlot}
+            onLayout={(e) => setScannerTrackWidth(e.nativeEvent.layout.width)}
           >
             {(isRecording || isSpeaking) && (
-              <View
-                style={styles.scannerTrack}
-                onLayout={(e) => setScannerTrackWidth(e.nativeEvent.layout.width)}
-              >
+              <View style={styles.scannerTrack}>
                 {scannerTravel > 0 && (
                   <Animated.View
                     style={[
@@ -2946,6 +2969,18 @@ export default function ChatScreen() {
                 )}
               </View>
             )}
+          </View>
+
+          <View
+            style={[
+              styles.inputBar,
+              {
+                backgroundColor: "rgba(0,0,0,0.75)",
+                borderTopColor: persona.colors.border,
+                paddingBottom: insets.bottom + 10,
+              },
+            ]}
+          >
             <TextInput
               style={[styles.textInput, { color: "#FFFFFF" }]}
               placeholder="Ask anything..."
@@ -3074,10 +3109,14 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   stopSpeakingIcon: { fontSize: 14, fontWeight: "700" },
-  scannerTrack: {
+  scannerSlot: {
     width: "100%",
     height: 3,
     marginBottom: 8,
+  },
+  scannerTrack: {
+    width: "100%",
+    height: 3,
     overflow: "hidden",
     backgroundColor: "rgba(255,255,255,0.12)",
     borderRadius: 2,
