@@ -791,6 +791,36 @@ export async function runDoctorReadTests() {
       (v) => v === 'medical:visit_outcome_read', 'medical:visit_outcome_read');
   }
 
+  // DR45–DR47: Continuity audit v2 §3.1 — subject-complement "who was the
+  // last doctor" forms are VISIT_HISTORY_READ (getLastVisit), not visit_read
+  // (getVisitSummary enumerates every doctor) and not a medical capture.
+  {
+    freshDB();
+    writeMedicalRecord({ doctor_name: 'Dr. Patel', notes: 'visit', visit_date: '2026-07-20' });
+    const d = await classifyQuery('Who was the last Doctor I saw?');
+    assert('DR45a "Who was the last Doctor I saw?" is visit_history_read', d.reason,
+      (v) => v === 'medical:visit_history_read', 'medical:visit_history_read');
+    assert('DR45b is not a medical capture / pending', d.reason,
+      (v) => v !== 'action:medical_capture', 'not action:medical_capture');
+    assert('DR45c names the most recent doctor', d.tier1Response,
+      (v) => typeof v === 'string' && v.includes('Dr. Patel') && !/don't have a visit/i.test(v),
+      'response names Dr. Patel');
+  }
+  {
+    freshDB();
+    writeMedicalRecord({ doctor_name: 'Dr. Patel', notes: 'visit', visit_date: '2026-07-20' });
+    const d = await classifyQuery('Who was my last doctor?');
+    assert('DR46 "Who was my last doctor?" is visit_history_read', d.reason,
+      (v) => v === 'medical:visit_history_read', 'medical:visit_history_read');
+  }
+  {
+    freshDB();
+    writeMedicalRecord({ doctor_name: 'Dr. Patel', notes: 'visit', visit_date: '2026-07-20' });
+    const d = await classifyQuery('When did I see him?');
+    assert('DR47 "When did I see him?" remains visit_history_read', d.reason,
+      (v) => v === 'medical:visit_history_read', 'medical:visit_history_read');
+  }
+
   const total = passed + failures.length;
   console.log(
     `\n${BOLD}DoctorRead: ${passed}/${total} passed` +
@@ -798,5 +828,9 @@ export async function runDoctorReadTests() {
     `${RESET}\n`
   );
   return { passed, failed: failures.length, total, failures };
+}
+
+if (process.argv[1]?.endsWith('doctorRead.test.ts')) {
+  runDoctorReadTests().catch(console.error);
 }
 

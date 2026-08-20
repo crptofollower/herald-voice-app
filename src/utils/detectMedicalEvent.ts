@@ -23,7 +23,14 @@ const PAST_VISIT = /\b(saw|visited|visiting|went to|met with|meeting with|had an
 const FUTURE_VISIT = /\b(have (?:a |an )?(?:doctor'?s?|dentist|dental|follow-?up)?\s?appointment|appointment with|going to see|scheduled with|seeing my|seeing (?:dr\.?|the doctor)|see (?:dr\.?|the doctor))\b/i;
 const MEDICATION = /\b(take|taking|i'm on|prescribed|started|using|use)\b/i;
 const ADVICE = /\b(says i need to|told me to|advised me to|wants me to)\b/i;
-const CALENDAR_READ_START = /^\s*\b(what|when|do i have|show me)\b/i;
+// Question/read-shape guard: a question is never a medical capture. `who` added
+// 2026-08-20 (Continuity audit v2 §3.1) — "Who was the last Doctor I saw" passed
+// this guard and then tripped PAST_VISIT on the word "saw", becoming a capture
+// that armed a write pending against a read question. Note the asymmetry this
+// closes: PAST_VISIT contains "saw" but not "see", which is why "Who did I see"
+// was already safe and "…I saw" was not. Floor backfill per Spine §3a Law-1
+// corollary — extend the deterministic pattern, never make the fallback smarter.
+const CALENDAR_READ_START = /^\s*\b(what|when|who|do i have|show me)\b/i;
 const REMINDER_START = /\b(remind me|don't let me forget|set a reminder|reminder to)\b/i;
 
 // ─── List-context guard (Build A) ─────────────────────────────────────────────
@@ -41,6 +48,13 @@ const DR_NAME = /Dr\.?\s+(\w+)/i;
 const SPECIALTY =
   /my (cardiologist|doctor|physician|specialist|therapist|dentist|neurologist|oncologist|psychiatrist)/i;
 const DOSAGE = /(\d+(?:\.\d+)?\s*(?:mg|mcg|ml|milligrams?|micrograms?)|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty(?:-?five)?|thirty|forty|fifty|seventy-five|(?:one|two|five)\s+hundred(?:\s+(?:fifty|twenty-five))?)\s+(?:mg|mcg|ml|milligrams?|micrograms?))/i;
+
+// Single owner for "is this utterance question/read-shaped." Same regex the
+// capture guard below uses — exported rather than copy-pasted so the capture
+// decline and the provenance suppression can never drift apart.
+export function isReadShapedUtterance(text: string): boolean {
+  return CALENDAR_READ_START.test(text.trim());
+}
 
 export function extractDoctorName(text: string): string | undefined {
   const dr = text.match(DR_NAME);

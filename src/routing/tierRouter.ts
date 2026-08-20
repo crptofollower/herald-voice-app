@@ -349,6 +349,11 @@ const VISIT_HISTORY_READ = [
   /\bwhen did i (?:last )?see\b/i,
   /\bwhen was my (?:last )?(?:appointment|visit)\b/i,
   /\bwhat was (?:it|that) for\b/i,
+  // 2026-08-20 (Continuity audit v2 §3.1): subject-complement "who was the
+  // last doctor" forms. Answered here rather than by visit_read because
+  // getVisitSummary enumerates every doctor ever seen, which does not answer
+  // "the last one." getLastVisit names the doctor AND the date.
+  /\bwho was (?:the|my) last (?:doctor|physician)\b/i,
 ];
 
 // Upcoming medical appointment recall — explicit medical/doctor FUTURE

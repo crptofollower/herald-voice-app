@@ -16,6 +16,7 @@ import { classifyQuery } from '../../src/routing/tierRouter.ts';
 import { routeIntent } from '../../src/routing/routeIntent.ts';
 import { processUtterance } from '../../src/routing/processUtterance.ts';
 import { ConversationSession } from '../../src/routing/conversationSession.ts';
+import { detectMedicalEvent } from '../../src/utils/detectMedicalEvent.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
 
@@ -197,6 +198,39 @@ export async function runVisitOutcomeHowDidTests() {
       "handled; I'll remember you saw Dr. Sarver.");
     assert('D3 still writes exactly one medical_records row', getMedicalRecords().length,
       (v) => v === 1, '1');
+  }
+
+  // ── D4/D5: Continuity audit v2 — named past visit remains a capture.
+  // "I went to the doctor yesterday" is locked at the detectMedicalEvent floor
+  // (who-guard must not starve it). classifyQuery currently owns that phrase as
+  // action:todo_complete (pre-existing; not repaired in this package).
+  {
+    freshDB();
+    const phrase = 'I saw Dr. Patel yesterday';
+    const d = await classifyQuery(phrase);
+    const ev = d.actionIntent && 'event' in d.actionIntent
+      ? (d.actionIntent as { event?: { type?: string; tense?: string; doctor_name?: string } }).event
+      : undefined;
+    assert('D4 classifyQuery → action:medical_capture past visit (Dr. Patel)',
+      { reason: d.reason, type: ev?.type, tense: ev?.tense, doctor: ev?.doctor_name },
+      (v) => {
+        const x = v as { reason?: string; type?: string; tense?: string; doctor?: string };
+        return x.reason === 'action:medical_capture'
+          && x.type === 'visit'
+          && x.tense === 'past'
+          && x.doctor === 'Dr. Patel';
+      },
+      'action:medical_capture; visit; past; Dr. Patel');
+  }
+  {
+    const ev = detectMedicalEvent('I went to the doctor yesterday');
+    assert('D5 detectMedicalEvent floor still past visit (who-guard did not starve)',
+      { type: ev?.type, tense: ev?.tense },
+      (v) => {
+        const x = v as { type?: string; tense?: string };
+        return x.type === 'visit' && x.tense === 'past';
+      },
+      'visit / past');
   }
 
   // ── E: phrase-order / noun-variant class (componentized isVisitOutcomeRead) ─

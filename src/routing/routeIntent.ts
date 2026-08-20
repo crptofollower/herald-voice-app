@@ -5,7 +5,7 @@
 import type { IntentRecord, ClassifyOutcome } from '../hooks/llmLayers';
 import type { TierDecision, LocalContext } from './tierRouter';
 import { writeServiceProvider, detectServiceCapture, detectPhoneCapture, detectInsuranceCapture, captureHouseholdInsurance, normalizeCarrier } from '../utils/householdCapture';
-import { detectDiagnosisCapture, detectDoctorIntroCapture, detectMedicalEvent } from '../utils/detectMedicalEvent';
+import { detectDiagnosisCapture, detectDoctorIntroCapture, detectMedicalEvent, isReadShapedUtterance } from '../utils/detectMedicalEvent';
 import { detectFamilyCapture } from '../utils/familyCapture';
 import { getDB } from '../db/schema';
 import { capturePerson } from '../db/capturePerson';
@@ -861,10 +861,21 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       const advice = intent.advice?.trim();
       const visitDate = parseDatePhrase(raw) ?? new Date().toLocaleDateString('en-CA');
 
+      // Trust repair 2026-08-20 (Continuity audit v2 §3.3): `raw` is the
+      // CAPTURE turn's utterance and was device-proven storing a read question
+      // ("Who was the last Doctor I saw") as visit detail, which then spoke
+      // back through getLastVisit's unhinted path. A question-shaped utterance
+      // is never visit provenance — the visit still commits, the bad detail
+      // simply is not stored. Verbatim rule is unaffected: nothing is
+      // rewritten, only omitted (Spine §3).
+      const visitNotes = isReadShapedUtterance(raw)
+        ? undefined
+        : (advice ? `${raw} — ${advice}` : raw);
+
       const commitVisit = (doctorName: string): CommitResult => {
         writeMedicalRecord({
           doctor_name: doctorName,
-          notes: advice ? `${raw} — ${advice}` : raw,
+          notes: visitNotes,
           visit_date: visitDate,
         });
         return { status: 'committed', ack: composeCaptureAck('medical_visit', `I'll remember you saw ${doctorName}.`) };
@@ -882,16 +893,17 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
         prompt: 'Got it — who did you see?',
         pendingKey: 'medical_visit',
         resume: async (userText: string): Promise<CommitResult> => {
-          let name = extractDoctorName(userText);
-          if (!name) {
-            const t = userText.trim().replace(/[.!?]+$/, '')
-              .replace(/^(it'?s|that'?s|i saw|i went to|his name is|her name is|the name is|it was)\s+/i, '');
-            const first = t.split(/\s+/).slice(0, 2).join(' ');
-            if (/^[A-Za-z][a-zA-Z'\-]+(?:\s+[A-Za-z][a-zA-Z'\-]+)?$/.test(first) && first.length >= 2) {
-              name = first;
-            }
-          }
-          if (!name) return { status: 'noop', ack: '' }; // not a name → caller re-routes
+          // Trust repair 2026-08-20 (Continuity audit v2 §3.3): the former
+          // two-token shape-test fallback admitted arbitrary speech as a
+          // doctor name — device-proven writing doctor_name:"No stop" from a
+          // cancel-shaped reply that CANCEL_RE's anchoring let through. A
+          // shape test cannot establish that a token IS a name. Only an
+          // explicitly heard "Dr. X" writes here (Spine §3/§5, and the
+          // add()-path comment above that already states this rule).
+          // Unrecognized replies return the honest noop; ConversationSession's
+          // re-ask ladder and budgeted release own the interaction from there.
+          const name = extractDoctorName(userText);
+          if (!name) return { status: 'noop', ack: '' }; // not a name → ladder re-asks
           return commitVisit(name);
         },
       };
