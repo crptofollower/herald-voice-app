@@ -23,6 +23,7 @@
 //   - LLM dispatchLocalIntent household_read
 //   - residual compound household action
 
+import { THIRD_PERSON_REFERENT } from '../utils/instructionSignals';
 import { findContactById } from '../db/contactsDB';
 import { getServiceProviderById } from '../utils/householdRead';
 import { formatPhoneForSpeech } from '../utils/phoneConfirm';
@@ -43,14 +44,42 @@ export type HouseholdConversationalSubject = {
   establishedAtTurn: number;
 };
 
+// Doctors carry no opaque entity id in this schema — every doctor read
+// identifies by name and getLastVisit matches on normalizeDoctorNameForMatch.
+// `entityId` therefore holds the doctor name, which IS the stable identity here.
+// It remains identity, never a cached factual answer: consume re-reads.
+export type MedicalConversationalSubject = {
+  domain: 'medical_doctor';
+  entityId: string;
+  displayName: string;
+  establishedAtTurn: number;
+};
+
 export type ConversationalSubject =
   | FamilyConversationalSubject
-  | HouseholdConversationalSubject;
+  | HouseholdConversationalSubject
+  | MedicalConversationalSubject;
 
 // Closed first-slice speech act: phone-number question about a third-person
 // singular pronoun. Pronoun form is eligibility only — never a selector.
-const REFERENT_PHONE_RE =
-  /^\s*(?:what(?:'s|s|\s+is))\s+(he|him|his|she|her|hers)\s+(?:phone\s+)?number\s*[?.!]?\s*$/i;
+const REFERENT_PHONE_RE = new RegExp(
+  `^\\s*(?:what(?:'s|s|\\s+is))\\s+(${THIRD_PERSON_REFERENT})\\s+(?:phone\\s+)?number\\s*[?.!]?\\s*$`,
+  'i',
+);
+
+// Second closed speech act: when-did-I-see against the live subject. Fully
+// anchored, same discipline as the phone act. Captured pronoun is discarded.
+const REFERENT_VISIT_DATE_RE = new RegExp(
+  `^\\s*when\\s+(?:did\\s+i\\s+(?:last\\s+)?see|was\\s+i\\s+(?:last\\s+)?seeing)\\s+(${THIRD_PERSON_REFERENT})\\s*[?.!]?\\s*$`,
+  'i',
+);
+
+export function isReferentVisitDateQuestion(text: string): boolean {
+  const m = text.match(REFERENT_VISIT_DATE_RE);
+  if (!m) return false;
+  void m[1]; // pronoun discarded — not a selector, no gender inference
+  return true;
+}
 
 export function isReferentPhoneQuestion(text: string): boolean {
   const m = text.match(REFERENT_PHONE_RE);
@@ -109,6 +138,15 @@ export class ConversationalSubjectHolder {
     };
   }
 
+  establishMedical(match: { entityId: string; displayName: string }): void {
+    this.subject = {
+      domain: 'medical_doctor',
+      entityId: match.entityId,
+      displayName: match.displayName,
+      establishedAtTurn: this.turn,
+    };
+  }
+
   establishHousehold(match: {
     entityId: string;
     displayName: string;
@@ -149,6 +187,8 @@ export function answerReferentPhone(subject: ConversationalSubject): string {
     return namedPhoneCopy(name, phone);
   }
 
+  if (subject.domain !== 'household_provider') return NEUTRAL_MISS;
+
   const row = getServiceProviderById(subject.entityId);
   if (!row) return NEUTRAL_MISS;
   const name = row.name?.trim();
@@ -156,4 +196,36 @@ export function answerReferentPhone(subject: ConversationalSubject): string {
   const phone = row.phone?.trim();
   if (!phone) return namedMissCopy(name);
   return namedPhoneCopy(name, phone);
+}
+
+/**
+ * Authoritative re-read for the visit-date referent. Flow C supplies IDENTITY
+ * ONLY — getLastVisit is the deterministic reader and owns every factual value
+ * in the returned sentence. Nothing is cached, nothing is phrased by a model.
+ * Returns null when this subject cannot answer, so the caller falls through
+ * rather than fabricating.
+ *
+ * Dynamic imports mirror tierRouter's VISIT_HISTORY_READ branch, which loads
+ * these same two modules the same way. Static imports from a routing module
+ * into db/ and utils/ are a cycle risk this pattern removes outright.
+ */
+export async function answerReferentVisitDate(
+  subject: ConversationalSubject,
+): Promise<string | null> {
+  if (subject.domain !== 'medical_doctor') return null;
+  const { getLastVisit } = await import('../db/medicalDB');
+  const { formatSpokenDate } = await import('../utils/parseTime');
+  const visit = getLastVisit(subject.entityId);
+  if (!visit) return `I don't have a visit with ${subject.displayName} yet — tell me and I'll remember.`;
+  const who = visit.doctorName ?? subject.displayName;
+  const spoken = formatSpokenDate(visit.visitDate);
+  const details: string[] = [];
+  if (visit.reason) details.push(`for ${visit.reason}`);
+  if (visit.diagnosis) details.push(`diagnosed with ${visit.diagnosis}`);
+  if (visit.notes) details.push(visit.notes);
+  if (visit.follow_up) details.push(`follow-up: ${visit.follow_up}`);
+  const detailPart = details.length > 0 ? ` — ${details.join('; ')}` : '';
+  // Sentence shape is duplicated with tierRouter VISIT_HISTORY_READ.
+  // Do not factor (Continuity Step 3 / Rule 11).
+  return `You last saw ${who} on ${spoken}${detailPart}.`;
 }

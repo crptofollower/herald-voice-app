@@ -7,9 +7,13 @@ import {
   ConversationalSubjectHolder,
   isReferentPhoneQuestion,
   answerReferentPhone,
+  isReferentVisitDateQuestion,
+  answerReferentVisitDate,
 } from './conversationalSubject';
 import { detectFamilyRead, resolveFamilyRead } from '../utils/familyRead';
 import { resolveHouseholdProvider } from '../utils/householdRead';
+import { getLastVisit } from '../db/medicalDB';
+import { extractDoctorName } from '../utils/detectMedicalEvent';
 import { getActiveTurnId, log as latLog } from '../utils/latencyInstrument';
 
 // D0 commit 2 (S54 addendum): the headless pipeline seam. UI (ChatScreen) calls
@@ -47,6 +51,16 @@ function maybeEstablishConversationalSubject(
   ) {
     const match = resolveHouseholdProvider(routeDecision.actionIntent.intent);
     if (match) holder.establishHousehold(match);
+    return;
+  }
+  // Continuity Step 3: a completed deterministic most-recent-visit read that
+  // identified exactly one doctor establishes that doctor as the subject.
+  // Re-derives identity from the same deterministic reader the branch used —
+  // it does not trust the response string. No name ⇒ no subject (fail closed).
+  if (routeDecision.kind === 'device_read' && routeDecision.reason === 'medical:visit_history_read') {
+    const visit = getLastVisit(extractDoctorName(text));
+    const name = visit?.doctorName?.trim();
+    if (name) holder.establishMedical({ entityId: name, displayName: name });
   }
 }
 
@@ -138,6 +152,18 @@ export async function processUtterance(
         : `I don't have a number for them yet.`;
       subject.clear();
       return { handled: true, source: 'referent_resume', responseText, commits: [] };
+    }
+    // Second closed speech act (Continuity Step 3): when-did-I-see against a
+    // live doctor subject. Flow C resolves WHO; getLastVisit owns the fact.
+    // A non-medical live subject returns null and falls through to routing —
+    // never a fabricated answer, never a cross-domain guess.
+    if (isReferentVisitDateQuestion(text)) {
+      const live = subject.peek();
+      const responseText = live ? await answerReferentVisitDate(live) : null;
+      if (responseText) {
+        subject.clear();
+        return { handled: true, source: 'referent_resume', responseText, commits: [] };
+      }
     }
     subject.clear();
   }

@@ -8,14 +8,16 @@ import Database from 'better-sqlite3';
 import { setDB } from '../../src/db/schema.ts';
 import { writeContactRaw } from '../../src/db/contactsDB.ts';
 import { writeServiceProvider } from '../../src/utils/householdCapture.ts';
-import { writeMedicalRecord, attachVisitOutcome } from '../../src/db/medicalDB.ts';
+import { writeMedicalRecord, attachVisitOutcome, getMedicalRecords } from '../../src/db/medicalDB.ts';
 import { classifyQuery } from '../../src/routing/tierRouter.ts';
 import { processUtterance } from '../../src/routing/processUtterance.ts';
 import { ConversationSession } from '../../src/routing/conversationSession.ts';
 import {
   ConversationalSubjectHolder,
   isReferentPhoneQuestion,
+  isReferentVisitDateQuestion,
 } from '../../src/routing/conversationalSubject.ts';
+import { formatSpokenDate } from '../../src/utils/parseTime.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
 
@@ -401,6 +403,134 @@ export async function runConversationalSubjectTests() {
     const t = await say('I need help');
     assert('L0a Law 0 owns the turn', t, v => v.handled === true && v.source === 'emergency', 'emergency');
     assert('L0b Law 0 clears subject', subject.hasLive(), v => v === false, 'cleared');
+  }
+
+  // ── Continuity Step 3 — doctor subject + visit-date referent ───────────────
+  assert('V-him', isReferentVisitDateQuestion('When did I see him?'), v => v === true, 'true');
+  assert('V-last-her', isReferentVisitDateQuestion('When did I last see her?'), v => v === true, 'true');
+  assert('V-patel-out', isReferentVisitDateQuestion('When did I see Dr. Patel?'), v => v === false, 'false');
+  assert('V-phone-out', isReferentVisitDateQuestion("What's his number?"), v => v === false, 'false');
+
+  {
+    const { say, subject } = freshFlow();
+    seedTwoDoctorOutcomes();
+    const before = getMedicalRecords().length;
+    const t1 = await say('Who was the last doctor I saw?');
+    assert('S3-1a Variant A still visit_history_read (no pronoun, unhinted global ok)', t1,
+      v => v.handled === false && v.routeDecision.kind === 'device_read'
+        && v.routeDecision.reason === 'medical:visit_history_read'
+        && v.routeDecision.response.includes('Dr. Smith'),
+      'device_read / visit_history_read / Smith');
+    const established = subject.peek();
+    assert('S3-1 doctor read establishes medical_doctor with the latest name', established,
+      v => v?.domain === 'medical_doctor' && v.entityId === 'Dr. Smith' && v.displayName === 'Dr. Smith',
+      'medical_doctor Dr. Smith');
+    assert('S3-10 establishment does not write medical_records', getMedicalRecords().length,
+      v => v === before, String(before));
+  }
+
+  {
+    const { say, subject } = freshFlow();
+    seedTwoDoctorOutcomes();
+    await say('When did I see Dr. Patel?');
+    assert('S3-4 named Patel remains visit_history_read', subject.peek(),
+      v => v?.domain === 'medical_doctor' && v.entityId === 'Dr. Patel',
+      'established Patel');
+    const tNamed = await (async () => {
+      const { say: say2 } = freshFlow();
+      seedTwoDoctorOutcomes();
+      const t = await say2('When did I see Dr. Patel?');
+      return t;
+    })();
+    assert('S3-4b reason unchanged for named doctor', tNamed,
+      v => v.handled === false && v.routeDecision.kind === 'device_read'
+        && v.routeDecision.reason === 'medical:visit_history_read',
+      'medical:visit_history_read');
+    const t2 = await say('When did I see him?');
+    const patelSpoken = formatSpokenDate('2026-05-01');
+    const smithSpoken = formatSpokenDate('2026-07-20');
+    assert('S3-2 live doctor + when-did-I-see-him is referent_resume from storage', t2,
+      v => v.handled === true && v.source === 'referent_resume'
+        && v.responseText.includes('Dr. Patel')
+        && v.responseText.includes(patelSpoken)
+        && !v.responseText.includes('Dr. Smith')
+        && !v.responseText.includes(smithSpoken),
+      `referent_resume Patel on ${patelSpoken}, not Smith`);
+    assert('S3-2b subject clears after visit-date consume', subject.hasLive(), v => v === false, 'cleared');
+  }
+
+  {
+    const { say, subject } = freshFlow();
+    seedTwoDoctorOutcomes();
+    const t1 = await say('When did I see him?');
+    assert('S3-3a pronoun with no subject is unresolved_referent', t1,
+      v => v.handled === false && v.routeDecision.kind === 'device_read'
+        && v.routeDecision.reason === 'medical:visit_history_unresolved_referent'
+        && v.routeDecision.response === "I'm not sure who you mean — which doctor?"
+        && !/Smith|Patel|You last saw/i.test(v.routeDecision.response),
+      'unresolved_referent clarification, no global visit data');
+    assert('S3-3c no subject established', subject.hasLive(), v => v === false, 'no subject');
+  }
+
+  {
+    const { say, subject } = freshFlow();
+    seedTwoDoctorOutcomes();
+    await say('Who was the last doctor I saw?');
+    const t2 = await say('Open YouTube');
+    assert('S3-5a unused turn is not Flow C', t2,
+      v => !(v.handled === true && v.source === 'referent_resume'),
+      'not referent_resume');
+    assert('S3-5b subject gone after unused turn', subject.hasLive(), v => v === false, 'cleared');
+    const t3 = await say('When did I see him?');
+    assert('S3-5c later pronoun fail-closed', t3,
+      v => v.handled === false
+        && v.routeDecision.kind === 'device_read'
+        && v.routeDecision.reason === 'medical:visit_history_unresolved_referent'
+        && !/Smith|Patel|You last saw/i.test(v.routeDecision.response),
+      'unresolved_referent, no global visit data');
+  }
+
+  {
+    const { say, session, subject } = freshFlow();
+    seedTwoDoctorOutcomes();
+    await say('Who was the last doctor I saw?');
+    const arm = await say('What did my doctor tell me?');
+    assert('S3-6a medical pending arms', { arm, pending: session.hasPending() },
+      v => v.arm.handled === true && v.arm.source === 'capture' && v.pending === true,
+      'pending armed');
+    assert('S3-6b pending clears subject before next turn', subject.hasLive(), v => v === false, 'cleared by pending arm');
+    subject.establishMedical({ entityId: 'Dr. Smith', displayName: 'Dr. Smith' });
+    const t3 = await say('When did I see him?');
+    assert('S3-6c PendingSlot owns the visit-date pronoun', t3,
+      v => v.handled === true && v.source === 'pending_resume'
+        && !/You last saw/i.test(v.responseText),
+      'pending_resume, not a visit-history read');
+    assert('S3-6d Flow C resolver was not evaluated', subject.didEvaluateReferent(), v => v === false, 'not evaluated');
+  }
+
+  {
+    const { say, subject } = freshFlow();
+    seedTwoDoctorOutcomes();
+    await say('Who was the last doctor I saw?');
+    const t = await say('I need help');
+    assert('S3-7a Law 0 owns the turn', t, v => v.handled === true && v.source === 'emergency', 'emergency');
+    assert('S3-7b Law 0 clears doctor subject', subject.hasLive(), v => v === false, 'cleared');
+  }
+
+  {
+    const { say, subject } = freshFlow();
+    writeServiceProvider('plumber', 'Bob', '469-555-0103');
+    seedTwoDoctorOutcomes();
+    await say('Who is my plumber?');
+    assert('S3-H live household subject', subject.peek()?.domain, v => v === 'household_provider', 'household_provider');
+    const t2 = await say('When did I see him?');
+    assert('S3-H no cross-domain visit answer', t2,
+      v => !(v.handled === true && v.source === 'referent_resume' && typeof v.responseText === 'string' && /last saw/i.test(v.responseText)),
+      'not a visit-date referent_resume');
+    assert('S3-H falls through to unresolved_referent', t2,
+      v => v.handled === false && v.routeDecision.kind === 'device_read'
+        && v.routeDecision.reason === 'medical:visit_history_unresolved_referent',
+      'medical:visit_history_unresolved_referent');
   }
 
   const total = passed + failures.length;

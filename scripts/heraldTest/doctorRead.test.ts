@@ -817,8 +817,12 @@ export async function runDoctorReadTests() {
     freshDB();
     writeMedicalRecord({ doctor_name: 'Dr. Patel', notes: 'visit', visit_date: '2026-07-20' });
     const d = await classifyQuery('When did I see him?');
-    assert('DR47 "When did I see him?" remains visit_history_read', d.reason,
-      (v) => v === 'medical:visit_history_read', 'medical:visit_history_read');
+    assert('DR47 "When did I see him?" with no subject is unresolved_referent', d.reason,
+      (v) => v === 'medical:visit_history_unresolved_referent',
+      'medical:visit_history_unresolved_referent');
+    assert('DR47b does not name a seeded doctor from the global read', d.tier1Response,
+      (v) => typeof v === 'string' && v === "I'm not sure who you mean — which doctor?",
+      'clarification, no doctor name');
   }
 
   const total = passed + failures.length;

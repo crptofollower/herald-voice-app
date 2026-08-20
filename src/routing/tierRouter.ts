@@ -25,6 +25,7 @@ import {
   TODO_ADD_SIGNALS,
   TODO_ADD_PREFIX,
   COMPLETED_PAST_FIRST_PERSON_RE,
+  THIRD_PERSON_REFERENT_RE,
 } from "../utils/instructionSignals";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -1674,6 +1675,23 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
         reason: "medical:visit_history_unresolved_specialty",
       };
     }
+    // Continuity Step 3 fail-closed: an unresolved third-person referent must
+    // never be answered from the unhinted global read. getLastVisit(undefined)
+    // returns whatever visit is newest, so "when did I see him" with no
+    // established subject would name an arbitrary doctor — a fabrication-class
+    // wrong answer (Spine §5). Gated on PRONOUN PRESENCE, not on !doctorHint:
+    // "when was my last appointment" / "what was it for" are legitimately
+    // unhinted and must keep the global read.
+    // A live Flow C subject is consumed upstream at processUtterance step 1b,
+    // so this guard only ever sees the no-subject case.
+    if (!doctorHint && THIRD_PERSON_REFERENT_RE.test(msg)) {
+      return {
+        tier: 1,
+        tier1Response: "I'm not sure who you mean — which doctor?",
+        isMedical: true,
+        reason: "medical:visit_history_unresolved_referent",
+      };
+    }
     const visit = getLastVisit(doctorHint);
     let response: string;
     if (!visit) {
@@ -1689,6 +1707,8 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
       if (visit.notes) details.push(visit.notes);
       if (visit.follow_up) details.push(`follow-up: ${visit.follow_up}`);
       const reasonPart = details.length > 0 ? ` — ${details.join('; ')}` : '';
+      // Sentence shape is duplicated with answerReferentVisitDate
+      // (conversationalSubject.ts). Do not factor (Continuity Step 3 / Rule 11).
       response = `You last saw ${who} on ${spoken}${reasonPart}.`;
     }
     return { tier: 1, tier1Response: response, isMedical: true, reason: "medical:visit_history_read" };

@@ -48,3 +48,13 @@ export const TODO_ADD_PREFIX =
 // Union of tierRouter TODO_COMPLETE first-person verb patterns (672, 676, 677).
 export const COMPLETED_PAST_FIRST_PERSON_RE =
   /\bI\s+(?:already\s+)?(?:called|finished|completed|did|done|took care of|handled|picked up|dropped off|returned|sent|submitted|paid|filed|bought|got|grabbed|went to|made it to|got to|stopped by)\b/i;
+
+// Third-person singular referent set. Single owner, shared by Flow C's referent
+// speech acts (conversationalSubject.ts) and the visit-history fail-closed guard
+// (tierRouter.ts). Pronoun form is ELIGIBILITY ONLY — never a selector. Herald
+// has no gender field and must not infer one; a matched pronoun may refer to the
+// one active subject regardless of form.
+export const THIRD_PERSON_REFERENT = 'he|him|his|she|her|hers';
+
+export const THIRD_PERSON_REFERENT_RE =
+  new RegExp(`\\b(?:${THIRD_PERSON_REFERENT})\\b`, 'i');
