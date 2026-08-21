@@ -34,6 +34,17 @@ function includedCharCount(entry: HotRingEntry): number {
   return n;
 }
 
+/**
+ * Step 5a turn-entry authorization: true when peek holds an authorized entry for
+ * the literal immediately preceding turnIndex. NOT ring-non-empty; gaps fail closed.
+ */
+export function hasImmediatelyAdjacentHotAuthorization(
+  peekedEntries: HotRingEntry[],
+  currentTurnIndex: number,
+): boolean {
+  return peekedEntries.some((e) => e.turnIndex === currentTurnIndex - 1);
+}
+
 /** Contiguous suffix from the highest turnIndex — stops at first missing turnIndex. */
 export function selectContiguousHotSuffix(entries: HotRingEntry[]): HotRingEntry[] {
   if (entries.length === 0) return [];

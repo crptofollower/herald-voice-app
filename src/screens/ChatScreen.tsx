@@ -71,7 +71,7 @@ import { useLocalLLM } from '../hooks/useLocalLLM';
 import { runConversationalProbeSet } from '../dev/conversationalProbe';
 import { classifyWithLLM } from '../hooks/llmLayers';
 import { generateEphemeralConversation, canRunEphemeralConversation, isEligibleForEphemeralConversation } from '../utils/ephemeralConversation';
-import { createHotNarrativeRing } from '../utils/hotNarrativeRing';
+import { createHotNarrativeRing, hasImmediatelyAdjacentHotAuthorization } from '../utils/hotNarrativeRing';
 import { answerFromDevice } from '../utils/localAnswers';
 import { parseTimeFromText } from '../utils/parseTime';
 import { detectFamilyRead, answerFamilyRead } from '../utils/familyRead';
@@ -1052,10 +1052,14 @@ export default function ChatScreen() {
     text = normalizeInput(text);
     if (!text) return;
 
-    // Step 5a: monotonic turn identity; authorization resets each turn; HOT peek (not take).
+    // Step 5a: monotonic turn identity; HOT peek (not take); authorization derived
+    // from immediately adjacent peek entry — not ring-non-empty.
     turnIndexRef.current += 1;
-    immediateContextAuthorizedRef.current = false;
     const hotContextForGeneration = hotRingRef.current.peek(Date.now());
+    immediateContextAuthorizedRef.current = hasImmediatelyAdjacentHotAuthorization(
+      hotContextForGeneration,
+      turnIndexRef.current,
+    );
 
     const turnId = getActiveTurnId() ?? beginTurn();
     latLog('sendMessage entry', { turnId, inputSource: 'app' });

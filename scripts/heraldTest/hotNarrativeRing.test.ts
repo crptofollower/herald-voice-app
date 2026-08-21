@@ -1,14 +1,19 @@
 // scripts/heraldTest/hotNarrativeRing.test.ts
 // Step 5a — HOT narrative ring mechanism + boundary tests (Option 4 depth-only).
 
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   createHotNarrativeRing,
   selectContiguousHotSuffix,
   hotAssistantPolicyForDeviceRead,
+  hasImmediatelyAdjacentHotAuthorization,
   HOT_RING_TTL_MS,
   HOT_RING_MAX_PAIRS,
   HOT_RING_MAX_INCLUDED_CHARS,
   type HotRingEntry,
+  type HotNarrativeRing,
 } from '../../src/utils/hotNarrativeRing.ts';
 import {
   buildEphemeralPromptMessages,
@@ -30,6 +35,28 @@ function entry(
     establishedAt: opts?.establishedAt ?? Date.now(),
     assistantHotPolicy: opts?.policy ?? 'include',
   };
+}
+
+/** Mirrors ChatScreen sendMessage turn-entry wiring — production exports only. */
+function turnEntry(
+  ring: HotNarrativeRing,
+  turnIndexRef: { current: number },
+  nowMs: number,
+): { authorized: boolean; turnIndex: number } {
+  turnIndexRef.current += 1;
+  const peeked = ring.peek(nowMs);
+  const authorized = hasImmediatelyAdjacentHotAuthorization(peeked, turnIndexRef.current);
+  return { authorized, turnIndex: turnIndexRef.current };
+}
+
+function pushAuthorizedPair(
+  ring: HotNarrativeRing,
+  turnIndex: number,
+  user: string,
+  assistant: string,
+  nowMs: number,
+): void {
+  ring.push(entry(turnIndex, user, assistant, { establishedAt: nowMs }));
 }
 
 export async function runHotNarrativeRingTests() {
@@ -240,6 +267,135 @@ export async function runHotNarrativeRingTests() {
 
   assertTrue('constants: max pairs is 3', HOT_RING_MAX_PAIRS === 3);
   assertTrue('constants: max chars is 2400', HOT_RING_MAX_INCLUDED_CHARS === 2400);
+
+  // ── Source-lock: ChatScreen Step 5a turn-entry wiring enforceability ────────
+  console.log(`\n${BOLD}-- HOT turn-entry source-lock (ChatScreen.tsx) -------------${RESET}`);
+  {
+    const chatPath = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      '../../src/screens/ChatScreen.tsx',
+    );
+    const chatSrc = fs.readFileSync(chatPath, 'utf8');
+    const turnEntrySeam = chatSrc.match(
+      /\/\/ Step 5a: monotonic turn identity[\s\S]*?immediateContextAuthorizedRef\.current = hasImmediatelyAdjacentHotAuthorization\(\s*hotContextForGeneration,\s*turnIndexRef\.current,\s*\);/,
+    )?.[0] ?? '';
+
+    assertTrue(
+      'SEAM-1 ChatScreen turn-entry derives via hasImmediatelyAdjacentHotAuthorization',
+      turnEntrySeam.includes('hasImmediatelyAdjacentHotAuthorization('),
+    );
+    assertTrue(
+      'SEAM-2 uses hotContextForGeneration from hotRingRef.current.peek',
+      turnEntrySeam.includes('hotContextForGeneration')
+        && /hotRingRef\.current\.peek\(Date\.now\(\)\)/.test(turnEntrySeam),
+    );
+    assertTrue(
+      'SEAM-3 passes current turnIndexRef.current to adjacency helper',
+      /turnIndexRef\.current \+= 1/.test(turnEntrySeam)
+        && turnEntrySeam.includes('turnIndexRef.current,'),
+    );
+    assertTrue(
+      'SEAM-4 no unconditional immediateContextAuthorizedRef=false at turn-entry seam',
+      !/immediateContextAuthorizedRef\.current = false/.test(turnEntrySeam),
+    );
+    assertTrue(
+      'SEAM-5 imports hasImmediatelyAdjacentHotAuthorization from hotNarrativeRing',
+      /import \{[^}]*hasImmediatelyAdjacentHotAuthorization[^}]*\} from '\.\.\/utils\/hotNarrativeRing'/.test(chatSrc),
+    );
+  }
+
+  // ── Integration: sendMessage turn-entry authorization wiring (device repro) ─
+  console.log(`\n${BOLD}-- HOT turn-entry integration (S24+ repro) -------------------${RESET}`);
+
+  // A: chit_chat turn 1 -> adjacent "Tell me more" eligible (not Graceful Confusion path)
+  {
+    const ring = createHotNarrativeRing();
+    const turnIndexRef = { current: 0 };
+    const t0 = Date.now();
+    const t1 = turnEntry(ring, turnIndexRef, t0);
+    assertTrue('A: turn 1 entry not authorized (no prior)', !t1.authorized);
+    pushAuthorizedPair(ring, t1.turnIndex, 'Tell me about yourself.', 'I am Herald.', t0);
+    const t2 = turnEntry(ring, turnIndexRef, t0);
+    assertTrue('A: turn 2 derives authorization from adjacent turn 1', t2.authorized);
+    assertTrue(
+      'A: Tell me more eligible with derived authorization',
+      isEligibleForEphemeralConversation('Tell me more.', t2.authorized),
+    );
+  }
+
+  // B: chit_chat -> deterministic gap (no push) -> Tell me more ineligible
+  {
+    const ring = createHotNarrativeRing();
+    const turnIndexRef = { current: 0 };
+    const t0 = Date.now();
+    const t1 = turnEntry(ring, turnIndexRef, t0);
+    pushAuthorizedPair(ring, t1.turnIndex, 'Tell me about yourself.', 'I am Herald.', t0);
+    turnEntry(ring, turnIndexRef, t0); // turn 2 deterministic — no ring push
+    const t3 = turnEntry(ring, turnIndexRef, t0);
+    assertTrue('B: gap at turn 2 breaks adjacency authorization', !t3.authorized);
+    assertTrue(
+      'B: Tell me more ineligible after deterministic gap',
+      !isEligibleForEphemeralConversation('Tell me more.', t3.authorized),
+    );
+  }
+
+  // C: three consecutive authorized pairs — each immediate follow-up authorized
+  {
+    const ring = createHotNarrativeRing();
+    const turnIndexRef = { current: 0 };
+    const t0 = Date.now();
+    const phrases = [
+      ['Tell me about yourself.', 'I am Herald.'],
+      ['What can you do?', 'Local device tasks.'],
+      ['Tell me more.', 'Happy to expand.'],
+    ] as const;
+    for (let i = 0; i < phrases.length; i++) {
+      const te = turnEntry(ring, turnIndexRef, t0);
+      if (i === 0) {
+        assertTrue('C: opening turn not authorized', !te.authorized);
+      } else {
+        assertTrue(`C: turn ${te.turnIndex} authorized by adjacent prior`, te.authorized);
+      }
+      pushAuthorizedPair(ring, te.turnIndex, phrases[i]![0], phrases[i]![1], t0);
+    }
+    const followUp = turnEntry(ring, turnIndexRef, t0);
+    assertTrue('C: fourth turn authorized after third push', followUp.authorized);
+    assertTrue(
+      'C: follow-up eligible without latching beyond adjacency',
+      isEligibleForEphemeralConversation('Why is that useful?', followUp.authorized),
+    );
+  }
+
+  // D: TTL-expired entry does not authorize next turn
+  {
+    const ring = createHotNarrativeRing();
+    const turnIndexRef = { current: 0 };
+    const now = Date.now();
+    const t1 = turnEntry(ring, turnIndexRef, now - HOT_RING_TTL_MS - 1000);
+    pushAuthorizedPair(ring, t1.turnIndex, 'Tell me about yourself.', 'Stale.', now - HOT_RING_TTL_MS - 1000);
+    const t2 = turnEntry(ring, turnIndexRef, now);
+    assertTrue('D: expired HOT does not authorize adjacent turn', !t2.authorized);
+    assertTrue(
+      'D: Tell me more ineligible after TTL expiry',
+      !isEligibleForEphemeralConversation('Tell me more.', t2.authorized),
+    );
+  }
+
+  // E: emergency clear removes authorization
+  {
+    const ring = createHotNarrativeRing();
+    const turnIndexRef = { current: 0 };
+    const t0 = Date.now();
+    const t1 = turnEntry(ring, turnIndexRef, t0);
+    pushAuthorizedPair(ring, t1.turnIndex, 'Tell me about yourself.', 'I am Herald.', t0);
+    ring.clear();
+    const t2 = turnEntry(ring, turnIndexRef, t0);
+    assertTrue('E: post-clear no adjacent authorization', !t2.authorized);
+    assertTrue(
+      'E: Tell me more ineligible after Law 0 clear',
+      !isEligibleForEphemeralConversation('Tell me more.', t2.authorized),
+    );
+  }
 
   const total = passed + failures.length;
   console.log(
