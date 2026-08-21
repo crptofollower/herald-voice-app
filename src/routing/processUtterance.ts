@@ -9,6 +9,8 @@ import {
   answerReferentPhone,
   isReferentVisitDateQuestion,
   answerReferentVisitDate,
+  isReferentVisitOutcomeQuestion,
+  answerReferentVisitOutcome,
 } from './conversationalSubject';
 import { detectFamilyRead, resolveFamilyRead } from '../utils/familyRead';
 import { resolveHouseholdProvider } from '../utils/householdRead';
@@ -160,6 +162,14 @@ export async function processUtterance(
     if (isReferentVisitDateQuestion(text)) {
       const live = subject.peek();
       const responseText = live ? await answerReferentVisitDate(live) : null;
+      if (responseText) {
+        subject.clear();
+        return { handled: true, source: 'referent_resume', responseText, commits: [] };
+      }
+    }
+    if (isReferentVisitOutcomeQuestion(text)) {
+      const live = subject.peek();
+      const responseText = live ? await answerReferentVisitOutcome(live) : null;
       if (responseText) {
         subject.clear();
         return { handled: true, source: 'referent_resume', responseText, commits: [] };

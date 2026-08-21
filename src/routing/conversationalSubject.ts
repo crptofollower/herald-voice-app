@@ -81,6 +81,22 @@ export function isReferentVisitDateQuestion(text: string): boolean {
   return true;
 }
 
+// Third closed speech act: visit-outcome against the live subject. Subject-
+// position pronouns only — not the full THIRD_PERSON_REFERENT union (object/
+// possessive forms are invalid here). Pronoun is eligibility only; discarded.
+const REFERENT_SUBJECT_PRONOUN = 'he|she|they';
+const REFERENT_VISIT_OUTCOME_RE = new RegExp(
+  `^\\s*what\\s+did\\s+(${REFERENT_SUBJECT_PRONOUN})\\s+tell\\s+me\\s*[?.!]?\\s*$`,
+  'i',
+);
+
+export function isReferentVisitOutcomeQuestion(text: string): boolean {
+  const m = text.match(REFERENT_VISIT_OUTCOME_RE);
+  if (!m) return false;
+  void m[1]; // pronoun discarded — not a selector, no gender inference
+  return true;
+}
+
 export function isReferentPhoneQuestion(text: string): boolean {
   const m = text.match(REFERENT_PHONE_RE);
   if (!m) return false;
@@ -228,4 +244,18 @@ export async function answerReferentVisitDate(
   // Sentence shape is duplicated with tierRouter VISIT_HISTORY_READ.
   // Do not factor (Continuity Step 3 / Rule 11).
   return `You last saw ${who} on ${spoken}${detailPart}.`;
+}
+
+/**
+ * Authoritative re-read for the visit-outcome referent. Flow C supplies IDENTITY
+ * ONLY — getLastVisitOutcomeSummary is the deterministic reader and owns every
+ * factual value in the returned sentence. Returns null when this subject cannot
+ * answer, so the caller falls through rather than fabricating.
+ */
+export async function answerReferentVisitOutcome(
+  subject: ConversationalSubject,
+): Promise<string | null> {
+  if (subject.domain !== 'medical_doctor') return null;
+  const { getLastVisitOutcomeSummary } = await import('../db/medicalDB');
+  return getLastVisitOutcomeSummary(subject.entityId);
 }

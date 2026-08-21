@@ -4,6 +4,9 @@
 // Runner: npx tsx scripts/heraldTest/conversationalSubject.test.ts
 // Gate:   wired from run.mjs.
 
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import Database from 'better-sqlite3';
 import { setDB } from '../../src/db/schema.ts';
 import { writeContactRaw } from '../../src/db/contactsDB.ts';
@@ -16,6 +19,7 @@ import {
   ConversationalSubjectHolder,
   isReferentPhoneQuestion,
   isReferentVisitDateQuestion,
+  isReferentVisitOutcomeQuestion,
 } from '../../src/routing/conversationalSubject.ts';
 import { formatSpokenDate } from '../../src/utils/parseTime.ts';
 
@@ -93,6 +97,11 @@ function seedTwoDoctorOutcomes() {
   const smithId = writeMedicalRecord({ doctor_name: 'Dr. Smith', notes: 'visit', visit_date: '2026-07-20' });
   attachVisitOutcome(smithId, 'Smith said to continue the current dose.');
 }
+
+const SMITH_OUTCOME = 'Smith said to continue the current dose.';
+const PATEL_OUTCOME = 'Patel said the labs were unremarkable.';
+const FOSTER_OUTCOME = 'Your blood pressure reading was elevated, follow up in a month.';
+const VISIT_OUTCOME_MISS = "I don't have anything from your last visit yet.";
 
 function spokenPhone(digits: string): string {
   const d = digits.replace(/\D/g, '');
@@ -531,6 +540,187 @@ export async function runConversationalSubjectTests() {
       v => v.handled === false && v.routeDecision.kind === 'device_read'
         && v.routeDecision.reason === 'medical:visit_history_unresolved_referent',
       'medical:visit_history_unresolved_referent');
+  }
+
+  // ── Continuity Step 3b — doctor subject + visit-outcome referent ───────────
+  console.log(`\n${BOLD}  Visit-outcome referent (Flow C + tierRouter guard)${RESET}\n`);
+
+  assert('O-P-he', isReferentVisitOutcomeQuestion('What did he tell me?'), v => v === true, 'true');
+  assert('O-P-she', isReferentVisitOutcomeQuestion('What did she tell me?'), v => v === true, 'true');
+  assert('O-P-they', isReferentVisitOutcomeQuestion('What did they tell me?'), v => v === true, 'true');
+  assert('O-P-patel-out', isReferentVisitOutcomeQuestion('What did Dr. Patel tell me?'), v => v === false, 'false');
+  assert('O-P-him-out', isReferentVisitOutcomeQuestion('What did him tell me?'), v => v === false, 'false');
+
+  {
+    const { say, subject } = freshFlow();
+    seedTwoDoctorOutcomes();
+    await say('When did I see Dr. Smith?');
+    assert('O1a Smith established', subject.peek()?.entityId, v => v === 'Dr. Smith', 'Dr. Smith');
+    const t2 = await say('What did he tell me?');
+    assert('O1b referent_resume with Smith outcome', t2,
+      v => v.handled === true && v.source === 'referent_resume'
+        && v.responseText.includes(SMITH_OUTCOME)
+        && !v.responseText.includes(PATEL_OUTCOME),
+      'referent_resume / Smith outcome');
+    assert('O1c subject cleared after consume', subject.hasLive(), v => v === false, 'cleared');
+  }
+
+  {
+    const { say, subject } = freshFlow();
+    const smithId = writeMedicalRecord({ doctor_name: 'Dr. Smith', notes: 'visit', visit_date: '2026-05-01' });
+    attachVisitOutcome(smithId, SMITH_OUTCOME);
+    const fosterId = writeMedicalRecord({ doctor_name: 'Dr. Foster', notes: 'visit', visit_date: '2026-07-20' });
+    attachVisitOutcome(fosterId, FOSTER_OUTCOME);
+    await say('When did I see Dr. Smith?');
+    assert('O2a Smith subject locked', subject.peek()?.entityId, v => v === 'Dr. Smith', 'Dr. Smith');
+    const t2 = await say('What did he tell me?');
+    assert('O2b returns Smith outcome, not newer Foster', t2,
+      v => v.handled === true && v.source === 'referent_resume'
+        && v.responseText.includes(SMITH_OUTCOME)
+        && !v.responseText.includes('elevated')
+        && !v.responseText.includes(FOSTER_OUTCOME),
+      'Smith only');
+  }
+
+  {
+    const { say, subject } = freshFlow();
+    seedTwoDoctorOutcomes();
+    const t1 = await say('What did he tell me?');
+    assert('O3a no-subject → visit_outcome_unresolved_referent', t1,
+      v => v.handled === false && v.routeDecision.kind === 'device_read'
+        && v.routeDecision.reason === 'medical:visit_outcome_unresolved_referent',
+      'medical:visit_outcome_unresolved_referent');
+    assert('O3b clarify copy', t1,
+      v => v.handled === false && v.routeDecision.response === "I'm not sure who you mean — which doctor?",
+      "I'm not sure who you mean — which doctor?");
+    assert('O3c never global latest outcome', t1,
+      v => v.handled === false
+        && !v.routeDecision.response.includes(SMITH_OUTCOME)
+        && !v.routeDecision.response.includes(PATEL_OUTCOME)
+        && v.routeDecision.tier === 1,
+      'tier-1 clarify, no Smith/Patel leak');
+    assert('O3d no subject established', subject.hasLive(), v => v === false, 'no subject');
+  }
+
+  {
+    const { say, subject } = freshFlow();
+    seedTwoDoctorOutcomes();
+    await say('When did I see Dr. Smith?');
+    assert('O4a stale Smith subject live', subject.peek()?.entityId, v => v === 'Dr. Smith', 'Dr. Smith');
+    const t2 = await say('What did Dr. Patel tell me?');
+    assert('O4b explicit Patel wins over stale subject', t2,
+      v => v.handled === false && v.routeDecision.kind === 'device_read'
+        && v.routeDecision.reason === 'medical:visit_outcome_read'
+        && v.routeDecision.response.includes(PATEL_OUTCOME)
+        && !v.routeDecision.response.includes(SMITH_OUTCOME),
+      'Patel outcome via named read');
+    assert('O4c not referent_resume hijack', t2,
+      v => !(v.handled === true && v.source === 'referent_resume'),
+      'not referent_resume');
+  }
+
+  {
+    const { say, subject } = freshFlow();
+    writeMedicalRecord({ doctor_name: 'Dr. Smith', notes: 'visit', visit_date: '2026-07-20', status: 'noted' });
+    await say('When did I see Dr. Smith?');
+    const t2 = await say('What did he tell me?');
+    assert('O5a no stored outcome → exact miss string', t2,
+      v => v.handled === true && v.source === 'referent_resume'
+        && v.responseText === VISIT_OUTCOME_MISS,
+      VISIT_OUTCOME_MISS);
+    assert('O5b subject cleared after miss consume', subject.hasLive(), v => v === false, 'cleared');
+  }
+
+  {
+    const { say, subject } = freshFlow();
+    writeContactRaw({ name: 'Shannon', relationship: 'wife', phone: '2145550100', importance: 8 });
+    seedTwoDoctorOutcomes();
+    await say('Who is my wife?');
+    assert('O6a family subject live', subject.peek()?.domain, v => v === 'family_contact', 'family_contact');
+    const t2 = await say('What did he tell me?');
+    assert('O6b no medical cross-resolution from family subject', t2,
+      v => !(v.handled === true && v.source === 'referent_resume'
+        && typeof v.responseText === 'string'
+        && (v.responseText.includes(SMITH_OUTCOME) || v.responseText.includes(PATEL_OUTCOME))),
+      'no medical outcome via family subject');
+    assert('O6c fail-closed to visit_outcome_unresolved_referent', t2,
+      v => v.handled === false && v.routeDecision.reason === 'medical:visit_outcome_unresolved_referent',
+      'medical:visit_outcome_unresolved_referent');
+  }
+
+  {
+    const { say, subject } = freshFlow();
+    writeServiceProvider('plumber', 'Bob', '469-555-0103');
+    seedTwoDoctorOutcomes();
+    await say('Who is my plumber?');
+    assert('O6d household subject live', subject.peek()?.domain, v => v === 'household_provider', 'household_provider');
+    const t2 = await say('What did he tell me?');
+    assert('O6e no medical cross-resolution from household subject', t2,
+      v => !(v.handled === true && v.source === 'referent_resume'
+        && typeof v.responseText === 'string'
+        && (v.responseText.includes(SMITH_OUTCOME) || v.responseText.includes(PATEL_OUTCOME))),
+      'no medical outcome via household subject');
+    assert('O6f fail-closed to visit_outcome_unresolved_referent', t2,
+      v => v.handled === false && v.routeDecision.reason === 'medical:visit_outcome_unresolved_referent',
+      'medical:visit_outcome_unresolved_referent');
+  }
+
+  {
+    const { say, subject } = freshFlow();
+    seedTwoDoctorOutcomes();
+    await say('When did I see Dr. Smith?');
+    const tShe = await say('What did she tell me?');
+    assert('O7a she pronoun referent_resume Smith outcome', tShe,
+      v => v.handled === true && v.source === 'referent_resume'
+        && v.responseText.includes(SMITH_OUTCOME),
+      'she → Smith outcome');
+    assert('O7b she consume clears subject', subject.hasLive(), v => v === false, 'cleared');
+  }
+
+  {
+    const { say, subject } = freshFlow();
+    seedTwoDoctorOutcomes();
+    await say('When did I see Dr. Smith?');
+    const tThey = await say('What did they tell me?');
+    assert('O7c they pronoun referent_resume Smith outcome', tThey,
+      v => v.handled === true && v.source === 'referent_resume'
+        && v.responseText.includes(SMITH_OUTCOME),
+      'they → Smith outcome');
+    assert('O7d they consume clears subject', subject.hasLive(), v => v === false, 'cleared');
+  }
+
+  {
+    const { say, subject } = freshFlow();
+    seedTwoDoctorOutcomes();
+    await say('When did I see Dr. Smith?');
+    await say('When did I see him?');
+    assert('O8a visit-date consume cleared subject', subject.hasLive(), v => v === false, 'cleared');
+    const t3 = await say('What did he tell me?');
+    assert('O8b subsequent outcome pronoun fail-closed', t3,
+      v => v.handled === false
+        && v.routeDecision.reason === 'medical:visit_outcome_unresolved_referent'
+        && !v.routeDecision.response.includes(SMITH_OUTCOME)
+        && !v.routeDecision.response.includes(PATEL_OUTCOME),
+      'unresolved_referent, no lifetime expansion');
+  }
+
+  {
+    const procPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../src/routing/processUtterance.ts');
+    const src = fs.readFileSync(procPath, 'utf8');
+    const liveStart = src.indexOf('if (subject?.hasLive())');
+    const liveEnd = src.indexOf('// 2) The single routing authority');
+    const liveBlock = src.slice(liveStart, liveEnd);
+    const outcomeIdx = liveBlock.indexOf('isReferentVisitOutcomeQuestion(text)');
+    const trailingClearIdx = liveBlock.lastIndexOf('subject.clear();');
+    assert('O-SL outcome block precedes trailing unused-subject clear', { outcomeIdx, trailingClearIdx },
+      v => (v as { outcomeIdx: number; trailingClearIdx: number }).outcomeIdx > 0
+        && (v as { outcomeIdx: number; trailingClearIdx: number }).outcomeIdx
+          < (v as { outcomeIdx: number; trailingClearIdx: number }).trailingClearIdx,
+      'outcome before trailing clear');
+    assert('O-SL outcome block follows visit-date block', liveBlock,
+      v => (v as string).indexOf('isReferentVisitDateQuestion(text)')
+        < (v as string).indexOf('isReferentVisitOutcomeQuestion(text)'),
+      'visit-date before outcome');
   }
 
   const total = passed + failures.length;

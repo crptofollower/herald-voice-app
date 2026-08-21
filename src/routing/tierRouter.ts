@@ -27,6 +27,7 @@ import {
   COMPLETED_PAST_FIRST_PERSON_RE,
   THIRD_PERSON_REFERENT_RE,
 } from "../utils/instructionSignals";
+import { isReferentVisitOutcomeQuestion } from "./conversationalSubject";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1467,6 +1468,20 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     const { getLastVisitOutcomeSummary } = await import('../db/medicalDB');
     const response = getLastVisitOutcomeSummary(doctorHint);
     return { tier: 1, tier1Response: response, isMedical: true, reason: "medical:visit_outcome_read" };
+  }
+
+  // Continuity: unresolved third-person visit-outcome referent — no live Flow C
+  // subject consumed upstream at processUtterance step 1b. Must not fall through
+  // to the unhinted global latest reader (Spine §5 fabrication class).
+  // Subject-position he|she|they only; canonical THIRD_PERSON_REFERENT_RE excludes
+  // "they" and object/possessive forms are invalid here — reuse conversationalSubject act.
+  if (isReferentVisitOutcomeQuestion(msg)) {
+    return {
+      tier: 1,
+      tier1Response: "I'm not sure who you mean — which doctor?",
+      isMedical: true,
+      reason: "medical:visit_outcome_unresolved_referent",
+    };
   }
 
   // Device: medical capture — past-tense medical events only
