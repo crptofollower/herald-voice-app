@@ -6,7 +6,7 @@
 // the forms are exactly the Fix-2 fence already proven in detectServiceCapture.
 
 const PERSONAL_MEMORY_RECALL_QUESTION_RE =
-  /\b(?:do\s+you\s+(?:remember|recall|know)|did\s+i\s+(?:tell|mention)|what\s+did\b[\s\S]*?\b(?:say|tell)\b)\b/i;
+  /\b(?:do\s+you\s+(?:remember|recall|know)|did\s+i\s+(?:tell|mention)|what\s+did\b[\s\S]*?\b(?:say|tell)\b|did\s+you\s+say\b|are\s+you\s+saying\b)\b/i;
 
 export function isPersonalMemoryRecallQuestion(text: string): boolean {
   return PERSONAL_MEMORY_RECALL_QUESTION_RE.test(text);

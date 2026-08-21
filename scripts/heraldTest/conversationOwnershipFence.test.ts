@@ -5,6 +5,7 @@
 // of scope for this file and are not proven here.
 
 import { isEligibleForEphemeralConversation } from '../../src/utils/ephemeralConversation.ts';
+import { routeIntent } from '../../src/routing/routeIntent.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
 
@@ -19,6 +20,17 @@ export async function runConversationOwnershipFenceTests() {
       passed++;
     } else {
       console.log(`${RED}✗ FAIL${RESET}  ${label}\n       input: ${DIM}"${input}"${RESET}\n       got: ${DIM}${got}${RESET}\n       expected: ${DIM}${expected}${RESET}`);
+      failures.push({ label, got, expected: String(expected) });
+    }
+  }
+
+  function assertWithContext(label: string, input: string, ctx: boolean, expected: boolean) {
+    const got = isEligibleForEphemeralConversation(input, ctx);
+    if (got === expected) {
+      console.log(`${GREEN}✓ PASS${RESET}  ${label}`);
+      passed++;
+    } else {
+      console.log(`${RED}✗ FAIL${RESET}  ${label}\n       input: ${DIM}"${input}"${RESET} ctx=${ctx}\n       got: ${DIM}${got}${RESET}\n       expected: ${DIM}${expected}${RESET}`);
       failures.push({ label, got, expected: String(expected) });
     }
   }
@@ -120,35 +132,75 @@ export async function runConversationOwnershipFenceTests() {
   ];
   for (const [i, phrase] of META_POS.entries()) {
     assert(`56.${i + 1}a no-context "${phrase}" stays blocked`, phrase, false);
-    const got = isEligibleForEphemeralConversation(phrase, true);
-    if (got === true) {
-      console.log(`${GREEN}✓ PASS${RESET}  56.${i + 1}b with-context "${phrase}" eligible`);
-      passed++;
-    } else {
-      console.log(`${RED}✗ FAIL${RESET}  56.${i + 1}b with-context "${phrase}" eligible\n       got: ${DIM}${got}${RESET}\n       expected: ${DIM}true${RESET}`);
-      failures.push({ label: `56.${i + 1}b with-context`, got, expected: 'true' });
-    }
+    assertWithContext(`56.${i + 1}b with-context "${phrase}" eligible`, phrase, true, true);
   }
-  const META_NEG = [
-    'What do you remember about me?',
-    'What did my doctor say?',
-    "What's Hunter's phone number?",
-    'Are you going to call my daughter?',
-    'Will you text my son?',
-    'Did you say the doctor told me to come back?',
-    'What did you say about Hunter?',
-    'Are you saying Sarah texted?',
+
+  // Step 4 (2026-08-20): 57.x META_NEG retired — predicate-level interrogatives
+  // with authorized context are now eligible by design; fact-seeking and action
+  // ownership remain upstream (Group E). Imperatives with context stay blocked
+  // in Group C below.
+
+  // ── Step 4 Group A: eligible with authorized context ─────────────────────
+  const STEP4_CTX_ELIGIBLE = [
+    'How far away is it?',
+    'Tell me more.',
+    'What do you mean?',
+    'Why do you say that?',
+    'And then what?',
+    'What did you mean by that?',
   ];
-  for (const [i, phrase] of META_NEG.entries()) {
-    const got = isEligibleForEphemeralConversation(phrase, true);
-    if (got === false) {
-      console.log(`${GREEN}✓ PASS${RESET}  57.${i + 1} with-context "${phrase}" still blocked`);
+  for (const [i, phrase] of STEP4_CTX_ELIGIBLE.entries()) {
+    assertWithContext(`58.${i + 1} ctx=true "${phrase}" eligible`, phrase, true, true);
+  }
+
+  // ── Step 4 Group B: same six with ctx=false ⇒ ineligible (load-bearing) ──
+  for (const [i, phrase] of STEP4_CTX_ELIGIBLE.entries()) {
+    assertWithContext(`59.${i + 1} ctx=false "${phrase}" ineligible`, phrase, false, false);
+  }
+
+  // ── Step 4 Group C: imperatives stay ineligible even with context ─────────
+  const STEP4_CTX_BLOCKED = [
+    'Remind me to call him Friday.',
+    "Hunter's coming Saturday, remind me to call him Friday.",
+    'Call Josh.',
+    'Add milk to my grocery list.',
+  ];
+  for (const [i, phrase] of STEP4_CTX_BLOCKED.entries()) {
+    assertWithContext(`60.${i + 1} ctx=true imperative blocked`, phrase, true, false);
+  }
+
+  // ── Step 4 Group D: opening-turn additions (one-arg / ctx=false unchanged) ─
+  assert('61: tell me about the moon opening turn blocked', 'Tell me about the moon.', false);
+  assert('62: do you think good idea opening turn eligible', "Do you think that's a good idea?", true);
+
+  // ── Step 4 Group E: routing authority — personal fence upstream of slot ───
+  {
+    const decision = await routeIntent('What did I tell you about my insurance?', {
+      classifyQuery: async () => ({ tier: 3, reason: 'default' }),
+      classifyLLM: async () => ({ status: 'ok', intents: [] }),
+      llmReady: true,
+    });
+    const reason = (decision as { reason?: string }).reason;
+    if (decision.kind === 'needs_clarification' && reason === 'personal_memory:recall_declined') {
+      console.log(`${GREEN}✓ PASS${RESET}  63: insurance recall → personal_memory:recall_declined`);
       passed++;
     } else {
-      console.log(`${RED}✗ FAIL${RESET}  57.${i + 1} with-context "${phrase}" still blocked\n       got: ${DIM}${got}${RESET}\n       expected: ${DIM}false${RESET}`);
-      failures.push({ label: `57.${i + 1} with-context still blocked`, got, expected: 'false' });
+      console.log(`${RED}✗ FAIL${RESET}  63: insurance recall → personal_memory:recall_declined\n       got: ${DIM}${JSON.stringify(decision)}${RESET}`);
+      failures.push({ label: '63: insurance recall reason', got: decision, expected: 'personal_memory:recall_declined' });
+    }
+    if (reason !== 'default') {
+      console.log(`${GREEN}✓ PASS${RESET}  64: insurance recall never reason:default`);
+      passed++;
+    } else {
+      console.log(`${RED}✗ FAIL${RESET}  64: insurance recall never reason:default\n       got reason: ${DIM}${reason}${RESET}`);
+      failures.push({ label: '64: insurance recall not default', got: reason, expected: 'not default' });
     }
   }
+
+  // Step 4 Group F: takeLiveEphemeralContext is component-scoped in ChatScreen —
+  // not extractable for headless harness; lifetime proven by device rows C/D (§5).
+  // Step 4 Group G: slot population performs no SQLite write — architectural;
+  // no ref in topicDB or any DB module (Step 0 audit).
 
   const total = passed + failures.length;
   console.log(

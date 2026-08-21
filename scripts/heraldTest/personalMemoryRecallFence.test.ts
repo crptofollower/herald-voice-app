@@ -9,6 +9,7 @@ import { setDB } from '../../src/db/schema.ts';
 import { processUtterance } from '../../src/routing/processUtterance.ts';
 import { ConversationSession } from '../../src/routing/conversationSession.ts';
 import { classifyQuery } from '../../src/routing/tierRouter.ts';
+import { routeIntent } from '../../src/routing/routeIntent.ts';
 import type { ClassifyOutcome } from '../../src/hooks/llmLayers.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
@@ -173,6 +174,111 @@ export async function runPersonalMemoryRecallFenceTests() {
         && v.routeDecision.actionIntent.type === 'household_read',
       'device_action household_read');
     assert('R7d household read writes nothing', r.providers.length, (v) => v === 0, '0 rows');
+  }
+
+  // Step 4 — retired 57.x predicate cases as routing-level authority proofs.
+  // A live conversational context must not let personal truth or device actions
+  // reach reason:'default' or hostile LLM capture. Real classifyQuery; hostile stub.
+  console.log(`\n${BOLD}-- Step 4 routing authority (retired 57.x) -------------------${RESET}\n`);
+
+  async function routeWithHostile(text: string) {
+    freshDB();
+    let llmCalls = 0;
+    const decision = await routeIntent(text, {
+      classifyQuery,
+      classifyLLM: async () => {
+        llmCalls += 1;
+        return HOSTILE_CAPTURE;
+      },
+      llmReady: true,
+      captureContext: { contacts: [], lists: [] },
+    });
+    return { decision, llmCalls };
+  }
+
+  const ROUTE_57: {
+    label: string;
+    text: string;
+    kind: string;
+    reason: string;
+    maxLlmCalls?: number;
+  }[] = [
+    {
+      label: 'S4-1 remember about me',
+      text: 'What do you remember about me?',
+      kind: 'needs_clarification',
+      reason: 'personal_memory:recall_declined',
+      maxLlmCalls: 0,
+    },
+    {
+      label: 'S4-2 doctor said',
+      text: 'What did my doctor say?',
+      kind: 'device_read',
+      reason: 'medical:visit_outcome_read',
+      maxLlmCalls: 0,
+    },
+    {
+      label: 'S4-3 Hunter phone',
+      text: "What's Hunter's phone number?",
+      kind: 'device_read',
+      reason: 'contact:phone_lookup:miss',
+      maxLlmCalls: 0,
+    },
+    {
+      label: 'S4-4 call daughter',
+      text: 'Are you going to call my daughter?',
+      kind: 'capture',
+      reason: 'routeIntent:contact_call_intercept',
+      maxLlmCalls: 0,
+    },
+    {
+      label: 'S4-5 text son',
+      text: 'Will you text my son?',
+      kind: 'device_action',
+      reason: 'action:sms',
+      maxLlmCalls: 0,
+    },
+    {
+      label: 'S4-6 did you say doctor',
+      text: 'Did you say the doctor told me to come back?',
+      kind: 'needs_clarification',
+      reason: 'personal_memory:recall_declined',
+      maxLlmCalls: 0,
+    },
+    {
+      label: 'S4-7 what did you say Hunter',
+      text: 'What did you say about Hunter?',
+      kind: 'needs_clarification',
+      reason: 'personal_memory:recall_declined',
+      maxLlmCalls: 0,
+    },
+    {
+      label: 'S4-8 are you saying Sarah',
+      text: 'Are you saying Sarah texted?',
+      kind: 'needs_clarification',
+      reason: 'personal_memory:recall_declined',
+      maxLlmCalls: 0,
+    },
+  ];
+
+  for (const row of ROUTE_57) {
+    const { decision, llmCalls } = await routeWithHostile(row.text);
+    assert(`${row.label} kind`, decision.kind, (v) => v === row.kind, row.kind);
+    assert(
+      `${row.label} reason`,
+      'reason' in decision ? decision.reason : undefined,
+      (v) => v === row.reason,
+      row.reason,
+    );
+    if (row.maxLlmCalls != null) {
+      assert(`${row.label} no hostile LLM`, llmCalls, (v) => v <= row.maxLlmCalls!, `≤ ${row.maxLlmCalls}`);
+    }
+    assert(
+      `${row.label} never default`,
+      'reason' in decision ? decision.reason : undefined,
+      (v) => v !== 'default',
+      'not default',
+    );
   }
 
   const total = passed + failures.length;

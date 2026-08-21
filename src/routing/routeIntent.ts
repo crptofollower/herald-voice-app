@@ -2019,6 +2019,14 @@ export async function routeIntent(
                : 'tier1:list_todo_intercept' };
   }
 
+  // Site-A fence (early): recall-shaped questions must fail closed before a
+  // mis-tiered medical_capture intercept can resurrect them as a write.
+  // Tier-1 device_read paths above already returned; this catches tier-3
+  // fallthrough and medical_capture misfires (e.g. "Did you say the doctor…").
+  if (isPersonalMemoryRecallQuestion(text)) {
+    return { kind: 'needs_clarification', reason: 'personal_memory:recall_declined' };
+  }
+
   if (
     decision.tier === 1 &&
     decision.actionIntent?.type === 'medical_capture' &&
@@ -2048,14 +2056,6 @@ export async function routeIntent(
       source: 'deterministic',
       reason: 'tier1:visit_intercept',
     };
-  }
-
-  // Site-A fence: a recall/question speech-act that every deterministic
-  // personal-memory authority already declined must not be resurrected as
-  // an LLM write. Existing claimed reads/actions/capturers returned above
-  // and are unchanged. Fail-closed shape is the existing honest tail.
-  if (isPersonalMemoryRecallQuestion(text)) {
-    return { kind: 'needs_clarification', reason: 'personal_memory:recall_declined' };
   }
 
   // LAT-ARC-B: tracks whether a REAL classifyLLM completion happened for

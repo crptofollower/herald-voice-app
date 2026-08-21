@@ -85,18 +85,6 @@ const COMPLEMENT_OPINION_RE =
 const COMPLEMENT_SOCIAL_RE =
   /^(about\s+(yourself|your\s+day)|something\s+(funny|interesting|nice))\b/i;
 
-// 7b-A — Herald-response-meta speech act (2026-08-17). Closed conjunction:
-// a response verb AND a manner/anaphoric adjunct. Never OR, never verb-only,
-// never manner-only. Word-bounded so "say" does not match "saying".
-// Do not grow these sets to chase new phrasings — stop and report.
-const HERALD_RESPONSE_META_VERB_RE = /\b(?:answer|respond|say|said)\b/i;
-const HERALD_RESPONSE_META_MANNER_RE =
-  /\b(?:the same way|the same thing|like that|like this|that way|this way)\b/i;
-
-function isHeraldResponseMetaQuestion(text: string): boolean {
-  return HERALD_RESPONSE_META_VERB_RE.test(text) && HERALD_RESPONSE_META_MANNER_RE.test(text);
-}
-
 /** Pure predicate -- no I/O. True if this otherwise-unclaimed utterance is
  *  safe to hand to ephemeral conversation.
  *  hasAuthorizedImmediateContext: the one-slot prior pair is populated
@@ -120,15 +108,33 @@ export function isEligibleForEphemeralConversation(
   // opinion check below.
   const tellMeMatch = t.match(TELL_ME_WRAPPER_RE);
   if (tellMeMatch) {
+    // Step 4 (2026-08-20): a live authorized context slot is itself an
+    // authority-state fact — the immediately preceding turn was a non-personal
+    // exchange Herald authored (ephemeral success, or a non-medical chit_chat
+    // read; those are the slot's only two writers). "Tell me more" continuing
+    // such an exchange is a continuation, not a fact request. With NO slot the
+    // enumerated complements remain the only door, so opening-turn behavior is
+    // unchanged and the fail-closed default stands.
+    if (hasAuthorizedImmediateContext) return true;
     const complement = t.slice(tellMeMatch[0].length).trim();
     return COMPLEMENT_OPINION_RE.test(complement) || COMPLEMENT_SOCIAL_RE.test(complement);
   }
 
   if (INTERROGATIVE_RE.test(t) && !OPINION_SEEKING_RE.test(t)) {
-    // 7b-A: leftover interrogative about Herald's own immediately preceding
-    // reply. Requires authorized context AND verb∧manner. Context alone or
-    // interrogative alone is not enough. Action / tell-me already returned.
-    return hasAuthorizedImmediateContext && isHeraldResponseMetaQuestion(t);
+    // Step 4 (2026-08-20): supersedes 7b-A's verb∧manner conjunction, which
+    // could only be extended by growing word lists — the exact move this file
+    // forbids. The division is architectural: the LLM handles conversational
+    // language; Herald handles authority and boundaries. Authority is already
+    // established upstream — reaching here requires reason:'default', meaning
+    // every deterministic owner declined, the classifier itself returned
+    // unclear/none, it is not live-data, and it is not a personal-memory recall
+    // question (routeIntent Site-A fence). Combined with a live authorized
+    // slot, that is sufficient; Herald does not additionally need to recognise
+    // that "it"/"that"/"more" constitute anaphora.
+    // Action and tell-me already returned above. canRunEphemeralConversation
+    // (personal-capture, pending, emergency, busy, llmStatus) is unchanged and
+    // remains authoritative.
+    return hasAuthorizedImmediateContext;
   }
   return true;
 }

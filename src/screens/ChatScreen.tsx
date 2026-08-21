@@ -131,6 +131,9 @@ interface IntentAction {
 
 const IDLE_THRESHOLD_MS = 60 * 60 * 1000; // 60 minutes
 
+// Step 4: bounded lifetime for the ephemeral conversational context slot.
+const EPHEMERAL_CONTEXT_TTL_MS = 60 * 60 * 1000; // 1 hour
+
 // ─── Bouncing dots ─────────────────────────────────────────────────────────────
 
 function BouncingDots({ color }: { color: string }) {
@@ -408,7 +411,24 @@ export default function ChatScreen() {
   // persistence, overwritten every ephemeral exchange, never accumulates.
   // Per Conversational Architecture Constitution §2 (2026-08-14 addition):
   // this is NOT Memory and carries no authority.
-  const ephemeralContextRef = useRef<{ user: string; assistant: string } | null>(null);
+  // Step 4 (2026-08-20): `establishedAt` bounds the slot in wall-clock time so a
+  // follow-up hours later cannot resurrect a stale exchange. RAM only — no
+  // storage, no timer, no persistence. Still NOT Memory, still no authority.
+  const ephemeralContextRef = useRef<{ user: string; assistant: string; establishedAt: number } | null>(null);
+
+  /** Read-and-clear, TTL-checked. Called EXACTLY ONCE per turn, before any
+   *  routing. Every turn therefore starts with the slot empty; only a
+   *  successful ephemeral generation or an authorized chit_chat read puts one
+   *  back. Emergency, pending, capture, device actions, non-chit_chat reads and
+   *  backend answers all clear the context implicitly by not refreshing it —
+   *  which is the topic-escape rule, expressed once instead of per branch. */
+  const takeLiveEphemeralContext = (): { user: string; assistant: string } | null => {
+    const slot = ephemeralContextRef.current;
+    ephemeralContextRef.current = null;
+    if (!slot) return null;
+    if (Date.now() - slot.establishedAt > EPHEMERAL_CONTEXT_TTL_MS) return null;
+    return { user: slot.user, assistant: slot.assistant };
+  };
 
   // ── Scroll snap prevention ────────────────────────────────────────────────
   // Only auto-scroll to bottom when user is already near the bottom, or when
@@ -1050,6 +1070,12 @@ export default function ChatScreen() {
     text = normalizeInput(text);
     if (!text) return;
 
+    // Step 4: take the prior conversational context for THIS turn and clear the
+    // ref in the same operation. Placed ahead of the Law 0 emergency bridge so
+    // an emergency clears it too. Everything downstream reads `priorEphemeral`,
+    // never the ref.
+    const priorEphemeral = takeLiveEphemeralContext();
+
     const turnId = getActiveTurnId() ?? beginTurn();
     latLog('sendMessage entry', { turnId, inputSource: 'app' });
 
@@ -1345,7 +1371,7 @@ export default function ChatScreen() {
       let reply = canned;
       if (
         outcome.routeDecision.reason === 'default' &&
-        isEligibleForEphemeralConversation(text, ephemeralContextRef.current != null)
+        isEligibleForEphemeralConversation(text, priorEphemeral != null)
       ) {
         const canConverse = canRunEphemeralConversation({
           rdTier: 3,
@@ -1370,10 +1396,10 @@ export default function ChatScreen() {
           const ephemeral = await generateEphemeralConversation(
             text,
             getCtx(),
-            ephemeralContextRef.current ?? undefined,
+            priorEphemeral ?? undefined,
           );
           if (ephemeral.status === 'ok') {
-            ephemeralContextRef.current = { user: text, assistant: ephemeral.text };
+            ephemeralContextRef.current = { user: text, assistant: ephemeral.text, establishedAt: Date.now() };
             reply = ephemeral.text;
           }
           // Decline/empty/error keeps the canned line below -- never redirects
@@ -1406,7 +1432,7 @@ export default function ChatScreen() {
     const noteDeterministicChitChatContext = (assistantText: string) => {
       if (routeDecision.kind !== 'device_read') return;
       if (!routeDecision.reason.startsWith('chit_chat:') || routeDecision.isMedical) return;
-      ephemeralContextRef.current = { user: text, assistant: assistantText };
+      ephemeralContextRef.current = { user: text, assistant: assistantText, establishedAt: Date.now() };
     };
 
     // Law 5 fail-closed fence (LLM_LIVE Build D, Spine §3a). True only when
@@ -1747,10 +1773,10 @@ export default function ChatScreen() {
             const ephemeral = await generateEphemeralConversation(
               text,
               getCtx(),
-              ephemeralContextRef.current ?? undefined,
+              priorEphemeral ?? undefined,
             );
             if (ephemeral.status === 'ok') {
-              ephemeralContextRef.current = { user: text, assistant: ephemeral.text };
+              ephemeralContextRef.current = { user: text, assistant: ephemeral.text, establishedAt: Date.now() };
               offlineReply = ephemeral.text;
             } else {
               offlineReply = "I'm not sure I'm following you — can you help me understand?";
