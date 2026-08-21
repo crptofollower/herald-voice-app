@@ -197,8 +197,8 @@ export async function runConversationOwnershipFenceTests() {
     }
   }
 
-  // Step 4 Group F: takeLiveEphemeralContext is component-scoped in ChatScreen —
-  // not extractable for headless harness; lifetime proven by device rows C/D (§5).
+  // Step 5a Group F: HOT ring peek/clear is component-scoped in ChatScreen —
+  // headless harness tests hotNarrativeRing.ts directly; device rows prove lifecycle.
   // Step 4 Group G: slot population performs no SQLite write — architectural;
   // no ref in topicDB or any DB module (Step 0 audit).
 

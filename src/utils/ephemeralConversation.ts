@@ -16,6 +16,7 @@ import type { LlamaContext } from 'llama.rn';
 import { withLlamaContextExclusive } from './llamaContextExclusive';
 import { getActiveTurnId, beginCtxCompletion, endCtxCompletion, log as latLog, mono as latMono } from './latencyInstrument';
 import { IMPERATIVE_ACTION_RE } from './instructionSignals';
+import type { HotRingEntry } from './hotNarrativeRing';
 
 // Conversation Ownership Fence (design review 2026-08-15, three rounds;
 // amended same day -- Gap A / Gap B corrections below).
@@ -148,6 +149,24 @@ Do not diagnose medical conditions, provide financial recommendations, or claim 
 
 export type EphemeralTurn = { user: string; assistant: string };
 
+/** Pure prompt assembly — exported for Structural Test M (payload inspection). */
+export function buildEphemeralPromptMessages(
+  userText: string,
+  hotEntries: HotRingEntry[],
+): { role: 'system' | 'user' | 'assistant'; content: string }[] {
+  const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
+    { role: 'system', content: EPHEMERAL_SYSTEM_PROMPT },
+  ];
+  for (const e of hotEntries) {
+    messages.push({ role: 'user', content: e.user });
+    if (e.assistantHotPolicy === 'include') {
+      messages.push({ role: 'assistant', content: e.assistant });
+    }
+  }
+  messages.push({ role: 'user', content: userText });
+  return messages;
+}
+
 export type EphemeralResult =
   | { status: 'ok'; text: string }
   | { status: 'unavailable'; reason: 'no-ctx' | 'busy' | 'empty-output' | 'error' };
@@ -182,7 +201,7 @@ export function canRunEphemeralConversation(input: {
 export async function generateEphemeralConversation(
   userText: string,
   ctx: LlamaContext | null,
-  priorTurn?: EphemeralTurn,
+  hotEntries: HotRingEntry[] = [],
 ): Promise<EphemeralResult> {
   const turnId = getActiveTurnId();
   console.log('[ephemeralConversation] ENTER');
@@ -198,14 +217,7 @@ export async function generateEphemeralConversation(
     let completionSeq: number | null = null;
     let completionEnded = false;
     try {
-      const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
-        { role: 'system', content: EPHEMERAL_SYSTEM_PROMPT },
-      ];
-      if (priorTurn) {
-        messages.push({ role: 'user', content: priorTurn.user });
-        messages.push({ role: 'assistant', content: priorTurn.assistant });
-      }
-      messages.push({ role: 'user', content: userText });
+      const messages = buildEphemeralPromptMessages(userText, hotEntries);
 
       console.log('[ephemeralConversation] COMPLETION_START');
       const t0 = Date.now();
