@@ -8,10 +8,11 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import Database from 'better-sqlite3';
-import { setDB } from '../../src/db/schema.ts';
+import { setDB, getDB } from '../../src/db/schema.ts';
 import { writeContactRaw } from '../../src/db/contactsDB.ts';
 import { writeServiceProvider } from '../../src/utils/householdCapture.ts';
-import { writeMedicalRecord, attachVisitOutcome, getMedicalRecords } from '../../src/db/medicalDB.ts';
+import { writeMedicalRecord, attachVisitOutcome, getMedicalRecords, normalizeDoctorNameForMatch } from '../../src/db/medicalDB.ts';
+import { findUpcomingEventsMatchingTerm } from '../../src/db/calendarCacheDB.ts';
 import { classifyQuery } from '../../src/routing/tierRouter.ts';
 import { processUtterance } from '../../src/routing/processUtterance.ts';
 import { ConversationSession } from '../../src/routing/conversationSession.ts';
@@ -65,6 +66,10 @@ const SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS legal_documents (
     id TEXT PRIMARY KEY, type TEXT, location TEXT, created_at TEXT, updated_at TEXT, removed_at TEXT
   );
+  CREATE TABLE IF NOT EXISTS calendar_cache (
+    id TEXT PRIMARY KEY, title TEXT, start_ms INTEGER, end_ms INTEGER,
+    all_day INTEGER DEFAULT 0, notes TEXT, cached_at TEXT
+  );
 `;
 
 function makeShim(db: Database.Database) {
@@ -101,6 +106,28 @@ function seedTwoDoctorOutcomes() {
 
 function seedUpcomingAppointment(doctorName: string, visitDate: string) {
   writeMedicalRecord({ doctor_name: doctorName, visit_date: visitDate, status: 'upcoming' });
+}
+
+function seedCalendarEvent(title: string, startMs: number, opts?: { allDay?: boolean; endMs?: number }) {
+  const db = getDB();
+  db.runSync(
+    `INSERT OR REPLACE INTO calendar_cache (id, title, start_ms, end_ms, all_day, notes, cached_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?);`,
+    [
+      `cal_${startMs}_${Math.random().toString(36).slice(2, 6)}`,
+      title, startMs, opts?.endMs ?? startMs + 3600_000,
+      opts?.allDay ? 1 : 0, null, new Date().toISOString(),
+    ],
+  );
+}
+
+// A fixed future instant well inside the forward window (never flaky vs "now").
+function futureMs(daysAhead: number, hour = 11): number {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() + daysAhead);
+  d.setHours(hour, 0, 0, 0);
+  return d.getTime();
 }
 
 const SMITH_OUTCOME = 'Smith said to continue the current dose.';
@@ -854,6 +881,198 @@ export async function runConversationalSubjectTests() {
         && v.responseText === "I don't have another visit with Dr. Smith coming up."
         && !v.responseText.includes('Smithson'),
       "honest miss for Smith, no Smithson leak");
+  }
+
+  // ── Forward Calendar Evidence V1 — doctor subject → calendar fallback ──
+  console.log(`\n${BOLD}  Forward Calendar Evidence V1 (calendar-source fallback)${RESET}\n`);
+
+  // Locale-independent helper: the expected weekday for a seeded event,
+  // derived from the SAME formatter path the production code uses (build
+  // CalendarEvidenceParts -> toLocaleDateString weekday), so tests never
+  // hardcode a device's AM/PM punctuation or 12h/24h time rendering. We
+  // assert on provenance prefix + name + weekday (the user-visible
+  // requirement), not on a Samsung-specific time string. Seeded events are
+  // spread across distinct days so weekday alone distinguishes the correct
+  // event from decoys.
+  const weekdayOf = (ms: number) => new Date(ms).toLocaleDateString([], { weekday: 'long' });
+
+  // A — calendar fallback when medical authority has no upcoming visit
+  {
+    const { say, subject } = freshFlow();
+    seedTwoDoctorOutcomes(); // Smith + Patel PAST visits only, no upcoming medical rows
+    const smithMs = futureMs(2, 11);
+    seedCalendarEvent('Dr. Smith', smithMs);
+    await say('When did I see Dr. Smith?'); // establish Smith subject
+    const t2 = await say('When am I seeing him again?');
+    assert('CAL-A1 calendar fallback: provenance prefix + name + correct weekday', t2,
+      v => v.handled === true && v.source === 'referent_resume'
+        && v.responseText.startsWith('Your calendar shows Dr. Smith on ')
+        && v.responseText.includes(weekdayOf(smithMs)),
+      `Your calendar shows Dr. Smith on ${weekdayOf(smithMs)} …`);
+    assert('CAL-A2 subject remains Dr. Smith after calendar answer', subject.peek()?.entityId,
+      v => v === 'Dr. Smith', 'Dr. Smith');
+    assert('CAL-A3 answer does NOT use confirmed-medical voice', t2,
+      v => v.handled === true && !/^You see /.test(v.responseText)
+        && !/You have an appointment/i.test(v.responseText),
+      'no confirmed-medical phrasing');
+  }
+
+  // B — medical authority precedence: confirmed upcoming visit wins, calendar ignored
+  {
+    const { say } = freshFlow();
+    const smithId = writeMedicalRecord({ doctor_name: 'Dr. Smith', notes: 'visit', visit_date: '2026-05-01' });
+    attachVisitOutcome(smithId, SMITH_OUTCOME);
+    seedUpcomingAppointment('Dr. Smith', '2026-12-01'); // confirmed MEDICAL upcoming
+    seedCalendarEvent('Dr. Smith', futureMs(2, 9)); // calendar also has one, sooner
+    await say('When did I see Dr. Smith?');
+    const t2 = await say('When am I seeing him again?');
+    assert('CAL-B1 medical authority wins, confirmed-memory voice used', t2,
+      v => v.handled === true && v.source === 'referent_resume'
+        && /^You see Dr\. Smith on /.test(v.responseText),
+      'You see Dr. Smith … (medical voice)');
+    assert('CAL-B2 calendar fallback did NOT override medical', t2,
+      v => v.handled === true && !/Your calendar shows/.test(v.responseText),
+      'no calendar-provenance phrasing');
+  }
+
+  // C — namesake fence, chronology-CANNOT-hide-a-break: both decoys
+  //     (Smithson, Smithers) sit SOONER than the legitimate longer title, so
+  //     a broken fence would surface a decoy, not the real event. Distinct
+  //     days => weekday distinguishes them without a time string.
+  {
+    const { say } = freshFlow();
+    const smithId = writeMedicalRecord({ doctor_name: 'Dr. Smith', notes: 'visit', visit_date: '2026-05-01' });
+    attachVisitOutcome(smithId, SMITH_OUTCOME);
+    const decoy1Ms = futureMs(1, 9);
+    const decoy2Ms = futureMs(2, 10);
+    const realMs = futureMs(4, 15);
+    seedCalendarEvent('Dr. Smithson', decoy1Ms);            // namesake decoy, soonest
+    seedCalendarEvent('Dr. Smithers', decoy2Ms);            // namesake decoy, 2nd
+    seedCalendarEvent('Appointment with Dr. Smith', realMs); // legitimate longer title, latest
+    await say('When did I see Dr. Smith?');
+    const t2 = await say('When am I seeing him again?');
+    assert('CAL-C1 longer legitimate title matches; correct (later) event, not a sooner namesake', t2,
+      v => v.handled === true && v.responseText.startsWith('Your calendar shows Dr. Smith on ')
+        && v.responseText.includes(weekdayOf(realMs))
+        && !v.responseText.includes(weekdayOf(decoy1Ms)),
+      `real event weekday ${weekdayOf(realMs)}, not a decoy`);
+    assert('CAL-C2 Smithson never leaks', t2,
+      v => v.handled === true && !/Smithson/.test(v.responseText), 'no Smithson');
+    assert('CAL-C3 Smithers never leaks', t2,
+      v => v.handled === true && !/Smithers/.test(v.responseText), 'no Smithers');
+  }
+
+  // C-unit — direct matcher proof, independent of chronology AND of speech
+  //          formatting. Proves the token-sequence fence itself: two
+  //          legitimate titles match, both namesakes excluded, regardless of
+  //          ordering. This is the assertion that catches a broken fence even
+  //          if a decoy were later.
+  {
+    const db = new Database(':memory:');
+    db.exec(SCHEMA_SQL);
+    setDB(makeShim(db));
+    seedCalendarEvent('Dr. Smithson', futureMs(1, 9));
+    seedCalendarEvent('Dr. Smithers', futureMs(1, 10));
+    seedCalendarEvent('Dr. Smith - Follow Up', futureMs(2, 11));
+    seedCalendarEvent('Appointment with Dr. Smith', futureMs(3, 12));
+    // Pass the RAW term -- the reader tokenizes and normalizes internally.
+    const hits = findUpcomingEventsMatchingTerm('Dr. Smith', normalizeDoctorNameForMatch);
+    const titles = hits.map((h: { title: string }) => h.title).sort();
+    assert('CAL-Cu1 matcher returns exactly the two legitimate Dr. Smith titles', titles,
+      v => Array.isArray(v) && v.length === 2
+        && v.includes('Appointment with Dr. Smith')
+        && v.includes('Dr. Smith - Follow Up'),
+      'two legitimate titles only');
+    assert('CAL-Cu2 matcher excludes Smithson (partial-token namesake)', hits,
+      (v: { title: string }[]) => !v.some(h => /Smithson/.test(h.title)), 'no Smithson row');
+    assert('CAL-Cu3 matcher excludes Smithers (partial-token namesake)', hits,
+      (v: { title: string }[]) => !v.some(h => /Smithers/.test(h.title)), 'no Smithers row');
+  }
+
+  // C-i18n — Unicode/accented name: the tokenizer must NOT shred an accented
+  //          name on its accent char, must match it inside a longer title,
+  //          and must still fence a partial-token namesake built on it. Proves
+  //          the tokenizer is not ASCII-only. Uses a fresh DB like CAL-Cu.
+  {
+    const db = new Database(':memory:');
+    db.exec(SCHEMA_SQL);
+    setDB(makeShim(db));
+    seedCalendarEvent('Dr. Muñoz', futureMs(1, 9));                 // exact accented match
+    seedCalendarEvent('Appointment with Dr. Muñoz', futureMs(2, 10)); // accented inside longer title
+    seedCalendarEvent('Dr. Muñozson', futureMs(3, 11));            // accented namesake decoy
+    const hits = findUpcomingEventsMatchingTerm('Dr. Muñoz', normalizeDoctorNameForMatch);
+    const titles = hits.map((h: { title: string }) => h.title).sort();
+    assert('CAL-Ci1 accented name matches itself + longer title, not shredded on accent', titles,
+      v => Array.isArray(v) && v.length === 2
+        && v.includes('Dr. Muñoz')
+        && v.includes('Appointment with Dr. Muñoz'),
+      'both legitimate Muñoz titles');
+    assert('CAL-Ci2 accented partial-token namesake (Muñozson) still fenced', hits,
+      (v: { title: string }[]) => !v.some(h => /Muñozson/.test(h.title)), 'no Muñozson row');
+  }
+
+  // D — no medical result AND no calendar match → honest no-result, no substitution
+  {
+    const { say, subject } = freshFlow();
+    seedTwoDoctorOutcomes();
+    seedCalendarEvent('Dentist cleaning', futureMs(2, 11)); // unrelated event present
+    await say('When did I see Dr. Smith?');
+    const t2 = await say('When am I seeing him again?');
+    assert('CAL-D1 honest no-result when neither source matches', t2,
+      v => v.handled === true && v.source === 'referent_resume'
+        && v.responseText === "I don't have another visit with Dr. Smith coming up.",
+      "I don't have another visit with Dr. Smith coming up.");
+    assert('CAL-D2 unrelated calendar event never substituted', t2,
+      v => v.handled === true && !/Dentist/.test(v.responseText) && !/Your calendar shows/.test(v.responseText),
+      'no substitution');
+    assert('CAL-D3 subject preserved after honest miss', subject.peek()?.entityId,
+      v => v === 'Dr. Smith', 'Dr. Smith');
+  }
+
+  // E — multiple future Dr. Smith calendar events → nearest chosen
+  //     deterministically. Distinct days => weekday of the nearest event must
+  //     appear; the later event's (distinct) weekday must not.
+  {
+    const { say } = freshFlow();
+    const smithId = writeMedicalRecord({ doctor_name: 'Dr. Smith', notes: 'visit', visit_date: '2026-05-01' });
+    attachVisitOutcome(smithId, SMITH_OUTCOME);
+    const nearestMs = futureMs(2, 9);
+    const laterMs = futureMs(5, 15);
+    seedCalendarEvent('Dr. Smith', laterMs);   // later
+    seedCalendarEvent('Dr. Smith', nearestMs); // nearest -- should win
+    await say('When did I see Dr. Smith?');
+    const t2 = await say('When am I seeing him again?');
+    assert('CAL-E1 nearest future calendar event chosen (deterministic soonest-first)', t2,
+      v => v.handled === true
+        && v.responseText.includes(weekdayOf(nearestMs))
+        && (weekdayOf(nearestMs) === weekdayOf(laterMs) || !v.responseText.includes(weekdayOf(laterMs))),
+      `nearest weekday ${weekdayOf(nearestMs)}`);
+  }
+
+  // F — provenance: calendar answer always source-voiced, never medical-voiced
+  {
+    const { say } = freshFlow();
+    const smithId = writeMedicalRecord({ doctor_name: 'Dr. Smith', notes: 'visit', visit_date: '2026-05-01' });
+    attachVisitOutcome(smithId, SMITH_OUTCOME);
+    seedCalendarEvent('Dr. Smith', futureMs(2, 11));
+    await say('When did I see Dr. Smith?');
+    const t2 = await say('When am I seeing him again?');
+    assert('CAL-F1 provenance prefix present and exact', t2,
+      v => v.handled === true && v.responseText.startsWith('Your calendar shows '),
+      'starts with "Your calendar shows "');
+  }
+
+  // G — no write side effect: reading calendar evidence writes nothing to medical_records
+  {
+    const { say } = freshFlow();
+    const smithId = writeMedicalRecord({ doctor_name: 'Dr. Smith', notes: 'visit', visit_date: '2026-05-01' });
+    attachVisitOutcome(smithId, SMITH_OUTCOME);
+    seedCalendarEvent('Dr. Smith', futureMs(2, 11));
+    const before = getMedicalRecords().length;
+    await say('When did I see Dr. Smith?');
+    await say('When am I seeing him again?');
+    assert('CAL-G1 calendar read creates no medical_records row', getMedicalRecords().length,
+      v => v === before, String(before));
   }
 
   const total = passed + failures.length;

@@ -277,3 +277,125 @@ export function formatEventsForSpecificDay(
   const last = lines.pop()!;
   return `${dayLabel.charAt(0).toUpperCase() + dayLabel.slice(1)} you have: ${lines.join(", ")}, and ${last}.`;
 }
+
+// ─── findUpcomingEventsMatchingTerm ────────────────────────────────────────
+//
+// Generic forward calendar-evidence reader (Forward Calendar Evidence V1).
+// NOT domain-specific -- it knows nothing about "doctor". Given grounded
+// search TOKENS and a caller-supplied deterministic per-string normalizer, it
+// returns the cache's currently-live matching events in chronological order
+// (soonest first), from NOW forward only. Provenance is preserved: raw
+// CachedEvent rows are returned; the CALLER decides how to speak them and is
+// responsible for calendar-source phrasing.
+//
+// NAMESAKE FENCE (deterministic token-sequence match, not substring/regex):
+// an event matches only if the normalized search-token sequence occurs as a
+// run of COMPLETE ADJACENT tokens within the normalized title tokens. So
+// "dr smith" matches "dr smith", "dr smith - follow up", and "appointment
+// with dr smith", but NOT "dr smithson" or "dr smithers" (token inequality).
+// Reuses the caller's normalizer (medicalDB.normalizeDoctorNameForMatch) for
+// per-token normalization -- no second normalization rule invented here.
+//
+// Forward-only by construction: calendar_cache holds today→+14 days and is
+// rebuilt each refresh (see refreshCalendarCache). This reader adds a
+// start_ms >= now floor so an all-day or in-progress event earlier today does
+// not surface as "upcoming". It cannot and does not read history.
+
+// Split into normalized tokens: split raw on any run of non-letter/non-number
+// characters FIRST (Unicode-aware: \p{L}=letter, \p{N}=number, u flag), then
+// normalize each token. Splitting BEFORE normalization makes the result
+// independent of whether the normalizer keeps or drops separators. The
+// Unicode classes (not ASCII [A-Za-z0-9]) are required so ordinary
+// international names are not shredded: "Dr. Muñoz" -> ["dr","muñoz"], NOT
+// ["dr","mu","oz"]. Empty tokens dropped.
+//
+// RUNTIME NOTE: \p{L}/\p{N} with the u flag are ES2018 Unicode property
+// escapes. They are supported by Hermes (React Native's engine) in current
+// Herald builds and by the tsx/Node gate runner. If a future Hermes/RN
+// downgrade ever rejects this pattern at load time, the ONLY approved
+// fallback is a broader Unicode letter/number range check -- never revert to
+// ASCII [A-Za-z0-9], which silently mis-tokenizes accented names. Do NOT add
+// a Unicode library, ICU shim, or accent-folding step (accent-folding is an
+// identity decision, out of scope for V1).
+function normalizedTokens(raw: string, normalize: (s: string) => string): string[] {
+  return raw
+    .split(/[^\p{L}\p{N}]+/u)
+    .map((t) => normalize(t))
+    .map((t) => t.trim())
+    .filter((t) => t.length > 0);
+}
+
+// True iff `needle` occurs as a contiguous run of exactly-equal tokens in
+// `haystack`. Empty needle never matches (fail closed).
+function tokenSequenceContained(haystack: string[], needle: string[]): boolean {
+  if (needle.length === 0 || needle.length > haystack.length) return false;
+  for (let i = 0; i + needle.length <= haystack.length; i++) {
+    let all = true;
+    for (let j = 0; j < needle.length; j++) {
+      if (haystack[i + j] !== needle[j]) { all = false; break; }
+    }
+    if (all) return true;
+  }
+  return false;
+}
+
+export function findUpcomingEventsMatchingTerm(
+  rawTerm: string,
+  normalize: (s: string) => string,
+): CachedEvent[] {
+  const needle = normalizedTokens(rawTerm, normalize);
+  if (needle.length === 0) return [];
+  const db = getDB();
+  const nowMs = Date.now();
+  const rows = db.getAllSync<CachedEvent>(
+    `SELECT * FROM calendar_cache
+     WHERE start_ms >= ?
+     ORDER BY start_ms ASC;`,
+    [nowMs],
+  );
+  return rows.filter(
+    (e) => e.title && tokenSequenceContained(normalizedTokens(e.title, normalize), needle),
+  );
+}
+
+// ─── formatCalendarEvidenceForSpeech ───────────────────────────────────────
+//
+// Speaks a single calendar event with EXPLICIT calendar provenance. The
+// "Your calendar shows" prefix is load-bearing (Forward Calendar Evidence
+// V1 / four-layer trust model): it marks the answer as a Source read, never
+// a confirmed-memory claim. Do not remove or soften the prefix. displayName
+// is the caller's grounded identity label (e.g. the doctor subject's
+// displayName), used verbatim so a partial title match still speaks the full
+// known name.
+//
+// Time rendering uses the platform's own locale (toLocaleTimeString) -- this
+// is deliberately NOT pinned to a device/locale, so it renders correctly on
+// any Android locale (12h or 24h) rather than assuming Samsung/en-US. Tests
+// therefore assert on the provenance prefix and the DAY, and derive the
+// expected time string from the SAME formatter helper rather than hardcoding
+// "11:00 AM" (see buildCalendarEvidenceParts, exported for that purpose).
+
+// Pure, locale-independent structural parts + the locale-rendered time, so
+// tests can assert structure (prefix, name, weekday) without coupling to one
+// device's AM/PM punctuation. Exported for direct unit testing.
+export function buildCalendarEvidenceParts(
+  displayName: string,
+  event: CachedEvent,
+): { prefix: string; displayName: string; weekday: string; timeStr: string | null } {
+  const start = new Date(event.start_ms);
+  const weekday = start.toLocaleDateString([], { weekday: 'long' });
+  const timeStr = event.all_day
+    ? null
+    : start.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return { prefix: 'Your calendar shows', displayName, weekday, timeStr };
+}
+
+export function formatCalendarEvidenceForSpeech(
+  displayName: string,
+  event: CachedEvent,
+): string {
+  const p = buildCalendarEvidenceParts(displayName, event);
+  return p.timeStr === null
+    ? `${p.prefix} ${p.displayName} on ${p.weekday}.`
+    : `${p.prefix} ${p.displayName} on ${p.weekday} at ${p.timeStr}.`;
+}

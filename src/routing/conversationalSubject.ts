@@ -311,6 +311,23 @@ export async function answerReferentUpcomingVisit(
     (r) => r.doctorName && normalizeDoctorNameForMatch(r.doctorName) === target,
   );
   if (matches.length === 0) {
+    // Medical authority (confirmed memory) has no upcoming visit. Fall back
+    // to the forward calendar cache as a lower-precedence SOURCE (Forward
+    // Calendar Evidence V1). This never writes medical_records and never
+    // speaks in confirmed-memory voice -- formatCalendarEvidenceForSpeech
+    // prefixes "Your calendar shows" so provenance is explicit. The namesake
+    // fence is a deterministic token-sequence match inside the reader, using
+    // the same normalizeDoctorNameForMatch normalizer, so Dr. Smith and
+    // Dr. Smithson do not cross-match. subject.entityId IS the stored doctor
+    // name (identity), passed raw -- the reader tokenizes and normalizes it.
+    const { findUpcomingEventsMatchingTerm, formatCalendarEvidenceForSpeech } =
+      await import('../db/calendarCacheDB');
+    const calMatches = findUpcomingEventsMatchingTerm(subject.entityId, normalizeDoctorNameForMatch);
+    if (calMatches.length > 0) {
+      // findUpcomingEventsMatchingTerm already returns soonest-first, from
+      // now forward. Speak the nearest as calendar evidence.
+      return formatCalendarEvidenceForSpeech(subject.displayName, calMatches[0]);
+    }
     return `I don't have another visit with ${subject.displayName} coming up.`;
   }
   const sorted = [...matches].sort((a, b) =>
