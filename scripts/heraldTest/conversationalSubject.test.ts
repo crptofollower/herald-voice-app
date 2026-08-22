@@ -20,6 +20,7 @@ import {
   isReferentPhoneQuestion,
   isReferentVisitDateQuestion,
   isReferentVisitOutcomeQuestion,
+  isReferentUpcomingVisitQuestion,
 } from '../../src/routing/conversationalSubject.ts';
 import { formatSpokenDate } from '../../src/utils/parseTime.ts';
 
@@ -96,6 +97,10 @@ function seedTwoDoctorOutcomes() {
   attachVisitOutcome(patelId, 'Patel said the labs were unremarkable.');
   const smithId = writeMedicalRecord({ doctor_name: 'Dr. Smith', notes: 'visit', visit_date: '2026-07-20' });
   attachVisitOutcome(smithId, 'Smith said to continue the current dose.');
+}
+
+function seedUpcomingAppointment(doctorName: string, visitDate: string) {
+  writeMedicalRecord({ doctor_name: doctorName, visit_date: visitDate, status: 'upcoming' });
 }
 
 const SMITH_OUTCOME = 'Smith said to continue the current dose.';
@@ -465,7 +470,8 @@ export async function runConversationalSubjectTests() {
         && !v.responseText.includes('Dr. Smith')
         && !v.responseText.includes(smithSpoken),
       `referent_resume Patel on ${patelSpoken}, not Smith`);
-    assert('S3-2b subject clears after visit-date consume', subject.hasLive(), v => v === false, 'cleared');
+    assert('S3-2b subject RENEWED (still live) after visit-date consume', subject.hasLive(), v => v === true, 'live');
+    assert('S3-2c renewed subject is still Patel, not cleared/switched', subject.peek()?.entityId, v => v === 'Dr. Patel', 'Dr. Patel');
   }
 
   {
@@ -562,7 +568,7 @@ export async function runConversationalSubjectTests() {
         && v.responseText.includes(SMITH_OUTCOME)
         && !v.responseText.includes(PATEL_OUTCOME),
       'referent_resume / Smith outcome');
-    assert('O1c subject cleared after consume', subject.hasLive(), v => v === false, 'cleared');
+    assert('O1c subject RENEWED (still live) after outcome consume', subject.hasLive(), v => v === true, 'live');
   }
 
   {
@@ -628,7 +634,7 @@ export async function runConversationalSubjectTests() {
       v => v.handled === true && v.source === 'referent_resume'
         && v.responseText === VISIT_OUTCOME_MISS,
       VISIT_OUTCOME_MISS);
-    assert('O5b subject cleared after miss consume', subject.hasLive(), v => v === false, 'cleared');
+    assert('O5b subject RENEWED even on honest miss (identity still resolved)', subject.hasLive(), v => v === true, 'live');
   }
 
   {
@@ -674,7 +680,7 @@ export async function runConversationalSubjectTests() {
       v => v.handled === true && v.source === 'referent_resume'
         && v.responseText.includes(SMITH_OUTCOME),
       'she → Smith outcome');
-    assert('O7b she consume clears subject', subject.hasLive(), v => v === false, 'cleared');
+    assert('O7b she consume RENEWS subject', subject.hasLive(), v => v === true, 'live');
   }
 
   {
@@ -686,7 +692,7 @@ export async function runConversationalSubjectTests() {
       v => v.handled === true && v.source === 'referent_resume'
         && v.responseText.includes(SMITH_OUTCOME),
       'they → Smith outcome');
-    assert('O7d they consume clears subject', subject.hasLive(), v => v === false, 'cleared');
+    assert('O7d they consume RENEWS subject', subject.hasLive(), v => v === true, 'live');
   }
 
   {
@@ -694,14 +700,13 @@ export async function runConversationalSubjectTests() {
     seedTwoDoctorOutcomes();
     await say('When did I see Dr. Smith?');
     await say('When did I see him?');
-    assert('O8a visit-date consume cleared subject', subject.hasLive(), v => v === false, 'cleared');
+    assert('O8a visit-date consume RENEWS subject (was: cleared)', subject.hasLive(), v => v === true, 'live');
     const t3 = await say('What did he tell me?');
-    assert('O8b subsequent outcome pronoun fail-closed', t3,
-      v => v.handled === false
-        && v.routeDecision.reason === 'medical:visit_outcome_unresolved_referent'
-        && !v.routeDecision.response.includes(SMITH_OUTCOME)
-        && !v.routeDecision.response.includes(PATEL_OUTCOME),
-      'unresolved_referent, no lifetime expansion');
+    assert('O8b chained outcome pronoun now RESOLVES via renewed subject (was: fail-closed)', t3,
+      v => v.handled === true && v.source === 'referent_resume'
+        && v.responseText.includes(SMITH_OUTCOME)
+        && !v.responseText.includes(PATEL_OUTCOME),
+      'referent_resume, Smith outcome');
   }
 
   {
@@ -721,6 +726,134 @@ export async function runConversationalSubjectTests() {
       v => (v as string).indexOf('isReferentVisitDateQuestion(text)')
         < (v as string).indexOf('isReferentVisitOutcomeQuestion(text)'),
       'visit-date before outcome');
+  }
+
+  // ── Continuity Step 4 — upcoming-visit referent (Flow C + tierRouter guard) ──
+  console.log(`\n${BOLD}  Upcoming-visit referent + medical chaining (Continuity Step 4)${RESET}\n`);
+
+  assert('U-P-am-i-seeing-him', isReferentUpcomingVisitQuestion('When am I seeing him again?'), v => v === true, 'true');
+  assert('U-P-do-i-see-her', isReferentUpcomingVisitQuestion('When do I see her again?'), v => v === true, 'true');
+  assert('U-P-next-appt-they', isReferentUpcomingVisitQuestion("When's my next appointment with them?"), v => v === true, 'true');
+  assert('U-P-patel-out', isReferentUpcomingVisitQuestion('When am I seeing Dr. Patel again?'), v => v === false, 'false');
+  assert('U-P-phone-out', isReferentUpcomingVisitQuestion("What's his number?"), v => v === false, 'false');
+
+  // ── Test A (spec): three-turn chain, same doctor, no re-naming ──
+  {
+    const { say, subject } = freshFlow();
+    seedTwoDoctorOutcomes();
+    const t1 = await say('Who was the last doctor I saw?');
+    assert('CHAIN-A1 turn 1 establishes Smith', t1.handled === false && t1.routeDecision.response.includes('Dr. Smith'), v => v === true, 'Dr. Smith named');
+    const t2 = await say('When did I see him?');
+    assert('CHAIN-A2 turn 2 resolves Smith visit date via referent_resume', t2,
+      v => v.handled === true && v.source === 'referent_resume' && v.responseText.includes('Dr. Smith'),
+      'referent_resume, Dr. Smith');
+    assert('CHAIN-A3 subject still live after turn 2', subject.hasLive(), v => v === true, 'live');
+    const t3 = await say('What did he tell me?');
+    assert('CHAIN-A4 turn 3 resolves Smith outcome via referent_resume, same subject', t3,
+      v => v.handled === true && v.source === 'referent_resume'
+        && v.responseText.includes(SMITH_OUTCOME)
+        && !v.responseText.includes(PATEL_OUTCOME),
+      'referent_resume, Smith outcome only');
+  }
+
+  // ── Test B (spec): four-turn chain including upcoming-visit ──
+  {
+    const { say, subject } = freshFlow();
+    seedTwoDoctorOutcomes();
+    seedUpcomingAppointment('Dr. Smith', '2026-09-10');
+    await say('Who was the last doctor I saw?');
+    await say('When did I see him?');
+    await say('What did he tell me?');
+    assert('CHAIN-B1 subject still live after three referent turns', subject.hasLive(), v => v === true, 'live');
+    assert('CHAIN-B2 subject still Smith after three referent turns', subject.peek()?.entityId, v => v === 'Dr. Smith', 'Dr. Smith');
+    const t4 = await say('When am I seeing him again?');
+    assert('CHAIN-B3 turn 4 resolves Smith upcoming visit via referent_resume', t4,
+      v => v.handled === true && v.source === 'referent_resume'
+        && v.responseText.includes('Dr. Smith')
+        && v.responseText.includes(formatSpokenDate('2026-09-10')),
+      'referent_resume, Smith upcoming visit');
+  }
+
+  // ── Test C (spec): explicit named subject replaces the stale live one ──
+  {
+    const { say, subject } = freshFlow();
+    seedTwoDoctorOutcomes();
+    await say('When did I see Dr. Smith?');
+    assert('CHAIN-C1 Smith established', subject.peek()?.entityId, v => v === 'Dr. Smith', 'Dr. Smith');
+    await say('When did I see Dr. Patel?');
+    assert('CHAIN-C2 explicit named Patel overrides stale Smith subject', subject.peek()?.entityId, v => v === 'Dr. Patel', 'Dr. Patel');
+    const t3 = await say('What did he tell me?');
+    assert('CHAIN-C3 subsequent "him" resolves to Patel, never Smith', t3,
+      v => v.handled === true && v.source === 'referent_resume'
+        && v.responseText.includes(PATEL_OUTCOME)
+        && !v.responseText.includes(SMITH_OUTCOME),
+      'Patel outcome only');
+  }
+
+  // ── Test D (spec): unrelated turn releases the subject, no resurrection ──
+  {
+    const { say, subject } = freshFlow();
+    seedTwoDoctorOutcomes();
+    await say('When did I see Dr. Smith?');
+    await say('When did I see him?'); // renews Smith
+    assert('CHAIN-D1 subject live before unrelated turn', subject.hasLive(), v => v === true, 'live');
+    await say('Open YouTube'); // unrelated -- must release
+    assert('CHAIN-D2 subject released by unrelated turn', subject.hasLive(), v => v === false, 'cleared');
+    const t3 = await say('What did he tell me?');
+    assert('CHAIN-D3 pronoun after release fails closed, no resurrection of Smith', t3,
+      v => v.handled === false
+        && v.routeDecision.reason === 'medical:visit_outcome_unresolved_referent'
+        && !v.routeDecision.response.includes(SMITH_OUTCOME),
+      'unresolved_referent, no Smith leak');
+  }
+
+  // ── Test E (spec): missing subject, upcoming-visit leg specifically ──
+  {
+    const { say, subject } = freshFlow();
+    seedTwoDoctorOutcomes();
+    seedUpcomingAppointment('Dr. Smith', '2026-09-10');
+    seedUpcomingAppointment('Dr. Patel', '2026-09-15');
+    const t1 = await say('When am I seeing him again?');
+    assert('CHAIN-E1 no-subject upcoming referent fails closed', t1,
+      v => v.handled === false && v.routeDecision.kind === 'device_read'
+        && v.routeDecision.reason === 'medical:visit_upcoming_unresolved_referent'
+        && v.routeDecision.response === "I'm not sure who you mean — which doctor?",
+      'unresolved referent clarification');
+    assert('CHAIN-E2 no broad/lifetime fallback leaked either doctor', t1,
+      v => v.handled === false
+        && !t1.routeDecision.response.includes('Smith')
+        && !t1.routeDecision.response.includes('Patel'),
+      'no doctor named');
+    assert('CHAIN-E3 no subject established by the miss', subject.hasLive(), v => v === false, 'no subject');
+  }
+
+  // ── Test F (spec): live subject, but no matching upcoming appointment ──
+  {
+    const { say, subject } = freshFlow();
+    seedTwoDoctorOutcomes(); // Smith and Patel both have PAST visits only, no upcoming rows
+    await say('When did I see Dr. Smith?');
+    const t2 = await say('When am I seeing him again?');
+    assert('CHAIN-F1 honest miss, no fabricated appointment', t2,
+      v => v.handled === true && v.source === 'referent_resume'
+        && v.responseText === "I don't have another visit with Dr. Smith coming up.",
+      "I don't have another visit with Dr. Smith coming up.");
+    assert('CHAIN-F2 subject preserved (not silently switched) after the miss', subject.peek()?.entityId, v => v === 'Dr. Smith', 'Dr. Smith');
+  }
+
+  // ── Test G (spec): near-name decoy does not get auto-selected ──
+  {
+    const { say, subject } = freshFlow();
+    const smithId = writeMedicalRecord({ doctor_name: 'Dr. Smith', notes: 'visit', visit_date: '2026-05-01' });
+    attachVisitOutcome(smithId, SMITH_OUTCOME);
+    seedUpcomingAppointment('Dr. Smithson', '2026-09-20'); // decoy: similar but NOT the same doctor
+    await say('When did I see Dr. Smith?');
+    assert('CHAIN-G1 Smith subject established, not Smithson', subject.peek()?.entityId, v => v === 'Dr. Smith', 'Dr. Smith');
+    const t2 = await say('When am I seeing him again?');
+    assert('CHAIN-G2 decoy Smithson row never auto-selected for Smith\'s subject', t2,
+      v => v.handled === true && v.source === 'referent_resume'
+        && v.responseText === "I don't have another visit with Dr. Smith coming up."
+        && !v.responseText.includes('Smithson'),
+      "honest miss for Smith, no Smithson leak");
   }
 
   const total = passed + failures.length;

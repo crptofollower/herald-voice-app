@@ -11,6 +11,8 @@ import {
   answerReferentVisitDate,
   isReferentVisitOutcomeQuestion,
   answerReferentVisitOutcome,
+  isReferentUpcomingVisitQuestion,
+  answerReferentUpcomingVisit,
 } from './conversationalSubject';
 import { detectFamilyRead, resolveFamilyRead } from '../utils/familyRead';
 import { resolveHouseholdProvider } from '../utils/householdRead';
@@ -155,23 +157,33 @@ export async function processUtterance(
       subject.clear();
       return { handled: true, source: 'referent_resume', responseText, commits: [] };
     }
-    // Second closed speech act (Continuity Step 3): when-did-I-see against a
-    // live doctor subject. Flow C resolves WHO; getLastVisit owns the fact.
-    // A non-medical live subject returns null and falls through to routing —
-    // never a fabricated answer, never a cross-domain guess.
-    if (isReferentVisitDateQuestion(text)) {
-      const live = subject.peek();
-      const responseText = live ? await answerReferentVisitDate(live) : null;
+    // Continuity Step 4: successful medical referent resolution (visit-date,
+    // visit-outcome, upcoming-visit) RENEWS the subject instead of clearing
+    // it, so a chain of related follow-up questions about the same doctor
+    // resolves without re-naming him each time. Renewal reuses the existing
+    // holder mechanism (establishMedical with the SAME identity) -- no new
+    // topic stack, no persistence. A domain-mismatched live subject (family
+    // or household) still returns null from every medical act below and
+    // falls through unchanged -- never a fabricated cross-domain answer.
+    const live = subject.peek();
+    if (live && isReferentVisitDateQuestion(text)) {
+      const responseText = await answerReferentVisitDate(live);
       if (responseText) {
-        subject.clear();
+        subject.establishMedical({ entityId: live.entityId, displayName: live.displayName });
         return { handled: true, source: 'referent_resume', responseText, commits: [] };
       }
     }
-    if (isReferentVisitOutcomeQuestion(text)) {
-      const live = subject.peek();
-      const responseText = live ? await answerReferentVisitOutcome(live) : null;
+    if (live && isReferentVisitOutcomeQuestion(text)) {
+      const responseText = await answerReferentVisitOutcome(live);
       if (responseText) {
-        subject.clear();
+        subject.establishMedical({ entityId: live.entityId, displayName: live.displayName });
+        return { handled: true, source: 'referent_resume', responseText, commits: [] };
+      }
+    }
+    if (live && isReferentUpcomingVisitQuestion(text)) {
+      const responseText = await answerReferentUpcomingVisit(live);
+      if (responseText) {
+        subject.establishMedical({ entityId: live.entityId, displayName: live.displayName });
         return { handled: true, source: 'referent_resume', responseText, commits: [] };
       }
     }

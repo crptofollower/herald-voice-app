@@ -27,7 +27,7 @@ import {
   COMPLETED_PAST_FIRST_PERSON_RE,
   THIRD_PERSON_REFERENT_RE,
 } from "../utils/instructionSignals";
-import { isReferentVisitOutcomeQuestion } from "./conversationalSubject";
+import { isReferentVisitOutcomeQuestion, isReferentUpcomingVisitQuestion } from "./conversationalSubject";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1481,6 +1481,20 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
       tier1Response: "I'm not sure who you mean — which doctor?",
       isMedical: true,
       reason: "medical:visit_outcome_unresolved_referent",
+    };
+  }
+
+  // Continuity Step 4: unresolved third-person upcoming-visit referent -- no
+  // live Flow C subject consumed upstream at processUtterance step 1b. Must
+  // not fall through to a broad/unhinted upcoming-appointments list (Spine
+  // §5 fabrication class) -- mirrors the visit-outcome guard immediately
+  // above; same closed pronoun set, same fail-closed shape.
+  if (isReferentUpcomingVisitQuestion(msg)) {
+    return {
+      tier: 1,
+      tier1Response: "I'm not sure who you mean — which doctor?",
+      isMedical: true,
+      reason: "medical:visit_upcoming_unresolved_referent",
     };
   }
 

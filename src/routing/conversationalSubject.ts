@@ -7,8 +7,14 @@
 // that entity's phone with a third-person singular pronoun.
 //
 // RAM only. Same mounted-chat lifecycle as ConversationSession.
-// TTL: exactly one following user turn. Consume clears. Unused next turn
-// clears. Process death/restart: gone. No SQLite persistence.
+// TTL: exactly one following user turn per act, EXCEPT the three medical
+// referent acts (visit-date, visit-outcome, upcoming-visit), which RENEW
+// the subject on a successful resolve so a chain of related follow-up
+// questions about the same doctor keeps working without re-naming him
+// (Continuity Step 4). Renewal reuses this file's own establishMedical()
+// with the SAME identity -- no new topic stack, no persistence. Unused next
+// turn still clears, as does any domain mismatch, explicit new subject,
+// pending, or emergency. Process death/restart: gone. No SQLite persistence.
 //
 // Phone is NEVER cached. Previous ACK/prose is NEVER cached as truth.
 // displayName / relationship / category are convenience context only —
@@ -258,4 +264,67 @@ export async function answerReferentVisitOutcome(
   if (subject.domain !== 'medical_doctor') return null;
   const { getLastVisitOutcomeSummary } = await import('../db/medicalDB');
   return getLastVisitOutcomeSummary(subject.entityId);
+}
+
+// Fourth closed speech act (Continuity Step 4): upcoming-visit against the
+// live doctor subject. Branches 1–2 reuse THIRD_PERSON_REFERENT (object
+// forms after seeing/see, same as visit-date). Branch 3 adds "them" for
+// "next appointment with them". Pronoun is eligibility only; discarded.
+const REFERENT_UPCOMING_VISIT_RE = new RegExp(
+  `^\\s*when(?:` +
+    `\\s+am\\s+i\\s+seeing\\s+(${THIRD_PERSON_REFERENT})\\s+again` +
+    `|\\s+do\\s+i\\s+see\\s+(${THIRD_PERSON_REFERENT})\\s+again` +
+    `|(?:'s|\\s+is)\\s+my\\s+next\\s+appointment\\s+with\\s+(${REFERENT_SUBJECT_PRONOUN}|them)` +
+  `)\\s*[?.!]?\\s*$`,
+  'i',
+);
+
+export function isReferentUpcomingVisitQuestion(text: string): boolean {
+  const m = text.match(REFERENT_UPCOMING_VISIT_RE);
+  if (!m) return false;
+  void (m[1] ?? m[2] ?? m[3]); // pronoun discarded -- not a selector, no gender inference
+  return true;
+}
+
+/**
+ * Authoritative re-read for the upcoming-visit referent (Continuity Step 4).
+ * Flow C supplies IDENTITY ONLY -- getUpcomingAppointments is the
+ * deterministic reader and owns every factual value in the returned
+ * sentence. Exact-match on the normalized stored doctor name (the subject's
+ * entityId is itself a stored doctor name from getLastVisit) -- no
+ * fuzzy/substring matching, so this cannot select an ambiguous or wrong
+ * doctor's appointments. Returns null when this subject cannot answer
+ * (non-medical domain), so the caller falls through rather than
+ * fabricating. Sentence shape mirrors tierRouter's phraseNamedDoctorUpcoming
+ * -- not factored, same discipline as answerReferentVisitDate above
+ * (Continuity Step 3 / Rule 11).
+ */
+export async function answerReferentUpcomingVisit(
+  subject: ConversationalSubject,
+): Promise<string | null> {
+  if (subject.domain !== 'medical_doctor') return null;
+  const { getUpcomingAppointments, normalizeDoctorNameForMatch } = await import('../db/medicalDB');
+  const { formatSpokenDate } = await import('../utils/parseTime');
+  const all = getUpcomingAppointments();
+  const target = normalizeDoctorNameForMatch(subject.entityId);
+  const matches = all.filter(
+    (r) => r.doctorName && normalizeDoctorNameForMatch(r.doctorName) === target,
+  );
+  if (matches.length === 0) {
+    return `I don't have another visit with ${subject.displayName} coming up.`;
+  }
+  const sorted = [...matches].sort((a, b) =>
+    (a.visitDate < b.visitDate ? -1 : a.visitDate > b.visitDate ? 1 : 0),
+  );
+  const CAP = 3;
+  const shown = sorted.slice(0, CAP);
+  const remaining = sorted.length - shown.length;
+  let sentence = `You see ${subject.displayName} on ${formatSpokenDate(shown[0].visitDate)}`;
+  for (let i = 1; i < shown.length; i++) {
+    const isLastShown = i === shown.length - 1;
+    const connector = isLastShown && remaining === 0 ? 'and again' : 'then again';
+    sentence += `, ${connector} ${formatSpokenDate(shown[i].visitDate)}`;
+  }
+  sentence += remaining > 0 ? `, and ${remaining} more after that.` : '.';
+  return sentence;
 }
