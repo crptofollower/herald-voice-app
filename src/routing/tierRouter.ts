@@ -27,7 +27,7 @@ import {
   COMPLETED_PAST_FIRST_PERSON_RE,
   THIRD_PERSON_REFERENT_RE,
 } from "../utils/instructionSignals";
-import { isReferentVisitOutcomeQuestion, isReferentUpcomingVisitQuestion } from "./conversationalSubject";
+import { isReferentVisitOutcomeQuestion, isReferentUpcomingVisitQuestion, isReferentYearBoundedVisitQuestion } from "./conversationalSubject";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1495,6 +1495,20 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
       tier1Response: "I'm not sure who you mean — which doctor?",
       isMedical: true,
       reason: "medical:visit_upcoming_unresolved_referent",
+    };
+  }
+
+  // Android Calendar Range V1: unresolved third-person year-bounded
+  // referent -- no live Flow C subject consumed upstream. Mirrors the
+  // visit-outcome / upcoming-visit guards above; same closed pronoun shape,
+  // same fail-closed clarification, same reason it must not fall through to
+  // any broad/unhinted result (Spine §5 fabrication class).
+  if (isReferentYearBoundedVisitQuestion(msg)) {
+    return {
+      tier: 1,
+      tier1Response: "I'm not sure who you mean — which doctor?",
+      isMedical: true,
+      reason: "medical:visit_year_unresolved_referent",
     };
   }
 

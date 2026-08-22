@@ -238,7 +238,37 @@ export async function answerReferentVisitDate(
   const { getLastVisit } = await import('../db/medicalDB');
   const { formatSpokenDate } = await import('../utils/parseTime');
   const visit = getLastVisit(subject.entityId);
-  if (!visit) return `I don't have a visit with ${subject.displayName} yet — tell me and I'll remember.`;
+  if (!visit) {
+    // Android Calendar Range V1: no confirmed medical visit. Try bounded
+    // historical calendar evidence (BACK_MONTHS back) before the honest
+    // miss. Date phrasing, not weekday -- an event up to a year old needs
+    // an actual calendar date, not an ambiguous day-of-week.
+    const BACK_MONTHS = 12;
+    const { normalizeDoctorNameForMatch } = await import('../db/medicalDB');
+    const { queryCalendarEvidence, formatCalendarEvidenceForSpeech } = await import('../db/calendarCacheDB');
+    const now = new Date();
+    const backStart = new Date(now);
+    backStart.setMonth(backStart.getMonth() - BACK_MONTHS);
+    const rangeResult = await queryCalendarEvidence(subject.entityId, normalizeDoctorNameForMatch, backStart, now);
+    if (rangeResult.status === 'unavailable') {
+      // Not evidence of absence -- must never be spoken as any absence
+      // claim, bounded or not. Source-honest, distinct third voice.
+      return "I couldn't check your calendar right now.";
+    }
+    if (rangeResult.events.length > 0) {
+      // Ascending sort -- most recent PAST match is the last element.
+      return formatCalendarEvidenceForSpeech(subject.displayName, rangeResult.events[rangeResult.events.length - 1], 'date');
+    }
+    // CTO trust correction: a successful search with zero matches is real
+    // evidence of absence WITHIN THE CHECKED BOUND -- but "I don't have a
+    // visit ... yet" (no bound stated, invites "tell me") reads as a
+    // lifetime/complete-history claim once a calendar search backs it,
+    // which Herald never performed (only the past BACK_MONTHS were
+    // checked; there is no full-history search). Must never imply Herald
+    // searched the user's entire life. This string MUST stay in sync with
+    // BACK_MONTHS above.
+    return `I don't see anything with ${subject.displayName} on your calendar in the past ${BACK_MONTHS} months.`;
+  }
   const who = visit.doctorName ?? subject.displayName;
   const spoken = formatSpokenDate(visit.visitDate);
   const details: string[] = [];
@@ -320,7 +350,7 @@ export async function answerReferentUpcomingVisit(
     // the same normalizeDoctorNameForMatch normalizer, so Dr. Smith and
     // Dr. Smithson do not cross-match. subject.entityId IS the stored doctor
     // name (identity), passed raw -- the reader tokenizes and normalizes it.
-    const { findUpcomingEventsMatchingTerm, formatCalendarEvidenceForSpeech } =
+    const { findUpcomingEventsMatchingTerm, formatCalendarEvidenceForSpeech, queryCalendarEvidence } =
       await import('../db/calendarCacheDB');
     const calMatches = findUpcomingEventsMatchingTerm(subject.entityId, normalizeDoctorNameForMatch);
     if (calMatches.length > 0) {
@@ -328,7 +358,33 @@ export async function answerReferentUpcomingVisit(
       // now forward. Speak the nearest as calendar evidence.
       return formatCalendarEvidenceForSpeech(subject.displayName, calMatches[0]);
     }
-    return `I don't have another visit with ${subject.displayName} coming up.`;
+    // Android Calendar Range V1: the 14-day cache found nothing either.
+    // Widen to a direct, on-demand device query up to FORWARD_MONTHS out
+    // before honestly giving up. This fires only on this double-miss, so
+    // the live OS query is paid rarely, never on every turn. Date phrasing
+    // (not weekday) -- "Wednesday" is ambiguous for an appointment months
+    // out.
+    const FORWARD_MONTHS = 6;
+    const now = new Date();
+    const forwardEnd = new Date(now);
+    forwardEnd.setMonth(forwardEnd.getMonth() + FORWARD_MONTHS);
+    const wideResult = await queryCalendarEvidence(subject.entityId, normalizeDoctorNameForMatch, now, forwardEnd);
+    // Unavailable (permission/provider error) is NOT evidence of absence --
+    // must never be spoken as any absence claim, bounded or not. Source-
+    // honest, distinct third voice.
+    if (wideResult.status === 'unavailable') {
+      return "I couldn't check your calendar right now.";
+    }
+    if (wideResult.events.length > 0) {
+      return formatCalendarEvidenceForSpeech(subject.displayName, wideResult.events[0], 'date');
+    }
+    // CTO trust correction: a successful search with zero matches is real
+    // evidence of absence WITHIN THE CHECKED BOUND -- but the spoken claim
+    // must say so explicitly. "I don't have another visit coming up" (no
+    // bound stated) reads as an unbounded/lifetime claim once a calendar
+    // search backs it, overstating what was actually checked. This string
+    // MUST stay in sync with FORWARD_MONTHS above.
+    return `I don't see anything with ${subject.displayName} on your calendar in the next ${FORWARD_MONTHS} months.`;
   }
   const sorted = [...matches].sort((a, b) =>
     (a.visitDate < b.visitDate ? -1 : a.visitDate > b.visitDate ? 1 : 0),
@@ -344,4 +400,82 @@ export async function answerReferentUpcomingVisit(
   }
   sentence += remaining > 0 ? `, and ${remaining} more after that.` : '.';
   return sentence;
+}
+
+// Fifth closed speech act (Android Calendar Range V1): year-bounded query
+// against the live doctor subject. Unlike the other referent predicates,
+// this one returns the extracted year (not a bare boolean) because the
+// caller needs it -- subject supplies identity, this supplies the temporal
+// bound. Deliberately narrow, closed phrasing family (mirrors the discipline
+// every other referent act in this file follows): "I thought I saw him in
+// 2024", "did I see him in 2024", "when did I see him in 2024". Requires
+// BOTH an OBJECT-position third-person pronoun AND an explicit 4-digit year
+// -- no bare "in 2024" alone (that has no subject-referent shape and isn't
+// this act). Pronoun grammar note: "saw HIM" / "see HER" is the OBJECT of
+// the verb, the same grammatical slot as REFERENT_VISIT_DATE_RE's "did I
+// (last) see him/her" above -- this reuses THIRD_PERSON_REFERENT (object
+// forms), NOT REFERENT_SUBJECT_PRONOUN (he|she|they, used only where the
+// pronoun is the SUBJECT of its own clause, e.g. "what did HE tell me").
+// Consistent with THIRD_PERSON_REFERENT's own established scope, this does
+// not cover "them" (no existing object-position act in this file does).
+const REFERENT_YEAR_RE = new RegExp(
+  `^\\s*(?:i\\s+thought\\s+i\\s+saw|did\\s+i\\s+see|when\\s+did\\s+i\\s+see)\\s+(${THIRD_PERSON_REFERENT})\\s+in\\s+(19\\d{2}|20\\d{2})\\s*[?.!]?\\s*$`,
+  'i',
+);
+
+export function isReferentYearBoundedVisitQuestion(text: string): { year: number } | null {
+  const m = text.match(REFERENT_YEAR_RE);
+  if (!m) return null;
+  void m[1]; // pronoun discarded -- not a selector, no gender inference
+  return { year: parseInt(m[2], 10) };
+}
+
+/**
+ * Authoritative bounded-year re-read (Android Calendar Range V1). No
+ * year-scoped medical authority exists (getLastVisit has no year filter and
+ * always returns the single latest visit regardless of year, so it cannot
+ * correctly answer a year-scoped question) -- this act goes straight to
+ * calendar evidence, which is the only source capable of answering it. Never
+ * auto-selects among multiple matches within the year: returns a bounded,
+ * deterministic clarification naming the dates instead of guessing. Local
+ * year bounds are HALF-OPEN to match queryCalendarEvidence's [start, end)
+ * contract: start = local Jan 1 of `year`, end = local Jan 1 of `year + 1`
+ * (NOT Dec 31 23:59:59.999 -- that mixes an inclusive-end value with an
+ * exclusive filter; numerically harmless here but the wrong convention to
+ * compose against a half-open contract, and the source of a real class of
+ * off-by-one bugs elsewhere if copied). Matches this codebase's existing
+ * local-date-window convention otherwise (see getAppointmentsForLocalDate /
+ * getCachedEventsForDate). Returns null only for a non-medical-domain
+ * subject, so the caller falls through rather than fabricating.
+ */
+export async function answerReferentYearBoundedVisit(
+  subject: ConversationalSubject,
+  year: number,
+): Promise<string | null> {
+  if (subject.domain !== 'medical_doctor') return null;
+  const { normalizeDoctorNameForMatch } = await import('../db/medicalDB');
+  const { queryCalendarEvidence, formatCalendarEvidenceForSpeech } = await import('../db/calendarCacheDB');
+  const yearStart = new Date(year, 0, 1, 0, 0, 0, 0);
+  const yearEnd = new Date(year + 1, 0, 1, 0, 0, 0, 0);
+  const rangeResult = await queryCalendarEvidence(subject.entityId, normalizeDoctorNameForMatch, yearStart, yearEnd);
+  if (rangeResult.status === 'unavailable') {
+    // Not evidence of absence -- must never be spoken as "I don't have
+    // anything...". Source-honest, distinct third voice.
+    return "I couldn't check your calendar right now.";
+  }
+  const hits = rangeResult.events;
+  if (hits.length === 0) {
+    return `I don't have anything with ${subject.displayName} on your calendar in ${year}.`;
+  }
+  if (hits.length === 1) {
+    return formatCalendarEvidenceForSpeech(subject.displayName, hits[0], 'date');
+  }
+  // Multiple matches in the same year -- never auto-select (Test E). Bounded
+  // deterministic clarification naming every date. Carries the SAME
+  // provenance prefix as every other calendar-sourced sentence in this file
+  // -- a clarification is still a calendar-sourced utterance and must not
+  // silently drop the "Your calendar shows" marker just because it asks a
+  // question instead of stating a single fact.
+  const dates = hits.map((h) => new Date(h.start_ms).toLocaleDateString([], { month: 'long', day: 'numeric' }));
+  return `Your calendar shows ${hits.length} things with ${subject.displayName} in ${year} — ${dates.join(', ')}. Which one did you mean?`;
 }

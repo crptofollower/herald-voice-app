@@ -62,39 +62,24 @@ export async function refreshCalendarCache(): Promise<void> {
       db.runSync("DELETE FROM calendar_cache;");
 
       for (const event of events) {
-        if (!event.title) continue;
+        const parsed = parseRawCalendarEvent(event, now);
+        if (!parsed) continue;
 
-        // Parse startDate/endDate safely — expo-calendar returns strings on Android
-        // that may not be standard ISO. new Date() handles most formats.
-        let startMs = event.startDate ? new Date(event.startDate).getTime() : now;
-        let endMs = event.endDate ? new Date(event.endDate).getTime() : now;
-
-        // All-day events on Android are stored as UTC midnight.
-        // This causes them to appear on the wrong day in local time.
-        // Normalize: shift to local midnight so overlap queries work correctly.
-        if (event.allDay) {
-          const startLocal = new Date(startMs);
-          startLocal.setHours(0, 0, 0, 0);
-          startMs = startLocal.getTime();
-          const endLocal = new Date(endMs);
-          endLocal.setHours(23, 59, 59, 999);
-          endMs = endLocal.getTime();
-        }
-
-        // Skip events with unparseable dates
-        if (isNaN(startMs) || isNaN(endMs)) continue;
-
+        // NOTE: cached_at here is the WRITE-TIME timestamp (nowISO, when this
+        // refresh ran), not parsed.cached_at (which parseRawCalendarEvent
+        // sets for its own return-value shape, used by queryCalendarEvidence
+        // below where there is no cache write at all). Do not swap these.
         db.runSync(
           `INSERT OR REPLACE INTO calendar_cache
              (id, title, start_ms, end_ms, all_day, notes, cached_at)
            VALUES (?, ?, ?, ?, ?, ?, ?);`,
           [
-            event.id,
-            event.title,
-            startMs,
-            endMs,
-            event.allDay ? 1 : 0,
-            event.notes ?? null,
+            parsed.id,
+            parsed.title,
+            parsed.start_ms,
+            parsed.end_ms,
+            parsed.all_day,
+            parsed.notes ?? null,
             nowISO,
           ]
         );
@@ -381,21 +366,208 @@ export function findUpcomingEventsMatchingTerm(
 export function buildCalendarEvidenceParts(
   displayName: string,
   event: CachedEvent,
-): { prefix: string; displayName: string; weekday: string; timeStr: string | null } {
+): { prefix: string; displayName: string; weekday: string; dateLabel: string; timeStr: string | null } {
   const start = new Date(event.start_ms);
   const weekday = start.toLocaleDateString([], { weekday: 'long' });
+  // dateLabel includes the year unconditionally -- an event that is months
+  // or a year old must never rely on the listener tracking which year is
+  // implied (Elder Safety: never assume relative-date tracking).
+  const dateLabel = start.toLocaleDateString([], { month: 'long', day: 'numeric', year: 'numeric' });
   const timeStr = event.all_day
     ? null
     : start.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  return { prefix: 'Your calendar shows', displayName, weekday, timeStr };
+  return { prefix: 'Your calendar shows', displayName, weekday, dateLabel, timeStr };
 }
 
+// mode='weekday' (default) preserves EVERY existing call site's behavior
+// byte-for-byte (the 14-day-cache fallback, already device-proven last
+// session) -- weekday is meaningful and unambiguous within ~2 weeks. New
+// wide-range/historical/year-bounded call sites (Android Calendar Range V1)
+// pass mode='date': for anything outside the near-term cache window,
+// "Wednesday" is ambiguous (which Wednesday?) -- an actual calendar date is
+// the honest, unambiguous phrasing.
 export function formatCalendarEvidenceForSpeech(
   displayName: string,
   event: CachedEvent,
+  mode: 'weekday' | 'date' = 'weekday',
 ): string {
   const p = buildCalendarEvidenceParts(displayName, event);
+  const when = mode === 'date' ? p.dateLabel : p.weekday;
   return p.timeStr === null
-    ? `${p.prefix} ${p.displayName} on ${p.weekday}.`
-    : `${p.prefix} ${p.displayName} on ${p.weekday} at ${p.timeStr}.`;
+    ? `${p.prefix} ${p.displayName} on ${when}.`
+    : `${p.prefix} ${p.displayName} on ${when} at ${p.timeStr}.`;
+}
+
+// ─── parseRawCalendarEvent ──────────────────────────────────────────────────
+//
+// Shared event-parsing logic (Android Calendar Range V1 / Rule 11 — machinery
+// unified at the second occurrence, per Harvest §B item 6(a)). Factored out
+// of refreshCalendarCache's inline loop, which now calls this too (see above)
+// — behavior there is unchanged, this is purely a mechanical extraction.
+// Handles the two known Android/expo-calendar quirks this file's header
+// already documents: non-standard ISO date strings, and all-day events
+// stored as UTC midnight (normalized to local-day bounds here). Returns null
+// for a missing title or unparseable dates -- caller skips the row.
+function parseRawCalendarEvent(
+  event: { id: string; title?: string | null; startDate?: string | Date | null; endDate?: string | Date | null; allDay?: boolean; notes?: string | null },
+  fallbackNowMs: number,
+): CachedEvent | null {
+  if (!event.title) return null;
+  let startMs = event.startDate ? new Date(event.startDate).getTime() : fallbackNowMs;
+  let endMs = event.endDate ? new Date(event.endDate).getTime() : fallbackNowMs;
+  if (event.allDay) {
+    const startLocal = new Date(startMs);
+    startLocal.setHours(0, 0, 0, 0);
+    startMs = startLocal.getTime();
+    const endLocal = new Date(endMs);
+    endLocal.setHours(23, 59, 59, 999);
+    endMs = endLocal.getTime();
+  }
+  if (isNaN(startMs) || isNaN(endMs)) return null;
+  return {
+    id: event.id,
+    title: event.title,
+    start_ms: startMs,
+    end_ms: endMs,
+    all_day: event.allDay ? 1 : 0,
+    notes: event.notes ?? undefined,
+    cached_at: new Date().toISOString(),
+  };
+}
+
+// ─── queryCalendarEvidence ───────────────────────────────────────────────────
+//
+// Generic, ON-DEMAND, bounded calendar-evidence range reader (Android
+// Calendar Range V1). Sibling to findUpcomingEventsMatchingTerm (which only
+// reads the 14-day cache) -- this one queries the device calendar DIRECTLY,
+// for a caller-supplied [startDate, endDate) window of ANY size (bounded by
+// the caller, never unbounded). Read-only: no SQL write, no calendar_cache
+// mutation, no persistence of any kind. Reuses the SAME namesake-fence
+// matcher (normalizedTokens / tokenSequenceContained) as the 14-day-cache
+// reader -- one matching rule, two sources.
+//
+// PROVIDER-NEUTRAL SEAM: the actual device fetch is a swappable module-level
+// function (see setCalendarEventFetcher below), the same pattern this
+// codebase already uses for setDB/getDB and calendarWrite.ts's injectable
+// CalendarWriteFn. A future non-Android calendar source (e.g. Outlook) would
+// be a different fetcher behind this SAME queryCalendarEvidence signature --
+// no new abstraction is built here, this injectability point already IS the
+// seam. Not built or wired to anything in this session.
+//
+// Called rarely by design: only on a DOUBLE miss (medical authority AND the
+// fast 14-day cache both empty), so this on-demand OS call is paid rarely,
+// never on every turn.
+//
+// RESULT SHAPE: mirrors this codebase's own EphemeralResult convention
+// (ephemeralConversation.ts: `{status:'ok', text}` / `{status:'unavailable',
+// reason}`) rather than inventing a new pattern. This distinguishes three
+// genuinely different outcomes that a bare array collapses into one:
+//   - a successful query with matches
+//   - a successful query with zero matches (real evidence of absence)
+//   - the source being unavailable (permission denied, provider error --
+//     NOT evidence of absence, and must never be spoken as if it were).
+// Collapsing "unavailable" into an empty array would let a permission
+// failure silently become a confident "I don't have another visit..." --
+// a wrong answer stated with the same confidence as a real honest miss,
+// which is exactly the failure class CLAUDE.md's Trust First principle
+// exists to prevent. `reason` is for logging only, never spoken to the
+// user (see call sites in conversationalSubject.ts).
+//
+// TYPE NOTE: expo-calendar does not export a standalone `Calendar.Event`
+// type. Derive the raw element type from the actual function's return type
+// instead of guessing an export name -- this is the established, correct
+// form (confirmed against this project's actual compilation, not assumed).
+type RawCalendarEvent = Awaited<ReturnType<typeof Calendar.getEventsAsync>>[number];
+
+export type RawCalendarFetchResult =
+  | { status: 'ok'; events: RawCalendarEvent[] }
+  | { status: 'unavailable'; reason: 'permission-denied' | 'error' };
+
+async function fetchRawDeviceEvents(startDate: Date, endDate: Date): Promise<RawCalendarFetchResult> {
+  try {
+    let { status } = await Calendar.getCalendarPermissionsAsync();
+    if (status !== 'granted') {
+      const result = await Calendar.requestCalendarPermissionsAsync();
+      status = result.status;
+    }
+    if (status !== 'granted') return { status: 'unavailable', reason: 'permission-denied' };
+    const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
+    const events = await Calendar.getEventsAsync(calendars.map((c) => c.id), startDate, endDate);
+    return { status: 'ok', events };
+  } catch {
+    return { status: 'unavailable', reason: 'error' };
+  }
+}
+
+// Module-level swappable fetcher -- mirrors setDB/getDB (schema.ts) and
+// CalendarWriteFn (calendarWrite.ts)'s existing injectability convention.
+// Real callers never touch this; the test gate swaps it because expo-calendar
+// has no native bridge inside the Node/tsx test runner. Tests can now supply
+// either an {status:'ok', events} fake (evidence tests) or an
+// {status:'unavailable', reason} fake (the new trust-boundary tests below).
+let _eventFetcher: (start: Date, end: Date) => Promise<RawCalendarFetchResult> = fetchRawDeviceEvents;
+export function setCalendarEventFetcher(fn: (start: Date, end: Date) => Promise<RawCalendarFetchResult>): void {
+  _eventFetcher = fn;
+}
+export function resetCalendarEventFetcher(): void {
+  _eventFetcher = fetchRawDeviceEvents;
+}
+
+export type CalendarEvidenceResult =
+  | { status: 'ok'; events: CachedEvent[] }
+  | { status: 'unavailable'; reason: 'permission-denied' | 'error' };
+
+export async function queryCalendarEvidence(
+  rawTerm: string,
+  normalize: (s: string) => string,
+  startDate: Date,
+  endDate: Date,
+): Promise<CalendarEvidenceResult> {
+  const needle = normalizedTokens(rawTerm, normalize);
+  // An empty/degenerate search term is a caller-input condition, not a
+  // calendar-availability problem -- stays 'ok' with zero events.
+  if (needle.length === 0) return { status: 'ok', events: [] };
+  const startMsBound = startDate.getTime();
+  const endMsBound = endDate.getTime();
+  try {
+    const raw = await _eventFetcher(startDate, endDate);
+    if (raw.status === 'unavailable') return raw;
+    const now = Date.now();
+    const mapped: CachedEvent[] = [];
+    for (const event of raw.events) {
+      // Never speak a fabricated date: parseRawCalendarEvent's fallbackNowMs
+      // exists for refreshCalendarCache's own established, unrelated need
+      // (a cache row with no usable date defaults to "now" so the cache
+      // write doesn't crash) -- that fallback is correct THERE because
+      // nothing speaks that value as a specific date. HERE, the parsed
+      // start_ms is spoken directly as calendar evidence ("Your calendar
+      // shows ... on [date]"), so a row with no real event.startDate must
+      // be skipped outright, never defaulted to "now" and spoken as if it
+      // were observed. This is a stricter rule for THIS call site only;
+      // parseRawCalendarEvent itself and refreshCalendarCache's use of it
+      // are unchanged.
+      if (!event.startDate) continue;
+      const parsed = parseRawCalendarEvent(event, now);
+      if (!parsed) continue;
+      mapped.push(parsed);
+    }
+    // Defensive range enforcement: even though the OS was asked for
+    // [startDate, endDate), do not trust that as the only bound. This makes
+    // the contract deterministic and provider-neutral regardless of how
+    // literally a given calendar source's query semantics honor the passed
+    // range (a future non-Android source might behave differently), and
+    // makes the caller-supplied bound the actual, enforced source of truth
+    // rather than an assumption about the underlying API.
+    const events = mapped
+      .filter((e) => e.start_ms >= startMsBound && e.start_ms < endMsBound)
+      .filter((e) => tokenSequenceContained(normalizedTokens(e.title, normalize), needle))
+      .sort((a, b) => a.start_ms - b.start_ms);
+    return { status: 'ok', events };
+  } catch {
+    // Fail closed, never throw through the conversation pipeline -- mirrors
+    // refreshCalendarCache's and writeCalendarCore's existing discipline.
+    // This is a genuine 'unavailable', NOT a bare [] -- see the type comment
+    // above for why that distinction is load-bearing.
+    return { status: 'unavailable', reason: 'error' };
+  }
 }

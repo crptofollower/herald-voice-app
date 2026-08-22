@@ -13,6 +13,8 @@ import {
   answerReferentVisitOutcome,
   isReferentUpcomingVisitQuestion,
   answerReferentUpcomingVisit,
+  isReferentYearBoundedVisitQuestion,
+  answerReferentYearBoundedVisit,
 } from './conversationalSubject';
 import { detectFamilyRead, resolveFamilyRead } from '../utils/familyRead';
 import { resolveHouseholdProvider } from '../utils/householdRead';
@@ -185,6 +187,16 @@ export async function processUtterance(
       if (responseText) {
         subject.establishMedical({ entityId: live.entityId, displayName: live.displayName });
         return { handled: true, source: 'referent_resume', responseText, commits: [] };
+      }
+    }
+    if (live) {
+      const yearMatch = isReferentYearBoundedVisitQuestion(text);
+      if (yearMatch) {
+        const responseText = await answerReferentYearBoundedVisit(live, yearMatch.year);
+        if (responseText) {
+          subject.establishMedical({ entityId: live.entityId, displayName: live.displayName });
+          return { handled: true, source: 'referent_resume', responseText, commits: [] };
+        }
       }
     }
     subject.clear();

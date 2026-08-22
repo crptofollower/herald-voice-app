@@ -12,7 +12,7 @@ import { setDB, getDB } from '../../src/db/schema.ts';
 import { writeContactRaw } from '../../src/db/contactsDB.ts';
 import { writeServiceProvider } from '../../src/utils/householdCapture.ts';
 import { writeMedicalRecord, attachVisitOutcome, getMedicalRecords, normalizeDoctorNameForMatch } from '../../src/db/medicalDB.ts';
-import { findUpcomingEventsMatchingTerm } from '../../src/db/calendarCacheDB.ts';
+import { findUpcomingEventsMatchingTerm, setCalendarEventFetcher, resetCalendarEventFetcher, queryCalendarEvidence } from '../../src/db/calendarCacheDB.ts';
 import { classifyQuery } from '../../src/routing/tierRouter.ts';
 import { processUtterance } from '../../src/routing/processUtterance.ts';
 import { ConversationSession } from '../../src/routing/conversationSession.ts';
@@ -22,6 +22,10 @@ import {
   isReferentVisitDateQuestion,
   isReferentVisitOutcomeQuestion,
   isReferentUpcomingVisitQuestion,
+  isReferentYearBoundedVisitQuestion,
+  answerReferentVisitDate,
+  answerReferentUpcomingVisit,
+  answerReferentYearBoundedVisit,
 } from '../../src/routing/conversationalSubject.ts';
 import { formatSpokenDate } from '../../src/utils/parseTime.ts';
 
@@ -127,6 +131,57 @@ function futureMs(daysAhead: number, hour = 11): number {
   d.setHours(0, 0, 0, 0);
   d.setDate(d.getDate() + daysAhead);
   d.setHours(hour, 0, 0, 0);
+  return d.getTime();
+}
+
+// Android Calendar Range V1: expo-calendar has no native bridge inside the
+// Node/tsx test runner, so queryCalendarEvidence's device fetch is swapped
+// for a fake one via calendarCacheDB's setCalendarEventFetcher (mirrors this
+// file's own setDB pattern). Returns {status:'ok', events} -- the fetcher's
+// discriminated shape after the unavailable/ok distinction was added. The
+// fake IGNORES the start/end bounds it's called with and returns the full
+// seeded list every time -- the bound enforcement itself is the OS's
+// contract (already evidenced safe from source, see session handoff), not
+// something re-provable in this harness. What IS under test here is
+// Herald's own matching/sorting/mapping/phrasing/range-filtering, which this
+// fully exercises. Always reset in a finally so no test leaks its fake
+// fetcher into a later block.
+async function withFakeCalendarEvents<T>(
+  events: { id: string; title: string; startDate: string | Date; endDate?: string | Date; notes?: string | null; allDay?: boolean }[],
+  fn: () => Promise<T>,
+): Promise<T> {
+  setCalendarEventFetcher(async () => ({ status: 'ok' as const, events: events as any }));
+  try {
+    return await fn();
+  } finally {
+    resetCalendarEventFetcher();
+  }
+}
+
+// Trust-boundary test helper: simulates the calendar source being
+// unavailable (permission denied or a provider error) -- NOT the same as
+// "zero events found". Proves the caller speaks the honest
+// "I couldn't check your calendar right now." voice, never the confident
+// "I don't have another visit..." miss string, when this fires.
+async function withUnavailableCalendar<T>(
+  reason: 'permission-denied' | 'error',
+  fn: () => Promise<T>,
+): Promise<T> {
+  setCalendarEventFetcher(async () => ({ status: 'unavailable' as const, reason }));
+  try {
+    return await fn();
+  } finally {
+    resetCalendarEventFetcher();
+  }
+}
+
+// Fixed instant N months from now, at a given hour -- for building fake
+// wide-range/historical event fixtures without flakiness vs "now".
+function monthsFromNowMs(monthsOffset: number, hour = 11): number {
+  const d = new Date();
+  d.setDate(1); // avoid month-length rollover surprises (e.g. Jan 31 + 1mo)
+  d.setHours(hour, 0, 0, 0);
+  d.setMonth(d.getMonth() + monthsOffset);
   return d.getTime();
 }
 
@@ -858,13 +913,15 @@ export async function runConversationalSubjectTests() {
   {
     const { say, subject } = freshFlow();
     seedTwoDoctorOutcomes(); // Smith and Patel both have PAST visits only, no upcoming rows
-    await say('When did I see Dr. Smith?');
-    const t2 = await say('When am I seeing him again?');
-    assert('CHAIN-F1 honest miss, no fabricated appointment', t2,
-      v => v.handled === true && v.source === 'referent_resume'
-        && v.responseText === "I don't have another visit with Dr. Smith coming up.",
-      "I don't have another visit with Dr. Smith coming up.");
-    assert('CHAIN-F2 subject preserved (not silently switched) after the miss', subject.peek()?.entityId, v => v === 'Dr. Smith', 'Dr. Smith');
+    await withFakeCalendarEvents([], async () => {
+      await say('When did I see Dr. Smith?');
+      const t2 = await say('When am I seeing him again?');
+      assert('CHAIN-F1 honest miss, no fabricated appointment', t2,
+        v => v.handled === true && v.source === 'referent_resume'
+          && v.responseText === "I don't see anything with Dr. Smith on your calendar in the next 6 months.",
+        "I don't see anything with Dr. Smith on your calendar in the next 6 months.");
+      assert('CHAIN-F2 subject preserved (not silently switched) after the miss', subject.peek()?.entityId, v => v === 'Dr. Smith', 'Dr. Smith');
+    });
   }
 
   // ── Test G (spec): near-name decoy does not get auto-selected ──
@@ -873,14 +930,16 @@ export async function runConversationalSubjectTests() {
     const smithId = writeMedicalRecord({ doctor_name: 'Dr. Smith', notes: 'visit', visit_date: '2026-05-01' });
     attachVisitOutcome(smithId, SMITH_OUTCOME);
     seedUpcomingAppointment('Dr. Smithson', '2026-09-20'); // decoy: similar but NOT the same doctor
-    await say('When did I see Dr. Smith?');
-    assert('CHAIN-G1 Smith subject established, not Smithson', subject.peek()?.entityId, v => v === 'Dr. Smith', 'Dr. Smith');
-    const t2 = await say('When am I seeing him again?');
-    assert('CHAIN-G2 decoy Smithson row never auto-selected for Smith\'s subject', t2,
-      v => v.handled === true && v.source === 'referent_resume'
-        && v.responseText === "I don't have another visit with Dr. Smith coming up."
-        && !v.responseText.includes('Smithson'),
-      "honest miss for Smith, no Smithson leak");
+    await withFakeCalendarEvents([], async () => {
+      await say('When did I see Dr. Smith?');
+      assert('CHAIN-G1 Smith subject established, not Smithson', subject.peek()?.entityId, v => v === 'Dr. Smith', 'Dr. Smith');
+      const t2 = await say('When am I seeing him again?');
+      assert('CHAIN-G2 decoy Smithson row never auto-selected for Smith\'s subject', t2,
+        v => v.handled === true && v.source === 'referent_resume'
+          && v.responseText === "I don't see anything with Dr. Smith on your calendar in the next 6 months."
+          && !v.responseText.includes('Smithson'),
+        "honest miss for Smith, no Smithson leak");
+    });
   }
 
   // ── Forward Calendar Evidence V1 — doctor subject → calendar fallback ──
@@ -1011,22 +1070,32 @@ export async function runConversationalSubjectTests() {
       (v: { title: string }[]) => !v.some(h => /Muñozson/.test(h.title)), 'no Muñozson row');
   }
 
-  // D — no medical result AND no calendar match → honest no-result, no substitution
+  // D — no medical result AND no calendar match anywhere within the checked
+  //     bounds (14-day cache, then the 6-month wide-range search added by
+  //     Android Calendar Range V1) → honest BOUNDED no-result, no
+  //     substitution. Wraps the scenario in a fake wide-range fetcher
+  //     returning {status:'ok', events:[]} -- this scenario now also
+  //     reaches that tier (added after this test was originally written),
+  //     and without the mock the real fetcher would fail in this Node test
+  //     environment and produce "I couldn't check your calendar right now."
+  //     instead, which is not what this test proves.
   {
     const { say, subject } = freshFlow();
     seedTwoDoctorOutcomes();
-    seedCalendarEvent('Dentist cleaning', futureMs(2, 11)); // unrelated event present
-    await say('When did I see Dr. Smith?');
-    const t2 = await say('When am I seeing him again?');
-    assert('CAL-D1 honest no-result when neither source matches', t2,
-      v => v.handled === true && v.source === 'referent_resume'
-        && v.responseText === "I don't have another visit with Dr. Smith coming up.",
-      "I don't have another visit with Dr. Smith coming up.");
-    assert('CAL-D2 unrelated calendar event never substituted', t2,
-      v => v.handled === true && !/Dentist/.test(v.responseText) && !/Your calendar shows/.test(v.responseText),
-      'no substitution');
-    assert('CAL-D3 subject preserved after honest miss', subject.peek()?.entityId,
-      v => v === 'Dr. Smith', 'Dr. Smith');
+    seedCalendarEvent('Dentist cleaning', futureMs(2, 11)); // unrelated event present in the 14-day cache
+    await withFakeCalendarEvents([], async () => {
+      await say('When did I see Dr. Smith?');
+      const t2 = await say('When am I seeing him again?');
+      assert('CAL-D1 honest BOUNDED no-result when neither source matches (CTO trust correction)', t2,
+        v => v.handled === true && v.source === 'referent_resume'
+          && v.responseText === "I don't see anything with Dr. Smith on your calendar in the next 6 months.",
+        "I don't see anything with Dr. Smith on your calendar in the next 6 months.");
+      assert('CAL-D2 unrelated calendar event never substituted', t2,
+        v => v.handled === true && !/Dentist/.test(v.responseText) && !/Your calendar shows/.test(v.responseText),
+        'no substitution');
+      assert('CAL-D3 subject preserved after honest miss', subject.peek()?.entityId,
+        v => v === 'Dr. Smith', 'Dr. Smith');
+    });
   }
 
   // E — multiple future Dr. Smith calendar events → nearest chosen
@@ -1072,6 +1141,273 @@ export async function runConversationalSubjectTests() {
     await say('When did I see Dr. Smith?');
     await say('When am I seeing him again?');
     assert('CAL-G1 calendar read creates no medical_records row', getMedicalRecords().length,
+      v => v === before, String(before));
+  }
+
+  // ── Android Calendar Range V1 — wide-range / historical / year-bounded ──
+  console.log(`\n${BOLD}  Android Calendar Range V1 (wide-range calendar evidence)${RESET}\n`);
+
+  assert('RANGE-P1 year-bounded regex: "I thought I saw him in 2024"',
+    isReferentYearBoundedVisitQuestion('I thought I saw him in 2024?'),
+    v => v !== null && v.year === 2024, '{year: 2024}');
+  assert('RANGE-P2 year-bounded regex: "did I see her in 2023"',
+    isReferentYearBoundedVisitQuestion('Did I see her in 2023?'),
+    v => v !== null && v.year === 2023, '{year: 2023}');
+  assert('RANGE-P3 year-bounded regex rejects bare year with no subject shape',
+    isReferentYearBoundedVisitQuestion('What happened in 2024?'),
+    v => v === null, 'null');
+  assert('RANGE-P4 year-bounded regex rejects named-doctor form (not a pronoun act)',
+    isReferentYearBoundedVisitQuestion('Did I see Dr. Smith in 2024?'),
+    v => v === null, 'null');
+
+  // A — wider future lookup: 3-month-out event, beyond the 14-day cache,
+  //     found via the direct wide-range query.
+  {
+    const { say, subject } = freshFlow();
+    seedTwoDoctorOutcomes(); // no upcoming medical rows
+    const threeMonthsMs = monthsFromNowMs(3, 14);
+    await withFakeCalendarEvents(
+      [{ id: 'e1', title: 'Dr. Smith', startDate: new Date(threeMonthsMs).toISOString() }],
+      async () => {
+        await say('When did I see Dr. Smith?');
+        const t2 = await say('When am I seeing him again?');
+        assert('RANGE-A1 wide-range future match found beyond the 14-day cache', t2,
+          v => v.handled === true && v.source === 'referent_resume'
+            && v.responseText.startsWith('Your calendar shows Dr. Smith on ')
+            && /\d{4}/.test(v.responseText), // date-mode phrasing includes a year
+          'Your calendar shows Dr. Smith on [Month Day, Year] …');
+        assert('RANGE-A2 subject remains Dr. Smith', subject.peek()?.entityId, v => v === 'Dr. Smith', 'Dr. Smith');
+      },
+    );
+  }
+
+  // B — medical authority still wins over a wide-range calendar match
+  {
+    const { say } = freshFlow();
+    const smithId = writeMedicalRecord({ doctor_name: 'Dr. Smith', notes: 'visit', visit_date: '2026-05-01' });
+    attachVisitOutcome(smithId, SMITH_OUTCOME);
+    seedUpcomingAppointment('Dr. Smith', '2026-12-01'); // confirmed MEDICAL upcoming
+    await withFakeCalendarEvents(
+      [{ id: 'e1', title: 'Dr. Smith', startDate: new Date(monthsFromNowMs(3, 9)).toISOString() }],
+      async () => {
+        await say('When did I see Dr. Smith?');
+        const t2 = await say('When am I seeing him again?');
+        assert('RANGE-B1 medical authority wins over wide-range calendar match', t2,
+          v => v.handled === true && /^You see Dr\. Smith on /.test(v.responseText),
+          'You see Dr. Smith … (medical voice)');
+      },
+    );
+  }
+
+  // C — historical lookup via the referent path with an established subject
+  {
+    freshFlow(); // empty DB so getLastVisit misses and calendar fallback runs
+    const pastMs = monthsFromNowMs(-8, 10);
+    await withFakeCalendarEvents(
+      [{ id: 'e1', title: 'Appointment with Dr. Smith', startDate: new Date(pastMs).toISOString() }],
+      async () => {
+        const subj = { domain: 'medical_doctor' as const, entityId: 'Dr. Smith', displayName: 'Dr. Smith', establishedAtTurn: 1 };
+        const result = await answerReferentVisitDate(subj);
+        assert('RANGE-C1 historical calendar fallback returns date-mode calendar answer', result,
+          (v: string | null) => v !== null && v.startsWith('Your calendar shows Dr. Smith on ') && /\d{4}/.test(v),
+          'Your calendar shows Dr. Smith on [Month Day, Year]');
+      },
+    );
+  }
+
+  // C2 — historical: a SUCCESSFUL 12-month search with zero matches must
+  //      speak a BOUNDED no-result (CTO trust correction), never the old
+  //      unbounded "yet" claim, which read as a lifetime/complete-history
+  //      search Herald never actually performed. withFakeCalendarEvents([])
+  //      forces a genuine {status:'ok', events:[]} -- proving this is the
+  //      real bounded-miss path, not an accidental unavailable.
+  {
+    freshFlow();
+    await withFakeCalendarEvents([], async () => {
+      const subj = { domain: 'medical_doctor' as const, entityId: 'Dr. Smith', displayName: 'Dr. Smith', establishedAtTurn: 1 };
+      const result = await answerReferentVisitDate(subj);
+      assert('RANGE-C2 successful 12-month historical search, zero matches -> bounded no-result', result,
+        (v: string | null) => v === "I don't see anything with Dr. Smith on your calendar in the past 12 months.",
+        "I don't see anything with Dr. Smith on your calendar in the past 12 months.");
+    });
+  }
+
+  // D — year-bounded: single match, only events IN the requested year used.
+  {
+    freshFlow();
+    const inYearMs = new Date(2024, 5, 15, 10, 0, 0, 0).getTime();  // June 2024
+    const outOfYearMs = new Date(2025, 5, 15, 10, 0, 0, 0).getTime(); // June 2025 -- must NOT be returned
+    await withFakeCalendarEvents(
+      [
+        { id: 'e1', title: 'Dr. Smith', startDate: new Date(inYearMs).toISOString() },
+        { id: 'e2', title: 'Dr. Smith', startDate: new Date(outOfYearMs).toISOString() },
+      ],
+      async () => {
+        const subj = { domain: 'medical_doctor' as const, entityId: 'Dr. Smith', displayName: 'Dr. Smith', establishedAtTurn: 1 };
+        const result = await answerReferentYearBoundedVisit(subj, 2024);
+        assert('RANGE-D1 year-bounded query returns only the 2024 match', result,
+          (v: string | null) => v !== null && v.includes('June 15, 2024') && !v.includes('2025'),
+          'June 15, 2024, not 2025');
+      },
+    );
+  }
+
+  // D2 — half-open year boundary proof: the exact edge instants. Dec 31
+  //      23:59 of `year` must be INCLUDED; Jan 1 00:00:00.000 of `year + 1`
+  //      must be EXCLUDED (queryCalendarEvidence's [start, end) contract,
+  //      end = local Jan 1 of year+1). If the boundary were wrongly
+  //      inclusive of the next year's first instant, both events would
+  //      match and the multi-match clarification ("which one") would fire
+  //      instead of a single calendar-voiced answer.
+  {
+    freshFlow();
+    const lastInstantOfYear = new Date(2024, 11, 31, 23, 59, 0, 0).getTime();
+    const firstInstantOfNextYear = new Date(2025, 0, 1, 0, 0, 0, 0).getTime();
+    await withFakeCalendarEvents(
+      [
+        { id: 'e1', title: 'Dr. Smith', startDate: new Date(lastInstantOfYear).toISOString() },
+        { id: 'e2', title: 'Dr. Smith', startDate: new Date(firstInstantOfNextYear).toISOString() },
+      ],
+      async () => {
+        const subj = { domain: 'medical_doctor' as const, entityId: 'Dr. Smith', displayName: 'Dr. Smith', establishedAtTurn: 1 };
+        const result = await answerReferentYearBoundedVisit(subj, 2024);
+        assert('RANGE-D2 half-open boundary: Dec 31 23:59 in, Jan 1 00:00:00.000 next year excluded', result,
+          (v: string | null) => v !== null && v.startsWith('Your calendar shows Dr. Smith on ') && !/which one/i.test(v),
+          'single match only (Dec 31 event) -- boundary correctly excludes Jan 1 next year');
+      },
+    );
+  }
+
+  // E — year-bounded: multiple matches never auto-selected, bounded clarification
+  {
+    freshFlow();
+    const m1 = new Date(2024, 2, 3, 9, 0, 0, 0).getTime();  // March 3, 2024
+    const m2 = new Date(2024, 8, 10, 11, 0, 0, 0).getTime(); // September 10, 2024
+    await withFakeCalendarEvents(
+      [
+        { id: 'e1', title: 'Dr. Smith', startDate: new Date(m1).toISOString() },
+        { id: 'e2', title: 'Dr. Smith', startDate: new Date(m2).toISOString() },
+      ],
+      async () => {
+        const subj = { domain: 'medical_doctor' as const, entityId: 'Dr. Smith', displayName: 'Dr. Smith', establishedAtTurn: 1 };
+        const result = await answerReferentYearBoundedVisit(subj, 2024);
+        assert('RANGE-E1 multiple matches never auto-selected; both dates named', result,
+          (v: string | null) => v !== null
+            && v.includes('March 3') && v.includes('September 10')
+            && /which one/i.test(v),
+          'clarification naming both dates, no auto-select');
+        assert('RANGE-E2 multi-match clarification still carries calendar provenance', result,
+          (v: string | null) => v !== null && v.startsWith('Your calendar shows '),
+          'starts with "Your calendar shows " even on the clarification path');
+      },
+    );
+  }
+
+  // F — namesake fence still applies to wide-range/year queries
+  {
+    freshFlow();
+    const decoyMs = new Date(2024, 2, 3, 9, 0, 0, 0).getTime();
+    await withFakeCalendarEvents(
+      [{ id: 'e1', title: 'Dr. Smithson', startDate: new Date(decoyMs).toISOString() }],
+      async () => {
+        const subj = { domain: 'medical_doctor' as const, entityId: 'Dr. Smith', displayName: 'Dr. Smith', establishedAtTurn: 1 };
+        const result = await answerReferentYearBoundedVisit(subj, 2024);
+        assert('RANGE-F1 namesake fence applies on the year-bounded path (Smithson excluded)', result,
+          (v: string | null) => v === "I don't have anything with Dr. Smith on your calendar in 2024.",
+          "honest no-result, no Smithson leak");
+      },
+    );
+  }
+
+  // G — Unicode still intact on the wide-range path
+  {
+    freshFlow();
+    const munozMs = monthsFromNowMs(3, 14);
+    await withFakeCalendarEvents(
+      [{ id: 'e1', title: 'Appointment with Dr. Muñoz', startDate: new Date(munozMs).toISOString() }],
+      async () => {
+        const subj = { domain: 'medical_doctor' as const, entityId: 'Dr. Muñoz', displayName: 'Dr. Muñoz', establishedAtTurn: 1 };
+        const result = await answerReferentUpcomingVisit(subj);
+        assert('RANGE-G1 accented name intact on wide-range path', result,
+          (v: string | null) => v !== null && v.includes('Dr. Muñoz'),
+          'Dr. Muñoz, not shredded');
+      },
+    );
+  }
+
+  // ── Trust boundary: unavailable is NOT a no-result (CTO correction) ──
+  console.log(`\n${BOLD}  Calendar unavailable ≠ calendar evidence absent${RESET}\n`);
+
+  // U0 — direct unit proof: queryCalendarEvidence itself surfaces
+  //      'unavailable', never collapses it into a bare empty-match result.
+  {
+    freshFlow();
+    await withUnavailableCalendar('error', async () => {
+      const now = new Date();
+      const later = new Date(now);
+      later.setMonth(later.getMonth() + 6);
+      const result = await queryCalendarEvidence('Dr. Smith', normalizeDoctorNameForMatch, now, later);
+      assert('RANGE-U0 queryCalendarEvidence itself reports unavailable, not {status:ok, events:[]}', result,
+        (v: { status: string }) => v.status === 'unavailable',
+        "{status: 'unavailable'}");
+    });
+  }
+
+  // U1 — upcoming-visit consumer: unavailable speaks the honest
+  //      "couldn't check" voice, never the confident absence claim.
+  {
+    freshFlow();
+    await withUnavailableCalendar('permission-denied', async () => {
+      const subj = { domain: 'medical_doctor' as const, entityId: 'Dr. Smith', displayName: 'Dr. Smith', establishedAtTurn: 1 };
+      const result = await answerReferentUpcomingVisit(subj);
+      assert('RANGE-U1 upcoming-visit: unavailable never becomes any false absence claim (bounded or unbounded)', result,
+        (v: string | null) => v === "I couldn't check your calendar right now."
+          && v !== `I don't have another visit with Dr. Smith coming up.`
+          && v !== `I don't see anything with Dr. Smith on your calendar in the next 6 months.`,
+        "I couldn't check your calendar right now.");
+    });
+  }
+
+  // U2 — historical (visit-date) consumer: same honest voice, same fence.
+  {
+    freshFlow();
+    await withUnavailableCalendar('error', async () => {
+      const subj = { domain: 'medical_doctor' as const, entityId: 'Dr. Smith', displayName: 'Dr. Smith', establishedAtTurn: 1 };
+      const result = await answerReferentVisitDate(subj);
+      assert('RANGE-U2 historical: unavailable never becomes any false absence claim (bounded or unbounded)', result,
+        (v: string | null) => v === "I couldn't check your calendar right now."
+          && v !== `I don't have a visit with Dr. Smith yet — tell me and I'll remember.`
+          && v !== `I don't see anything with Dr. Smith on your calendar in the past 12 months.`,
+        "I couldn't check your calendar right now.");
+    });
+  }
+
+  // U3 — year-bounded consumer: same honest voice, same fence.
+  {
+    freshFlow();
+    await withUnavailableCalendar('permission-denied', async () => {
+      const subj = { domain: 'medical_doctor' as const, entityId: 'Dr. Smith', displayName: 'Dr. Smith', establishedAtTurn: 1 };
+      const result = await answerReferentYearBoundedVisit(subj, 2024);
+      assert('RANGE-U3 year-bounded: unavailable never becomes a false "I don\'t have anything" claim', result,
+        (v: string | null) => v === "I couldn't check your calendar right now."
+          && !/on your calendar in 2024/i.test(v ?? ''),
+        "I couldn't check your calendar right now.");
+    });
+  }
+
+  // H — no persistence: wide-range/year queries write nothing to medical_records
+  {
+    freshFlow();
+    const before = getMedicalRecords().length;
+    await withFakeCalendarEvents(
+      [{ id: 'e1', title: 'Dr. Smith', startDate: new Date(monthsFromNowMs(3, 11)).toISOString() }],
+      async () => {
+        const subj = { domain: 'medical_doctor' as const, entityId: 'Dr. Smith', displayName: 'Dr. Smith', establishedAtTurn: 1 };
+        await answerReferentUpcomingVisit(subj);
+        await answerReferentYearBoundedVisit(subj, new Date().getFullYear());
+      },
+    );
+    assert('RANGE-H1 no medical_records row created by wide-range/year reads', getMedicalRecords().length,
       v => v === before, String(before));
   }
 
