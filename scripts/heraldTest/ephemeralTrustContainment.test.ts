@@ -69,8 +69,8 @@ export async function runEphemeralTrustContainmentTests() {
   // ── 3. Grounded narrative remains generative-eligible ─────────────────────
   assertTrue('ETC-5 grounded narrative not bare zero-evidence',
     !isBareZeroEvidenceOpeningFragment('My son called this morning.'));
-  assertTrue('ETC-6 grounded narrative may run generative prose',
-    mayRunGenerativeEphemeralPersonalProse({
+  assertTrue('ETC-6 interaction report blocked from free generative prose',
+    !mayRunGenerativeEphemeralPersonalProse({
       reason: 'default',
       text: 'My son called this morning.',
       hasAuthorizedContinuation: false,
@@ -181,7 +181,7 @@ export async function runEphemeralTrustContainmentTests() {
     assertTrue('ETC-15 bare seam never invoked generate', !generateCalled);
   }
 
-  // ── 8. Poison containment — failed generative does not grant continuation ─
+  // ── 8. Interaction report — bounded ack even when generate would fail ─────
   {
     const outcome = await resolveEphemeralSeam({
       text: 'My son called this morning.',
@@ -197,13 +197,15 @@ export async function runEphemeralTrustContainmentTests() {
       ephemeralBusy: false,
       generate: async () => ({ status: 'unavailable', reason: 'empty-output' }),
     });
-    assert('ETC-16 failed generative returns clarify', outcome.kind, 'clarify');
-    assertTrue('ETC-17 failed generative has no grantContinuation flag',
-      !('grantContinuation' in outcome && (outcome as { grantContinuation?: boolean }).grantContinuation === true));
+    assert('ETC-16 interaction report returns bounded ack not clarify', outcome.kind, 'generative');
+    assert('ETC-17 interaction report bounded reply on generate skip',
+      outcome.reply,
+      'Your son called this morning.');
   }
 
-  // ── 9. Successful generative grants continuation flag ─────────────────────
+  // ── 9. Interaction report — bounded ack without free generative ───────────
   {
+    let generateCalled = false;
     const outcome = await resolveEphemeralSeam({
       text: 'My son called this morning.',
       reason: 'default',
@@ -216,11 +218,16 @@ export async function runEphemeralTrustContainmentTests() {
       llmStatus: 'ready',
       classifierBusy: false,
       ephemeralBusy: false,
-      generate: async () => ({ status: 'ok', text: 'That sounds nice.' }),
+      generate: async () => {
+        generateCalled = true;
+        return { status: 'ok', text: 'That sounds nice.' };
+      },
     });
-    assert('ETC-18 successful generative kind', outcome.kind, 'generative');
-    assertTrue('ETC-19 successful generative grants continuation',
-      outcome.kind === 'generative' && outcome.grantContinuation === true);
+    assert('ETC-18 interaction report returns generative kind with bounded reply', outcome.kind, 'generative');
+    assert('ETC-19 interaction report reply stays evidence-bounded',
+      outcome.reply,
+      'Your son called this morning.');
+    assertTrue('ETC-19b interaction report never invoked generate', !generateCalled);
   }
 
   // ── 10. v1 accepted tradeoff — short reaction may fail bare floor ─────────

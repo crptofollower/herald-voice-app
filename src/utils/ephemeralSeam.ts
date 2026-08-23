@@ -13,6 +13,10 @@ import { captureHousehold } from './householdCapture';
 import { dispatchReadIntents, type ReadIntentMeta } from '../routing/readIntent';
 import { utteranceHasInteractionReportShape } from '../routing/speechActAuthority';
 import { COMPLETED_PAST_FIRST_PERSON_RE } from './instructionSignals';
+import {
+  buildBoundedPastEventAcknowledgment,
+  utteranceRequiresBoundedPastEventAck,
+} from './predicateExtensionContainment';
 
 export const EPHEMERAL_CLARIFY_REPLY =
   "I'm not sure I'm following you — can you help me understand?";
@@ -97,6 +101,8 @@ export function mayRunGenerativeEphemeralPersonalProse(input: {
   }
   if (input.hasAuthorizedContinuation) return true;
   if (isBareZeroEvidenceOpeningFragment(input.text)) return false;
+  // Predicate-Extension V1: past personal event reports get bounded ack, not free generative.
+  if (utteranceRequiresBoundedPastEventAck(input.text)) return false;
   return true;
 }
 
@@ -141,6 +147,23 @@ export async function resolveEphemeralSeam(input: {
     hasContactCollectPending: input.hasContactCollectPending,
     isEligible: eligible,
   });
+  const repairOwned = hasPendingRepairOwnership({
+    hasSessionPending: input.hasPendingSession,
+    hasContactCollectPending: input.hasContactCollectPending,
+  });
+  if (
+    input.reason === 'default'
+    && !repairOwned
+    && eligible
+    && utteranceRequiresBoundedPastEventAck(input.text)
+  ) {
+    return {
+      kind: 'generative',
+      reply: buildBoundedPastEventAcknowledgment(input.text),
+      grantContinuation: true,
+    };
+  }
+
   if (!mayGenerate) {
     return { kind: 'clarify', reply: EPHEMERAL_CLARIFY_REPLY };
   }
