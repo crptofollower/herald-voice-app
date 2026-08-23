@@ -197,11 +197,13 @@ export function canRunEphemeralConversation(input: {
 
 /** Production entry point. Caller MUST have already verified
  *  canRunEphemeralConversation() -- this function re-checks busy state
- *  defensively but does not re-derive routing/authority conditions. */
+ *  defensively but does not re-derive routing/authority conditions.
+ *  onPartial is presentation-only — never persisted or authoritative. */
 export async function generateEphemeralConversation(
   userText: string,
   ctx: LlamaContext | null,
   hotEntries: HotRingEntry[] = [],
+  onPartial?: (accumulatedText: string) => void,
 ): Promise<EphemeralResult> {
   const turnId = getActiveTurnId();
   console.log('[ephemeralConversation] ENTER');
@@ -223,12 +225,33 @@ export async function generateEphemeralConversation(
       const t0 = Date.now();
       completionSeq = beginCtxCompletion('ephemeral');
       const completionT0 = latMono();
-      const result = await ctx.completion({
-        messages,
-        n_predict: 128,
-        temperature: 0.6,
-        top_p: 0.9,
-      });
+      let firstTokenLogged = false;
+      const result = await ctx.completion(
+        {
+          messages,
+          n_predict: 128,
+          temperature: 0.6,
+          top_p: 0.9,
+        },
+        (data) => {
+          const d = data as {
+            accumulated_text?: string;
+            content?: string;
+            token?: string;
+          };
+          const accumulated =
+            (typeof d.accumulated_text === 'string' && d.accumulated_text) ||
+            (typeof d.content === 'string' && d.content) ||
+            (typeof d.token === 'string' && d.token) ||
+            '';
+          if (!accumulated.trim()) return;
+          if (!firstTokenLogged) {
+            firstTokenLogged = true;
+            latLog('ephemeral first token', { turnId });
+          }
+          onPartial?.(accumulated);
+        },
+      );
       endCtxCompletion(completionSeq, 'ephemeral', latMono() - completionT0, result);
       completionEnded = true;
       const ms = Date.now() - t0;

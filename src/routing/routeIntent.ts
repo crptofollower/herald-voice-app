@@ -17,6 +17,7 @@ import { buildPhoneConfirmPending, formatPhoneForSpeech } from '../utils/phoneCo
 import { matchCandidateToken } from './conversationSession';
 import { isPersonalMemoryRecallQuestion } from './personalMemoryRecall';
 import { shouldRefuseLlmCaptureProposal } from './speechActAuthority';
+import type { ReadIntentMeta } from './readIntent';
 
 type ActionIntent = NonNullable<TierDecision['actionIntent']>;
 
@@ -28,8 +29,8 @@ export type RouteDecision =
   | { kind: 'medical_read_pending'; pending: Extract<CommitResult, { status: 'pending' }>; reason: string }
   | { kind: 'not_ready'; reason: string }
   | { kind: 'memory_probe'; tier: 2; context: LocalContext; reason: string }
-  | { kind: 'backend'; tier: 3; reason: string; llmAlreadyClassified?: boolean }
-  | { kind: 'needs_clarification'; guess?: string; reason: string }
+  | { kind: 'backend'; tier: 3; reason: string; llmAlreadyClassified?: boolean; readMeta?: ReadIntentMeta }
+  | { kind: 'needs_clarification'; guess?: string; reason: string; readMeta?: ReadIntentMeta }
 
 // ─── Routing authority scaffolding (Commit 1) ────────────────────────────────
 // CommitResult: the only gate for ACK strings. A string is never spoken for a
@@ -2067,9 +2068,20 @@ export async function routeIntent(
   // 'backend'/live:data, and 'capture' source:'llm' with an unconverted
   // intent type — see session investigation, 2026-08-18).
   let llmAlreadyClassified = false;
+  let readMeta: ReadIntentMeta | undefined;
 
   if (deps.llmReady && deps.classifyLLM) {
     const out = await deps.classifyLLM(text);
+    // A-3: classify may run here; read dispatch is deferred to ChatScreen after
+    // remaining deterministic nets miss. readMeta travels on the RouteDecision.
+    if (out.status === 'ok') {
+      if (out.readLabeled || (out.readIntents?.length ?? 0) > 0) {
+        readMeta = {
+          readIntents: out.readIntents ?? [],
+          readLabeled: out.readLabeled ?? false,
+        };
+      }
+    }
     // A busy or absent classifier is NOT "found nothing" — it never ran. Returning
     // [] here would fall through to the backend and ship the user's raw words to
     // Railway because of a concurrency state, not because the utterance needed the
@@ -2101,7 +2113,7 @@ export async function routeIntent(
   }
 
   if (decision.reason === 'live:data') {
-    return { kind: 'backend', tier: 3, reason: decision.reason, llmAlreadyClassified };
+    return { kind: 'backend', tier: 3, reason: decision.reason, llmAlreadyClassified, readMeta };
   }
   // Deferred-ready window: local LLM is loading/warming. Do not misattribute
   // as needs_clarification ("I'm not sure I'm following you"). live:data above
@@ -2109,7 +2121,7 @@ export async function routeIntent(
   if (!deps.llmReady && deps.llmStatus === 'loading') {
     return { kind: 'not_ready', reason: 'llm:not_ready:loading' };
   }
-  return { kind: 'needs_clarification', reason: decision.reason };
+  return { kind: 'needs_clarification', reason: decision.reason, readMeta };
   } finally {
     latLog('routeIntent END', {
       turnId,

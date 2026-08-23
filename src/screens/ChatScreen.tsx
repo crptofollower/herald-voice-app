@@ -70,7 +70,14 @@ import { useDeviceMemory } from "../hooks/useDeviceMemory";
 import { useLocalLLM } from '../hooks/useLocalLLM';
 import { runConversationalProbeSet } from '../dev/conversationalProbe';
 import { classifyWithLLM } from '../hooks/llmLayers';
-import { generateEphemeralConversation, canRunEphemeralConversation, isEligibleForEphemeralConversation } from '../utils/ephemeralConversation';
+import {
+  generateEphemeralConversation,
+} from '../utils/ephemeralConversation';
+import {
+  resolveEphemeralSeam,
+  EPHEMERAL_CLARIFY_REPLY,
+  tryReadIntentReply,
+} from '../utils/ephemeralSeam';
 import { createHotNarrativeRing, hasImmediatelyAdjacentHotAuthorization } from '../utils/hotNarrativeRing';
 import { answerFromDevice } from '../utils/localAnswers';
 import { parseTimeFromText } from '../utils/parseTime';
@@ -124,6 +131,20 @@ import { getActiveTopics, extractTopicsFromMessage, recordTopicMention } from ".
 import { launchAndroidTimer } from "../utils/androidClock";
 import { captureHousehold } from '../utils/householdCapture';
 import { answerHouseholdRead, detectHouseholdRead } from '../utils/householdRead';
+import { type ReadIntentMeta } from '../routing/readIntent';
+import type { RouteDecision } from '../routing/routeIntent';
+
+function tryReadIntentFromMeta(meta: ReadIntentMeta | undefined): string | null {
+  return tryReadIntentReply(meta);
+}
+
+function tryReadIntentDispatch(routeDecision: RouteDecision): string | null {
+  const meta =
+    routeDecision.kind === 'needs_clarification' || routeDecision.kind === 'backend'
+      ? routeDecision.readMeta
+      : undefined;
+  return tryReadIntentFromMeta(meta);
+}
 
 interface IntentAction {
   type: string;
@@ -518,6 +539,22 @@ export default function ChatScreen() {
     streamAbortRef.current = null;
     finishStream();
   }, [finishStream]);
+
+  const beginEphemeralUiStream = useCallback((streamTurnId: number) => {
+    setIsStreaming(true);
+    setIsWaiting(false);
+    setStreamingContent('');
+    return (partial: string) => {
+      if (getActiveTurnId() !== streamTurnId) return;
+      setStreamingContent(partial);
+    };
+  }, []);
+
+  const clearEphemeralUiStream = useCallback((streamTurnId: number) => {
+    if (getActiveTurnId() !== streamTurnId) return;
+    setStreamingContent('');
+    setIsStreaming(false);
+  }, []);
 
   // ── AppState listener (stable, uses ref) ──────────────────────────────────
   useEffect(() => {
@@ -1277,17 +1314,19 @@ export default function ChatScreen() {
       }
 
       // Reply didn't match the expected number/address AND wasn't caught above.
-      // Release the collect and fall through so an unrelated request still gets
-      // answered (never trap the user). PARKED: navigate/text still arm this ref;
-      // full migration into ConversationSession's re-ask ladder is Commit C2
-      // (PENDING_UNIFICATION spec) — until then this is the honest release, not
-      // a silent abandon.
-      const _abandonedAction = pendingContactCollectRef.current?.action;
+      // Repair fragment — fail closed; never fall through to generative conversation.
+      addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+      const abandonedAction = pendingContactCollectRef.current?.action;
       pendingContactCollectRef.current = null;
-      if (_abandonedAction === 'navigate' || _abandonedAction === 'text') {
-        addMessage({ id: generateId('msg'), role: 'assistant', content: "Okay — let's come back to that. What can I help you with?", timestamp: Date.now() });
-      }
-      // Fall through to normal routing
+      const repairReleaseReply =
+        abandonedAction === 'navigate' || abandonedAction === 'text'
+          ? "Okay — let's come back to that. What can I help you with?"
+          : EPHEMERAL_CLARIFY_REPLY;
+      addMessage({ id: generateId('msg'), role: 'assistant', content: repairReleaseReply, timestamp: Date.now() });
+      speak(repairReleaseReply);
+      sendingRef.current = false;
+      setInputText('');
+      return;
     }
 
     // Deterministic-first routing: the regex/SQL classifier runs FIRST and always wins.
@@ -1346,58 +1385,46 @@ export default function ChatScreen() {
       return;
     }
     if (outcome.routeDecision.kind === 'needs_clarification') {
-      // EPHEMERAL CONVERSATION SEAM (Constitution §2; ownership fence 2026-08-15).
-      // This is the real leftover: classifyQuery reason:'default' becomes
-      // needs_clarification. The later backend && reason==='default' block is
-      // unreachable on this path (source-proven, design review). Only
-      // reason:'default' may attempt conversation; any other needs_clarification
-      // reason keeps the canned line. isEligibleForEphemeralConversation
-      // declines fact-seeking interrogatives and unmatched leading imperatives
-      // -- canned clarification is the honest tail, never a different reader.
-      const canned = "I'm not sure I'm following you — can you help me understand?";
+      const canned = EPHEMERAL_CLARIFY_REPLY;
       let reply = canned;
-      if (
-        outcome.routeDecision.reason === 'default' &&
-        isEligibleForEphemeralConversation(text, immediateContextAuthorizedRef.current)
-      ) {
-        const canConverse = canRunEphemeralConversation({
+      if (outcome.routeDecision.reason === 'default') {
+        const seamOutcome = await resolveEphemeralSeam({
+          text,
+          reason: outcome.routeDecision.reason,
+          readMeta: outcome.routeDecision.readMeta,
+          hasAuthorizedContinuation: immediateContextAuthorizedRef.current,
+          hasPendingSession: sessionRef.current.hasPending(),
+          hasContactCollectPending: pendingContactCollectRef.current != null,
           rdTier: 3,
           hasStructuredCaptures: false,
-          isPersonalCaptureRisk: false,
-          hasPending: sessionRef.current.hasPending(),
+          isPersonalCaptureRisk: isUnresolvedPersonalCapture(outcome.routeDecision),
           llmStatus,
           classifierBusy: false,
           ephemeralBusy: false,
+          generate: async () => {
+            const onPartial = beginEphemeralUiStream(turnId);
+            try {
+              return await generateEphemeralConversation(
+                text,
+                getCtx(),
+                hotContextForGeneration,
+                onPartial,
+              );
+            } finally {
+              clearEphemeralUiStream(turnId);
+            }
+          },
         });
-        console.log('[ephemeralConversation] GATE', JSON.stringify({
-          canConverse,
-          rdTier: 3,
-          hasStructuredCaptures: false,
-          isPersonalCaptureRisk: false,
-          hasPending: sessionRef.current.hasPending(),
-          llmStatus,
-          classifierBusy: false,
-          ephemeralBusy: false,
-        }));
-        if (canConverse) {
-          const ephemeral = await generateEphemeralConversation(
-            text,
-            getCtx(),
-            hotContextForGeneration,
-          );
-          if (ephemeral.status === 'ok') {
-            hotRingRef.current.push({
-              turnIndex: turnIndexRef.current,
-              user: text,
-              assistant: ephemeral.text,
-              establishedAt: Date.now(),
-              assistantHotPolicy: 'include',
-            });
-            immediateContextAuthorizedRef.current = true;
-            reply = ephemeral.text;
-          }
-          // Decline/empty/error keeps the canned line below -- never redirects
-          // to an unrelated deterministic reader or to askHeraldStream.
+        reply = seamOutcome.reply;
+        if (seamOutcome.kind === 'generative' && seamOutcome.grantContinuation) {
+          hotRingRef.current.push({
+            turnIndex: turnIndexRef.current,
+            user: text,
+            assistant: seamOutcome.reply,
+            establishedAt: Date.now(),
+            assistantHotPolicy: 'include',
+          });
+          immediateContextAuthorizedRef.current = true;
         }
       }
       addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
@@ -1422,6 +1449,11 @@ export default function ChatScreen() {
       routeDecision.kind === 'device_read' ? routeDecision.response : undefined;
     const rdLocalContext =
       routeDecision.kind === 'memory_probe' ? routeDecision.context : undefined;
+
+    let heldReadMeta: ReadIntentMeta | undefined =
+      routeDecision.kind === 'backend' || routeDecision.kind === 'needs_clarification'
+        ? routeDecision.readMeta
+        : undefined;
 
     const noteDeterministicChitChatContext = (assistantText: string) => {
       if (routeDecision.kind !== 'device_read') return;
@@ -1487,6 +1519,12 @@ export default function ChatScreen() {
           sendingRef.current = false;
           setInputText('');
           return;
+        }
+        if (llmOut.status === 'ok' && (llmOut.readLabeled || (llmOut.readIntents?.length ?? 0) > 0)) {
+          heldReadMeta = {
+            readIntents: llmOut.readIntents ?? [],
+            readLabeled: llmOut.readLabeled ?? false,
+          };
         }
       } catch {
         // Law 5 fail-closed fence: an exception while reclassifying an
@@ -1689,6 +1727,16 @@ export default function ChatScreen() {
           return;
         }
 
+        const readReplyOfflineHeld = tryReadIntentFromMeta(heldReadMeta);
+        if (readReplyOfflineHeld) {
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          addMessage({ id: generateId('msg'), role: 'assistant', content: readReplyOfflineHeld, timestamp: Date.now() });
+          speak(readReplyOfflineHeld);
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+
         // Tier 1.5: on-device LLM capture — ONLY for the tier-3 gap (deterministic-first).
         // A tier-1 read/action must never be re-captured here (e.g. "who is my wife" is a
         // family READ, not a family_capture). Matches the online gate.
@@ -1739,6 +1787,20 @@ export default function ChatScreen() {
               setInputText('');
               return;
             }
+            if (offlineOut.status === 'ok') {
+              const offlineRead = tryReadIntentFromMeta({
+                readIntents: offlineOut.readIntents ?? [],
+                readLabeled: offlineOut.readLabeled ?? false,
+              });
+              if (offlineRead) {
+                addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+                addMessage({ id: generateId('msg'), role: 'assistant', content: offlineRead, timestamp: Date.now() });
+                speak(offlineRead);
+                sendingRef.current = false;
+                setInputText('');
+                return;
+              }
+            }
           } catch {
             // fall through to honest fallback
           }
@@ -1756,41 +1818,45 @@ export default function ChatScreen() {
           ];
           offlineReply = offlineReplies[Math.floor(Math.random() * offlineReplies.length)];
         } else {
-          // EPHEMERAL CONVERSATION SEAM (Constitution §2, 2026-08-14 addition).
-          // Reached only when: rdTier===3, structured classifier found nothing
-          // (llmCaptures.length===0, established above), llmStatus==='ready'.
-          // Defensive re-checks here (never trust the outer scope alone):
-          // Law 5 personal-capture-risk fence and pending-workflow ownership.
-          const canConverse = canRunEphemeralConversation({
+          // EPHEMERAL CONVERSATION SEAM (Constitution §2) — shared resolveEphemeralSeam.
+          const seamOutcome = await resolveEphemeralSeam({
+            text,
+            reason: 'default',
+            readMeta: heldReadMeta,
+            hasAuthorizedContinuation: immediateContextAuthorizedRef.current,
+            hasPendingSession: sessionRef.current.hasPending(),
+            hasContactCollectPending: pendingContactCollectRef.current != null,
             rdTier,
-            hasStructuredCaptures: false, // this branch is only reached when it was false
+            hasStructuredCaptures: false,
             isPersonalCaptureRisk,
-            hasPending: sessionRef.current.hasPending(),
             llmStatus,
-            classifierBusy: false, // re-verified inside generateEphemeralConversation itself
-            ephemeralBusy: false,  // re-verified inside generateEphemeralConversation itself
+            classifierBusy: false,
+            ephemeralBusy: false,
+            skipAuthoritativeOwners: true,
+            generate: async () => {
+              const onPartial = beginEphemeralUiStream(turnId);
+              try {
+                return await generateEphemeralConversation(
+                  text,
+                  getCtx(),
+                  hotContextForGeneration,
+                  onPartial,
+                );
+              } finally {
+                clearEphemeralUiStream(turnId);
+              }
+            },
           });
-          if (canConverse) {
-            const ephemeral = await generateEphemeralConversation(
-              text,
-              getCtx(),
-              hotContextForGeneration,
-            );
-            if (ephemeral.status === 'ok') {
-              hotRingRef.current.push({
-                turnIndex: turnIndexRef.current,
-                user: text,
-                assistant: ephemeral.text,
-                establishedAt: Date.now(),
-                assistantHotPolicy: 'include',
-              });
-              immediateContextAuthorizedRef.current = true;
-              offlineReply = ephemeral.text;
-            } else {
-              offlineReply = "I'm not sure I'm following you — can you help me understand?";
-            }
-          } else {
-            offlineReply = "I'm not sure I'm following you — can you help me understand?";
+          offlineReply = seamOutcome.reply;
+          if (seamOutcome.kind === 'generative' && seamOutcome.grantContinuation) {
+            hotRingRef.current.push({
+              turnIndex: turnIndexRef.current,
+              user: text,
+              assistant: seamOutcome.reply,
+              establishedAt: Date.now(),
+              assistantHotPolicy: 'include',
+            });
+            immediateContextAuthorizedRef.current = true;
           }
         }
         addMessage({ id: generateId('msg'), role: 'user',
@@ -1907,6 +1973,16 @@ export default function ChatScreen() {
         timestamp: now + 1,
       });
       speak(localAnswer);
+      sendingRef.current = false;
+      setInputText("");
+      return;
+    }
+
+    const readReplyOnline = tryReadIntentFromMeta(heldReadMeta);
+    if (readReplyOnline) {
+      addMessage({ id: generateId("msg"), role: "user", content: text, timestamp: now });
+      addMessage({ id: generateId("msg"), role: "assistant", content: readReplyOnline, timestamp: now + 1 });
+      speak(readReplyOnline);
       sendingRef.current = false;
       setInputText("");
       return;

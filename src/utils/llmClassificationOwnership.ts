@@ -26,5 +26,7 @@ export function alreadyClassifiedByRouteIntent(routeDecision: RouteDecision): bo
 // is never network authority. Does not interpret utterances; enforces the
 // RouteDecision kind routeIntent already emitted upstream.
 export function mayInvokeBackendStream(routeDecision: RouteDecision): boolean {
-  return routeDecision.kind === 'backend';
+  if (routeDecision.kind !== 'backend') return false;
+  if (routeDecision.readMeta?.readLabeled) return false;
+  return true;
 }

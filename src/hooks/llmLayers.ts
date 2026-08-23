@@ -29,6 +29,8 @@ import {
 import { SERVICE_SYNONYMS, INSURANCE_SYNONYMS } from '../utils/householdRead';
 import { FAMILY_SYNONYMS } from '../utils/familyRead';
 import { getSurfaceForms, IN_SCOPE_FIELDS, type RoutingFieldName } from '../utils/evidenceRegistry';
+import { CLASSIFIER_RESPONSE_FORMAT } from './classifierJsonSchema';
+import { parseReadIntentsFromClassifierWithDiagnostic } from '../routing/readIntent';
 
 // ─── Intent types ─────────────────────────────────────────────────────────────
 
@@ -67,7 +69,7 @@ const STEP_FORMS = [
 ]; // SESSION_W W3c: FAMILY_SYNONYMS ∪ step forms
 
 export type ClassifyOutcome =
-  | { status: 'ok'; intents: IntentRecord[] }
+  | { status: 'ok'; intents: IntentRecord[]; readIntents?: ReadIntent[]; readLabeled?: boolean }
   | { status: 'not_ready'; reason: 'in-flight' | 'no-ctx' }
   | { status: 'failed'; reason: 'completion_error' };
 
@@ -400,6 +402,76 @@ function isCaptureComplete(rec: IntentRecord): boolean {
 
 // ─── Layer 1 — Classifier ─────────────────────────────────────────────────────
 
+/** TEMP — device classifier raw JSON diagnostic (logging only). */
+export const CLASSIFIER_RAW_LOG_MAX = 512;
+
+export function truncateClassifierRawForLog(rawText: string): string | null {
+  const trimmed = rawText.trim();
+  if (!trimmed) return null;
+  if (trimmed.length <= CLASSIFIER_RAW_LOG_MAX) return trimmed;
+  return `${trimmed.slice(0, CLASSIFIER_RAW_LOG_MAX)}…`;
+}
+
+function logClassifierRawDiagnostic(raw: string | undefined, isWarmup: boolean): void {
+  if (isWarmup) return;
+  console.log('[classifierRaw]', JSON.stringify({
+    rawJson: raw ? truncateClassifierRawForLog(raw) : null,
+  }));
+}
+
+/** TEMP — llama.rn completion surface diagnostic (logging only). */
+export type ClassifierCompletionSurfaceLog = {
+  tokens_predicted: number | null;
+  stopped_word: boolean | null;
+  stopping_word: string | null;
+  text: string | null;
+  content: string | null;
+  accumulated_text: string | null;
+};
+
+export function buildClassifierCompletionSurfaceLogPayload(
+  result: unknown,
+): ClassifierCompletionSurfaceLog {
+  const r = result as {
+    tokens_predicted?: number;
+    stopped_word?: boolean;
+    stopping_word?: string;
+    text?: string;
+    content?: string;
+    accumulated_text?: string;
+  } | null | undefined;
+  if (!r) {
+    return {
+      tokens_predicted: null,
+      stopped_word: null,
+      stopping_word: null,
+      text: null,
+      content: null,
+      accumulated_text: null,
+    };
+  }
+  const trunc = (v: string | undefined): string | null => {
+    if (v == null) return null;
+    return truncateClassifierRawForLog(v);
+  };
+  return {
+    tokens_predicted: typeof r.tokens_predicted === 'number' ? r.tokens_predicted : null,
+    stopped_word: typeof r.stopped_word === 'boolean' ? r.stopped_word : null,
+    stopping_word: typeof r.stopping_word === 'string' ? r.stopping_word : null,
+    text: trunc(r.text),
+    content: trunc(r.content),
+    accumulated_text: trunc(r.accumulated_text),
+  };
+}
+
+function logClassifierCompletionSurfaceDiagnostic(result: unknown, isWarmup: boolean): void {
+  if (isWarmup) return;
+  console.log(
+    '[classifierCompletionSurface]',
+    JSON.stringify(buildClassifierCompletionSurfaceLogPayload(result)),
+  );
+}
+
 export async function classifyWithLLM(
   userText: string,
   ctx: LlamaContext | null,
@@ -418,7 +490,7 @@ export async function classifyWithLLM(
     return { status: 'not_ready', reason: 'no-ctx' };
   }
   const trimmed = userText.trim();
-  if (!trimmed) return { status: 'ok', intents: [] };
+  if (!trimmed) return { status: 'ok', intents: [], readIntents: [], readLabeled: false };
 
   const gate = await withLlamaContextExclusive('classifier', 'try', async () => {
     const classifyT0 = latMono();
@@ -485,6 +557,19 @@ TODO ADD:
 PASS — use when live data needed, unclear, or none of the above:
 {"type":"pass"}
 
+HOUSEHOLD READ — personal-memory QUESTIONS only (never statements/captures):
+{"type":"read","domain":"HOUSEHOLD","entity_type":"legal_document","entity":"will","requested_information":"EXISTENCE","raw_phrase":"Do I have a will?","confidence":"high"}
+"Do I have a will?" → {"type":"read","domain":"HOUSEHOLD","entity_type":"legal_document","entity":"will","requested_information":"EXISTENCE","raw_phrase":"Do I have a will?","confidence":"high"}
+"Where is my will?" → {"type":"read","domain":"HOUSEHOLD","entity_type":"legal_document","entity":"will","requested_information":"LOCATION","raw_phrase":"Where is my will?","confidence":"high"}
+"Who do I call for plumbing?" → {"type":"read","domain":"HOUSEHOLD","entity_type":"service_provider","entity":"plumbing","requested_information":"IDENTITY","raw_phrase":"Who do I call for plumbing?","confidence":"high"}
+"My car insurance is Allstate" → {"type":"insurance_capture","insType":"car","carrier":"Allstate"} NOT read — statements are capture, not read
+entity_type must be one of: service_provider, insurance, legal_document
+requested_information must be one of: EXISTENCE, IDENTITY, LOCATION, CONTACT, STATUS, ENUMERATION
+domain must be HOUSEHOLD for household questions
+entity: copy an EXACT contiguous word/phrase from the User line below — never synonyms, never stored categories (plumber/HVAC/will-type labels), never example wording
+raw_phrase: must equal the User line exactly — never paraphrase or rewrite the question
+confidence: high when clear, low when ambiguous
+
 COMPOUND UTTERANCES — one sentence can carry MORE THAN ONE intent. Emit one
 object per intent, in the order spoken:
 "I'm taking lisinopril 5mg and I need apples" → [{"type":"medical_capture","drug":"lisinopril","dosage":"5mg","raw":"I'm taking lisinopril 5mg and I need apples"},{"type":"list_add","items":["apples"],"listName":"grocery"}]
@@ -521,9 +606,11 @@ User: "${trimmed.replace(/"/g, '\\"')}"`;
         top_k: 1,
         seed: 0,
         stop: ['\n\n', '<|end|>', '<|eot_id|>'],
+        ...(isWarmup ? { response_format: CLASSIFIER_RESPONSE_FORMAT } : {}),
       });
       endCtxCompletion(completionSeq, consumer, latMono() - completionT0, result);
       completionEnded = true;
+      logClassifierCompletionSurfaceDiagnostic(result, isWarmup);
 
       // Canonical warmup → snapshot must share this exclusive hold with no
       // intervening release. Ready is signaled before optional save I/O.
@@ -538,12 +625,25 @@ User: "${trimmed.replace(/"/g, '\\"')}"`;
       console.log('[classifyWithLLM]', JSON.stringify({ ms: Date.now() - __t0, rawLen: raw?.length ?? 0 }));
       if (!raw) {
         classifyOutcome = 'empty';
-        return { status: 'ok' as const, intents: [] as IntentRecord[] };
+        logClassifierRawDiagnostic(undefined, isWarmup);
+        return { status: 'ok' as const, intents: [] as IntentRecord[], readIntents: [], readLabeled: false };
       }
+      logClassifierRawDiagnostic(raw, isWarmup);
       const vocab = buildClassifierVocab(hints.lists);
+      const { meta: readMeta, diagnostic: readDiag } = parseReadIntentsFromClassifierWithDiagnostic(raw, trimmed);
+      if (readDiag.readLabeled) {
+        console.log('[readIntentParse]', JSON.stringify({
+          rawJson: readDiag.rawJson,
+          readLabeled: readDiag.readLabeled,
+          parsedCount: readDiag.parsedCount,
+          dropped: readDiag.dropped,
+        }));
+      }
       return {
         status: 'ok' as const,
         intents: parseClassifierOutput(raw, trimmed, vocab),
+        readIntents: readMeta.readIntents,
+        readLabeled: readMeta.readLabeled,
       };
     } catch (e) {
       if (completionSeq != null && !completionEnded) {
@@ -556,7 +656,7 @@ User: "${trimmed.replace(/"/g, '\\"')}"`;
       }
       // Real classify: preserve prior degrade-to-empty behavior for routing.
       classifyOutcome = 'error';
-      return { status: 'ok' as const, intents: [] as IntentRecord[] };
+      return { status: 'ok' as const, intents: [] as IntentRecord[], readIntents: [], readLabeled: false };
     } finally {
       latLog('classifyWithLLM END', {
         turnId,

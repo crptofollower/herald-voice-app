@@ -52,6 +52,11 @@ const INTERACTION_REPORT_RE = new RegExp(
   'i',
 );
 
+/** Exported for ephemeral zero-evidence gate — existing D1 narration shape only. */
+export function utteranceHasInteractionReportShape(utterance: string): boolean {
+  return INTERACTION_REPORT_RE.test(utterance);
+}
+
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
