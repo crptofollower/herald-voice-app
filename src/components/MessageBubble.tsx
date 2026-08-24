@@ -33,10 +33,15 @@ import type { Persona } from "../constants/personas";
 interface Props {
   message: Message;
   persona: Persona;
+  /** Current exchange vs prior transcript — presentation weight only. */
+  visualWeight?: "current" | "prior";
+  /** Ephemeral heard-text preview before auto-send. */
+  isEphemeral?: boolean;
 }
 
-export function MessageBubble({ message, persona }: Props) {
+export function MessageBubble({ message, persona, visualWeight = "current", isEphemeral = false }: Props) {
   const isUser = message.role === "user";
+  const isPrior = visualWeight === "prior";
 
   // Fade + rise in. Herald's words "arrive" rather than "post".
   const opacity = useRef(new Animated.Value(0)).current;
@@ -57,7 +62,7 @@ export function MessageBubble({ message, persona }: Props) {
     ]).start();
   }, [opacity, translateY]);
 
-  // ── User: small muted chip (a receipt of what was heard) ──────────────────
+  // ── User: restrained receipt — right-aligned, translucent surface ───────
   if (isUser) {
     return (
       <Animated.View
@@ -69,10 +74,24 @@ export function MessageBubble({ message, persona }: Props) {
         <View
           style={[
             styles.userChip,
-            { backgroundColor: persona.colors.userBubble },
+            isPrior ? styles.userChipPrior : styles.userChipCurrent,
+            isEphemeral && styles.userChipEphemeral,
+            {
+              backgroundColor: persona.surfaceTint,
+              borderRightColor: persona.colors.accent,
+            },
           ]}
         >
-          <Text style={styles.userText} selectable>
+          <Text
+            style={[
+              styles.userText,
+              { color: persona.colors.textMuted },
+              isPrior && styles.userTextPrior,
+              isEphemeral && styles.userTextEphemeral,
+            ]}
+            selectable
+            allowFontScaling
+          >
             {message.content}
           </Text>
         </View>
@@ -80,7 +99,7 @@ export function MessageBubble({ message, persona }: Props) {
     );
   }
 
-  // ── Herald: floating words on a soft scrim (no box) ───────────────────────
+  // ── Herald: floating words on a soft scrim with identity accent edge ─────
   return (
     <Animated.View
       style={[
@@ -102,9 +121,17 @@ export function MessageBubble({ message, persona }: Props) {
         locations={[0, 0.12, 0.88, 1]}
         start={{ x: 0, y: 0 }}
         end={{ x: 0, y: 1 }}
-        style={styles.heraldScrim}
+        style={[
+          styles.heraldScrim,
+          isPrior && styles.heraldScrimPrior,
+          { borderLeftColor: persona.colors.accent },
+        ]}
       >
-        <Text style={styles.heraldText} selectable>
+        <Text
+          style={[styles.heraldText, isPrior && styles.heraldTextPrior]}
+          selectable
+          allowFontScaling
+        >
           {message.content}
         </Text>
       </LinearGradient>
@@ -121,16 +148,35 @@ const styles = StyleSheet.create({
   },
   userChip: {
     maxWidth: "78%",
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 18,
-    opacity: 0.92,
+    paddingHorizontal: 14,
+    borderRadius: 14,
+    borderRightWidth: 3,
+  },
+  userChipCurrent: {
+    paddingVertical: 11,
+    opacity: 1,
+  },
+  userChipPrior: {
+    paddingVertical: 9,
+    opacity: 0.9,
+  },
+  userChipEphemeral: {
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.35)",
+    opacity: 1,
   },
   userText: {
-    color: "#FFFFFF",
-    fontSize: 16,
-    lineHeight: 22,
     fontWeight: "500",
+    fontSize: 15,
+    lineHeight: 21,
+  },
+  userTextEphemeral: {
+    fontSize: 17,
+    lineHeight: 24,
+  },
+  userTextPrior: {
+    fontSize: 15,
+    lineHeight: 21,
   },
 
   // ── Herald floating response ────────────────────────────────────────────
@@ -139,11 +185,14 @@ const styles = StyleSheet.create({
     marginVertical: 10,
   },
   heraldScrim: {
-    // Edge-to-edge soft band, not a tile. Text floats; scrim only
-    // exists so it reads over a bright background photo.
     paddingHorizontal: 20,
     paddingVertical: 18,
     borderRadius: 8,
+    borderLeftWidth: 3,
+  },
+  heraldScrimPrior: {
+    paddingVertical: 14,
+    opacity: 0.92,
   },
   heraldText: {
     color: "#FFFFFF",
@@ -154,5 +203,10 @@ const styles = StyleSheet.create({
     textShadowColor: "rgba(0,0,0,0.55)",
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 5,
+  },
+  heraldTextPrior: {
+    fontSize: 18,
+    lineHeight: 27,
+    opacity: 0.94,
   },
 });

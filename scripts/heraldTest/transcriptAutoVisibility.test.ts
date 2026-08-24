@@ -90,25 +90,15 @@ export async function runTranscriptAutoVisibilityTests() {
     'scrollTranscriptToEnd + FlatList scroll handlers do not invoke authority',
   );
 
-  const scannerSlotJsx = chatSrc.indexOf('style={styles.scannerSlot}');
-  const inputBarJsx = chatSrc.search(/style=\{\[\s*styles\.inputBar/);
-  const inputBarToTextInput = chatSrc.slice(
-    inputBarJsx >= 0 ? inputBarJsx : 0,
-    chatSrc.indexOf('<TextInput', inputBarJsx >= 0 ? inputBarJsx : 0) + 10,
-  );
-
   assert(
-    'TAV-6 scanner slot always mounted above inputBar; track/bar remain isRecording||isSpeaking gated',
-    scannerSlotJsx >= 0
-      && inputBarJsx > scannerSlotJsx
-      && /onLayout=\{\(e\) => setScannerTrackWidth/.test(chatSrc.slice(scannerSlotJsx, inputBarJsx))
-      && !/\{\(isRecording\s*\|\|\s*isSpeaking\)\s*&&[\s\S]*?styles\.scannerSlot/.test(chatSrc)
-      && /\{\(isRecording\s*\|\|\s*isSpeaking\)\s*&&[\s\S]*?styles\.scannerTrack/.test(chatSrc)
-      && /\{\(isRecording\s*\|\|\s*isSpeaking\)\s*&&[\s\S]*?styles\.scannerBar/.test(chatSrc)
-      && /styles\.inputBar[\s\S]*?>\s*<TextInput/.test(inputBarToTextInput)
-      && !/styles\.scannerSlot/.test(inputBarToTextInput),
-    (v) => v === true,
-    'scannerSlot always mounted as sibling above inputBar; track/bar gated; inputBar first child is TextInput',
+    'TAV-6 scanner removed; talk-primary inputBar leads with talk control then TextInput',
+    chatSrc,
+    (src) => typeof src === 'string'
+      && !/\bscannerSlot\b/.test(src)
+      && !/\bscannerTrack\b/.test(src)
+      && !/\bscannerBar\b/.test(src)
+      && /styles\.inputBar[\s\S]*?styles\.talkControlBtn[\s\S]*?<TextInput/.test(src),
+    'no scanner slot/track/bar; talk control precedes TextInput in inputBar',
   );
 
   const total = passed + failures.length;

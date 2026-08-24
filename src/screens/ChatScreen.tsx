@@ -54,6 +54,8 @@ import {
 } from "../api/herald";
 import { useSpeech } from "../hooks/useSpeech";
 import { useProactiveQueue } from "../hooks/useProactiveQueue";
+import { LinearGradient } from "expo-linear-gradient";
+import { Ionicons } from "@expo/vector-icons";
 import { PersonaBackground } from "../components/PersonaBackground";
 import { MessageBubble } from "../components/MessageBubble";
 import { ProactiveCard } from "../components/ProactiveCard";
@@ -68,7 +70,6 @@ import { useMic } from "../hooks/useMic";
 import { useRaiseToWake } from "../hooks/useRaiseToWake";
 import { useDeviceMemory } from "../hooks/useDeviceMemory";
 import { useLocalLLM } from '../hooks/useLocalLLM';
-import { runConversationalProbeSet } from '../dev/conversationalProbe';
 import { classifyWithLLM } from '../hooks/llmLayers';
 import {
   generateEphemeralConversation,
@@ -415,8 +416,6 @@ export default function ChatScreen() {
   const liveGreetingAddedRef = useRef(false);
   const greetingIdRef = useRef<string>("");
   const autoOpenAppsRef = useRef<Set<string>>(new Set());
-  const scannerX = useRef(new Animated.Value(0)).current;
-  const [scannerTrackWidth, setScannerTrackWidth] = useState(0);
   const tokenBatchRef = useRef<string>('');
   const batchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Pending contact collection — when Herald asks "what's their number/address?"
@@ -1332,11 +1331,6 @@ export default function ChatScreen() {
     // Deterministic-first routing: the regex/SQL classifier runs FIRST and always wins.
     // Tier-1 reads and actions are handled by the dispatch below. The on-device LLM only
     // attempts a capture when deterministic routing found nothing actionable (tier 3 gap).
-    // TEMP DIAGNOSTIC — D1 structured-speech integrity, 2026-08-12.
-    // Metadata only, no transcript content. Remove after D1 is classified.
-    console.log(
-      `[D1-DIAG] ts=${Date.now()} boundary=route digitCount=${(text.match(/\d/g) || []).length} charCount=${text.length}`
-    );
     const outcome = await processUtterance(text, sessionRef.current, {
       classifyQuery,
       classifyLLM: async (t: string) => classifyWithLLM(t, getCtx(), {
@@ -2207,19 +2201,23 @@ export default function ChatScreen() {
     sendMessage(inputText.trim());
   }, [inputText, sendMessage]);
 
+  const [heardPreviewText, setHeardPreviewText] = useState('');
+
   const handleTranscript = useCallback((transcript: string) => {
     if (!transcript.trim()) return;
     const trimmed = transcript.trim().slice(0, 2000);
     latLog('handleTranscript entry', { turnId: getActiveTurnId(), charLen: trimmed.length });
     // Brief display in input bar so user sees what was heard, then send
     setInputText(trimmed);
+    setHeardPreviewText(trimmed);
     setTimeout(() => {
       latLog('STT handoff timer fired', { turnId: getActiveTurnId(), delayMs: 600 });
       setInputText('');
+      setHeardPreviewText('');
       sendMessage(trimmed);
     }, 600);
   }, [sendMessage]);
-  const { isRecording, startRecording, stopRecording, suspendForSpeech } = useMic(handleTranscript, isSpeakingRef);
+  const { isRecording, startRecording, stopRecording, suspendForSpeech, partialText } = useMic(handleTranscript, isSpeakingRef);
   suspendForSpeechRef.current = suspendForSpeech;
 
   useRaiseToWake({
@@ -2245,25 +2243,6 @@ export default function ChatScreen() {
       return () => clearTimeout(timer);
     }
   }, [isSpeaking, isStreaming, startRecording]);
-
-  useEffect(() => {
-    if (!isRecording && !isSpeaking) {
-      scannerX.setValue(0);
-      return;
-    }
-    const duration = isRecording ? 1400 : 900;
-    const loop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(scannerX, { toValue: 1, duration, useNativeDriver: true }),
-        Animated.timing(scannerX, { toValue: 0, duration: 0, useNativeDriver: true }),
-      ])
-    );
-    loop.start();
-    return () => {
-      loop.stop();
-      scannerX.setValue(0);
-    };
-  }, [isRecording, isSpeaking, scannerX]);
 
   // ── Intent execution ──────────────────────────────────────────────────────
 
@@ -2792,11 +2771,17 @@ export default function ChatScreen() {
     [markRead, userId]
   );
 
+  const currentExchangeStart = Math.max(0, displayMessages.length - 2);
+
   const renderMessage = useCallback(
-    ({ item }: { item: Message }) => (
-      <MessageBubble message={item} persona={persona} />
+    ({ item, index }: { item: Message; index: number }) => (
+      <MessageBubble
+        message={item}
+        persona={persona}
+        visualWeight={index >= currentExchangeStart ? "current" : "prior"}
+      />
     ),
-    [persona]
+    [persona, currentExchangeStart]
   );
 
   const buildDispatchDeps = useCallback((): DispatchDeps => ({
@@ -2824,8 +2809,9 @@ export default function ChatScreen() {
   // ── Render ────────────────────────────────────────────────────────────────
 
   const aiInitial = (aiName || 'Herald').trim().charAt(0).toUpperCase();
-  const scannerBarWidth = 40;
-  const scannerTravel = Math.max(0, scannerTrackWidth - scannerBarWidth);
+  const livePartialText = isRecording && partialText.trim() && !heardPreviewText
+    ? partialText.trim()
+    : '';
 
   return (
     <PersonaBackground persona={personaKey}>
@@ -2864,9 +2850,11 @@ export default function ChatScreen() {
                   ]}
                   accessibilityLabel="Stop speaking"
                 >
-                  <Text style={[styles.stopSpeakingIcon, { color: persona.colors.accent }]}>
-                    ⏹
-                  </Text>
+                  <Ionicons
+                    name="stop-circle-outline"
+                    size={16}
+                    color={persona.colors.accent}
+                  />
                 </TouchableOpacity>
               )}
               {unreadCount > 0 && (
@@ -2984,6 +2972,32 @@ export default function ChatScreen() {
               }}
               ListFooterComponent={
                 <>
+                  {livePartialText ? (
+                    <MessageBubble
+                      message={{
+                        id: "stt-partial",
+                        role: "user",
+                        content: livePartialText,
+                        timestamp: Date.now(),
+                      }}
+                      persona={persona}
+                      visualWeight="current"
+                      isEphemeral
+                    />
+                  ) : null}
+                  {heardPreviewText ? (
+                    <MessageBubble
+                      message={{
+                        id: "heard-preview",
+                        role: "user",
+                        content: heardPreviewText,
+                        timestamp: Date.now(),
+                      }}
+                      persona={persona}
+                      visualWeight="current"
+                      isEphemeral
+                    />
+                  ) : null}
                   {isWaiting && (
                     <View style={styles.typingRow}>
                       <BouncingDots color={persona.colors.accent} />
@@ -2992,6 +3006,7 @@ export default function ChatScreen() {
                           styles.typingText,
                           { color: "rgba(255,255,255,0.6)" },
                         ]}
+                        allowFontScaling
                       >
                         {thinkingPhrase}
                       </Text>
@@ -3006,6 +3021,7 @@ export default function ChatScreen() {
                         timestamp: Date.now(),
                       }}
                       persona={persona}
+                      visualWeight="current"
                     />
                   ) : null}
                 </>
@@ -3025,186 +3041,150 @@ export default function ChatScreen() {
             />
           )}
 
-          {/* TEMP DIAGNOSTIC — hands-free reachability toggle, 2026-08-02.
-              Founder-only. No persistence, no AsyncStorage. Defaults OFF on
-              every launch (relies on handsFreeMode's existing useState(false)
-              initializer — nothing added here changes that). Remove in the
-              same commit that removes recovery instrumentation. */}
-          {isOwner && (
-          <TouchableOpacity
-            onPress={() => setHandsFreeMode((v) => !v)}
-            accessibilityLabel={
-              handsFreeMode
-                ? "TEMP DIAGNOSTIC: hands-free is ON, tap to turn off"
-                : "TEMP DIAGNOSTIC: hands-free is OFF, tap to turn on"
-            }
-            style={{
-              alignSelf: 'center',
-              paddingVertical: 4,
-              paddingHorizontal: 10,
-              marginBottom: 4,
-              borderRadius: 6,
-              backgroundColor: handsFreeMode ? '#cc3333' : 'rgba(255,255,255,0.15)',
-            }}
+          <LinearGradient
+            colors={[
+              "rgba(0,0,0,0)",
+              persona.surfaceTint,
+              persona.surfaceTint,
+            ]}
+            locations={[0, 0.28, 1]}
+            style={[styles.composerCanvas, { paddingBottom: insets.bottom + 10 }]}
           >
-            <Text style={{ color: '#fff', fontSize: 11, fontWeight: '600', letterSpacing: 0.5 }}>
-              TEMP DIAGNOSTIC — HANDS-FREE: {handsFreeMode ? 'ON' : 'OFF'}
-            </Text>
-          </TouchableOpacity>
-          )}
+            <View style={styles.inputBar}>
+              <TouchableOpacity
+                style={[
+                  styles.talkControlBtn,
+                  {
+                    backgroundColor: isRecording
+                      ? "rgba(204, 51, 51, 0.28)"
+                      : persona.surfaceTint,
+                    borderColor: isRecording
+                      ? "#cc3333"
+                      : persona.colors.accent + "66",
+                  },
+                ]}
+                onPress={() => {
+                  if (isStreaming || isWaiting || isSpeakingRef.current) return;
+                  Keyboard.dismiss();
+                  if (isRecording) {
+                    stopRecording();
+                  } else {
+                    // 50ms delay: lets Android layout settle after keyboard dismiss
+                    // before speech recognition initialises -- fixes first-tap miss.
+                    // M1 short-utterance follow-on, 2026-08-13: bias STT toward the
+                    // closed confirm vocabulary when a pending confirmation is
+                    // active at tap time -- manual button only, per approved scope.
+                    const micMode = sessionRef.current.hasPending() ? 'control_confirmation' : 'open';
+                    setTimeout(() => startRecording('manual_button', micMode), 50);
+                  }
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  isRecording
+                    ? "Stop recording"
+                    : `Talk to ${aiName || "Herald"}`
+                }
+              >
+                <View
+                  style={[
+                    styles.talkAvatar,
+                    {
+                      backgroundColor: isRecording
+                        ? "rgba(204, 51, 51, 0.45)"
+                        : persona.colors.accentMuted,
+                      borderColor: isRecording
+                        ? "#cc3333"
+                        : persona.colors.accent,
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[styles.talkAvatarLetter, { color: persona.colors.accent }]}
+                    allowFontScaling
+                  >
+                    {aiInitial}
+                  </Text>
+                </View>
+                <Text
+                  style={[styles.talkLabel, { color: persona.colors.text }]}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                  allowFontScaling
+                >
+                  {isRecording ? "Listening…" : `Talk to ${aiName || "Herald"}`}
+                </Text>
+                <Ionicons
+                  name={isRecording ? "stop-circle-outline" : "mic-outline"}
+                  size={18}
+                  color={isRecording ? "#ff8888" : persona.colors.accent}
+                  style={styles.talkMicCue}
+                />
+              </TouchableOpacity>
 
-          {/* TEMP DIAGNOSTIC — conversational-probe manual trigger, authorized
-              test session 2026-08-14. Single tap only, no long-press. Founder-only,
-              no persistence. Remove after the conversational-model experiment
-              concludes, same commit that removes the hands-free diagnostic above. */}
-          {isOwner && (
-          <TouchableOpacity
-            onPress={() => {
-              console.log('[conversationalProbe] MANUAL_TRIGGER');
-              runConversationalProbeSet(getCtx(), activeModel).catch((e) =>
-                console.log('[conversationalProbe] SET_FAILED', String(e)));
-            }}
-            accessibilityLabel="TEMP DIAGNOSTIC: run conversational LLM probe set"
-            style={{
-              alignSelf: 'center',
-              paddingVertical: 4,
-              paddingHorizontal: 10,
-              marginBottom: 4,
-              borderRadius: 6,
-              backgroundColor: 'rgba(26,155,138,0.35)',
-            }}
-          >
-            <Text style={{ color: '#fff', fontSize: 11, fontWeight: '600', letterSpacing: 0.5 }}>
-              TEMP DIAGNOSTIC — RUN LLM PROBE
-            </Text>
-          </TouchableOpacity>
-          )}
-
-          <View
-            style={styles.scannerSlot}
-            onLayout={(e) => setScannerTrackWidth(e.nativeEvent.layout.width)}
-          >
-            {(isRecording || isSpeaking) && (
-              <View style={styles.scannerTrack}>
-                {scannerTravel > 0 && (
-                  <Animated.View
+              <View style={styles.composerTextRow}>
+                <TextInput
+                  style={[
+                    styles.textInputSecondary,
+                    {
+                      color: persona.colors.text,
+                      backgroundColor: "rgba(0,0,0,0.32)",
+                      borderColor: persona.colors.border,
+                    },
+                  ]}
+                  placeholder="Ask anything…"
+                  placeholderTextColor="rgba(255,255,255,0.42)"
+                  value={inputText}
+                  onChangeText={setInputText}
+                  multiline
+                  maxLength={2000}
+                  returnKeyType="send"
+                  onSubmitEditing={() => {
+                    if (inputText.trim()) {
+                      sendMessage(inputText.trim());
+                      setInputText('');
+                    }
+                  }}
+                  blurOnSubmit={false}
+                  accessibilityLabel="Message input"
+                  allowFontScaling
+                  onFocus={() => {
+                    // Stop Herald speaking when user taps to type.
+                    // Prevents feedback loop: user corrects → mic hears Herald talking.
+                    stop();
+                  }}
+                />
+                <TouchableOpacity
+                  style={[
+                    styles.sendBtnSecondary,
+                    {
+                      backgroundColor:
+                        inputText.trim() && !isStreaming
+                          ? persona.colors.accentMuted
+                          : "rgba(0,0,0,0.25)",
+                      borderColor: persona.colors.border,
+                    },
+                  ]}
+                  onPress={handleSend}
+                  disabled={!inputText.trim() || isStreaming}
+                  accessibilityRole="button"
+                  accessibilityLabel="Send message"
+                >
+                  <Text
                     style={[
-                      styles.scannerBar,
+                      styles.sendArrowSecondary,
                       {
-                        backgroundColor: persona.colors.accent,
-                        transform: [{
-                          translateX: scannerX.interpolate({
-                            inputRange: [0, 1],
-                            outputRange: [0, scannerTravel],
-                          }),
-                        }],
+                        color: inputText.trim() && !isStreaming
+                          ? persona.colors.accent
+                          : "rgba(255,255,255,0.35)",
                       },
                     ]}
-                  />
-                )}
+                  >
+                    ↑
+                  </Text>
+                </TouchableOpacity>
               </View>
-            )}
-          </View>
-
-          <View
-            style={[
-              styles.inputBar,
-              {
-                backgroundColor: "rgba(0,0,0,0.75)",
-                borderTopColor: persona.colors.border,
-                paddingBottom: insets.bottom + 10,
-              },
-            ]}
-          >
-            <TextInput
-              style={[styles.textInput, { color: "#FFFFFF" }]}
-              placeholder="Ask anything..."
-              placeholderTextColor="rgba(255,255,255,0.45)"
-              value={inputText}
-              onChangeText={setInputText}
-              multiline
-              maxLength={2000}
-              returnKeyType="send"
-              onSubmitEditing={() => {
-                if (inputText.trim()) {
-                  sendMessage(inputText.trim());
-                  setInputText('');
-                }
-              }}
-              blurOnSubmit={false}
-              accessibilityLabel="Message input"
-              onFocus={() => {
-                // Stop Herald speaking when user taps to type.
-                // Prevents feedback loop: user corrects → mic hears Herald talking.
-                stop();
-              }}
-            />
-            <View style={{ alignItems: 'center' }}>
-            <TouchableOpacity
-              style={[
-                styles.sendBtn,
-                {
-                  backgroundColor: handsFreeMode
-                    ? persona.colors.accent
-                    : isRecording
-                    ? '#cc3333'
-                    : 'transparent',
-                  borderWidth: handsFreeMode || isRecording ? 0 : 1,
-                  borderColor: persona.colors.accent,
-                  marginRight: 6,
-                },
-              ]}
-              onPress={() => {
-                if (isStreaming || isWaiting || isSpeakingRef.current) return;
-                Keyboard.dismiss();
-                if (isRecording) {
-                  stopRecording();
-                } else {
-                  // 50ms delay: lets Android layout settle after keyboard dismiss
-                  // before speech recognition initialises -- fixes first-tap miss.
-                  // M1 short-utterance follow-on, 2026-08-13: bias STT toward the
-                  // closed confirm vocabulary when a pending confirmation is
-                  // active at tap time -- manual button only, per approved scope.
-                  const micMode = sessionRef.current.hasPending() ? 'control_confirmation' : 'open';
-                  setTimeout(() => startRecording('manual_button', micMode), 50);
-                }
-              }}
-              accessibilityLabel={handsFreeMode ? "Stop hands-free mode" : "Start hands-free mode"}
-            >
-              <Text style={[styles.sendArrow, { color: handsFreeMode || isRecording ? '#fff' : persona.colors.accent }]}>
-                {isRecording ? '⏹' : '🎤'}
-              </Text>
-            </TouchableOpacity>
-            {!isRecording && !isStreaming && !isWaiting && (
-              <Text style={{
-                color: 'rgba(255,255,255,0.35)',
-                fontSize: 10,
-                marginTop: 2,
-                textAlign: 'center',
-                letterSpacing: 0.5,
-              }}>
-                tap to speak
-              </Text>
-            )}
             </View>
-            <TouchableOpacity
-              style={[
-                styles.sendBtn,
-                {
-                  backgroundColor:
-                    inputText.trim() && !isStreaming
-                      ? persona.colors.accent
-                      : persona.colors.border,
-                },
-              ]}
-              onPress={handleSend}
-              disabled={!inputText.trim() || isStreaming}
-              accessibilityRole="button"
-              accessibilityLabel="Send message"
-            >
-              <Text style={styles.sendArrow}>↑</Text>
-            </TouchableOpacity>
-          </View>
+          </LinearGradient>
         </KeyboardAvoidingView>
       </SafeAreaView>
     </PersonaBackground>
@@ -3244,23 +3224,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   stopSpeakingIcon: { fontSize: 14, fontWeight: "700" },
-  scannerSlot: {
-    width: "100%",
-    height: 3,
-    marginBottom: 8,
-  },
-  scannerTrack: {
-    width: "100%",
-    height: 3,
-    overflow: "hidden",
-    backgroundColor: "rgba(255,255,255,0.12)",
-    borderRadius: 2,
-  },
-  scannerBar: {
-    width: 40,
-    height: 3,
-    borderRadius: 2,
-  },
   badge: {
     minWidth: 26,
     height: 26,
@@ -3345,22 +3308,78 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
 
+  composerCanvas: {
+    paddingHorizontal: 12,
+    paddingTop: 14,
+  },
   inputBar: {
+    gap: 10,
+  },
+  talkControlBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    minHeight: 52,
+    borderRadius: 26,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    gap: 10,
+    width: "100%",
+    maxWidth: "100%",
+  },
+  talkAvatar: {
+    width: 36,
+    height: 36,
+    minWidth: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  talkAvatarLetter: {
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  talkLabel: {
+    flex: 1,
+    flexShrink: 1,
+    fontSize: 16,
+    fontWeight: "600",
+    letterSpacing: -0.2,
+    minWidth: 0,
+  },
+  talkMicCue: {
+    flexShrink: 0,
+  },
+  composerTextRow: {
     flexDirection: "row",
     alignItems: "flex-end",
-    paddingHorizontal: 12,
-    paddingTop: 10,
-    borderTopWidth: 1,
     gap: 8,
+    width: "100%",
   },
-  textInput: {
+  textInputSecondary: {
     flex: 1,
-    fontSize: 17,
-    lineHeight: 24,
-    maxHeight: 120,
+    fontSize: 15,
+    lineHeight: 21,
+    maxHeight: "22%",
+    minHeight: 40,
+    paddingHorizontal: 14,
     paddingTop: 8,
     paddingBottom: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    minWidth: 0,
   },
+  sendBtnSecondary: {
+    minWidth: 36,
+    minHeight: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 2,
+  },
+  sendArrowSecondary: { fontSize: 16, fontWeight: "600" },
   sendBtn: {
     width: 44,
     height: 44,

@@ -19,6 +19,8 @@ export function useMic(
   ttsActiveRef?: { current: boolean },
 ) {
   const [isRecording, setIsRecording] = useState(false);
+  // Read-only mirror of latestPartialRef for presentation (live STT partial).
+  const [partialText, setPartialText] = useState('');
   const maxTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bufferRef = useRef<string>('');
   // STT partial-only recovery (2026-08-18): tracks the latest CONTENTFUL
@@ -108,6 +110,7 @@ export function useMic(
     // the native 'end' this function's own stop() call triggers could
     // incorrectly flush_partial a fragment from a turn Herald just cancelled.
     latestPartialRef.current = '';
+    setPartialText('');
     if (bufferTimerRef.current) { clearTimeout(bufferTimerRef.current); bufferTimerRef.current = null; }
     bufferRef.current = '';
     if (maxTimer.current) { clearTimeout(maxTimer.current); maxTimer.current = null; }
@@ -154,6 +157,7 @@ export function useMic(
     // event (e.g. after an error-path flush) can never re-deliver stale
     // partial content as a duplicate turn.
     latestPartialRef.current = '';
+    setPartialText('');
     if (bufferTimerRef.current) {
       clearTimeout(bufferTimerRef.current);
       bufferTimerRef.current = null;
@@ -287,9 +291,10 @@ export function useMic(
     } else {
       // Non-final partial carrying real content -- retain for terminal-
       // event recovery only. Overwrite, never concatenate.
-      const partialText = event.results[0]?.transcript?.trim();
-      if (partialText) {
-        latestPartialRef.current = partialText;
+      const partial = event.results[0]?.transcript?.trim();
+      if (partial) {
+        latestPartialRef.current = partial;
+        setPartialText(partial);
       }
     }
   });
@@ -358,6 +363,7 @@ export function useMic(
     turnActiveRef.current = false;
     speechStartedRef.current = false;
     latestPartialRef.current = '';
+    setPartialText('');
     if (maxTimer.current) { clearTimeout(maxTimer.current); maxTimer.current = null; }
     if (bufferTimerRef.current) { clearTimeout(bufferTimerRef.current); bufferTimerRef.current = null; }
     bufferRef.current = '';
@@ -384,6 +390,7 @@ export function useMic(
       const final = bufferRef.current.trim();
       bufferRef.current = '';
       latestPartialRef.current = '';
+      setPartialText('');
       if (maxTimer.current) { clearTimeout(maxTimer.current); maxTimer.current = null; }
       rlog('TEARDOWN_REQUESTED', { reason: 'manual_stop' });
       try { ExpoSpeechRecognitionModule.stop(); } catch (e) { console.error('[useMic] stop failed:', e); }
@@ -406,6 +413,7 @@ export function useMic(
     }
     if (maxTimer.current) { clearTimeout(maxTimer.current); maxTimer.current = null; }
     latestPartialRef.current = '';
+    setPartialText('');
     rlog('TEARDOWN_REQUESTED', { reason: 'manual_stop' });
     try {
       ExpoSpeechRecognitionModule.stop();
@@ -437,6 +445,7 @@ export function useMic(
       turnActiveRef.current = false; // clean slate for a new turn
       speechStartedRef.current = false;
       latestPartialRef.current = '';
+      setPartialText('');
       clearEmptySessionRecovery();
 
       let stateBefore: string = 'unknown';
@@ -463,5 +472,5 @@ export function useMic(
     }
   }, [stopRecording]);
 
-  return { isRecording, startRecording, stopRecording, suspendForSpeech };
+  return { isRecording, startRecording, stopRecording, suspendForSpeech, partialText };
 }

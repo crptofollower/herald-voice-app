@@ -23,14 +23,6 @@ function assert(label: string, got: unknown, pred: (v: unknown) => boolean, expe
   }
 }
 
-function effectBodyWithMarker(src: string, depIncludes: string, bodyMarker: string): string | null {
-  const effects = [...src.matchAll(/useEffect\(\(\) => \{([\s\S]*?)\}, \[([^\]]+)\]\)/g)];
-  for (const m of effects) {
-    if (m[2].includes(depIncludes) && m[1].includes(bodyMarker)) return m[1];
-  }
-  return null;
-}
-
 export async function runListeningSpeakingMirrorTests() {
   passed = 0;
   failures.length = 0;
@@ -43,39 +35,41 @@ export async function runListeningSpeakingMirrorTests() {
   const chatSrc = fs.readFileSync(chatPath, 'utf8');
 
   assert(
-    'LSM-1 scanner track gated on isRecording or isSpeaking',
-    /\{\(isRecording\s*\|\|\s*isSpeaking\)\s*&&[\s\S]*?scannerTrack/.test(chatSrc),
+    'LSM-1 redundant scanner bar removed (subtraction pass)',
+    chatSrc,
+    (src) => typeof src === 'string'
+      && !/\bscannerTrack\b/.test(src)
+      && !/\bscannerBar\b/.test(src)
+      && !/\bscannerX\b/.test(src),
+    'no scannerTrack/scannerBar/scannerX in ChatScreen',
+  );
+
+  assert(
+    'LSM-2 talk control reflects isRecording state (no duplicate scanner cue)',
+    chatSrc,
+    (src) => typeof src === 'string'
+      && /backgroundColor: isRecording/.test(src)
+      && /borderColor: isRecording/.test(src)
+      && /isRecording \? "Listening…"/.test(src),
+    'talk control color/label gated on isRecording',
+  );
+
+  assert(
+    'LSM-3 stop-speaking header control still mirrors isSpeaking',
+    /\{isSpeaking && \([\s\S]*?accessibilityLabel="Stop speaking"/.test(chatSrc),
     (v) => v === true,
-    '(isRecording || isSpeaking) conditional wraps scannerTrack',
+    'header stop button gated on isSpeaking',
   );
 
   assert(
-    'LSM-2 scanner animation effect depends on isRecording; halo refs absent',
-    {
-      body: effectBodyWithMarker(chatSrc, 'isRecording', 'scannerX'),
-      noHaloRefs: !/\blistenGlowAnim\b/.test(chatSrc) && !/\bpulseAnim\b/.test(chatSrc),
-    },
-    (v) => {
-      const { body, noHaloRefs } = v as { body: string | null; noHaloRefs: boolean };
-      return typeof body === 'string' && body.includes('Animated.loop') && noHaloRefs;
-    },
-    'isRecording effect drives scannerX loop; listenGlowAnim/pulseAnim removed',
-  );
-
-  assert(
-    'LSM-3 scanner track reflects isSpeaking authority',
-    /\{\(isRecording\s*\|\|\s*isSpeaking\)\s*&&[\s\S]*?scannerBar/.test(chatSrc),
-    (v) => v === true,
-    'isSpeaking participates in scanner visibility gate',
-  );
-
-  assert(
-    'LSM-4 speaking scanner animation effect depends on isSpeaking',
-    effectBodyWithMarker(chatSrc, 'isSpeaking', 'scannerX'),
-    (body) => typeof body === 'string'
-      && !/\b(startRecording|stopRecording|speak|enqueueSentence)\s*\(/.test(body)
-      && !/\bspeakPulseAnim\b/.test(chatSrc),
-    'isSpeaking presence effect drives scannerX only; speakPulseAnim removed',
+    'LSM-4 no scanner animation effects remain',
+    chatSrc,
+    (src) => typeof src === 'string'
+      && !/useEffect\([\s\S]*?scannerX/.test(src)
+      && !/\blistenGlowAnim\b/.test(src)
+      && !/\bpulseAnim\b/.test(src)
+      && !/\bspeakPulseAnim\b/.test(src),
+    'no scannerX effect or halo/pulse anim refs',
   );
 
   assert(
@@ -97,19 +91,19 @@ export async function runListeningSpeakingMirrorTests() {
     'useMic + useSpeech destructuring intact',
   );
 
-  const scannerEffect = effectBodyWithMarker(chatSrc, 'scannerX', 'Animated.loop') ?? '';
   assert(
-    'LSM-7 presentation animation effects do not invoke STT/TTS',
-    !/\b(startRecording|stopRecording|speak|enqueueSentence)\s*\(/.test(scannerEffect),
-    (v) => v === true,
-    'no startRecording/stopRecording/speak/enqueueSentence in scanner presence effect',
-  );
-
-  assert(
-    'LSM-8 mic onPress still gates on isSpeakingRef (sync authority read)',
+    'LSM-7 mic onPress still gates on isSpeakingRef (sync authority read)',
     /if\s*\(\s*isStreaming\s*\|\|\s*isWaiting\s*\|\|\s*isSpeakingRef\.current\s*\)\s*return/.test(chatSrc),
     (v) => v === true,
     'mic tap block reads isSpeakingRef from useSpeech',
+  );
+
+  assert(
+    'LSM-8 talk control accessibility uses full AI name (not hands-free mislabel)',
+    /accessibilityLabel=\{[\s\S]*?`Talk to \$\{aiName \|\| "Herald"\}`/.test(chatSrc)
+      && /isRecording[\s\S]*?"Stop recording"/.test(chatSrc),
+    (v) => v === true,
+    'talk control a11y: Talk to full name / Stop recording',
   );
 
   const forbiddenCaptionHit = [

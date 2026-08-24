@@ -60,7 +60,7 @@ export function PersonaBackground({ persona: personaKey, children, style }: Prop
       <LinearGradient
         colors={persona.gradient}
         locations={[0, 0.30, 0.62, 1.0]}
-        style={StyleSheet.absoluteFill}
+        style={[StyleSheet.absoluteFill, { opacity: 0.88 }]}
       />
       {/* Content sits above overlay */}
       <View style={styles.content}>
