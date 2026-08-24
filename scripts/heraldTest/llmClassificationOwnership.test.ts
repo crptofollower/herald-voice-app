@@ -62,8 +62,15 @@ export async function runLlmClassificationOwnershipTests() {
   check('LCO-9 not_ready → false',
     { kind: 'not_ready', reason: '' }, false);
 
-  check('LCO-10 needs_clarification → false',
-    { kind: 'needs_clarification', reason: '' }, false);
+  check('LCO-10 needs_clarification without readMeta → false',
+    { kind: 'needs_clarification', reason: 'default' }, false);
+
+  check('LCO-10b needs_clarification with readMeta → true',
+    {
+      kind: 'needs_clarification',
+      reason: 'default',
+      readMeta: { readIntents: [], readLabeled: true },
+    }, true);
 
   check('LCO-11 phone_repair_needed → false',
     { kind: 'phone_repair_needed', pending: dummyPending, reason: '' }, false);

@@ -6,6 +6,7 @@
 
 import type { IntentRecord } from '../hooks/llmLayers';
 import { FAMILY_SYNONYMS } from '../utils/familyRead';
+import { utteranceRequiresBoundedPastEventAck } from '../utils/predicateExtensionContainment';
 import {
   IMPERATIVE_ACTION_RE,
   REMINDER_SIGNALS,
@@ -131,9 +132,18 @@ export function isD3CompletedPastActionRefusal(
   return COMPLETED_PAST_FIRST_PERSON_RE.test(utterance);
 }
 
+/** D4 — bounded personal-event narration → state-capture proposals (model path). */
+export function isD4BoundedPersonalEventRefusal(
+  utterance: string,
+  intents: IntentRecord[],
+): boolean {
+  if (!intents.some(i => STATE_CAPTURE_TYPES.has(i.type))) return false;
+  return utteranceRequiresBoundedPastEventAck(utterance);
+}
+
 /**
  * True when LLM proposals must be refused (same effect as pass-filter empty).
- * Evaluation order: explicit instruction → D1 → D3 → otherwise survive.
+ * Evaluation order: explicit instruction → D1 → D3 → D4 → otherwise survive.
  */
 export function shouldRefuseLlmCaptureProposal(
   utterance: string,
@@ -143,5 +153,6 @@ export function shouldRefuseLlmCaptureProposal(
   if (isExplicitInstructionToHerald(utterance)) return false;
   if (isD1InteractionReportRefusal(utterance, intents)) return true;
   if (isD3CompletedPastActionRefusal(utterance, intents)) return true;
+  if (isD4BoundedPersonalEventRefusal(utterance, intents)) return true;
   return false;
 }

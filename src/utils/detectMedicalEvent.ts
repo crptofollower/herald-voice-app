@@ -154,6 +154,16 @@ function extractAdvice(text: string): string | undefined {
   return m?.[1]?.trim().replace(/[.,;:!?]+$/, "");
 }
 
+/** Past/future visit claims require domain evidence — generic "saw/visited" alone is not authority. */
+const MEDICAL_VISIT_DOMAIN_EVIDENCE =
+  /\b(?:doctor|dentist|physician|therapist|cardiologist|neurologist|oncologist|psychiatrist|specialist|appointment|dr\.?\s+\w+)\b/i;
+
+export function hasMedicalVisitDomainEvidence(text: string): boolean {
+  if (extractDoctorName(text)) return true;
+  if (extractSpecialty(text)) return true;
+  return MEDICAL_VISIT_DOMAIN_EVIDENCE.test(text);
+}
+
 export function detectMedicalEvent(text: string): MedicalEvent | null {
   const raw = text.trim();
   if (!raw) return null;
@@ -162,10 +172,14 @@ export function detectMedicalEvent(text: string): MedicalEvent | null {
   // Build A: never read a list operation as a medical event.
   if (LIST_CONTEXT.test(raw)) return null;
 
-  const hasPastVisit = PAST_VISIT.test(raw);
+  let hasPastVisit = PAST_VISIT.test(raw);
   const hasFutureVisit = FUTURE_VISIT.test(raw);
   const hasMedication = MEDICATION.test(raw);
   const hasAdvice = ADVICE.test(raw);
+
+  if (hasPastVisit && !hasMedicalVisitDomainEvidence(raw)) {
+    hasPastVisit = false;
+  }
 
   if (!hasPastVisit && !hasFutureVisit && !hasMedication && !hasAdvice) return null;
 

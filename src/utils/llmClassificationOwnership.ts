@@ -18,6 +18,10 @@ import type { RouteDecision } from '../routing/routeIntent';
 export function alreadyClassifiedByRouteIntent(routeDecision: RouteDecision): boolean {
   if (routeDecision.kind === 'capture' && routeDecision.source === 'llm') return true;
   if (routeDecision.kind === 'backend' && routeDecision.llmAlreadyClassified === true) return true;
+  if (routeDecision.kind === 'needs_clarification') {
+    const meta = routeDecision.readMeta;
+    if (meta?.readLabeled || (meta?.readIntents?.length ?? 0) > 0) return true;
+  }
   return false;
 }
 

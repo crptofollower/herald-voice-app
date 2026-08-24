@@ -99,8 +99,8 @@ export function mayRunGenerativeEphemeralPersonalProse(input: {
   })) {
     return false;
   }
-  if (input.hasAuthorizedContinuation) return true;
   if (isBareZeroEvidenceOpeningFragment(input.text)) return false;
+  if (input.hasAuthorizedContinuation) return true;
   // Predicate-Extension V1: past personal event reports get bounded ack, not free generative.
   if (utteranceRequiresBoundedPastEventAck(input.text)) return false;
   return true;

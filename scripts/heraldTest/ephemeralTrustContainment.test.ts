@@ -124,14 +124,23 @@ export async function runEphemeralTrustContainmentTests() {
     }));
 
   // ── 5. Authorized continuation bypasses zero-evidence floor ───────────────
-  assertTrue('ETC-9 continuation authorizes bare follow-up generative',
+  assertTrue('ETC-9 continuation authorizes non-bare follow-up generative',
     mayRunGenerativeEphemeralPersonalProse({
       reason: 'default',
-      text: 'Tell me more.',
+      text: 'What do you think about that?',
       hasAuthorizedContinuation: true,
       hasPendingSession: false,
       hasContactCollectPending: false,
-      isEligible: isEligibleForEphemeralConversation('Tell me more.', true),
+      isEligible: isEligibleForEphemeralConversation('What do you think about that?', true),
+    }));
+  assertTrue('ETC-9b bare label stays blocked even with continuation',
+    !mayRunGenerativeEphemeralPersonalProse({
+      reason: 'default',
+      text: 'The Shields.',
+      hasAuthorizedContinuation: true,
+      hasPendingSession: false,
+      hasContactCollectPending: false,
+      isEligible: isEligibleForEphemeralConversation('The Shields.', true),
     }));
 
   // ── 6. Pending repair ownership blocks generative ─────────────────────────
