@@ -58,6 +58,8 @@ import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import { PersonaBackground } from "../components/PersonaBackground";
 import { MessageBubble } from "../components/MessageBubble";
+import { CapabilitySurface } from "../components/CapabilitySurface";
+import { fetchNwsTomorrowForecast, isNwsTomorrowAtDeviceEligible, type NwsForecastResult } from "../capabilities/nwsWeather";
 import { ProactiveCard } from "../components/ProactiveCard";
 import { IntentCard, type ActionStatus } from "../components/IntentCard";
 import { generateId } from "../utils/id";
@@ -397,6 +399,7 @@ export default function ChatScreen() {
   const [thinkingPhrase, setThinkingPhrase] = useState(THINKING_PHRASES[0]);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [dbReady, setDbReady] = useState(false);
+  const [weatherSurface, setWeatherSurface] = useState<NwsForecastResult | null>(null);
 
   // ── Ambient mode state ────────────────────────────────────────────────────
   // sessionStart filters which messages are shown in the current session.
@@ -1099,6 +1102,7 @@ export default function ChatScreen() {
 
     const turnId = getActiveTurnId() ?? beginTurn();
     latLog('sendMessage entry', { turnId, inputSource: 'app' });
+    setWeatherSurface(null);
 
     // ── Law 0 bridge (interim, Step 3) ─────────────────────────────────────────
     // Catches emergency BEFORE the 1 legacy ref-pending can intercept or
@@ -1991,6 +1995,20 @@ export default function ChatScreen() {
       sendingRef.current = false;
       setInputText('');
       return;
+    }
+
+    if (isNwsTomorrowAtDeviceEligible(text) && lat != null && lng != null) {
+      const nwsResult = await fetchNwsTomorrowForecast(lat, lng);
+      if (nwsResult) {
+        const reply = `${nwsResult.periodTitle}: ${nwsResult.forecastText}`;
+        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: now });
+        addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: now + 1 });
+        speak(reply);
+        setWeatherSurface(nwsResult);
+        sendingRef.current = false;
+        setInputText('');
+        return;
+      }
     }
 
     lastInteractionRef.current = now;
@@ -2996,6 +3014,17 @@ export default function ChatScreen() {
                       persona={persona}
                       visualWeight="current"
                       isEphemeral
+                    />
+                  ) : null}
+                  {weatherSurface ? (
+                    <CapabilitySurface
+                      providerLabel={weatherSurface.providerLabel}
+                      periodTitle={weatherSurface.periodTitle}
+                      forecastText={weatherSurface.forecastText}
+                      sourceLinkLabel={weatherSurface.sourceLinkLabel}
+                      onViewForecast={() => Linking.openURL(weatherSurface.sourceUrl)}
+                      surfaceTint={persona.surfaceTint}
+                      accent={persona.colors.accent}
                     />
                   ) : null}
                   {isWaiting && (
