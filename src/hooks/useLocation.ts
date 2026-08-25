@@ -81,6 +81,48 @@ async function setCachedLocation(result: LocationResult): Promise<void> {
   }
 }
 
+const ENSURE_COORDS_TIMEOUT_MS = 8_000;
+
+export type Coords = { lat: number; lng: number };
+
+function coordsFromResult(result: LocationResult | null): Coords | null {
+  if (result?.lat == null || result?.lng == null) return null;
+  if (!isValidCONUS(result.lat, result.lng)) return null;
+  return { lat: result.lat, lng: result.lng };
+}
+
+/**
+ * Bounded on-demand coords for query-time consumers (e.g. NWS).
+ * Returns cached valid coords when present; otherwise foreground permission
+ * + getCurrentPositionAsync with timeout. No geocoding or persistence writes.
+ */
+export async function ensureCoords(): Promise<Coords | null> {
+  await hydrateCacheRef();
+  const fromRef = coordsFromResult(cacheRef.current);
+  if (fromRef) return fromRef;
+
+  const cached = await getCachedLocation();
+  const fromCache = coordsFromResult(cached);
+  if (fromCache) return fromCache;
+
+  const { status } = await Location.requestForegroundPermissionsAsync();
+  if (status !== "granted") return null;
+
+  try {
+    const pos = await Promise.race([
+      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error("ensureCoords timeout")), ENSURE_COORDS_TIMEOUT_MS);
+      }),
+    ]);
+    const { latitude: lat, longitude: lng } = pos.coords;
+    if (!isValidCONUS(lat, lng)) return null;
+    return { lat, lng };
+  } catch {
+    return null;
+  }
+}
+
 async function reverseGeocode(lat: number, lng: number, userId?: string): Promise<string | null> {
   try {
     const userParam = userId ? `&user_id=${userId}` : "";

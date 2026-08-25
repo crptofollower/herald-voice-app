@@ -67,7 +67,7 @@ import { normalizePhone } from "../utils/phone";
 import { normalizeInput } from "../utils/normalizeInput";
 import { beacon } from "../utils/diag";
 import { useCalendar } from "../hooks/useCalendar";
-import { useLocation } from "../hooks/useLocation";
+import { ensureCoords, useLocation } from "../hooks/useLocation";
 import { useMic } from "../hooks/useMic";
 import { useRaiseToWake } from "../hooks/useRaiseToWake";
 import { useDeviceMemory } from "../hooks/useDeviceMemory";
@@ -1997,8 +1997,27 @@ export default function ChatScreen() {
       return;
     }
 
-    if (isNwsTomorrowAtDeviceEligible(text) && lat != null && lng != null) {
-      const nwsResult = await fetchNwsTomorrowForecast(lat, lng);
+    if (isNwsTomorrowAtDeviceEligible(text)) {
+      let nwsLat = lat;
+      let nwsLng = lng;
+      if (nwsLat == null || nwsLng == null) {
+        const ready = await ensureCoords();
+        if (!ready) {
+          // Proposed copy (no prior approved NWS-location string in repo):
+          // "I need location permission to check tomorrow's forecast."
+          const reply =
+            "I can't get your location right now, so I can't check tomorrow's weather.";
+          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: now });
+          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: now + 1 });
+          speak(reply);
+          sendingRef.current = false;
+          setInputText('');
+          return;
+        }
+        nwsLat = ready.lat;
+        nwsLng = ready.lng;
+      }
+      const nwsResult = await fetchNwsTomorrowForecast(nwsLat, nwsLng);
       if (nwsResult) {
         const reply = `${nwsResult.periodTitle}: ${nwsResult.forecastText}`;
         addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: now });
