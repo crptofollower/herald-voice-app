@@ -91,14 +91,15 @@ export async function runTranscriptAutoVisibilityTests() {
   );
 
   assert(
-    'TAV-6 scanner removed; talk-primary inputBar leads with talk control then TextInput',
+    'TAV-6 scanner removed; unified inputBar with talk control then TextInput',
     chatSrc,
     (src) => typeof src === 'string'
       && !/\bscannerSlot\b/.test(src)
       && !/\bscannerTrack\b/.test(src)
       && !/\bscannerBar\b/.test(src)
-      && /styles\.inputBar[\s\S]*?styles\.talkControlBtn[\s\S]*?<TextInput/.test(src),
-    'no scanner slot/track/bar; talk control precedes TextInput in inputBar',
+      && /styles\.inputBar[\s\S]*?styles\.talkControlBtn[\s\S]*?<TextInput/.test(src)
+      && !/styles\.composerTextRow/.test(src),
+    'no scanner slot/track/bar; talk control + TextInput in one inputBar',
   );
 
   const total = passed + failures.length;

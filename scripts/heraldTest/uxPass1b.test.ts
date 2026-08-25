@@ -44,13 +44,13 @@ export async function runUxPass1bTests() {
   );
 
   assert(
-    'UX1B-2 long AI name — ellipsize tail on talk label',
+    'UX1B-2 compact voice zone — accessibility keeps full AI name',
     chatSrc,
     (src) => typeof src === 'string'
-      && /numberOfLines=\{1\}/.test(src)
-      && /ellipsizeMode="tail"/.test(src)
-      && /Talk to \$\{aiName \|\| "Herald"\}/.test(src),
-    'numberOfLines=1 + ellipsizeMode tail on talk label',
+      && /accessibilityLabel=\{[\s\S]*?`Talk to \$\{aiName \|\| "Herald"\}`/.test(src)
+      && /isRecording[\s\S]*?"Stop recording"/.test(src)
+      && !/Talk to Kit/.test(src),
+    'a11y: Talk to full name / Stop recording in voice zone',
   );
 
   assert(
@@ -73,14 +73,16 @@ export async function runUxPass1bTests() {
   );
 
   assert(
-    'UX1B-5 text path available — Ask anything placeholder + send',
+    'UX1B-5 text path in unified composer — Talk to AI + send via handleSend',
     chatSrc,
     (src) => typeof src === 'string'
-      && /placeholder="Ask anything…"/.test(src)
+      && /placeholder=\{`Talk to \$\{aiName \|\| "Herald"\}`\}/.test(src)
       && /accessibilityLabel="Message input"/.test(src)
       && /accessibilityLabel="Send message"/.test(src)
-      && /TextInput/.test(src),
-    'secondary text input + send preserved',
+      && /onPress=\{handleSend\}/.test(src)
+      && /styles\.inputBar[\s\S]*?<TextInput[\s\S]*?handleSend/.test(src)
+      && !/styles\.composerTextRow/.test(src),
+    'TextInput + handleSend in same inputBar; no detached secondary row',
   );
 
   assert(

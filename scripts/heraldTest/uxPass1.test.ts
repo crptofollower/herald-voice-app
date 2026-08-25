@@ -101,14 +101,21 @@ export async function runUxPass1Tests() {
   );
 
   assert(
-    'UX1-8 talk-primary composer — talk control leads text row',
+    'UX1-8 unified horizontal composer — voice, text, send in one row',
     chatSrc,
     (src) => typeof src === 'string'
       && /styles\.talkControlBtn/.test(src)
-      && /styles\.composerTextRow/.test(src)
-      && /styles\.textInputSecondary/.test(src)
-      && /styles\.inputBar[\s\S]*?styles\.talkControlBtn[\s\S]*?styles\.composerTextRow/.test(src),
-    'talk control precedes secondary text row in inputBar',
+      && /styles\.composerTextInput/.test(src)
+      && /styles\.inputBar[\s\S]*?styles\.talkControlBtn[\s\S]*?<TextInput[\s\S]*?handleSend/.test(src)
+      && !/styles\.composerTextRow/.test(src)
+      && /maxHeight:\s*120/.test(src)
+      && /minHeight:\s*44/.test(src)
+      && !/maxHeight:\s*"22%"/.test(src)
+      && /if \(isRecording\) \{[\s\S]*?stopRecording\(\)/.test(src)
+      && /startRecording\('manual_button', micMode\)/.test(src)
+      && /value=\{inputText\}/.test(src)
+      && /onChangeText=\{setInputText\}/.test(src),
+    'single inputBar: voice+TextInput+handleSend; fixed heights; inputText bound; no secondary row',
   );
 
   const total = passed + failures.length;

@@ -3134,14 +3134,15 @@ export default function ChatScreen() {
                     {aiInitial}
                   </Text>
                 </View>
-                <Text
-                  style={[styles.talkLabel, { color: persona.colors.text }]}
-                  numberOfLines={1}
-                  ellipsizeMode="tail"
-                  allowFontScaling
-                >
-                  {isRecording ? "Listening…" : `Talk to ${aiName || "Herald"}`}
-                </Text>
+                {isRecording ? (
+                  <Text
+                    style={[styles.talkRecordingLabel, { color: persona.colors.text }]}
+                    numberOfLines={1}
+                    allowFontScaling
+                  >
+                    {isRecording ? "Listening…" : ""}
+                  </Text>
+                ) : null}
                 <Ionicons
                   name={isRecording ? "stop-circle-outline" : "mic-outline"}
                   size={18}
@@ -3150,68 +3151,68 @@ export default function ChatScreen() {
                 />
               </TouchableOpacity>
 
-              <View style={styles.composerTextRow}>
-                <TextInput
+              <TextInput
+                style={[
+                  styles.composerTextInput,
+                  {
+                    color: persona.colors.text,
+                    backgroundColor: "rgba(0,0,0,0.32)",
+                    borderColor: persona.colors.border,
+                  },
+                ]}
+                placeholder={`Talk to ${aiName || "Herald"}`}
+                placeholderTextColor="rgba(255,255,255,0.42)"
+                value={inputText}
+                onChangeText={setInputText}
+                multiline
+                maxLength={2000}
+                returnKeyType="send"
+                onSubmitEditing={() => {
+                  if (inputText.trim()) {
+                    sendMessage(inputText.trim());
+                    setInputText('');
+                  }
+                }}
+                blurOnSubmit={false}
+                accessibilityLabel="Message input"
+                allowFontScaling
+                onFocus={() => {
+                  // Stop Herald speaking when user taps to type.
+                  // Prevents feedback loop: user corrects → mic hears Herald talking.
+                  stop();
+                }}
+              />
+
+              <TouchableOpacity
+                style={[
+                  styles.sendBtn,
+                  {
+                    backgroundColor:
+                      inputText.trim() && !isStreaming
+                        ? persona.colors.accentMuted
+                        : "rgba(0,0,0,0.25)",
+                    borderColor: persona.colors.border,
+                    borderWidth: 1,
+                  },
+                ]}
+                onPress={handleSend}
+                disabled={!inputText.trim() || isStreaming}
+                accessibilityRole="button"
+                accessibilityLabel="Send message"
+              >
+                <Text
                   style={[
-                    styles.textInputSecondary,
+                    styles.sendArrow,
                     {
-                      color: persona.colors.text,
-                      backgroundColor: "rgba(0,0,0,0.32)",
-                      borderColor: persona.colors.border,
+                      color: inputText.trim() && !isStreaming
+                        ? persona.colors.accent
+                        : "rgba(255,255,255,0.35)",
                     },
                   ]}
-                  placeholder="Ask anything…"
-                  placeholderTextColor="rgba(255,255,255,0.42)"
-                  value={inputText}
-                  onChangeText={setInputText}
-                  multiline
-                  maxLength={2000}
-                  returnKeyType="send"
-                  onSubmitEditing={() => {
-                    if (inputText.trim()) {
-                      sendMessage(inputText.trim());
-                      setInputText('');
-                    }
-                  }}
-                  blurOnSubmit={false}
-                  accessibilityLabel="Message input"
-                  allowFontScaling
-                  onFocus={() => {
-                    // Stop Herald speaking when user taps to type.
-                    // Prevents feedback loop: user corrects → mic hears Herald talking.
-                    stop();
-                  }}
-                />
-                <TouchableOpacity
-                  style={[
-                    styles.sendBtnSecondary,
-                    {
-                      backgroundColor:
-                        inputText.trim() && !isStreaming
-                          ? persona.colors.accentMuted
-                          : "rgba(0,0,0,0.25)",
-                      borderColor: persona.colors.border,
-                    },
-                  ]}
-                  onPress={handleSend}
-                  disabled={!inputText.trim() || isStreaming}
-                  accessibilityRole="button"
-                  accessibilityLabel="Send message"
                 >
-                  <Text
-                    style={[
-                      styles.sendArrowSecondary,
-                      {
-                        color: inputText.trim() && !isStreaming
-                          ? persona.colors.accent
-                          : "rgba(255,255,255,0.35)",
-                      },
-                    ]}
-                  >
-                    ↑
-                  </Text>
-                </TouchableOpacity>
-              </View>
+                  ↑
+                </Text>
+              </TouchableOpacity>
             </View>
           </LinearGradient>
         </KeyboardAvoidingView>
@@ -3342,19 +3343,22 @@ const styles = StyleSheet.create({
     paddingTop: 14,
   },
   inputBar: {
-    gap: 10,
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 8,
   },
   talkControlBtn: {
     flexDirection: "row",
     alignItems: "center",
-    minHeight: 52,
-    borderRadius: 26,
+    justifyContent: "center",
+    minWidth: 44,
+    minHeight: 44,
+    borderRadius: 22,
     borderWidth: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    gap: 10,
-    width: "100%",
-    maxWidth: "100%",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    gap: 4,
+    flexShrink: 0,
   },
   talkAvatar: {
     width: 36,
@@ -3369,46 +3373,28 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "700",
   },
-  talkLabel: {
-    flex: 1,
-    flexShrink: 1,
-    fontSize: 16,
-    fontWeight: "600",
-    letterSpacing: -0.2,
-    minWidth: 0,
-  },
   talkMicCue: {
     flexShrink: 0,
   },
-  composerTextRow: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    gap: 8,
-    width: "100%",
+  talkRecordingLabel: {
+    fontSize: 13,
+    fontWeight: "600",
+    flexShrink: 1,
+    minWidth: 0,
   },
-  textInputSecondary: {
+  composerTextInput: {
     flex: 1,
     fontSize: 15,
     lineHeight: 21,
-    maxHeight: "22%",
-    minHeight: 40,
+    minHeight: 44,
+    maxHeight: 120,
     paddingHorizontal: 14,
-    paddingTop: 8,
-    paddingBottom: 8,
-    borderRadius: 20,
+    paddingTop: 10,
+    paddingBottom: 10,
+    borderRadius: 22,
     borderWidth: 1,
     minWidth: 0,
   },
-  sendBtnSecondary: {
-    minWidth: 36,
-    minHeight: 36,
-    borderRadius: 18,
-    borderWidth: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    marginBottom: 2,
-  },
-  sendArrowSecondary: { fontSize: 16, fontWeight: "600" },
   sendBtn: {
     width: 44,
     height: 44,
