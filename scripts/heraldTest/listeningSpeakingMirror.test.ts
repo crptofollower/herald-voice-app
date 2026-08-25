@@ -45,13 +45,15 @@ export async function runListeningSpeakingMirrorTests() {
   );
 
   assert(
-    'LSM-2 talk control reflects isRecording state (no duplicate scanner cue)',
+    'LSM-2 talk control reflects isRecording state (no width-expanding Listening label)',
     chatSrc,
     (src) => typeof src === 'string'
       && /backgroundColor: isRecording/.test(src)
       && /borderColor: isRecording/.test(src)
-      && /isRecording \? "Listening…"/.test(src),
-    'talk control color/label gated on isRecording',
+      && /isRecording \? "stop-circle-outline" : "mic-outline"/.test(src)
+      && !/Listening…/.test(src)
+      && !/\btalkRecordingLabel\b/.test(src),
+    'talk control color/icon gated on isRecording; no Listening… text',
   );
 
   assert(

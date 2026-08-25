@@ -3153,15 +3153,6 @@ export default function ChatScreen() {
                     {aiInitial}
                   </Text>
                 </View>
-                {isRecording ? (
-                  <Text
-                    style={[styles.talkRecordingLabel, { color: persona.colors.text }]}
-                    numberOfLines={1}
-                    allowFontScaling
-                  >
-                    {isRecording ? "Listening…" : ""}
-                  </Text>
-                ) : null}
                 <Ionicons
                   name={isRecording ? "stop-circle-outline" : "mic-outline"}
                   size={18}
@@ -3394,12 +3385,6 @@ const styles = StyleSheet.create({
   },
   talkMicCue: {
     flexShrink: 0,
-  },
-  talkRecordingLabel: {
-    fontSize: 13,
-    fontWeight: "600",
-    flexShrink: 1,
-    minWidth: 0,
   },
   composerTextInput: {
     flex: 1,
