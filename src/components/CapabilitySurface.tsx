@@ -1,5 +1,6 @@
 // src/components/CapabilitySurface.tsx
-// Transient capability proof card — attribution + concise result + deep link.
+// Transient capability inset — attribution + concise result + understated source link.
+// Secondary to Kit's spoken/text answer. Not a modal or provider-app card.
 
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
@@ -26,28 +27,28 @@ export function CapabilitySurface({
   return (
     <View
       style={[
-        styles.card,
+        styles.inset,
         {
           backgroundColor: surfaceTint,
-          borderColor: `${accent}44`,
+          borderLeftColor: `${accent}99`,
         },
       ]}
       accessibilityRole="summary"
     >
-      <Text style={[styles.provider, { color: `${accent}cc` }]} allowFontScaling>
+      <Text style={[styles.provider, { color: `${accent}aa` }]} allowFontScaling>
         {providerLabel}
       </Text>
       <Text style={styles.periodTitle} allowFontScaling>
         {periodTitle}
       </Text>
-      <Text style={styles.forecastText} allowFontScaling numberOfLines={3}>
+      <Text style={styles.forecastText} allowFontScaling>
         {forecastText}
       </Text>
       <TouchableOpacity
         onPress={onViewForecast}
+        style={styles.linkHit}
         accessibilityRole="link"
         accessibilityLabel={sourceLinkLabel.replace(/\s*→\s*$/, '')}
-        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
       >
         <Text style={[styles.link, { color: accent }]} allowFontScaling>
           {sourceLinkLabel}
@@ -58,36 +59,40 @@ export function CapabilitySurface({
 }
 
 const styles = StyleSheet.create({
-  card: {
+  inset: {
     marginHorizontal: 16,
-    marginVertical: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderRadius: 12,
-    borderWidth: 1,
+    marginTop: 4,
+    marginBottom: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 14,
+    borderLeftWidth: 2,
     minWidth: 0,
   },
   provider: {
-    fontSize: 11,
-    fontWeight: '600',
-    letterSpacing: 0.6,
-    textTransform: 'uppercase',
-    marginBottom: 4,
+    fontSize: 12,
+    fontWeight: '500',
+    marginBottom: 2,
   },
   periodTitle: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '600',
-    color: 'rgba(255,255,255,0.92)',
-    marginBottom: 4,
+    color: 'rgba(255,255,255,0.88)',
+    marginBottom: 2,
   },
   forecastText: {
     fontSize: 14,
     lineHeight: 20,
     color: 'rgba(255,255,255,0.78)',
-    marginBottom: 8,
+    marginBottom: 4,
+  },
+  linkHit: {
+    minHeight: 44,
+    justifyContent: 'center',
+    alignSelf: 'flex-start',
   },
   link: {
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: '500',
   },
 });

@@ -177,6 +177,44 @@ export async function runCapabilitySurfaceTests() {
     'resolveSourceLink distinguishes API vs forecast.weather.gov',
   );
 
+  assert(
+    'CS-15 presentation — attribution, period, forecast, dynamic CTA rendered',
+    surfaceSrc,
+    (src) => typeof src === 'string'
+      && /\{providerLabel\}/.test(src)
+      && /\{periodTitle\}/.test(src)
+      && /\{forecastText\}/.test(src)
+      && /\{sourceLinkLabel\}/.test(src)
+      && /onPress=\{onViewForecast\}/.test(src),
+    'existing fields rendered; CTA still calls onViewForecast',
+  );
+
+  assert(
+    'CS-16 no second dismiss / No-thanks / filled CTA / emoji title',
+    surfaceSrc,
+    (src) => typeof src === 'string'
+      && !/No thanks/i.test(src)
+      && !/onDismiss/.test(src)
+      && !/accessibilityRole="button"/.test(src)
+      && !/backgroundColor:[\s\S]{0,40}onViewForecast/.test(src)
+      && !/emoji|🌤|☀️|☁️/.test(src)
+      && /accessibilityRole="link"/.test(src)
+      && /minHeight:\s*44/.test(src),
+    'single understated link CTA; 44dp target; no dismiss or emoji title',
+  );
+
+  assert(
+    'CS-17 inset grammar — no heavy boxed modal treatment',
+    surfaceSrc,
+    (src) => typeof src === 'string'
+      && /borderLeftWidth:\s*2/.test(src)
+      && !/borderWidth:\s*[2-9]/.test(src)
+      && !/numberOfLines=\{3\}/.test(src)
+      && !/textTransform:\s*'uppercase'/.test(src)
+      && /styles\.inset/.test(src),
+    'left-edge inset; forecast height unconstrained; no uppercase brand header',
+  );
+
   const total = passed + failures.length;
   console.log(`\n${BOLD}CapabilitySurface: ${passed}/${total} passed${failures.length ? ` — ${RED}${failures.length} FAILED${RESET}` : ` — ${GREEN}all green${RESET}`}${RESET}\n`);
   return { passed, failed: failures.length, total, failures };
