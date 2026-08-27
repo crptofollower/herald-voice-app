@@ -781,10 +781,11 @@ export async function runOsAmbiguityTests() {
     });
     await dispatchAction({ type: 'sms', contact: 'wife', message: '' }, 'text my wife', deps);
     assert('T-OSA-CTL-TEXT-wife Herald single Shannon still texts (no OS)',
-      { openURLs, messages },
-      v => v.openURLs.some((u: string) => u.startsWith('sms:5550300300'))
-        && v.messages.some((m: string) => /Opening a message to Shannon/i.test(m)),
-      'sms Shannon from Herald');
+      { openURLs, messages, hasPending: deps.session.hasPending() },
+      v => v.openURLs.length === 0
+        && v.hasPending === true
+        && v.messages.some((m: string) => /What would you like me to tell Shannon/i.test(m)),
+      'missing-content clarification; no empty sms');
   }
   {
     // c30ed9a1 presentation intact: relationship multi still uses named "I found a few" on CALL

@@ -21,7 +21,10 @@ export type PendingSlot = {
   budget: number;                                  // remaining re-asks
   resume: (userText: string) => Promise<CommitResult>;
   reaskPrompt?: string;                             // optional domain-specific re-ask override
+  releasePrompt?: string;                           // optional budget-exhaustion line (graceful stop)
   correctable?: CorrectableField;
+  /** When set, a claiming route must not steal a plausible pending answer. */
+  ownsReply?: (userText: string) => boolean;
 };
 
 // Single anchored CANCEL vocabulary (§4.2 sibling — cancel is checked before
@@ -86,23 +89,30 @@ function identityTokens(normalized: string): string[] {
   return normalized.split(' ').filter(tok => tok.length > 0 && !NON_IDENTITY_TOKENS.has(tok));
 }
 
+export function matchingCandidates(
+  replyText: string,
+  candidates: MatchableCandidate[],
+): MatchableCandidate[] {
+  const t = normalizeForMatch(replyText);
+  if (!t) return [];
+
+  const exact = candidates.filter(c => normalizeForMatch(c.label) === t);
+  if (exact.length === 1) return exact;
+
+  const identityReply = identityTokens(t);
+  if (identityReply.length === 0) return [];
+  const identityReplySet = new Set(identityReply);
+
+  return candidates.filter(c =>
+    identityTokens(normalizeForMatch(c.label)).some(tok => identityReplySet.has(tok)),
+  );
+}
+
 export function matchCandidateToken(
   replyText: string,
   candidates: MatchableCandidate[],
 ): MatchableCandidate | 'ambiguous' | 'none' {
-  const t = normalizeForMatch(replyText);
-  if (!t) return 'none';
-
-  const exact = candidates.filter(c => normalizeForMatch(c.label) === t);
-  if (exact.length === 1) return exact[0];
-
-  const identityReply = identityTokens(t);
-  if (identityReply.length === 0) return 'none';
-  const identityReplySet = new Set(identityReply);
-
-  const hits = candidates.filter(c =>
-    identityTokens(normalizeForMatch(c.label)).some(tok => identityReplySet.has(tok)),
-  );
+  const hits = matchingCandidates(replyText, candidates);
   if (hits.length === 1) return hits[0];
   if (hits.length > 1) return 'ambiguous';
   return 'none';
@@ -134,10 +144,20 @@ export class ConversationSession {
       pendingKey: slot.pendingKey,
       resume: slot.resume,
       reaskPrompt: slot.reaskPrompt,
+      releasePrompt: slot.releasePrompt,
       correctable: slot.correctable,
+      ownsReply: slot.ownsReply,
       kind,
       budget: slot.budget ?? (kind === 'destructive' ? 1 : DEFAULT_STANDARD_BUDGET),
     };
+  }
+
+  peekPendingKey(): string | null {
+    return this.pending?.pendingKey ?? null;
+  }
+
+  pendingOwnsReply(userText: string): boolean {
+    return this.pending?.ownsReply?.(userText) === true;
   }
 
   clearPending(): void {
@@ -171,6 +191,7 @@ export class ConversationSession {
             pendingKey: corrected.pendingKey,
             resume: corrected.resume,
             reaskPrompt: corrected.reaskPrompt,
+            releasePrompt: slot.releasePrompt,
             correctable: corrected.correctable,
             kind: slot.kind,
             budget: slot.kind === 'destructive' ? 1 : DEFAULT_STANDARD_BUDGET,
@@ -186,7 +207,7 @@ export class ConversationSession {
       slot.budget -= 1;
       if (slot.budget <= 0) {
         this.pending = null;
-        return { status: 'noop', ack: releaseAck(slot.kind) };
+        return { status: 'noop', ack: slot.releasePrompt ?? releaseAck(slot.kind) };
       }
       return {
         status: 'pending',
@@ -203,9 +224,11 @@ export class ConversationSession {
         pendingKey: result.pendingKey,
         resume: result.resume,
         reaskPrompt: result.reaskPrompt,
+        releasePrompt: result.releasePrompt ?? slot.releasePrompt,
         correctable: result.correctable,
+        ownsReply: slot.ownsReply,
         kind: slot.kind,
-        budget: slot.kind === 'destructive' ? 1 : DEFAULT_STANDARD_BUDGET,
+        budget: result.budget ?? (slot.kind === 'destructive' ? 1 : DEFAULT_STANDARD_BUDGET),
       };
       return result;
     }

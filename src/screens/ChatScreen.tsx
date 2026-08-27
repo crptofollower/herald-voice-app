@@ -135,7 +135,7 @@ import { launchAndroidTimer } from "../utils/androidClock";
 import { captureHousehold } from '../utils/householdCapture';
 import { answerHouseholdRead, detectHouseholdRead } from '../utils/householdRead';
 import { type ReadIntentMeta } from '../routing/readIntent';
-import type { RouteDecision } from '../routing/routeIntent';
+import type { RouteDecision, CommitResult } from '../routing/routeIntent';
 
 function tryReadIntentFromMeta(meta: ReadIntentMeta | undefined): string | null {
   return tryReadIntentReply(meta);
@@ -1359,7 +1359,20 @@ export default function ChatScreen() {
     }
     if (outcome.handled) {
       addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-      addMessage({ id: generateId('msg'), role: 'assistant', content: outcome.responseText, timestamp: Date.now() });
+      const recoveryChoices =
+        outcome.source === 'pending_resume'
+          ? outcome.commits.find(
+              (c): c is Extract<CommitResult, { status: 'pending' }> =>
+                c.status === 'pending' && Array.isArray(c.recoveryChoices) && c.recoveryChoices.length > 0,
+            )?.recoveryChoices
+          : undefined;
+      addMessage({
+        id: generateId('msg'),
+        role: 'assistant',
+        content: outcome.responseText,
+        timestamp: Date.now(),
+        recoveryChoices,
+      });
       speak(outcome.responseText);
       await runCommitEffects(outcome.commits, {
         openURL: (url) => Linking.openURL(url),
@@ -2238,6 +2251,13 @@ export default function ChatScreen() {
     sendMessage(inputText.trim());
   }, [inputText, sendMessage]);
 
+  const handleRecoveryChoice = useCallback((name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    if (!sessionRef.current.hasPending()) return;
+    sendMessage(trimmed);
+  }, [sendMessage]);
+
   const [heardPreviewText, setHeardPreviewText] = useState('');
 
   const handleTranscript = useCallback((transcript: string) => {
@@ -2816,9 +2836,12 @@ export default function ChatScreen() {
         message={item}
         persona={persona}
         visualWeight={index >= currentExchangeStart ? "current" : "prior"}
+        onRecoveryChoice={
+          index >= currentExchangeStart ? handleRecoveryChoice : undefined
+        }
       />
     ),
-    [persona, currentExchangeStart]
+    [persona, currentExchangeStart, handleRecoveryChoice]
   );
 
   const buildDispatchDeps = useCallback((): DispatchDeps => ({

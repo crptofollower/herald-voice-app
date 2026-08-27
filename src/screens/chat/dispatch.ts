@@ -23,6 +23,12 @@ import { guessMedicationName, deactivateMedicationByName } from '../../db/medica
 import { isMedicationCorroborated } from '../../db/factDB';
 import type { CommitResult } from '../../routing/routeIntent';
 import { matchCandidateToken } from '../../routing/conversationSession';
+import {
+  bindCallTextRecovery,
+  bindOsFiniteSmsDisambiguate,
+  isUnresolvedPersonRef,
+  type CallTextGap,
+} from '../../routing/callTextReadiness';
 
 // Pending-confirmation refs the dispatch handlers set so the NEXT user turn can
 // resolve them (collect a phone number, confirm a medication, etc.).
@@ -171,6 +177,69 @@ export async function dispatchAction(
         if (actionIntent.type === 'sms') {
           const { contact, message } = actionIntent;
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+
+          const completeReadySms = async (ready: { contactName: string; message: string }): Promise<CommitResult> => {
+            const identity = resolvePersonIdentity(ready.contactName);
+            if (identity.status !== 'single') {
+              return { status: 'failed', ack: `I don't have a number for ${ready.contactName}.` };
+            }
+            const cap = await resolvePersonCapability(identity.contact, 'phone');
+            if (cap.status !== 'available') {
+              return {
+                status: 'failed',
+                ack: `I know ${ready.contactName} but I don't have a phone number for them. What's their number?`,
+              };
+            }
+            const smsUrl = `sms:${cap.value.replace(/\D/g, '')}${ready.message ? `?body=${encodeURIComponent(ready.message)}` : ''}`;
+            try {
+              await openURL(smsUrl);
+              const okReply = ready.message
+                ? `Opening a message to ${identity.contact.name} with your note ready.`
+                : `Opening a message to ${identity.contact.name}.`;
+              return { status: 'committed', ack: okReply };
+            } catch {
+              return { status: 'failed', ack: `I couldn't open a message to ${identity.contact.name} — try again.` };
+            }
+          };
+
+          const armSmsRecovery = (
+            gap: CallTextGap,
+            contactName: string,
+            body: string,
+            candidateNames: string[] = [],
+            spokenQuery?: string,
+          ) => {
+            const bound = bindCallTextRecovery(
+              {
+                action: 'sms',
+                contactName,
+                message: body,
+                candidateNames,
+                spokenQuery,
+                gap,
+                turnsAsked: 1,
+              },
+              resolvePersonIdentity,
+              completeReadySms,
+            );
+            session.setPending({
+              pendingKey: bound.pendingKey,
+              resume: bound.resume,
+              kind: 'standard',
+              budget: bound.budget,
+              reaskPrompt: bound.reaskPrompt,
+              releasePrompt: bound.releasePrompt,
+              ownsReply: bound.ownsReply,
+            });
+            addMessage({ id: generateId('msg'), role: 'assistant', content: bound.prompt, timestamp: Date.now() });
+            speak(bound.prompt);
+          };
+
+          if (isUnresolvedPersonRef(contact)) {
+            armSmsRecovery('missing_person', '', message);
+            return;
+          }
+
           let resolvedSms;
           try {
             const identity = resolvePersonIdentity(contact);
@@ -195,42 +264,12 @@ export async function dispatchAction(
             };
 
             if (identity.status === 'ambiguous') {
-              const smsCandidates = identity.candidates.map(c => ({ label: c.name, ref: c.id }));
-              const byId = new Map(identity.candidates.map(c => [c.id, c]));
-              const names = identity.candidates.map(c => c.name).join(', ');
-              const reply = `I found more than one ${contact} in your contacts — ${names}. Which one did you mean?`;
-              addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-              speak(reply);
-              session.setPending({
-                pendingKey: 'sms_disambiguate_herald',
-                kind: 'standard',
-                reaskPrompt: `I'm not sure I caught that — which one did you mean: ${names}?`,
-                resume: async (replyText: string): Promise<CommitResult> => {
-                  const match = matchCandidateToken(replyText, smsCandidates);
-                  if (match === 'ambiguous' || match === 'none') return { status: 'noop', ack: '' };
-                  const picked = byId.get(match.ref);
-                  if (!picked) {
-                    return { status: 'failed', ack: `I don't have a number for ${match.label}. What's their number?` };
-                  }
-                  const cap = await resolvePersonCapability(picked, 'phone');
-                  if (cap.status === 'available') {
-                    const smsUrl = `sms:${cap.value.replace(/\D/g, '')}${message ? `?body=${encodeURIComponent(message)}` : ''}`;
-                    try {
-                      await openURL(smsUrl);
-                      const okReply = message
-                        ? `Opening a message to ${picked.name} with your note ready.`
-                        : `Opening a message to ${picked.name}.`;
-                      return { status: 'committed', ack: okReply };
-                    } catch {
-                      return { status: 'failed', ack: `I couldn't open a message to ${picked.name} — try again.` };
-                    }
-                  }
-                  return {
-                    status: 'failed',
-                    ack: `I know ${picked.name} but I don't have a phone number for them. What's their number?`,
-                  };
-                },
-              });
+              const names = identity.candidates.map(c => c.name.trim()).filter(Boolean);
+              if (names.length < 2) {
+                askForNumber(contact);
+                return;
+              }
+              armSmsRecovery('ambiguous_person', '', message, names, contact);
               return;
             }
 
@@ -255,6 +294,10 @@ export async function dispatchAction(
               if (!broadIsMulti) {
                 const cap = await resolvePersonCapability(only, 'phone');
                 if (cap.status === 'available') {
+                  if (!message.trim()) {
+                    armSmsRecovery('missing_content', only.name, '');
+                    return;
+                  }
                   await openSmsTo({ name: only.name, phone: cap.value });
                   return;
                 }
@@ -303,7 +346,11 @@ export async function dispatchAction(
             }
 
             if (resolvedSms?.phone) {
-              await openSmsTo({ name: resolvedSms.name, phone: resolvedSms.phone });
+              if (!message.trim()) {
+                armSmsRecovery('missing_content', resolvedSms.name, '');
+              } else {
+                await openSmsTo({ name: resolvedSms.name, phone: resolvedSms.phone });
+              }
             } else if (
               resolvedSms &&
               !resolvedSms.phone &&
@@ -314,35 +361,34 @@ export async function dispatchAction(
               // cannot be texted is not a candidate, per the Contact Candidacy
               // Rule (action-capability, not data completeness).
               const reachable = resolvedSms.deviceCandidates.filter(c => !!c.phone?.trim());
-              const smsCandidates = reachable.map(c => ({ label: c.name, ref: c.name, phone: c.phone }));
               const names = reachable.map(c => c.name).join(', ');
               const reply = `I found more than one ${contact} in your contacts — ${names}. Which one did you mean?`;
               addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
               speak(reply);
-              session.setPending({
-                pendingKey: 'sms_disambiguate',
-                kind: 'standard',
-                reaskPrompt: `I'm not sure I caught that — which one did you mean: ${names}?`,
-                resume: async (replyText: string): Promise<CommitResult> => {
-                  const match = matchCandidateToken(replyText, smsCandidates);
-                  if (match === 'ambiguous' || match === 'none') {
-                    return { status: 'noop', ack: '' };
-                  }
-                  const phone = match.phone?.replace(/\D/g, '') ?? '';
-                  if (!phone) {
-                    return { status: 'failed', ack: `I don't have a number for ${match.label}. What's their number?` };
-                  }
-                  const smsUrl = `sms:${phone}${message ? `?body=${encodeURIComponent(message)}` : ''}`;
+              const boundOs = bindOsFiniteSmsDisambiguate(
+                reachable.map(c => ({ name: c.name, phone: c.phone })),
+                message,
+                contact,
+                async (person) => {
+                  const smsUrl = `sms:${person.phone}${message ? `?body=${encodeURIComponent(message)}` : ''}`;
                   try {
                     await openURL(smsUrl);
                     const okReply = message
-                      ? `Opening a message to ${match.label} with your note ready.`
-                      : `Opening a message to ${match.label}.`;
+                      ? `Opening a message to ${person.name} with your note ready.`
+                      : `Opening a message to ${person.name}.`;
                     return { status: 'committed', ack: okReply };
                   } catch {
-                    return { status: 'failed', ack: `I couldn't open a message to ${match.label} — try again.` };
+                    return { status: 'failed', ack: `I couldn't open a message to ${person.name} — try again.` };
                   }
                 },
+              );
+              session.setPending({
+                pendingKey: boundOs.pendingKey,
+                kind: 'standard',
+                budget: boundOs.budget,
+                reaskPrompt: boundOs.reaskPrompt,
+                releasePrompt: boundOs.releasePrompt,
+                resume: boundOs.resume,
               });
             } else {
               if (RELATIONSHIP_WORDS.test(contact.trim())) {
@@ -474,6 +520,40 @@ export async function dispatchAction(
           const { resolveContactCallIntent } = await import('../../routing/routeIntent');
           const { applyIntents } = await import('../../routing/processUtterance');
           const rawContact = actionIntent.contact ?? '';
+          if (isUnresolvedPersonRef(rawContact)) {
+            const bound = bindCallTextRecovery(
+              {
+                action: 'call',
+                contactName: '',
+                message: '',
+                candidateNames: [],
+                gap: 'missing_person',
+                turnsAsked: 1,
+              },
+              resolvePersonIdentity,
+              async (ready) => {
+                const callIntent = await resolveContactCallIntent(ready.contactName, `call ${ready.contactName}`, {
+                  resolveContact: resolveContactPhone,
+                });
+                const { responseText, commits } = await applyIntents([callIntent], `call ${ready.contactName}`, session, undefined, 'deterministic');
+                const first = commits[0];
+                if (first) return first;
+                return { status: 'noop', ack: responseText };
+              },
+            );
+            session.setPending({
+              pendingKey: bound.pendingKey,
+              resume: bound.resume,
+              kind: 'standard',
+              budget: bound.budget,
+              reaskPrompt: bound.reaskPrompt,
+              releasePrompt: bound.releasePrompt,
+              ownsReply: bound.ownsReply,
+            });
+            addMessage({ id: generateId('msg'), role: 'assistant', content: bound.prompt, timestamp: Date.now() });
+            speak(bound.prompt);
+            return;
+          }
           const callIntent = await resolveContactCallIntent(rawContact, text, {
             resolveContact: resolveContactPhone,
           });

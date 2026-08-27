@@ -2,6 +2,7 @@ import { routeIntent, DOMAIN_WRITERS, composeAck, allConverted } from './routeIn
 import type { RouteDecision, CommitResult, ResolveContactFn } from './routeIntent';
 import type { IntentRecord } from '../hooks/llmLayers';
 import { ConversationSession, CONFIRM_YES_RE, CONFIRM_NO_RE } from './conversationSession';
+import { CALL_TEXT_RECOVERY_KEY, shouldPreemptCallTextRecovery } from './callTextReadiness';
 import { detectEmergency } from './emergencySignals';
 import {
   ConversationalSubjectHolder,
@@ -110,7 +111,15 @@ export async function applyIntents(
   const responseText = composeAck(results);
   const pending = results.find(r => r.status === 'pending');
   if (pending && pending.status === 'pending') {
-    session.setPending({ pendingKey: pending.pendingKey, resume: pending.resume, kind: pending.kind, reaskPrompt: pending.reaskPrompt, correctable: pending.correctable });
+    session.setPending({
+      pendingKey: pending.pendingKey,
+      resume: pending.resume,
+      kind: pending.kind,
+      reaskPrompt: pending.reaskPrompt,
+      releasePrompt: pending.releasePrompt,
+      budget: pending.budget,
+      correctable: pending.correctable,
+    });
   }
   return { responseText, commits: results };
 }
@@ -140,6 +149,20 @@ export async function processUtterance(
   //    routing. Every call returns a terminal result for this turn.
   //    PendingSlot is ABSOLUTE vs Flow C: do not evaluate the referent
   //    speech-act or re-read by id while a pending owns the turn.
+  //
+  //    Bounded exception (Call/Text recovery slice): a pending clarification
+  //    yields when existing routing already claims the utterance (device
+  //    action, device read, or live-data) and the text is not a plausible
+  //    pending answer. Not a capability allowlist.
+  if (session.hasPending()) {
+    const recoveryPending = session.peekPendingKey() === CALL_TEXT_RECOVERY_KEY;
+    if (recoveryPending) {
+      const decision = await deps.classifyQuery(text);
+      if (shouldPreemptCallTextRecovery(decision, text, session.pendingOwnsReply(text))) {
+        session.clearPending();
+      }
+    }
+  }
   if (session.hasPending()) {
     subject?.clear();
     const result = await session.resolvePending(text);

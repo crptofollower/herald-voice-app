@@ -45,6 +45,10 @@ export type CommitResult =
   | { status: 'pending';   prompt: string; pendingKey: string;
       kind?: 'standard' | 'destructive';
       reaskPrompt?: string;
+      releasePrompt?: string;
+      budget?: number;
+      /** Presentation-only Call/Text capture-repair choices. Not an action path. */
+      recoveryChoices?: string[];
       correctable?: import('./conversationSession').CorrectableField;
       resume: (userText: string) => Promise<CommitResult> }
   | { status: 'noop';      ack: string }

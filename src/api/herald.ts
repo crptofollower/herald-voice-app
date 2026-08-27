@@ -32,6 +32,8 @@ export interface Message {
   role: "user" | "assistant";
   content: string;
   timestamp: number;
+  /** Current Call/Text candidate names for capture-repair taps. Presentation only. */
+  recoveryChoices?: string[];
 }
 
 export interface AskPayload {

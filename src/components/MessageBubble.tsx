@@ -25,7 +25,7 @@
 //   backgroundColor: "rgba(0,0,0,0.5)" -- noted inline).
 
 import React, { useEffect, useRef } from "react";
-import { View, Text, StyleSheet, Animated } from "react-native";
+import { View, Text, StyleSheet, Animated, Pressable } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import type { Message } from "../api/herald";
 import type { Persona } from "../constants/personas";
@@ -37,9 +37,17 @@ interface Props {
   visualWeight?: "current" | "prior";
   /** Ephemeral heard-text preview before auto-send. */
   isEphemeral?: boolean;
+  /** Feeds a displayed candidate name back through sendMessage / pending resume. */
+  onRecoveryChoice?: (name: string) => void;
 }
 
-export function MessageBubble({ message, persona, visualWeight = "current", isEphemeral = false }: Props) {
+export function MessageBubble({
+  message,
+  persona,
+  visualWeight = "current",
+  isEphemeral = false,
+  onRecoveryChoice,
+}: Props) {
   const isUser = message.role === "user";
   const isPrior = visualWeight === "prior";
 
@@ -134,6 +142,28 @@ export function MessageBubble({ message, persona, visualWeight = "current", isEp
         >
           {message.content}
         </Text>
+        {message.role === "assistant"
+          && onRecoveryChoice
+          && (message.recoveryChoices?.length ?? 0) > 0 ? (
+          <View style={styles.recoveryChoiceRow}>
+            {message.recoveryChoices!.map((name) => (
+              <Pressable
+                key={name}
+                accessibilityRole="button"
+                accessibilityLabel={name}
+                onPress={() => onRecoveryChoice(name)}
+                style={[
+                  styles.recoveryChoice,
+                  { borderColor: persona.colors.accent, backgroundColor: persona.surfaceTint },
+                ]}
+              >
+                <Text style={styles.recoveryChoiceText} allowFontScaling>
+                  {name}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
       </LinearGradient>
     </Animated.View>
   );
@@ -193,6 +223,26 @@ const styles = StyleSheet.create({
   heraldScrimPrior: {
     paddingVertical: 14,
     opacity: 0.92,
+  },
+  recoveryChoiceRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 14,
+  },
+  recoveryChoice: {
+    minHeight: 44,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    justifyContent: "center",
+  },
+  recoveryChoiceText: {
+    color: "#FFFFFF",
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: "600",
   },
   heraldText: {
     color: "#FFFFFF",
