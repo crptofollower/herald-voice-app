@@ -12,7 +12,7 @@
 //   black-screened non-Snapdragon hardware (Motorola, pre-916c18aa).
 //   Changes to this flag require a ratified session + state-doc FLAG
 //   REGISTRY entry in the same session (LLM_LIVE_DESIGN_SPEC P7).
-export const LOCAL_LLM_ENABLED = true;
+export const LOCAL_LLM_ENABLED = false;
 
 // PROACTIVE_SURFACING_ENABLED:
 //   Gates Beat 1 medical appointment surfacing on cold mount
