@@ -105,7 +105,7 @@ import {
 } from '../utils/latencyInstrument';
 import { detectEmergency } from '../routing/emergencySignals';
 import type { IntentRecord } from '../hooks/llmLayers';
-import { dispatchRead, dispatchAction, launchAppAndCompose } from './chat/dispatch';
+import { dispatchRead, dispatchAction, launchAppAndCompose, releaseOverlappingContactCollect } from './chat/dispatch';
 import type { DispatchDeps } from './chat/dispatch';
 import { canonicalKey } from './chat/launchIdentity';
 import { handleTier1, buildTier2DeviceContext, buildAmbientDeviceContext, writeProfileFromOnboarding } from "../routing/tier1Responses";
@@ -1141,6 +1141,10 @@ export default function ChatScreen() {
     }
 
     // ── Pending contact collection — user is providing a number or address ──
+    // ConversationSession owns Call/Text recovery and CALL confirm/collect.
+    // Leftover collect-ref state must not intercept that job. 911 confirm_call
+    // is emergency confirmation and stays on this ref.
+    releaseOverlappingContactCollect(pendingContactCollectRef, sessionRef.current);
     if (pendingContactCollectRef.current) {
       subjectRef.current.clear();
       const pending = pendingContactCollectRef.current;

@@ -26,7 +26,9 @@ import { matchCandidateToken } from '../../routing/conversationSession';
 import {
   bindCallTextRecovery,
   bindOsFiniteSmsDisambiguate,
+  CALL_TEXT_RECOVERY_KEY,
   isUnresolvedPersonRef,
+  SMS_OS_DISAMBIGUATE_KEY,
   type CallTextGap,
 } from '../../routing/callTextReadiness';
 
@@ -34,6 +36,33 @@ import {
 // resolve them (collect a phone number, confirm a medication, etc.).
 export interface DispatchPendingRefs {
   pendingContactCollectRef: MutableRefObject<{ action: 'call' | 'navigate' | 'text' | 'confirm_phone' | 'confirm_call'; name: string; body?: string; phone?: string } | null>;
+}
+
+const SESSION_OWNED_CONTACT_PENDING_KEYS = new Set([
+  CALL_TEXT_RECOVERY_KEY,
+  SMS_OS_DISAMBIGUATE_KEY,
+  'sms_disambiguate_os_capability',
+  'contact_call',
+]);
+
+/** True when ConversationSession already owns Call/Text recovery or CALL confirm/collect. */
+export function sessionOwnsContactPending(session: ConversationSession): boolean {
+  const key = session.peekPendingKey();
+  return key != null && SESSION_OWNED_CONTACT_PENDING_KEYS.has(key);
+}
+
+/**
+ * Drop leftover collect-ref state when ConversationSession owns the same
+ * contact/person job. 911 confirm_call stays — that is emergency confirmation,
+ * not Call/Text recovery and not contact_call.
+ */
+export function releaseOverlappingContactCollect(
+  pendingContactCollectRef: DispatchPendingRefs['pendingContactCollectRef'],
+  session: ConversationSession,
+): void {
+  if (!sessionOwnsContactPending(session)) return;
+  if (pendingContactCollectRef.current?.action === 'confirm_call') return;
+  pendingContactCollectRef.current = null;
 }
 
 // Everything the dispatch handlers need from the component, passed explicitly.
@@ -231,6 +260,7 @@ export async function dispatchAction(
               releasePrompt: bound.releasePrompt,
               ownsReply: bound.ownsReply,
             });
+            releaseOverlappingContactCollect(pendingContactCollectRef, session);
             addMessage({ id: generateId('msg'), role: 'assistant', content: bound.prompt, timestamp: Date.now() });
             speak(bound.prompt);
           };
@@ -255,6 +285,10 @@ export async function dispatchAction(
             };
 
             const askForNumber = (name: string, opts?: { knownPerson?: boolean }) => {
+              if (sessionOwnsContactPending(session)) {
+                releaseOverlappingContactCollect(pendingContactCollectRef, session);
+                return;
+              }
               const reply = opts?.knownPerson
                 ? `I know ${name} but I don't have a phone number for them. What's their number?`
                 : `I don't have a number for ${name}. What's their number?`;
@@ -331,6 +365,7 @@ export async function dispatchAction(
                       }
                     },
                   });
+                  releaseOverlappingContactCollect(pendingContactCollectRef, session);
                   return;
                 }
                 askForNumber(only.name, { knownPerson: true });
@@ -390,6 +425,7 @@ export async function dispatchAction(
                 releasePrompt: boundOs.releasePrompt,
                 resume: boundOs.resume,
               });
+              releaseOverlappingContactCollect(pendingContactCollectRef, session);
             } else {
               if (RELATIONSHIP_WORDS.test(contact.trim())) {
                 const bare = contact.trim().replace(/^(my|our|his|her|their)\s+/i, '');
@@ -550,6 +586,7 @@ export async function dispatchAction(
               releasePrompt: bound.releasePrompt,
               ownsReply: bound.ownsReply,
             });
+            releaseOverlappingContactCollect(pendingContactCollectRef, session);
             addMessage({ id: generateId('msg'), role: 'assistant', content: bound.prompt, timestamp: Date.now() });
             speak(bound.prompt);
             return;
@@ -558,6 +595,7 @@ export async function dispatchAction(
             resolveContact: resolveContactPhone,
           });
           const { responseText, commits } = await applyIntents([callIntent], text, session, undefined, 'deterministic');
+          releaseOverlappingContactCollect(pendingContactCollectRef, session);
           addMessage({ id: generateId('msg'), role: 'assistant', content: responseText, timestamp: Date.now() });
           speak(responseText);
           for (const c of commits) {

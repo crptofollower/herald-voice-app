@@ -16,7 +16,7 @@ import {
   SMS_OS_DISAMBIGUATE_KEY,
 } from '../../src/routing/callTextReadiness.ts';
 import { proposeConstrainedCandidate } from '../../src/routing/candidateConstrainedMatch.ts';
-import { dispatchAction } from '../../src/screens/chat/dispatch.ts';
+import { dispatchAction, releaseOverlappingContactCollect } from '../../src/screens/chat/dispatch.ts';
 import type { DispatchDeps } from '../../src/screens/chat/dispatch.ts';
 import { resolvePersonIdentity } from '../../src/db/contactsDB.ts';
 
@@ -92,10 +92,12 @@ function makeSmsDeps(opts: {
   openURLs?: string[];
   messages?: string[];
   session?: ConversationSession;
+  pendingRef?: { current: DispatchDeps['pendingContactCollectRef']['current'] };
 }): DispatchDeps {
   const messages = opts.messages ?? [];
   const openURLs = opts.openURLs ?? [];
   const session = opts.session ?? new ConversationSession();
+  const pendingRef = opts.pendingRef ?? { current: null };
   return {
     session,
     addMessage: (m) => { messages.push(m.content); },
@@ -110,7 +112,7 @@ function makeSmsDeps(opts: {
     handleMapsAction: async () => {},
     launchAndroidTimer: async () => false,
     handleLaunchActionRef: { current: null },
-    pendingContactCollectRef: { current: null },
+    pendingContactCollectRef: pendingRef,
     platformOS: 'android',
     openURL: async (url) => { openURLs.push(url); },
   };
@@ -1299,6 +1301,107 @@ export async function runAuthorityReadinessRecoveryTests() {
         && v.openURLs.length === 0
         && v.pending === false,
       'not generic budget release; no guess');
+  }
+
+  // DD-2: leftover collect-ref must not co-own Call/Text recovery or CALL.
+  {
+    const leftover = { current: { action: 'text' as const, name: 'Paul', body: 'running late' } };
+    const session = new ConversationSession();
+    releaseOverlappingContactCollect(leftover, session);
+    assert('DD2-COLLECT-ALONE leftover number-collect stays when session has no contact pending',
+      leftover.current,
+      v => v?.action === 'text' && v?.name === 'Paul',
+      'ref remains; missing-number collection is not migrated');
+  }
+  {
+    freshDB();
+    const session = new ConversationSession();
+    const openURLs: string[] = [];
+    const leftover = { current: { action: 'text' as const, name: 'Paul', body: 'stale' } };
+    await dispatchAction(
+      { type: 'sms', contact: 'Paul', message: "I'll be there at 8" },
+      "Text Paul and tell him I'll be there at 8",
+      makeSmsDeps({ session, openURLs, pendingRef: leftover, resolveContactPhone: osPaulPhone() }),
+    );
+    assert('DD2-SINGLE-OWNER OS recovery clears leftover collect-ref',
+      { key: session.peekPendingKey(), leftover: leftover.current, openURLs },
+      v => v.key === SMS_OS_DISAMBIGUATE_KEY && v.leftover === null && v.openURLs.length === 0,
+      'session owns sms_disambiguate; collect-ref not co-armed');
+    const guess = await session.resolvePending('yes');
+    assert('DD2-YES leftover cannot authorize; ungrounded yes still no-ops',
+      { guess, openURLs, pending: session.hasPending() },
+      v => v.guess.status === 'pending' && v.openURLs.length === 0 && v.pending === true,
+      'yes never selects from collect-ref or OS set');
+    const cancel = await session.resolvePending('cancel');
+    assert('DD2-CANCEL session cancel releases OS recovery',
+      { cancel, openURLs, pending: session.hasPending(), leftover: leftover.current },
+      v => v.cancel.status === 'noop'
+        && /won't do that/i.test(v.cancel.ack)
+        && v.openURLs.length === 0
+        && v.pending === false
+        && v.leftover === null,
+      'cancel on ConversationSession; collect-ref already released');
+  }
+  {
+    const db = freshDB();
+    insertContact(db, { id: 'c_m', name: 'Mickey', phone: '555-010-0100' });
+    const session = new ConversationSession();
+    const leftover = { current: { action: 'text' as const, name: 'Paul', body: 'stale' } };
+    await dispatchAction(
+      { type: 'sms', contact: 'him', message: 'running late' },
+      'Text him running late',
+      makeSmsDeps({ session, pendingRef: leftover }),
+    );
+    assert('DD2-HERALD-RECOVERY leftover collect-ref yields to call_text_recovery',
+      { key: session.peekPendingKey(), leftover: leftover.current },
+      v => v.key === CALL_TEXT_RECOVERY_KEY && v.leftover === null,
+      'Herald person recovery is session-owned');
+  }
+  {
+    freshDB();
+    const session = new ConversationSession();
+    const leftover = { current: { action: 'confirm_call' as const, name: '911', phone: '911' } };
+    await dispatchAction(
+      { type: 'sms', contact: 'Paul', message: "I'll be there at 8" },
+      "Text Paul and tell him I'll be there at 8",
+      makeSmsDeps({ session, pendingRef: leftover, resolveContactPhone: osPaulPhone() }),
+    );
+    assert('DD2-911 911 confirm_call is not dropped when session also arms SMS recovery',
+      leftover.current,
+      v => v?.action === 'confirm_call' && v?.phone === '911',
+      'emergency confirm stays on collect-ref');
+  }
+  {
+    const db = freshDB();
+    insertContact(db, { id: 'c_m', name: 'Mickey', phone: '555-010-0100' });
+    const session = new ConversationSession();
+    const openURLs: string[] = [];
+    const leftover = { current: { action: 'text' as const, name: 'Paul', body: 'stale' } };
+    await dispatchAction(
+      { type: 'call', contact: 'Mickey' },
+      'Call Mickey.',
+      makeSmsDeps({ session, openURLs, pendingRef: leftover }),
+    );
+    assert('DD2-CALL unique Call Mickey still dials; CALL not flattened into SMS collect',
+      { urls: openURLs, leftover: leftover.current, pending: session.hasPending() },
+      v => v.urls.some((u: string) => u.startsWith('tel:5550100100'))
+        && v.pending === false
+        && v.leftover?.action === 'text',
+      'committed CALL; leftover SMS collect unchanged because session did not stay pending');
+  }
+  {
+    freshDB();
+    const session = new ConversationSession();
+    const leftover = { current: { action: 'text' as const, name: 'Paul', body: 'stale' } };
+    await dispatchAction(
+      { type: 'call', contact: 'him' },
+      'Call him.',
+      makeSmsDeps({ session, pendingRef: leftover }),
+    );
+    assert('DD2-CALL-RECOVERY unresolved Call him session-owns; leftover SMS collect released',
+      { key: session.peekPendingKey(), leftover: leftover.current },
+      v => v.key === CALL_TEXT_RECOVERY_KEY && v.leftover === null,
+      'CALL missing-person recovery is ConversationSession');
   }
 
   return { passed, failed: failures.length, total: passed + failures.length, failures };
