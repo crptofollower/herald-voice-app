@@ -78,24 +78,34 @@ export async function runMatchCandidateTests(): Promise<{ passed: number; failed
       'dial David Clevenger');
   }
 
-  // 4. Shared first name across two candidates → ambiguous, never auto-pick
+  // 4. Shared first name across two candidates → retain set, never auto-pick
   {
     const pending = await disambiguatePending(pair);
     const result = await pending.resume('David');
     assert('T-MC-4 "David" with two David candidates → no match',
       result,
-      v => v.status === 'noop' && v.ack === '',
-      'noop empty ack — re-ask, never silent dial');
+      v => v.status === 'pending'
+        && v.pendingKey === 'contact_call'
+        && v.status === 'pending'
+        && !dialPhone(v),
+      'pending retain — re-ask, never silent dial');
+    const after = result.status === 'pending' ? await result.resume('Clevenger') : result;
+    assert('T-MC-4b after shared first name, surname still dials',
+      dialPhone(after),
+      v => v === '5552222222',
+      'dial David Clevenger from retained set');
   }
 
-  // 5. Zero candidates match
+  // 5. Zero candidates match → capture-repair first miss, set retained
   {
     const pending = await disambiguatePending(pair);
     const result = await pending.resume('Smith');
-    assert('T-MC-5 reply matching zero candidates → no match',
+    assert('T-MC-5 reply matching zero candidates → first miss pending',
       result,
-      v => v.status === 'noop' && v.ack === '',
-      'noop empty ack');
+      v => v.status === 'pending'
+        && v.pendingKey === 'contact_call'
+        && /didn't catch that name clearly/i.test(v.prompt),
+      'capture-repair first miss, not empty-ack');
   }
 
   // 6. Distinct relationship word selects the single hit

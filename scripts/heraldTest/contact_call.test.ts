@@ -728,13 +728,13 @@ export async function runContactCallTests() {
     const pending = await addPending(filBridgeIntent());
     const result = await pending.resume('Shane Clevenger');
     const holder = findContactByRelationship('father-in-law');
-    assert('T-CT-25 named multi path: out-of-list name → noop, no relationship write',
+    assert('T-CT-25 named multi path: out-of-list name → miss pending, no relationship write',
       { result, holder, phone: dialPhone(result) },
-      v => v.result.status === 'noop' && !v.phone && v.holder == null,
-      'noop; no dial; no FIL row');
+      v => v.result.status === 'pending' && v.result.pendingKey === 'contact_call' && !v.phone && v.holder == null,
+      'retain finite set; no dial; no FIL row');
   }
 
-  // ── T-CT-26: named multi path — OS out-of-list name is noop (no write) ────
+  // ── T-CT-26: named multi path — OS out-of-list name is miss, not OS adopt ─
   {
     const db = freshDB();
     const pending = await addPending(filBridgeIntent(), {
@@ -745,10 +745,10 @@ export async function runContactCallTests() {
     });
     const result = await pending.resume('Maria Sanchez');
     const holder = findContactByRelationship('father-in-law');
-    assert('T-CT-26 named multi path: OS out-of-list name → noop, no relationship write',
+    assert('T-CT-26 named multi path: OS out-of-list name → miss pending, no relationship write',
       { result, holder, phone: dialPhone(result) },
-      v => v.result.status === 'noop' && !v.phone && v.holder == null,
-      'noop; no dial; no FIL row');
+      v => v.result.status === 'pending' && v.result.pendingKey === 'contact_call' && !v.phone && v.holder == null,
+      'no open-world OS adopt; no dial; no FIL row');
   }
 
   // ── T-CT-27: collectStage OS multi-match → pending pick, then unique name ─

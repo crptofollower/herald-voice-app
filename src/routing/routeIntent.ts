@@ -15,6 +15,12 @@ import { getActiveTurnId, log as latLog, mono as latMono } from '../utils/latenc
 import { normalizePhone } from '../utils/phone';
 import { buildPhoneConfirmPending, formatPhoneForSpeech } from '../utils/phoneConfirm';
 import { matchCandidateToken } from './conversationSession';
+import {
+  advanceFiniteCandidateRecovery,
+  GRACEFUL_STOP_WHO,
+  RECOVERY_BUDGET,
+  type CallTextTask,
+} from './callTextReadiness';
 import { isPersonalMemoryRecallQuestion } from './personalMemoryRecall';
 import { shouldRefuseLlmCaptureProposal } from './speechActAuthority';
 import type { ReadIntentMeta } from './readIntent';
@@ -1361,6 +1367,91 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
         return null;
       };
 
+      const finitePhoneableCallPending = (
+        rows: CallCandidate[],
+        contactLabel: string,
+        prompt: string,
+        onUnique: (picked: CallCandidate) => CommitResult,
+      ): CommitResult => {
+        const identityNames = rows.map(r => r.name.trim()).filter(Boolean);
+        const identityCount = identityNames.length;
+        const byName = new Map<string, CallCandidate>();
+        for (const row of rows) {
+          const name = row.name.trim();
+          if (name && row.phone?.trim() && !byName.has(name)) byName.set(name, row);
+        }
+        // Genuine singular identity may still complete. Two-plus identities
+        // with one phoneable row is ambiguity, not a unique CALL.
+        if (identityCount < 2 && byName.size === 1) {
+          return onUnique([...byName.values()][0]!);
+        }
+        if (byName.size === 0) {
+          return collectStage(contactLabel);
+        }
+        const onlyPhoneable = byName.size === 1 ? [...byName.values()][0]! : null;
+        const confirmOneAmongMany = identityCount >= 2 && onlyPhoneable != null;
+        let task: CallTextTask = {
+          action: 'call',
+          contactName: '',
+          message: '',
+          candidateNames: confirmOneAmongMany
+            ? [...new Set(identityNames)]
+            : [...byName.keys()],
+          spokenQuery: contactLabel,
+          proposedNames: confirmOneAmongMany ? [onlyPhoneable!.name.trim()] : [],
+          gap: 'ambiguous_person',
+          turnsAsked: 1,
+          failedMatchTurns: 0,
+        };
+        const spoken = contactLabel.trim() || 'people';
+        const initialPrompt = confirmOneAmongMany
+          ? `I found more than one ${spoken}. I only have a number for ${onlyPhoneable!.name}. Did you mean ${onlyPhoneable!.name}?`
+          : prompt;
+        const liveRows = (): CallCandidate[] =>
+          task.candidateNames.map(n => byName.get(n)).filter((c): c is CallCandidate => !!c);
+
+        const resume = async (pick: string): Promise<CommitResult> => {
+          const matched = matchCandidate(pick, liveRows(), contactLabel);
+          if (matched) return onUnique(matched);
+          const r = advanceFiniteCandidateRecovery(task, pick, {
+            fullSetTokenHit: 'retain',
+            uniqueTokenHit: 'defer_miss',
+          });
+          if (r.kind === 'non_advance' || r.kind === 'stop') {
+            return { status: 'noop', ack: r.kind === 'stop' ? r.ack : GRACEFUL_STOP_WHO };
+          }
+          if (r.kind === 'pending') {
+            task = r.task;
+            return {
+              status: 'pending',
+              prompt: r.prompt,
+              pendingKey: 'contact_call',
+              kind: 'standard',
+              reaskPrompt: r.prompt,
+              budget: RECOVERY_BUDGET,
+              releasePrompt: GRACEFUL_STOP_WHO,
+              resume,
+              recoveryChoices: r.recoveryChoices,
+            };
+          }
+          const name = r.task.contactName.trim();
+          const row = byName.get(name);
+          if (row) return onUnique(row);
+          return collectStage(name || contactLabel);
+        };
+
+        return {
+          status: 'pending',
+          prompt: initialPrompt,
+          pendingKey: 'contact_call',
+          kind: 'standard',
+          reaskPrompt: initialPrompt,
+          budget: RECOVERY_BUDGET,
+          releasePrompt: GRACEFUL_STOP_WHO,
+          resume,
+        };
+      };
+
       const extractPhone10 = (raw: string): string | null => {
         const m = raw.match(/([\d\s\-\(\)\+\.]{7,})/);
         if (!m) return null;
@@ -1432,39 +1523,22 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
                 }
                 return commitDial(device.name, device.phone);
               }
-              if (device && !device.phone && 'deviceCandidates' in device && device.deviceCandidates.length > 0) {
-                const osCandidates: CallCandidate[] = device.deviceCandidates.map(c => ({
-                  name: c.name,
-                  phone: c.phone,
-                  importance: 5,
-                }));
-                const names = joinNaturally(osCandidates.map(c => c.name));
-                const nestedPrompt = `I found a few in your contacts — ${names} — which one?`;
-
-                return {
-                  status: 'pending',
-                  prompt: nestedPrompt,
-                  pendingKey: 'contact_call',
-                  kind: 'standard',
-                  reaskPrompt: `I'm not sure I'm following — which one did you mean?`,
-                  resume: async (pick: string): Promise<CommitResult> => {
-
-                    const matched = matchCandidate(pick, osCandidates, contactLabel);
-                    if (!matched) {
-
-                      return { status: 'noop', ack: '' };
-                    }
+                if (device && !device.phone && 'deviceCandidates' in device && device.deviceCandidates.length > 0) {
+                  const osCandidates: CallCandidate[] = device.deviceCandidates.map(c => ({
+                    name: c.name,
+                    phone: c.phone,
+                    importance: 5,
+                  }));
+                  const names = joinNaturally(osCandidates.map(c => c.name));
+                  const nestedPrompt = `I found a few in your contacts — ${names} — which one?`;
+                  return finitePhoneableCallPending(osCandidates, contactLabel, nestedPrompt, (picked) => {
                     if (RELATIONSHIP_WORDS.test(contactLabel.trim())) {
-
-                      retireRelationshipHolder(contactLabel, matched.name);
-                      capturePerson({ name: matched.name, relationship: contactLabel, phone: matched.phone, importance: 7 });
-                      return commitDial(matched.name, matched.phone);
+                      retireRelationshipHolder(contactLabel, picked.name);
+                      capturePerson({ name: picked.name, relationship: contactLabel, phone: picked.phone, importance: 7 });
                     }
-
-                    return commitDial(matched.name, matched.phone);
-                  },
-                };
-              }
+                    return commitDial(picked.name, picked.phone);
+                  });
+                }
             }
 
             return { status: 'noop', ack: '' };
@@ -1543,29 +1617,15 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
           // your …" prompt below for zero/no-phone cases.
           const allPhoneable =
             list.length >= 2 && list.every(c => !!c.phone?.trim());
-          if (allPhoneable) {
+          const onePhoneableAmongMany =
+            list.length >= 2 && list.filter(c => !!c.phone?.trim()).length === 1;
+          if (allPhoneable || onePhoneableAmongMany) {
             const names = joinNaturally(list.map(c => c.name));
             const prompt = `I found a few in your contacts — ${names} — which one?`;
-
-            return {
-              status: 'pending',
-              prompt,
-              pendingKey: 'contact_call',
-              kind: 'standard',
-              reaskPrompt: `I'm not sure I'm following — which one did you mean?`,
-              resume: async (pick: string): Promise<CommitResult> => {
-                const matched = matchCandidate(pick, list, contactLabel);
-                if (!matched) {
-                  return { status: 'noop', ack: '' };
-                }
-                // Dial only — do not retire/write relationship, do not persist
-                // the relationship word as a contact name.
-                if (matched.phone?.trim()) {
-                  return commitDial(matched.name, matched.phone);
-                }
-                return collectStage(matched.name);
-              },
-            };
+            return finitePhoneableCallPending(list, contactLabel, prompt, (picked) => {
+              if (picked.phone?.trim()) return commitDial(picked.name, picked.phone);
+              return collectStage(picked.name);
+            });
           }
 
           const genericPrompt = `I don't know who your ${contactLabel} is yet — what's their last name, or you can just give me the number?`;
@@ -1646,30 +1706,13 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
                   }));
                   const names = joinNaturally(osCandidates.map(c => c.name));
                   const nestedPrompt = `I found a few in your contacts — ${names} — which one?`;
-
-                  return {
-                    status: 'pending',
-                    prompt: nestedPrompt,
-                    pendingKey: 'contact_call',
-                    kind: 'standard',
-                    reaskPrompt: `I'm not sure I'm following — which one did you mean?`,
-                    resume: async (pick: string): Promise<CommitResult> => {
-
-                      const matchedOs = matchCandidate(pick, osCandidates, contactLabel);
-                      if (!matchedOs) {
-
-                        return { status: 'noop', ack: '' };
-                      }
-                      if (RELATIONSHIP_WORDS.test(contactLabel.trim())) {
-
-                        retireRelationshipHolder(contactLabel, matchedOs.name);
-                        capturePerson({ name: matchedOs.name, relationship: contactLabel, phone: matchedOs.phone, importance: 7 });
-                        return commitDial(matchedOs.name, matchedOs.phone);
-                      }
-
-                      return commitDial(matchedOs.name, matchedOs.phone);
-                    },
-                  };
+                  return finitePhoneableCallPending(osCandidates, contactLabel, nestedPrompt, (picked) => {
+                    if (RELATIONSHIP_WORDS.test(contactLabel.trim())) {
+                      retireRelationshipHolder(contactLabel, picked.name);
+                      capturePerson({ name: picked.name, relationship: contactLabel, phone: picked.phone, importance: 7 });
+                    }
+                    return commitDial(picked.name, picked.phone);
+                  });
                 }
               }
 

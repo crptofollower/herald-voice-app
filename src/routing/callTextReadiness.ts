@@ -401,24 +401,7 @@ export function advanceCallTextTask(
 
 export type OsSmsCandidate = { name: string; phone: string };
 
-function proposeOrReaskOs(task: CallTextTask, trimmed: string): AdvanceResult {
-  const proposal = proposeConstrainedCandidate(trimmed, task.candidateNames);
-  if (proposal.kind === 'one') {
-    return stopOrPending(task, 'ambiguous_person', {
-      proposedNames: [proposal.name],
-      failedMatchTurns: 0,
-    });
-  }
-  if (proposal.kind === 'two') {
-    return stopOrPending(task, 'ambiguous_person', {
-      proposedNames: [...proposal.names],
-      failedMatchTurns: 0,
-    });
-  }
-  return captureRepairMiss(task, OS_CAPTURE_STOP_AFTER);
-}
-
-function afterOsCandidatePicked(task: CallTextTask, contactName: string): AdvanceResult {
+function afterFiniteCandidatePicked(task: CallTextTask, contactName: string): AdvanceResult {
   const ready: CallTextTask = {
     ...task,
     contactName,
@@ -433,14 +416,54 @@ function afterOsCandidatePicked(task: CallTextTask, contactName: string): Advanc
   return { kind: 'ready', task: ready };
 }
 
-function advanceOsSmsDisambiguate(task: CallTextTask, userText: string): AdvanceResult {
+/**
+ * Progressive recovery against a closed candidate-name list.
+ * Unique pick / propose / miss copy only. Does not look up contacts.
+ * `fullSetTokenHit: 'retain'` keeps the set when a shared token hits everyone
+ * (CALL). SMS OS keeps `'stop'` (existing).
+ */
+export function advanceFiniteCandidateRecovery(
+  task: CallTextTask,
+  userText: string,
+  opts?: {
+    stopAfter?: number;
+    fullSetTokenHit?: 'stop' | 'retain';
+    /** CALL: unique any-token hit is not authority if exact matchCandidate already declined. */
+    uniqueTokenHit?: 'authorize' | 'defer_miss';
+  },
+): AdvanceResult {
+  const stopAfter = opts?.stopAfter;
+  const fullSetTokenHit = opts?.fullSetTokenHit ?? 'stop';
+  const uniqueTokenHit = opts?.uniqueTokenHit ?? 'authorize';
   const trimmed = userText.trim();
-  if (!trimmed) return captureRepairMiss(task, OS_CAPTURE_STOP_AFTER);
+  if (!trimmed) return captureRepairMiss(task, stopAfter);
+
+  const proposeOrReask = (from: CallTextTask): AdvanceResult => {
+    const proposal = proposeConstrainedCandidate(trimmed, from.candidateNames);
+    if (proposal.kind === 'one') {
+      return stopOrPending(from, 'ambiguous_person', {
+        proposedNames: [proposal.name],
+        failedMatchTurns: 0,
+      });
+    }
+    if (proposal.kind === 'two') {
+      return stopOrPending(from, 'ambiguous_person', {
+        proposedNames: [...proposal.names],
+        failedMatchTurns: 0,
+      });
+    }
+    return captureRepairMiss(from, stopAfter);
+  };
+
+  const takeUnique = (from: CallTextTask, name: string): AdvanceResult => {
+    if (uniqueTokenHit === 'defer_miss') return proposeOrReask(from);
+    return afterFiniteCandidatePicked(from, name);
+  };
 
   const proposed = (task.proposedNames ?? []).map(n => n.trim()).filter(Boolean);
   if (proposed.length > 0) {
     if (proposed.length === 1 && CONFIRM_YES_RE.test(trimmed)) {
-      return afterOsCandidatePicked({ ...task, proposedNames: [] }, proposed[0]);
+      return afterFiniteCandidatePicked({ ...task, proposedNames: [] }, proposed[0]);
     }
     if (CONFIRM_NO_RE.test(trimmed)) {
       return {
@@ -451,14 +474,14 @@ function advanceOsSmsDisambiguate(task: CallTextTask, userText: string): Advance
     }
     const proposedHits = candidateHits(trimmed, proposed);
     if (proposedHits.length === 1) {
-      return afterOsCandidatePicked({ ...task, proposedNames: [] }, proposedHits[0]);
+      return afterFiniteCandidatePicked({ ...task, proposedNames: [] }, proposedHits[0]);
     }
     const allHits = candidateHits(trimmed, task.candidateNames);
-    if (allHits.length === 1) return afterOsCandidatePicked({ ...task, proposedNames: [] }, allHits[0]);
+    if (allHits.length === 1) return takeUnique({ ...task, proposedNames: [] }, allHits[0]);
     if (allHits.length >= 2 && allHits.length < task.candidateNames.length) {
       return stopOrPending(task, 'ambiguous_person', { candidateNames: allHits, proposedNames: [] });
     }
-    return proposeOrReaskOs({ ...task, proposedNames: [] }, trimmed);
+    return proposeOrReask({ ...task, proposedNames: [] });
   }
 
   if (CONFIRM_YES_RE.test(trimmed)) {
@@ -475,12 +498,24 @@ function advanceOsSmsDisambiguate(task: CallTextTask, userText: string): Advance
   }
 
   const hits = candidateHits(trimmed, task.candidateNames);
-  if (hits.length === 1) return afterOsCandidatePicked(task, hits[0]);
+  if (hits.length === 1) return takeUnique(task, hits[0]);
   if (hits.length >= 2 && hits.length < task.candidateNames.length) {
     return stopOrPending(task, 'ambiguous_person', { candidateNames: hits, proposedNames: [] });
   }
-  if (hits.length >= 2) return { kind: 'stop', ack: GRACEFUL_STOP_WHO };
-  return proposeOrReaskOs(task, trimmed);
+  if (hits.length >= 2) {
+    if (fullSetTokenHit === 'retain') {
+      return { kind: 'pending', task, prompt: promptForGap(task) };
+    }
+    return { kind: 'stop', ack: GRACEFUL_STOP_WHO };
+  }
+  return proposeOrReask(task);
+}
+
+function advanceOsSmsDisambiguate(task: CallTextTask, userText: string): AdvanceResult {
+  return advanceFiniteCandidateRecovery(task, userText, {
+    stopAfter: OS_CAPTURE_STOP_AFTER,
+    fullSetTokenHit: 'stop',
+  });
 }
 
 /**
