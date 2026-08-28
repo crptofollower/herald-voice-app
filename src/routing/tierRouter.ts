@@ -11,7 +11,7 @@ import { normalizeInput } from "../utils/normalizeInput";
 import { getProfileSummary, getProfileField } from "../db/profileDB";
 import { getMedicalSummary, getMedicalRecords, getDiagnosisSummary, getDoctorsSummary } from "../db/medicalDB";
 import { getRecentMentions, formatRecentMentions } from "../db/recallDB";
-import { detectMedicalEvent } from "../utils/detectMedicalEvent";
+import { detectMedicalEvent, extractDoctorName } from "../utils/detectMedicalEvent";
 import type { MedicalEvent } from "../utils/detectMedicalEvent";
 import { MONTHS, CALENDAR_WRITE_TRIGGER, CALENDAR_WRITE_NAMED_APPOINTMENT, parseDatePhrase } from "../utils/parseTime";
 import { PERSON_RELATIONSHIP_ALTERNATION, normalizePersonTarget, liftRelationshipName } from "../utils/personReference";
@@ -27,7 +27,7 @@ import {
   COMPLETED_PAST_FIRST_PERSON_RE,
   THIRD_PERSON_REFERENT_RE,
 } from "../utils/instructionSignals";
-import { isReferentVisitOutcomeQuestion, isReferentUpcomingVisitQuestion, isReferentYearBoundedVisitQuestion } from "./conversationalSubject";
+import { isReferentVisitOutcomeQuestion, isReferentUpcomingVisitQuestion, isReferentYearBoundedVisitQuestion, answerUpcomingCalendarEvidence } from "./conversationalSubject";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -372,7 +372,9 @@ const UPCOMING_MEDICAL_READ = [
   /\b(?:do i have|have i got)\b[\s\S]*\b(?:doctor|medical)\s+(?:appointments?|visits?)\b/i,
   /\b(?:doctor|medical)\s+(?:appointments?|visits?)\b[\s\S]*\bcoming up\b/i,
   /\bwhen(?:'s| is)?\s+my\s+next\s+(?:doctor|medical)\s+appointment\b/i,
+  /\bwhen(?:'s| is)?\s+my\s+next\s+appointment\s+with\s+dr\.?\s/i,
   /\bwhen do i see\s+dr\.?\s/i,
+  /\bwhen am i seeing\s+dr\.?\s/i,
   /\bwhen(?:'s| is)?\s+my\s+appointment\s+with\s+dr\.?\s/i,
   /\bdo i have\b[\s\S]*\b(?:coming up|upcoming)\b[\s\S]*\bwith\s+dr\.?\s/i,
 ];
@@ -382,7 +384,9 @@ const UPCOMING_MEDICAL_READ = [
 // "appointment with Dr X"). Everything else in UPCOMING_MEDICAL_READ lists.
 const UPCOMING_MEDICAL_SINGLE = [
   /\bnext\s+(?:doctor|medical)\s+appointment\b/i,
+  /\bnext\s+appointment\s+with\s+dr\.?\s/i,
   /\bwhen do i see\s+dr\.?\s/i,
+  /\bwhen am i seeing\s+dr\.?\s/i,
   /\bappointment\s+with\s+dr\.?\s/i,
 ];
 
@@ -1641,11 +1645,26 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
         .filter((r) => r.doctorName && storedNameSupportedByUtterance(r.doctorName, msg))
         .sort((a, b) => (b.doctorName!.length - a.doctorName!.length));
       if (matches.length === 0) {
+        const hint = extractDoctorName(msg);
+        if (!hint) {
+          return {
+            tier: 1,
+            tier1Response: "I don't have another upcoming visit with that doctor saved yet.",
+            isMedical: true,
+            reason: "medical:upcoming_read_named_miss",
+          };
+        }
+        const calReply = await answerUpcomingCalendarEvidence(hint, hint);
+        const calendarReason = calReply.startsWith('Your calendar shows')
+          ? 'medical:upcoming_read_named_calendar'
+          : /couldn't check your calendar/i.test(calReply)
+            ? 'medical:upcoming_read_named_calendar_unavailable'
+            : 'medical:upcoming_read_named_calendar_miss';
         return {
           tier: 1,
-          tier1Response: "I don't have another visit with that doctor coming up.",
+          tier1Response: calReply,
           isMedical: true,
-          reason: "medical:upcoming_read_named_miss",
+          reason: calendarReason,
         };
       }
       // Named query surfaces every upcoming visit with that doctor, soonest
@@ -1679,7 +1698,7 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     if (all.length === 0) {
       return {
         tier: 1,
-        tier1Response: "I don't have any doctor appointments coming up.",
+        tier1Response: "I don't have any upcoming doctor appointments saved yet.",
         isMedical: true,
         reason: "medical:upcoming_read_empty",
       };

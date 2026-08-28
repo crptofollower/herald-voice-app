@@ -1,16 +1,17 @@
 // scripts/heraldTest/upcomingMedicalRead.test.ts
 // Locks UPCOMING MEDICAL APPOINTMENT RECALL (2026-08-09): the forward-looking
 // medical_visit reader getUpcomingAppointments + its classifyQuery dispatch.
-// medical_records only — no calendar, no appointmentsDB, no reconciliation.
+// Named first-turn miss falls through to existing Calendar evidence (2026-08-28).
 // Named-doctor selection tests the COMPLETE stored name against the utterance
 // (no extracted-hint truncation); list caps at three then "plus N more".
 //
 // Runner: npx tsx scripts/heraldTest/upcomingMedicalRead.test.ts
 
 import Database from 'better-sqlite3';
-import { setDB } from '../../src/db/schema.ts';
-import { getUpcomingAppointments } from '../../src/db/medicalDB.ts';
+import { setDB, getDB } from '../../src/db/schema.ts';
+import { getUpcomingAppointments, getMedicalRecords } from '../../src/db/medicalDB.ts';
 import { classifyQuery } from '../../src/routing/tierRouter.ts';
+import { setCalendarEventFetcher, resetCalendarEventFetcher } from '../../src/db/calendarCacheDB.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
 
@@ -23,6 +24,10 @@ const SCHEMA_SQL = `
   );
   CREATE TABLE IF NOT EXISTS local_profile (
     key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS calendar_cache (
+    id TEXT PRIMARY KEY, title TEXT, start_ms INTEGER, end_ms INTEGER,
+    all_day INTEGER DEFAULT 0, notes TEXT, cached_at TEXT
   );
 `;
 
@@ -58,6 +63,41 @@ function insertUpcoming(db: Database.Database, doctor: string | null, visitDate:
   return id;
 }
 
+function seedCacheEvent(title: string, daysAhead: number, hour = 11) {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() + daysAhead);
+  d.setHours(hour, 0, 0, 0);
+  const startMs = d.getTime();
+  getDB().runSync(
+    `INSERT OR REPLACE INTO calendar_cache (id, title, start_ms, end_ms, all_day, notes, cached_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?);`,
+    [`cal_${startMs}`, title, startMs, startMs + 3600_000, 0, null, new Date().toISOString()],
+  );
+  return startMs;
+}
+
+async function withFakeCalendarEvents<T>(
+  events: { id: string; title: string; startDate: string | Date }[],
+  fn: () => Promise<T>,
+): Promise<T> {
+  setCalendarEventFetcher(async () => ({ status: 'ok' as const, events: events as any }));
+  try {
+    return await fn();
+  } finally {
+    resetCalendarEventFetcher();
+  }
+}
+
+async function withUnavailableCalendar<T>(fn: () => Promise<T>): Promise<T> {
+  setCalendarEventFetcher(async () => ({ status: 'unavailable' as const, reason: 'permission-denied' }));
+  try {
+    return await fn();
+  } finally {
+    resetCalendarEventFetcher();
+  }
+}
+
 export async function runUpcomingMedicalReadTests() {
   const failures: { label: string }[] = [];
   let passed = 0;
@@ -75,9 +115,10 @@ export async function runUpcomingMedicalReadTests() {
   {
     freshDB();
     const d = await classifyQuery('what doctor appointments do I have coming up');
-    assert('U1 empty → none template', d.tier1Response,
-      (v) => typeof v === 'string' && /don't have any doctor appointments coming up/i.test(v),
-      "I don't have any doctor appointments coming up.");
+    assert('U1 empty → Herald-local miss only', d.tier1Response,
+      (v) => typeof v === 'string' && /don't have any upcoming doctor appointments saved yet/i.test(v)
+        && !/coming up/i.test(v as string),
+      "I don't have any upcoming doctor appointments saved yet.");
     assert('U1b reason is empty-read', (d as any).reason, (v) => v === 'medical:upcoming_read_empty', 'medical:upcoming_read_empty');
   }
 
@@ -147,16 +188,18 @@ export async function runUpcomingMedicalReadTests() {
     assert('U7b reason named', (d as any).reason, (v) => v === 'medical:upcoming_read_named', 'medical:upcoming_read_named');
   }
 
-  // U8 — named-doctor miss (others exist) → honest miss, no leak
+  // U8 — named-doctor miss (others exist) → calendar bounded miss, no leak
   {
     const db = freshDB();
     insertUpcoming(db, 'Dr. Patel', dayOffset(2));
-    const d = await classifyQuery('when do I see Dr Smith');
-    assert('U8 named miss → honest miss', d.tier1Response,
-      (v) => typeof v === 'string' && /don't have another visit with that doctor coming up/i.test(v),
-      "I don't have another visit with that doctor coming up.");
-    assert('U8b miss does not leak Patel', d.tier1Response,
-      (v) => typeof v === 'string' && !(v as string).includes('Patel'), 'no Patel');
+    await withFakeCalendarEvents([], async () => {
+      const d = await classifyQuery('when do I see Dr Smith');
+      assert('U8 named miss → calendar bounded miss', d.tier1Response,
+        (v) => typeof v === 'string' && /don't see anything with Dr Smith on your calendar in the next 6 months/i.test(v),
+        "I don't see anything with Dr Smith on your calendar in the next 6 months.");
+      assert('U8b miss does not leak Patel', d.tier1Response,
+        (v) => typeof v === 'string' && !(v as string).includes('Patel'), 'no Patel');
+    });
   }
 
   // U9 — verbatim name with a period/apostrophe spoken exactly as stored
@@ -274,6 +317,85 @@ export async function runUpcomingMedicalReadTests() {
         /^You see Dr\. Smithson on .*, and again .*\.$/.test(v as string) &&
         !/Dr\. Smith on/.test(v as string),
       'You see Dr. Smithson on <d1>, and again <d2>. (no Dr. Smith clause)');
+  }
+
+  {
+    freshDB();
+    await withFakeCalendarEvents([], async () => {
+      const d = await classifyQuery('When is my next appointment with Dr. Smith?');
+      assert('ND-A next appointment with Dr. Smith reaches named calendar miss',
+        { reason: (d as any).reason, resp: d.tier1Response },
+        v => v.reason === 'medical:upcoming_read_named_calendar_miss'
+          && /don't see anything with Dr\. Smith on your calendar in the next 6 months/i.test(v.resp),
+        'named upcoming authority + bounded calendar miss');
+    });
+  }
+
+  {
+    freshDB();
+    await withFakeCalendarEvents([], async () => {
+      const d = await classifyQuery('When am I seeing Dr. Smith again?');
+      assert('ND-B seeing Dr. Smith again reaches named upcoming authority',
+        (d as any).reason,
+        v => v === 'medical:upcoming_read_named_calendar_miss',
+        'medical:upcoming_read_named_calendar_miss');
+    });
+  }
+
+  {
+    freshDB();
+    seedCacheEvent('Dr. Smith', 2);
+    const d = await classifyQuery('When is my next appointment with Dr. Smith?');
+    assert('ND-C/D named medical miss uses calendar evidence with provenance',
+      { reason: (d as any).reason, resp: d.tier1Response },
+      v => v.reason === 'medical:upcoming_read_named_calendar'
+        && typeof v.resp === 'string' && v.resp.startsWith('Your calendar shows Dr. Smith on '),
+      'Your calendar shows Dr. Smith …');
+  }
+
+  {
+    freshDB();
+    await withUnavailableCalendar(async () => {
+      const d = await classifyQuery('When is my appointment with Dr. Smith?');
+      assert('ND-E calendar unavailable is not absence',
+        { reason: (d as any).reason, resp: d.tier1Response },
+        v => v.reason === 'medical:upcoming_read_named_calendar_unavailable'
+          && v.resp === "I couldn't check your calendar right now.",
+        "I couldn't check your calendar right now.");
+    });
+  }
+
+  {
+    const db = freshDB();
+    insertUpcoming(db, 'Dr. Smith', dayOffset(12));
+    seedCacheEvent('Dr. Smith', 2);
+    const d = await classifyQuery('When do I see Dr. Smith?');
+    assert('ND-H medical upcoming still wins before Calendar',
+      d.tier1Response,
+      v => typeof v === 'string' && /^You see Dr\. Smith on /.test(v) && !/Your calendar shows/.test(v),
+      'confirmed-memory You see …');
+  }
+
+  {
+    freshDB();
+    const before = getMedicalRecords().length;
+    seedCacheEvent('Dr. Smith', 3);
+    await classifyQuery('When is my next appointment with Dr. Smith?');
+    assert('ND-I calendar evidence is not written to medical_records',
+      getMedicalRecords().length,
+      v => v === before,
+      'medical_records row count unchanged');
+  }
+
+  {
+    freshDB();
+    const d = await classifyQuery('Do I have any future doctor appointments?');
+    assert('ND-J generic empty is Herald-local, not universal absence',
+      d.tier1Response,
+      v => typeof v === 'string'
+        && /don't have any upcoming doctor appointments saved yet/i.test(v)
+        && !/coming up/i.test(v),
+      "I don't have any upcoming doctor appointments saved yet.");
   }
 
   const total = passed + failures.length;

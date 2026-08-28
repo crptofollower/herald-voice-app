@@ -317,6 +317,36 @@ export function isReferentUpcomingVisitQuestion(text: string): boolean {
 }
 
 /**
+ * Calendar fallback after medical upcoming-authority miss.
+ * Same chain as the referent upcoming-visit reader: 14-day cache, then
+ * on-demand 6-month range. Never writes medical_records.
+ */
+export async function answerUpcomingCalendarEvidence(
+  doctorTerm: string,
+  displayName: string,
+): Promise<string> {
+  const { normalizeDoctorNameForMatch } = await import('../db/medicalDB');
+  const { findUpcomingEventsMatchingTerm, formatCalendarEvidenceForSpeech, queryCalendarEvidence } =
+    await import('../db/calendarCacheDB');
+  const calMatches = findUpcomingEventsMatchingTerm(doctorTerm, normalizeDoctorNameForMatch);
+  if (calMatches.length > 0) {
+    return formatCalendarEvidenceForSpeech(displayName, calMatches[0]);
+  }
+  const FORWARD_MONTHS = 6;
+  const now = new Date();
+  const forwardEnd = new Date(now);
+  forwardEnd.setMonth(forwardEnd.getMonth() + FORWARD_MONTHS);
+  const wideResult = await queryCalendarEvidence(doctorTerm, normalizeDoctorNameForMatch, now, forwardEnd);
+  if (wideResult.status === 'unavailable') {
+    return "I couldn't check your calendar right now.";
+  }
+  if (wideResult.events.length > 0) {
+    return formatCalendarEvidenceForSpeech(displayName, wideResult.events[0], 'date');
+  }
+  return `I don't see anything with ${displayName} on your calendar in the next ${FORWARD_MONTHS} months.`;
+}
+
+/**
  * Authoritative re-read for the upcoming-visit referent (Continuity Step 4).
  * Flow C supplies IDENTITY ONLY -- getUpcomingAppointments is the
  * deterministic reader and owns every factual value in the returned
@@ -341,50 +371,7 @@ export async function answerReferentUpcomingVisit(
     (r) => r.doctorName && normalizeDoctorNameForMatch(r.doctorName) === target,
   );
   if (matches.length === 0) {
-    // Medical authority (confirmed memory) has no upcoming visit. Fall back
-    // to the forward calendar cache as a lower-precedence SOURCE (Forward
-    // Calendar Evidence V1). This never writes medical_records and never
-    // speaks in confirmed-memory voice -- formatCalendarEvidenceForSpeech
-    // prefixes "Your calendar shows" so provenance is explicit. The namesake
-    // fence is a deterministic token-sequence match inside the reader, using
-    // the same normalizeDoctorNameForMatch normalizer, so Dr. Smith and
-    // Dr. Smithson do not cross-match. subject.entityId IS the stored doctor
-    // name (identity), passed raw -- the reader tokenizes and normalizes it.
-    const { findUpcomingEventsMatchingTerm, formatCalendarEvidenceForSpeech, queryCalendarEvidence } =
-      await import('../db/calendarCacheDB');
-    const calMatches = findUpcomingEventsMatchingTerm(subject.entityId, normalizeDoctorNameForMatch);
-    if (calMatches.length > 0) {
-      // findUpcomingEventsMatchingTerm already returns soonest-first, from
-      // now forward. Speak the nearest as calendar evidence.
-      return formatCalendarEvidenceForSpeech(subject.displayName, calMatches[0]);
-    }
-    // Android Calendar Range V1: the 14-day cache found nothing either.
-    // Widen to a direct, on-demand device query up to FORWARD_MONTHS out
-    // before honestly giving up. This fires only on this double-miss, so
-    // the live OS query is paid rarely, never on every turn. Date phrasing
-    // (not weekday) -- "Wednesday" is ambiguous for an appointment months
-    // out.
-    const FORWARD_MONTHS = 6;
-    const now = new Date();
-    const forwardEnd = new Date(now);
-    forwardEnd.setMonth(forwardEnd.getMonth() + FORWARD_MONTHS);
-    const wideResult = await queryCalendarEvidence(subject.entityId, normalizeDoctorNameForMatch, now, forwardEnd);
-    // Unavailable (permission/provider error) is NOT evidence of absence --
-    // must never be spoken as any absence claim, bounded or not. Source-
-    // honest, distinct third voice.
-    if (wideResult.status === 'unavailable') {
-      return "I couldn't check your calendar right now.";
-    }
-    if (wideResult.events.length > 0) {
-      return formatCalendarEvidenceForSpeech(subject.displayName, wideResult.events[0], 'date');
-    }
-    // CTO trust correction: a successful search with zero matches is real
-    // evidence of absence WITHIN THE CHECKED BOUND -- but the spoken claim
-    // must say so explicitly. "I don't have another visit coming up" (no
-    // bound stated) reads as an unbounded/lifetime claim once a calendar
-    // search backs it, overstating what was actually checked. This string
-    // MUST stay in sync with FORWARD_MONTHS above.
-    return `I don't see anything with ${subject.displayName} on your calendar in the next ${FORWARD_MONTHS} months.`;
+    return answerUpcomingCalendarEvidence(subject.entityId, subject.displayName);
   }
   const sorted = [...matches].sort((a, b) =>
     (a.visitDate < b.visitDate ? -1 : a.visitDate > b.visitDate ? 1 : 0),
