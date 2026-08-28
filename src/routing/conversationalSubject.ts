@@ -316,6 +316,33 @@ export function isReferentUpcomingVisitQuestion(text: string): boolean {
   return true;
 }
 
+// Bounded doctor-calendar identity fence: same surname with distinct
+// doctor-shaped titles (Dr. Estil Vance vs Dr. Robert Vance) must not
+// auto-pick one identity. Same identity key still takes the soonest event.
+function speakUpcomingDoctorCalendarHits(
+  displayName: string,
+  doctorTerm: string,
+  events: { title: string; start_ms: number }[],
+  mode: 'weekday' | 'date',
+  normalize: (s: string) => string,
+  identityKey: (title: string, rawTerm: string, normalize: (s: string) => string) => string,
+  formatSpeech: (displayName: string, event: any, mode?: 'weekday' | 'date') => string,
+): string {
+  const keys = new Set(events.map((e) => identityKey(e.title, doctorTerm, normalize)));
+  if (keys.size > 1) {
+    const dates = events.map((h) => {
+      const dateLabel = new Date(h.start_ms).toLocaleDateString([], {
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric',
+      });
+      return `${h.title} on ${dateLabel}`;
+    });
+    return `Your calendar shows ${events.length} things with ${displayName} in the next 6 months — ${dates.join(', ')}. Which one did you mean?`;
+  }
+  return formatSpeech(displayName, events[0], mode);
+}
+
 /**
  * Calendar fallback after medical upcoming-authority miss.
  * Same chain as the referent upcoming-visit reader: 14-day cache, then
@@ -326,22 +353,51 @@ export async function answerUpcomingCalendarEvidence(
   displayName: string,
 ): Promise<string> {
   const { normalizeDoctorNameForMatch } = await import('../db/medicalDB');
-  const { findUpcomingEventsMatchingTerm, formatCalendarEvidenceForSpeech, queryCalendarEvidence } =
-    await import('../db/calendarCacheDB');
-  const calMatches = findUpcomingEventsMatchingTerm(doctorTerm, normalizeDoctorNameForMatch);
+  const {
+    findUpcomingEventsMatchingTerm,
+    formatCalendarEvidenceForSpeech,
+    queryCalendarEvidence,
+    titleMatchesDoctorCalendarTerm,
+    doctorCalendarIdentityKey,
+  } = await import('../db/calendarCacheDB');
+  const matchTitle = (title: string) =>
+    titleMatchesDoctorCalendarTerm(title, doctorTerm, normalizeDoctorNameForMatch);
+  const calMatches = findUpcomingEventsMatchingTerm(doctorTerm, normalizeDoctorNameForMatch, matchTitle);
   if (calMatches.length > 0) {
-    return formatCalendarEvidenceForSpeech(displayName, calMatches[0]);
+    return speakUpcomingDoctorCalendarHits(
+      displayName,
+      doctorTerm,
+      calMatches,
+      'weekday',
+      normalizeDoctorNameForMatch,
+      doctorCalendarIdentityKey,
+      formatCalendarEvidenceForSpeech,
+    );
   }
   const FORWARD_MONTHS = 6;
   const now = new Date();
   const forwardEnd = new Date(now);
   forwardEnd.setMonth(forwardEnd.getMonth() + FORWARD_MONTHS);
-  const wideResult = await queryCalendarEvidence(doctorTerm, normalizeDoctorNameForMatch, now, forwardEnd);
+  const wideResult = await queryCalendarEvidence(
+    doctorTerm,
+    normalizeDoctorNameForMatch,
+    now,
+    forwardEnd,
+    { matchTitle },
+  );
   if (wideResult.status === 'unavailable') {
     return "I couldn't check your calendar right now.";
   }
   if (wideResult.events.length > 0) {
-    return formatCalendarEvidenceForSpeech(displayName, wideResult.events[0], 'date');
+    return speakUpcomingDoctorCalendarHits(
+      displayName,
+      doctorTerm,
+      wideResult.events,
+      'date',
+      normalizeDoctorNameForMatch,
+      doctorCalendarIdentityKey,
+      formatCalendarEvidenceForSpeech,
+    );
   }
   return `I don't see anything with ${displayName} on your calendar in the next ${FORWARD_MONTHS} months.`;
 }

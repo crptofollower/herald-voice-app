@@ -398,6 +398,215 @@ export async function runUpcomingMedicalReadTests() {
       "I don't have any upcoming doctor appointments saved yet.");
   }
 
+  // V — doctor-title surname match (Dr. Vance / Dr. Estil Vance). Does not
+  // change generic future-doctor discovery (ND-J / Test #3 remains OPEN).
+
+  {
+    freshDB();
+    seedCacheEvent('Dr. Estil Vance - on follow-up', 5);
+    const d = await classifyQuery('When is my next appointment with Dr. Vance?');
+    assert('V1 Dr. Vance matches Dr. Estil Vance with calendar provenance',
+      { reason: (d as any).reason, resp: d.tier1Response },
+      v => v.reason === 'medical:upcoming_read_named_calendar'
+        && typeof v.resp === 'string' && v.resp.startsWith('Your calendar shows Dr. Vance on '),
+      'Your calendar shows Dr. Vance …');
+  }
+
+  {
+    freshDB();
+    seedCacheEvent('Dr. John Smith', 4);
+    const d = await classifyQuery('When is my next appointment with Dr. Smith?');
+    assert('V2 Dr. Smith matches Dr. John Smith',
+      d.tier1Response,
+      v => typeof v === 'string' && v.startsWith('Your calendar shows Dr. Smith on '),
+      'Your calendar shows Dr. Smith …');
+  }
+
+  {
+    freshDB();
+    seedCacheEvent('Dr. Smithson', 3);
+    await withFakeCalendarEvents([], async () => {
+      const d = await classifyQuery('When is my next appointment with Dr. Smith?');
+      assert('V3 Dr. Smith does not match Dr. Smithson',
+        d.tier1Response,
+        v => typeof v === 'string'
+          && /don't see anything with Dr\. Smith on your calendar in the next 6 months/i.test(v),
+        'bounded calendar miss');
+    });
+  }
+
+  {
+    freshDB();
+    seedCacheEvent('Dr. Joanne', 3);
+    await withFakeCalendarEvents([], async () => {
+      const d = await classifyQuery('When is my next appointment with Dr. Ann?');
+      assert('V4 Dr. Ann does not match Dr. Joanne',
+        d.tier1Response,
+        v => typeof v === 'string'
+          && /don't see anything with Dr\. Ann on your calendar in the next 6 months/i.test(v),
+        'bounded calendar miss');
+    });
+  }
+
+  {
+    freshDB();
+    seedCacheEvent('Dr. Smith', 2);
+    const d = await classifyQuery('When is my next appointment with Dr. Smith?');
+    assert('V5 exact Dr. Smith title still matches',
+      d.tier1Response,
+      v => typeof v === 'string' && v.startsWith('Your calendar shows Dr. Smith on '),
+      'Your calendar shows Dr. Smith …');
+  }
+
+  {
+    freshDB();
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setMonth(d.getMonth() + 3);
+    d.setHours(11, 0, 0, 0);
+    await withFakeCalendarEvents(
+      [{ id: 'v6', title: 'Dr. Estil Vance', startDate: d.toISOString() }],
+      async () => {
+        const res = await classifyQuery('When is my next appointment with Dr. Vance?');
+        assert('V6 range event beyond 14-day cache with given name matches',
+          { reason: (res as any).reason, resp: res.tier1Response },
+          v => v.reason === 'medical:upcoming_read_named_calendar'
+            && typeof v.resp === 'string' && v.resp.startsWith('Your calendar shows Dr. Vance on '),
+          'range attributed calendar hit');
+      },
+    );
+  }
+
+  {
+    const db = freshDB();
+    insertUpcoming(db, 'Dr. Vance', dayOffset(12));
+    seedCacheEvent('Dr. Estil Vance', 2);
+    const d = await classifyQuery('When is my next appointment with Dr. Vance?');
+    assert('V7 medical upcoming still outranks the Calendar candidate',
+      d.tier1Response,
+      v => typeof v === 'string' && /^You see Dr\. Vance on /.test(v) && !/Your calendar shows/.test(v),
+      'confirmed-memory You see …');
+  }
+
+  {
+    freshDB();
+    const before = getMedicalRecords().length;
+    seedCacheEvent('Dr. Estil Vance', 3);
+    await classifyQuery('When is my next appointment with Dr. Vance?');
+    assert('V8 calendar evidence is not written to medical_records',
+      getMedicalRecords().length,
+      v => v === before,
+      'medical_records row count unchanged');
+  }
+
+  {
+    freshDB();
+    seedCacheEvent('Dr. Estil Vance', 4, 9);
+    seedCacheEvent('Dr. Robert Vance', 8, 10);
+    const d = await classifyQuery('When is my next appointment with Dr. Vance?');
+    assert('V9 two doctor-shaped Vance titles do not silently pick one identity',
+      d.tier1Response,
+      v => typeof v === 'string'
+        && v.startsWith('Your calendar shows')
+        && /which one did you mean/i.test(v)
+        && /Estil/i.test(v)
+        && /Robert/i.test(v)
+        && !/^Your calendar shows Dr\. Vance on /.test(v),
+      'clarification naming both titles, no single-identity assertion');
+  }
+
+  {
+    freshDB();
+    await withUnavailableCalendar(async () => {
+      const d = await classifyQuery('When is my next appointment with Dr. Vance?');
+      assert('V10 calendar unavailable remains unavailable, not absence',
+        { reason: (d as any).reason, resp: d.tier1Response },
+        v => v.reason === 'medical:upcoming_read_named_calendar_unavailable'
+          && v.resp === "I couldn't check your calendar right now.",
+        "I couldn't check your calendar right now.");
+    });
+  }
+
+  async function assertNamedCalMiss(label: string, query: string, title: string) {
+    freshDB();
+    seedCacheEvent(title, 3);
+    await withFakeCalendarEvents([], async () => {
+      const d = await classifyQuery(query);
+      assert(label, d.tier1Response,
+        v => typeof v === 'string'
+          && /don't see anything with Dr\. \w+ on your calendar in the next 6 months/i.test(v)
+          && !/Your calendar shows/i.test(v),
+        'bounded calendar miss, not attribution');
+    });
+  }
+
+  await assertNamedCalMiss('B1 Dr. Patel does not match Dr. Smith - Patel',
+    'When is my next appointment with Dr. Patel?', 'Dr. Smith - Patel');
+  await assertNamedCalMiss('B2 Dr. Patel does not match Dr. Smith: Patel',
+    'When is my next appointment with Dr. Patel?', 'Dr. Smith: Patel');
+  await assertNamedCalMiss('B3 Dr. Patel does not match Dr. Smith (Patel)',
+    'When is my next appointment with Dr. Patel?', 'Dr. Smith (Patel)');
+  await assertNamedCalMiss('B4 Dr. Patel does not match Appointment with Dr. Smith - Patel',
+    'When is my next appointment with Dr. Patel?', 'Appointment with Dr. Smith - Patel');
+
+  {
+    freshDB();
+    seedCacheEvent('Dr. Estil Vance', 5);
+    const d = await classifyQuery('When is my next appointment with Dr. Vance?');
+    assert('B5 Dr. Vance still matches Dr. Estil Vance',
+      d.tier1Response,
+      v => typeof v === 'string' && v.startsWith('Your calendar shows Dr. Vance on '),
+      'Your calendar shows Dr. Vance …');
+  }
+
+  {
+    freshDB();
+    seedCacheEvent('Dr. John Smith', 4);
+    const d = await classifyQuery('When is my next appointment with Dr. Smith?');
+    assert('B6 Dr. Smith still matches Dr. John Smith',
+      d.tier1Response,
+      v => typeof v === 'string' && v.startsWith('Your calendar shows Dr. Smith on '),
+      'Your calendar shows Dr. Smith …');
+  }
+
+  await assertNamedCalMiss('B7 Smithson still does not match Dr. Smith',
+    'When is my next appointment with Dr. Smith?', 'Dr. Smithson');
+
+  {
+    freshDB();
+    seedCacheEvent('Dr. Estil Vance', 4, 9);
+    seedCacheEvent('Dr. Robert Vance', 8, 10);
+    const d = await classifyQuery('When is my next appointment with Dr. Vance?');
+    assert('B8 two genuine Dr. Vance identities still clarify',
+      d.tier1Response,
+      v => typeof v === 'string'
+        && v.startsWith('Your calendar shows')
+        && /which one did you mean/i.test(v)
+        && /Estil/i.test(v)
+        && /Robert/i.test(v)
+        && !/^Your calendar shows Dr\. Vance on /.test(v),
+      'clarification, no silent identity pick');
+  }
+
+  {
+    freshDB();
+    seedCacheEvent('Dr. John M. Smith', 4);
+    const d = await classifyQuery('When is my next appointment with Dr. Smith?');
+    assert('B9 initial period is not a span break: Dr. John M. Smith matches Dr. Smith',
+      d.tier1Response,
+      v => typeof v === 'string' && v.startsWith('Your calendar shows Dr. Smith on '),
+      'Your calendar shows Dr. Smith …');
+  }
+
+  await assertNamedCalMiss('B10 Dr. Smith re Patel fails closed for Dr. Patel',
+    'When is my next appointment with Dr. Patel?', 'Dr. Smith re Patel');
+  await assertNamedCalMiss('B11 period after a name token is a span break: Dr. Smith. Patel',
+    'When is my next appointment with Dr. Patel?', 'Dr. Smith. Patel');
+  await assertNamedCalMiss('B12 Dinner with Vance is not a doctor-shaped title',
+    'When is my next appointment with Dr. Vance?', 'Dinner with Vance');
+  await assertNamedCalMiss('B13 Dr. Patel does not match Dr. Smith & Patel',
+    'When is my next appointment with Dr. Patel?', 'Dr. Smith & Patel');
+
   const total = passed + failures.length;
   console.log(
     `\n${BOLD}UpcomingMedicalRead: ${passed}/${total} passed` +

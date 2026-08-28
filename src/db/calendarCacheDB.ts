@@ -324,9 +324,109 @@ function tokenSequenceContained(haystack: string[], needle: string[]): boolean {
   return false;
 }
 
+// Doctor-calendar title match (Vance repair). Does NOT replace
+// tokenSequenceContained. Exact adjacent runs still win first.
+//
+// Relaxed form is NOT "surname appears somewhere after Dr". Punctuation is
+// discarded by normalizedTokens, so "Dr. Estil Vance" and "Dr. Smith - Patel"
+// are token-identical unless the matcher keeps local title structure.
+// A doctor-name SPAN is the raw substring from each "Dr" until the next
+// structural title break (dash, colon, paren, slash, comma, semicolon, pipe,
+// ampersand, plus, at-sign, or a period after a multi-letter token).
+// Only that span is tokenized for the relaxed form. Positive shapes, with
+// the surname as the span's last token:
+//   dr + given + surname
+//   dr + given + single-letter initial + surname
+// Two unrestricted given-name tokens are refused (Dr. Smith re Patel).
+function isDoctorSpanBreakChar(c: string): boolean {
+  return (
+    c === '-' || c === '–' || c === '—' ||
+    c === ':' || c === '(' || c === '[' || c === '{' ||
+    c === '|' || c === '/' || c === ';' || c === ',' ||
+    c === '&' || c === '+' || c === '@'
+  );
+}
+
+function doctorNameSpanEnd(title: string, from: number): number {
+  for (let i = from; i < title.length; i++) {
+    const c = title[i];
+    if (isDoctorSpanBreakChar(c)) return i;
+    if (c !== '.') continue;
+    let letterCount = 0;
+    for (let j = i - 1; j >= from && /\p{L}/u.test(title[j]); j--) letterCount++;
+    const next = title[i + 1];
+    if (letterCount >= 2 && (next === undefined || /\s/.test(next))) return i;
+  }
+  return title.length;
+}
+
+function extractDoctorNameSpans(title: string): string[] {
+  const spans: string[] = [];
+  const startRe = /\b[Dd]r\.?/g;
+  let m: RegExpExecArray | null;
+  while ((m = startRe.exec(title)) !== null) {
+    const from = m.index;
+    const afterDr = from + m[0].length;
+    spans.push(title.slice(from, doctorNameSpanEnd(title, afterDr)));
+  }
+  return spans;
+}
+
+// Exact 3-token Given Surname, or 4-token Given + initial + Surname.
+// Returns the identity tokens or null. Surname must be the last token.
+function parseDoctorShapedSpan(toks: string[], surname: string): string[] | null {
+  if (toks.length < 3 || toks[0] !== 'dr') return null;
+  if (toks[toks.length - 1] !== surname) return null;
+  if (toks.some((t, i) => i > 0 && t === 'dr')) return null;
+  if (toks.length === 3) return toks;
+  if (toks.length === 4 && toks[2].length === 1) return toks;
+  return null;
+}
+
+function doctorSpanIdentityKey(toks: string[], surname: string): string | null {
+  if (toks.length < 2 || toks[0] !== 'dr') return null;
+  if (toks[1] === surname) return `dr|${surname}`;
+  const shaped = parseDoctorShapedSpan(toks, surname);
+  return shaped ? shaped.join('|') : null;
+}
+
+export function titleMatchesDoctorCalendarTerm(
+  title: string,
+  rawTerm: string,
+  normalize: (s: string) => string,
+): boolean {
+  const needle = normalizedTokens(rawTerm, normalize);
+  const haystack = normalizedTokens(title, normalize);
+  if (tokenSequenceContained(haystack, needle)) return true;
+  if (needle.length !== 2 || needle[0] !== 'dr' || !needle[1]) return false;
+  const surname = needle[1];
+  for (const span of extractDoctorNameSpans(title)) {
+    if (parseDoctorShapedSpan(normalizedTokens(span, normalize), surname)) return true;
+  }
+  return false;
+}
+
+export function doctorCalendarIdentityKey(
+  title: string,
+  rawTerm: string,
+  normalize: (s: string) => string,
+): string {
+  const needle = normalizedTokens(rawTerm, normalize);
+  const haystack = normalizedTokens(title, normalize);
+  if (needle.length === 2 && needle[0] === 'dr' && needle[1]) {
+    const surname = needle[1];
+    for (const span of extractDoctorNameSpans(title)) {
+      const key = doctorSpanIdentityKey(normalizedTokens(span, normalize), surname);
+      if (key) return key;
+    }
+  }
+  return haystack.join('|');
+}
+
 export function findUpcomingEventsMatchingTerm(
   rawTerm: string,
   normalize: (s: string) => string,
+  matchTitle?: (title: string) => boolean,
 ): CachedEvent[] {
   const needle = normalizedTokens(rawTerm, normalize);
   if (needle.length === 0) return [];
@@ -338,8 +438,10 @@ export function findUpcomingEventsMatchingTerm(
      ORDER BY start_ms ASC;`,
     [nowMs],
   );
+  const matches = matchTitle
+    ?? ((title: string) => tokenSequenceContained(normalizedTokens(title, normalize), needle));
   return rows.filter(
-    (e) => e.title && tokenSequenceContained(normalizedTokens(e.title, normalize), needle),
+    (e) => e.title && matches(e.title),
   );
 }
 
@@ -522,6 +624,7 @@ export async function queryCalendarEvidence(
   normalize: (s: string) => string,
   startDate: Date,
   endDate: Date,
+  opts?: { matchTitle?: (title: string) => boolean },
 ): Promise<CalendarEvidenceResult> {
   const needle = normalizedTokens(rawTerm, normalize);
   // An empty/degenerate search term is a caller-input condition, not a
@@ -529,6 +632,8 @@ export async function queryCalendarEvidence(
   if (needle.length === 0) return { status: 'ok', events: [] };
   const startMsBound = startDate.getTime();
   const endMsBound = endDate.getTime();
+  const titleMatches = opts?.matchTitle
+    ?? ((title: string) => tokenSequenceContained(normalizedTokens(title, normalize), needle));
   try {
     const raw = await _eventFetcher(startDate, endDate);
     if (raw.status === 'unavailable') return raw;
@@ -560,7 +665,7 @@ export async function queryCalendarEvidence(
     // rather than an assumption about the underlying API.
     const events = mapped
       .filter((e) => e.start_ms >= startMsBound && e.start_ms < endMsBound)
-      .filter((e) => tokenSequenceContained(normalizedTokens(e.title, normalize), needle))
+      .filter((e) => titleMatches(e.title))
       .sort((a, b) => a.start_ms - b.start_ms);
     return { status: 'ok', events };
   } catch {
