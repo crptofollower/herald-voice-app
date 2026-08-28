@@ -402,6 +402,121 @@ export async function answerUpcomingCalendarEvidence(
   return `I don't see anything with ${displayName} on your calendar in the next ${FORWARD_MONTHS} months.`;
 }
 
+const GENERIC_DOCTOR_CAL_FORWARD_MONTHS = 6;
+const GENERIC_DOCTOR_CAL_ABSENCE =
+  "I don't have any upcoming doctor appointments saved, and I don't see any doctor appointments on your calendar in the next 6 months.";
+
+function isDrShapedMatchTerm(term: string, normalize: (s: string) => string): boolean {
+  const n = normalize(term).split(/\s+/).filter(Boolean);
+  return n.length >= 2 && n[0] === 'dr';
+}
+
+function titleQualifiesGenericDoctorEvidence(
+  title: string,
+  normalize: (s: string) => string,
+  knownTerms: string[],
+  hasStrongSpan: (title: string, normalize: (s: string) => string) => boolean,
+  matchesTerm: (title: string, rawTerm: string, normalize: (s: string) => string) => boolean,
+): boolean {
+  if (hasStrongSpan(title, normalize)) return true;
+  for (const term of knownTerms) {
+    if (!isDrShapedMatchTerm(term, normalize)) continue;
+    if (matchesTerm(title, term, normalize)) return true;
+  }
+  return false;
+}
+
+function speakGenericDoctorCalendarHits(
+  events: { title: string; start_ms: number }[],
+  mode: 'next' | 'inventory',
+  dateMode: 'weekday' | 'date',
+  labels: string[],
+  formatSpeech: (displayName: string, event: any, mode?: 'weekday' | 'date') => string,
+): string {
+  if (mode === 'next' || events.length === 1) {
+    return formatSpeech(labels[0], events[0], dateMode);
+  }
+  const CAP = 3;
+  const shown = events.slice(0, CAP);
+  const remaining = events.length - shown.length;
+  const whenOf = (startMs: number) => {
+    const d = new Date(startMs);
+    return dateMode === 'date'
+      ? d.toLocaleDateString([], { month: 'long', day: 'numeric', year: 'numeric' })
+      : d.toLocaleDateString([], { weekday: 'long' });
+  };
+  let sentence = `Your calendar shows ${labels[0]} on ${whenOf(shown[0].start_ms)}`;
+  for (let i = 1; i < shown.length; i++) {
+    sentence += `, then ${labels[i]} on ${whenOf(shown[i].start_ms)}`;
+  }
+  sentence += remaining > 0 ? `, plus ${remaining} more.` : '.';
+  return sentence;
+}
+
+/**
+ * Generic upcoming-doctor Calendar evidence after medical_records upcoming miss.
+ * Strong multi-token doctor spans OR correlation with confirmed Dr-shaped
+ * Herald medical identities. Never writes medical_records.
+ */
+export async function answerUpcomingGenericDoctorCalendarEvidence(
+  mode: 'next' | 'inventory',
+): Promise<string> {
+  const { normalizeDoctorNameForMatch, getConfirmedDoctorMatchTerms } = await import('../db/medicalDB');
+  const {
+    findUpcomingCachedEvents,
+    formatCalendarEvidenceForSpeech,
+    queryCalendarRange,
+    titleHasStrongDoctorNameSpan,
+    titleMatchesDoctorCalendarTerm,
+    genericDoctorCalendarLabel,
+  } = await import('../db/calendarCacheDB');
+  const knownTerms = getConfirmedDoctorMatchTerms();
+  const qualifies = (title: string) =>
+    titleQualifiesGenericDoctorEvidence(
+      title,
+      normalizeDoctorNameForMatch,
+      knownTerms,
+      titleHasStrongDoctorNameSpan,
+      titleMatchesDoctorCalendarTerm,
+    );
+  const labelOf = (title: string) =>
+    genericDoctorCalendarLabel(title, normalizeDoctorNameForMatch, knownTerms.filter(
+      (t) => isDrShapedMatchTerm(t, normalizeDoctorNameForMatch),
+    ));
+
+  const cacheHits = findUpcomingCachedEvents().filter((e) => e.title && qualifies(e.title));
+  if (cacheHits.length > 0) {
+    const chosen = mode === 'next' ? cacheHits.slice(0, 1) : cacheHits;
+    return speakGenericDoctorCalendarHits(
+      chosen,
+      mode,
+      'weekday',
+      chosen.map((e) => labelOf(e.title)),
+      formatCalendarEvidenceForSpeech,
+    );
+  }
+
+  const now = new Date();
+  const forwardEnd = new Date(now);
+  forwardEnd.setMonth(forwardEnd.getMonth() + GENERIC_DOCTOR_CAL_FORWARD_MONTHS);
+  const wideResult = await queryCalendarRange(now, forwardEnd);
+  if (wideResult.status === 'unavailable') {
+    return "I couldn't check your calendar right now.";
+  }
+  const rangeHits = wideResult.events.filter((e) => e.title && qualifies(e.title));
+  if (rangeHits.length > 0) {
+    const chosen = mode === 'next' ? rangeHits.slice(0, 1) : rangeHits;
+    return speakGenericDoctorCalendarHits(
+      chosen,
+      mode,
+      'date',
+      chosen.map((e) => labelOf(e.title)),
+      formatCalendarEvidenceForSpeech,
+    );
+  }
+  return GENERIC_DOCTOR_CAL_ABSENCE;
+}
+
 /**
  * Authoritative re-read for the upcoming-visit referent (Continuity Step 4).
  * Flow C supplies IDENTITY ONLY -- getUpcomingAppointments is the

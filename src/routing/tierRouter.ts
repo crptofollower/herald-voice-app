@@ -27,7 +27,7 @@ import {
   COMPLETED_PAST_FIRST_PERSON_RE,
   THIRD_PERSON_REFERENT_RE,
 } from "../utils/instructionSignals";
-import { isReferentVisitOutcomeQuestion, isReferentUpcomingVisitQuestion, isReferentYearBoundedVisitQuestion, answerUpcomingCalendarEvidence } from "./conversationalSubject";
+import { isReferentVisitOutcomeQuestion, isReferentUpcomingVisitQuestion, isReferentYearBoundedVisitQuestion, answerUpcomingCalendarEvidence, answerUpcomingGenericDoctorCalendarEvidence } from "./conversationalSubject";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1696,11 +1696,20 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     }
 
     if (all.length === 0) {
+      const wantsSingle = UPCOMING_MEDICAL_SINGLE.some((p) => p.test(msg));
+      const calReply = await answerUpcomingGenericDoctorCalendarEvidence(
+        wantsSingle ? 'next' : 'inventory',
+      );
+      const calendarReason = calReply.startsWith('Your calendar shows')
+        ? 'medical:upcoming_read_generic_calendar'
+        : /couldn't check your calendar/i.test(calReply)
+          ? 'medical:upcoming_read_generic_calendar_unavailable'
+          : 'medical:upcoming_read_generic_calendar_miss';
       return {
         tier: 1,
-        tier1Response: "I don't have any upcoming doctor appointments saved yet.",
+        tier1Response: calReply,
         isMedical: true,
-        reason: "medical:upcoming_read_empty",
+        reason: calendarReason,
       };
     }
 

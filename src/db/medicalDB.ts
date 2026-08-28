@@ -196,6 +196,39 @@ export function findMatchingUpcomingAppointment(
 }
 
 /**
+ * Confirmed Herald doctor identity labels for Calendar correlation.
+ * medical_records.doctor_name (non-removed) and medical_contacts.name
+ * (non-removed) only — never Calendar, appointmentsDB, or capture heuristics.
+ * Callers must still require a Dr-shaped term before using a name as a needle.
+ */
+export function getConfirmedDoctorMatchTerms(): string[] {
+  const db = getDB();
+  const names = new Set<string>();
+  const records = db.getAllSync<{ doctor_name: string | null }>(
+    `SELECT doctor_name FROM medical_records
+     WHERE removed_at IS NULL AND doctor_name IS NOT NULL AND trim(doctor_name) != '';`,
+  );
+  for (const r of records) {
+    const n = r.doctor_name?.trim();
+    if (n) names.add(n);
+  }
+  try {
+    const contacts = db.getAllSync<{ name: string }>(
+      `SELECT name FROM medical_contacts
+       WHERE removed_at IS NULL AND name IS NOT NULL AND trim(name) != '';`,
+    );
+    for (const c of contacts) {
+      const n = c.name?.trim();
+      if (n) names.add(n);
+    }
+  } catch {
+    // Test DBs that never created medical_contacts: correlation still works
+    // from medical_records. Missing table is not a license to invent names.
+  }
+  return [...names];
+}
+
+/**
  * All upcoming doctor appointments, soonest-first, dated today or later.
  * The read authority for "what doctor appointments do I have coming up"
  * (UPCOMING MEDICAL APPOINTMENT RECALL, 2026-08-09). medical_records only —

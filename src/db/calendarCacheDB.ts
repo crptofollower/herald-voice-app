@@ -390,6 +390,44 @@ function doctorSpanIdentityKey(toks: string[], surname: string): string | null {
   return shaped ? shaped.join('|') : null;
 }
 
+function strongDoctorSpanNameTokensAreTitleCase(span: string): boolean {
+  const raw = span.split(/[^\p{L}\p{N}]+/u).filter((t) => t.length > 0);
+  if (raw.length < 2) return false;
+  return raw.slice(1).every((t) => /^\p{Lu}/u.test(t));
+}
+
+export function titleHasStrongDoctorNameSpan(
+  title: string,
+  normalize: (s: string) => string,
+): boolean {
+  for (const span of extractDoctorNameSpans(title)) {
+    const toks = normalizedTokens(span, normalize);
+    if (toks.length < 3) continue;
+    if (!parseDoctorShapedSpan(toks, toks[toks.length - 1])) continue;
+    if (!strongDoctorSpanNameTokensAreTitleCase(span)) continue;
+    return true;
+  }
+  return false;
+}
+
+export function genericDoctorCalendarLabel(
+  title: string,
+  normalize: (s: string) => string,
+  knownTerms: string[],
+): string {
+  for (const span of extractDoctorNameSpans(title)) {
+    const toks = normalizedTokens(span, normalize);
+    if (toks.length >= 3 && parseDoctorShapedSpan(toks, toks[toks.length - 1])
+      && strongDoctorSpanNameTokensAreTitleCase(span)) {
+      return span.trim();
+    }
+  }
+  for (const term of knownTerms) {
+    if (titleMatchesDoctorCalendarTerm(title, term, normalize)) return term;
+  }
+  return title;
+}
+
 export function titleMatchesDoctorCalendarTerm(
   title: string,
   rawTerm: string,
@@ -442,6 +480,17 @@ export function findUpcomingEventsMatchingTerm(
     ?? ((title: string) => tokenSequenceContained(normalizedTokens(title, normalize), needle));
   return rows.filter(
     (e) => e.title && matches(e.title),
+  );
+}
+
+export function findUpcomingCachedEvents(): CachedEvent[] {
+  const db = getDB();
+  const nowMs = Date.now();
+  return db.getAllSync<CachedEvent>(
+    `SELECT * FROM calendar_cache
+     WHERE start_ms >= ?
+     ORDER BY start_ms ASC;`,
+    [nowMs],
   );
 }
 
@@ -619,6 +668,39 @@ export type CalendarEvidenceResult =
   | { status: 'ok'; events: CachedEvent[] }
   | { status: 'unavailable'; reason: 'permission-denied' | 'error' };
 
+async function fetchMappedCalendarRange(
+  startDate: Date,
+  endDate: Date,
+): Promise<CalendarEvidenceResult> {
+  const startMsBound = startDate.getTime();
+  const endMsBound = endDate.getTime();
+  try {
+    const raw = await _eventFetcher(startDate, endDate);
+    if (raw.status === 'unavailable') return raw;
+    const now = Date.now();
+    const mapped: CachedEvent[] = [];
+    for (const event of raw.events) {
+      if (!event.startDate) continue;
+      const parsed = parseRawCalendarEvent(event, now);
+      if (!parsed) continue;
+      mapped.push(parsed);
+    }
+    const events = mapped
+      .filter((e) => e.start_ms >= startMsBound && e.start_ms < endMsBound)
+      .sort((a, b) => a.start_ms - b.start_ms);
+    return { status: 'ok', events };
+  } catch {
+    return { status: 'unavailable', reason: 'error' };
+  }
+}
+
+export async function queryCalendarRange(
+  startDate: Date,
+  endDate: Date,
+): Promise<CalendarEvidenceResult> {
+  return fetchMappedCalendarRange(startDate, endDate);
+}
+
 export async function queryCalendarEvidence(
   rawTerm: string,
   normalize: (s: string) => string,
@@ -627,52 +709,16 @@ export async function queryCalendarEvidence(
   opts?: { matchTitle?: (title: string) => boolean },
 ): Promise<CalendarEvidenceResult> {
   const needle = normalizedTokens(rawTerm, normalize);
-  // An empty/degenerate search term is a caller-input condition, not a
-  // calendar-availability problem -- stays 'ok' with zero events.
+  // Empty/degenerate search term is a caller-input condition, not a
+  // calendar-availability problem -- stays 'ok' with zero events and does
+  // NOT fetch. Generic doctor discovery must call queryCalendarRange instead.
   if (needle.length === 0) return { status: 'ok', events: [] };
-  const startMsBound = startDate.getTime();
-  const endMsBound = endDate.getTime();
+  const range = await fetchMappedCalendarRange(startDate, endDate);
+  if (range.status === 'unavailable') return range;
   const titleMatches = opts?.matchTitle
     ?? ((title: string) => tokenSequenceContained(normalizedTokens(title, normalize), needle));
-  try {
-    const raw = await _eventFetcher(startDate, endDate);
-    if (raw.status === 'unavailable') return raw;
-    const now = Date.now();
-    const mapped: CachedEvent[] = [];
-    for (const event of raw.events) {
-      // Never speak a fabricated date: parseRawCalendarEvent's fallbackNowMs
-      // exists for refreshCalendarCache's own established, unrelated need
-      // (a cache row with no usable date defaults to "now" so the cache
-      // write doesn't crash) -- that fallback is correct THERE because
-      // nothing speaks that value as a specific date. HERE, the parsed
-      // start_ms is spoken directly as calendar evidence ("Your calendar
-      // shows ... on [date]"), so a row with no real event.startDate must
-      // be skipped outright, never defaulted to "now" and spoken as if it
-      // were observed. This is a stricter rule for THIS call site only;
-      // parseRawCalendarEvent itself and refreshCalendarCache's use of it
-      // are unchanged.
-      if (!event.startDate) continue;
-      const parsed = parseRawCalendarEvent(event, now);
-      if (!parsed) continue;
-      mapped.push(parsed);
-    }
-    // Defensive range enforcement: even though the OS was asked for
-    // [startDate, endDate), do not trust that as the only bound. This makes
-    // the contract deterministic and provider-neutral regardless of how
-    // literally a given calendar source's query semantics honor the passed
-    // range (a future non-Android source might behave differently), and
-    // makes the caller-supplied bound the actual, enforced source of truth
-    // rather than an assumption about the underlying API.
-    const events = mapped
-      .filter((e) => e.start_ms >= startMsBound && e.start_ms < endMsBound)
-      .filter((e) => titleMatches(e.title))
-      .sort((a, b) => a.start_ms - b.start_ms);
-    return { status: 'ok', events };
-  } catch {
-    // Fail closed, never throw through the conversation pipeline -- mirrors
-    // refreshCalendarCache's and writeCalendarCore's existing discipline.
-    // This is a genuine 'unavailable', NOT a bare [] -- see the type comment
-    // above for why that distinction is load-bearing.
-    return { status: 'unavailable', reason: 'error' };
-  }
+  return {
+    status: 'ok',
+    events: range.events.filter((e) => titleMatches(e.title)),
+  };
 }

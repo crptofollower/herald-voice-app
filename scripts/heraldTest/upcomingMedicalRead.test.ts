@@ -25,6 +25,10 @@ const SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS local_profile (
     key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS medical_contacts (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, specialty TEXT, phone TEXT,
+    address TEXT, is_primary INTEGER DEFAULT 0, notes TEXT, created_at TEXT, removed_at TEXT
+  );
   CREATE TABLE IF NOT EXISTS calendar_cache (
     id TEXT PRIMARY KEY, title TEXT, start_ms INTEGER, end_ms INTEGER,
     all_day INTEGER DEFAULT 0, notes TEXT, cached_at TEXT
@@ -111,15 +115,21 @@ export async function runUpcomingMedicalReadTests() {
 
   console.log(`\n${BOLD}-- Upcoming Medical Appointment Recall --${RESET}\n`);
 
-  // U1 — no upcoming rows → honest none
+  // U1 — no upcoming rows → Calendar consulted; dual-source miss when empty
   {
     freshDB();
-    const d = await classifyQuery('what doctor appointments do I have coming up');
-    assert('U1 empty → Herald-local miss only', d.tier1Response,
-      (v) => typeof v === 'string' && /don't have any upcoming doctor appointments saved yet/i.test(v)
-        && !/coming up/i.test(v as string),
-      "I don't have any upcoming doctor appointments saved yet.");
-    assert('U1b reason is empty-read', (d as any).reason, (v) => v === 'medical:upcoming_read_empty', 'medical:upcoming_read_empty');
+    await withFakeCalendarEvents([], async () => {
+      const d = await classifyQuery('what doctor appointments do I have coming up');
+      assert('U1 empty → bounded dual-source miss, not universal absence', d.tier1Response,
+        (v) => typeof v === 'string'
+          && /don't have any upcoming doctor appointments saved/i.test(v)
+          && /calendar in the next 6 months/i.test(v as string)
+          && !/coming up/i.test(v as string),
+        "saved + calendar 6-month miss");
+      assert('U1b reason is generic calendar miss', (d as any).reason,
+        (v) => v === 'medical:upcoming_read_generic_calendar_miss',
+        'medical:upcoming_read_generic_calendar_miss');
+    });
   }
 
   // U2 — one upcoming → "You see Dr. Smith on ..."
@@ -389,13 +399,16 @@ export async function runUpcomingMedicalReadTests() {
 
   {
     freshDB();
-    const d = await classifyQuery('Do I have any future doctor appointments?');
-    assert('ND-J generic empty is Herald-local, not universal absence',
-      d.tier1Response,
-      v => typeof v === 'string'
-        && /don't have any upcoming doctor appointments saved yet/i.test(v)
-        && !/coming up/i.test(v),
-      "I don't have any upcoming doctor appointments saved yet.");
+    await withFakeCalendarEvents([], async () => {
+      const d = await classifyQuery('Do I have any future doctor appointments?');
+      assert('ND-J generic empty is dual-source miss, not universal absence',
+        d.tier1Response,
+        v => typeof v === 'string'
+          && /don't have any upcoming doctor appointments saved/i.test(v)
+          && /calendar in the next 6 months/i.test(v)
+          && !/coming up/i.test(v),
+        "saved + calendar 6-month miss");
+    });
   }
 
   // V — doctor-title surname match (Dr. Vance / Dr. Estil Vance). Does not
@@ -606,6 +619,275 @@ export async function runUpcomingMedicalReadTests() {
     'When is my next appointment with Dr. Vance?', 'Dinner with Vance');
   await assertNamedCalMiss('B13 Dr. Patel does not match Dr. Smith & Patel',
     'When is my next appointment with Dr. Patel?', 'Dr. Smith & Patel');
+
+  const GENERIC_ABSENCE = /don't have any upcoming doctor appointments saved/i;
+  const GENERIC_CAL = (v: unknown) => typeof v === 'string' && (v as string).startsWith('Your calendar shows');
+
+  {
+    const db = freshDB();
+    insertUpcoming(db, 'Dr. Smith', dayOffset(5));
+    seedCacheEvent('Dr. Estil Vance', 2);
+    const d = await classifyQuery('Do I have any future doctor appointments?');
+    assert('G1 medical upcoming still wins; Calendar not spoken',
+      d.tier1Response,
+      v => typeof v === 'string' && /^You see Dr\. Smith on /.test(v) && !/Your calendar shows/.test(v),
+      'You see Dr. Smith …');
+  }
+
+  {
+    const db = freshDB();
+    insertUpcoming(db, 'Dr. Smith', dayOffset(-20), 'noted');
+    seedCacheEvent('Dr. Smith', 3);
+    const d = await classifyQuery('Do I have any upcoming doctor appointments?');
+    assert('G2 known Dr. Smith + Calendar Dr. Smith is attributed Calendar evidence',
+      { reason: (d as any).reason, resp: d.tier1Response },
+      v => v.reason === 'medical:upcoming_read_generic_calendar' && GENERIC_CAL(v.resp) && /Dr\. Smith/.test(v.resp),
+      'Your calendar shows Dr. Smith …');
+  }
+
+  {
+    freshDB();
+    seedCacheEvent('Dr. Estil Vance', 4);
+    const d = await classifyQuery('Do I have any future doctor appointments?');
+    assert('G3 unknown Calendar Dr. Estil Vance qualifies as Calendar evidence',
+      d.tier1Response,
+      v => GENERIC_CAL(v) && /Estil Vance/i.test(v as string),
+      'Your calendar shows … Estil Vance');
+  }
+
+  {
+    freshDB();
+    seedCacheEvent('Dr. Smith', 3);
+    await withFakeCalendarEvents([], async () => {
+      const d = await classifyQuery('Do I have any future doctor appointments?');
+      assert('G4 unknown one-token Calendar Dr. Smith fails closed',
+        d.tier1Response,
+        v => typeof v === 'string' && GENERIC_ABSENCE.test(v) && !GENERIC_CAL(v),
+        'dual-source miss');
+    });
+  }
+
+  {
+    freshDB();
+    seedCacheEvent('Dr. Pepper', 3);
+    await withFakeCalendarEvents([], async () => {
+      const d = await classifyQuery('Do I have any future doctor appointments?');
+      assert('G5 unknown Dr. Pepper is not doctor evidence',
+        d.tier1Response,
+        v => typeof v === 'string' && GENERIC_ABSENCE.test(v) && !GENERIC_CAL(v),
+        'dual-source miss');
+    });
+  }
+
+  {
+    freshDB();
+    seedCacheEvent('Dr Pepper pickup', 3);
+    await withFakeCalendarEvents([], async () => {
+      const d = await classifyQuery('Do I have any future doctor appointments?');
+      assert('G6 unknown Dr Pepper pickup is not doctor evidence',
+        d.tier1Response,
+        v => typeof v === 'string' && GENERIC_ABSENCE.test(v) && !GENERIC_CAL(v),
+        'dual-source miss');
+    });
+  }
+
+  // Accepted bounded limitation:
+  // fully title-cased `Dr. X Y` spans are syntactically indistinguishable from
+  // unknown doctor names without semantic identity knowledge. Calendar evidence
+  // is surfaced verbatim and attributed; no medical memory is created.
+  {
+    freshDB();
+    seedCacheEvent('Dr. Pepper Pickup', 3);
+    const d = await classifyQuery('Do I have any future doctor appointments?');
+    assert('G6b title-cased Dr. Pepper Pickup qualifies as attributed Calendar evidence (syntax-only bound)',
+      d.tier1Response,
+      v => typeof v === 'string'
+        && (v as string).includes('Your calendar shows')
+        && (v as string).includes('Dr. Pepper Pickup'),
+      'Your calendar shows … Dr. Pepper Pickup');
+  }
+
+  {
+    freshDB();
+    seedCacheEvent('Dr. Who', 3);
+    await withFakeCalendarEvents([], async () => {
+      const d = await classifyQuery('Do I have any future doctor appointments?');
+      assert('G7 unknown Dr. Who is not doctor evidence',
+        d.tier1Response,
+        v => typeof v === 'string' && GENERIC_ABSENCE.test(v) && !GENERIC_CAL(v),
+        'dual-source miss');
+    });
+  }
+
+  {
+    freshDB();
+    seedCacheEvent('Doctor Who marathon', 3);
+    await withFakeCalendarEvents([], async () => {
+      const d = await classifyQuery('Do I have any future doctor appointments?');
+      assert('G8 Doctor Who marathon is not doctor evidence',
+        d.tier1Response,
+        v => typeof v === 'string' && GENERIC_ABSENCE.test(v) && !GENERIC_CAL(v),
+        'dual-source miss');
+    });
+  }
+
+  {
+    freshDB();
+    seedCacheEvent('Dentist appointment', 2);
+    seedCacheEvent('MRI', 3);
+    seedCacheEvent('Blood work', 4);
+    await withFakeCalendarEvents([], async () => {
+      const d = await classifyQuery('Do I have any future doctor appointments?');
+      assert('G9 dentist / MRI / blood work do not satisfy doctor-specific query',
+        d.tier1Response,
+        v => typeof v === 'string' && GENERIC_ABSENCE.test(v) && !GENERIC_CAL(v),
+        'dual-source miss');
+    });
+  }
+
+  {
+    freshDB();
+    seedCacheEvent('Dr. Estil Vance', 3, 9);
+    seedCacheEvent('Dr. John Smith', 6, 10);
+    const d = await classifyQuery('Do I have any future doctor appointments?');
+    assert('G10 inventory lists multiple qualifying Calendar doctor events',
+      d.tier1Response,
+      v => typeof v === 'string' && GENERIC_CAL(v) && /Estil Vance/i.test(v) && /John Smith/i.test(v)
+        && !/which one did you mean/i.test(v),
+      'Your calendar shows … then …');
+  }
+
+  {
+    freshDB();
+    seedCacheEvent('Dr. John Smith', 8, 10);
+    seedCacheEvent('Dr. Estil Vance', 3, 9);
+    const d = await classifyQuery('When is my next doctor appointment?');
+    assert('G11 next returns the earliest qualifying Calendar event',
+      d.tier1Response,
+      v => typeof v === 'string' && GENERIC_CAL(v) && /Estil Vance/i.test(v) && !/John Smith/i.test(v),
+      'soonest only');
+  }
+
+  {
+    freshDB();
+    await withUnavailableCalendar(async () => {
+      const d = await classifyQuery('Do I have any future doctor appointments?');
+      assert('G12 Calendar unavailable is not absence',
+        { reason: (d as any).reason, resp: d.tier1Response },
+        v => v.reason === 'medical:upcoming_read_generic_calendar_unavailable'
+          && v.resp === "I couldn't check your calendar right now.",
+        "I couldn't check your calendar right now.");
+    });
+  }
+
+  {
+    freshDB();
+    await withFakeCalendarEvents([], async () => {
+      const d = await classifyQuery('Do I have any future doctor appointments?');
+      assert('G13 medical empty + Calendar ok + no qualifying event is dual-source miss',
+        d.tier1Response,
+        v => typeof v === 'string'
+          && GENERIC_ABSENCE.test(v)
+          && /calendar in the next 6 months/i.test(v)
+          && !GENERIC_CAL(v),
+        'saved + 6-month calendar miss');
+    });
+  }
+
+  {
+    freshDB();
+    const before = getMedicalRecords().length;
+    seedCacheEvent('Dr. John Smith', 3);
+    await classifyQuery('Do I have any future doctor appointments?');
+    assert('G14 Calendar evidence does not write medical_records',
+      getMedicalRecords().length,
+      v => v === before,
+      'medical_records row count unchanged');
+  }
+
+  {
+    freshDB();
+    seedCacheEvent('Dr. Smith', 2);
+    const d = await classifyQuery('When is my next appointment with Dr. Smith?');
+    assert('G15 named Dr. Smith path remains attributed Calendar evidence',
+      d.tier1Response,
+      v => typeof v === 'string' && v.startsWith('Your calendar shows Dr. Smith on '),
+      'Your calendar shows Dr. Smith …');
+  }
+
+  {
+    freshDB();
+    seedCacheEvent('Dr. Estil Vance - on follow-up', 5);
+    const d = await classifyQuery('When is my next appointment with Dr. Vance?');
+    assert('G16 named Dr. Vance still matches Dr. Estil Vance',
+      d.tier1Response,
+      v => typeof v === 'string' && v.startsWith('Your calendar shows Dr. Vance on '),
+      'Your calendar shows Dr. Vance …');
+  }
+
+  {
+    freshDB();
+    seedCacheEvent('Dr. John Smith', 4);
+    const d = await classifyQuery('Do I have any future doctor appointments?');
+    assert('G17 unknown Dr. John Smith qualifies via strong multi-token structure',
+      d.tier1Response,
+      v => GENERIC_CAL(v) && /John Smith/i.test(v as string),
+      'Your calendar shows … John Smith');
+  }
+
+  {
+    const db = freshDB();
+    insertUpcoming(db, 'Dr. Smith', dayOffset(-15), 'noted');
+    seedCacheEvent('Dr. Smithson', 3);
+    await withFakeCalendarEvents([], async () => {
+      const d = await classifyQuery('Do I have any future doctor appointments?');
+      assert('G18 known Dr. Smith does not substring-match Calendar Dr. Smithson',
+        d.tier1Response,
+        v => typeof v === 'string' && GENERIC_ABSENCE.test(v) && !/Smithson/i.test(v as string),
+        'dual-source miss');
+    });
+  }
+
+  {
+    freshDB();
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setMonth(d.getMonth() + 3);
+    d.setHours(11, 0, 0, 0);
+    await withFakeCalendarEvents(
+      [{ id: 'g19', title: 'Dr. John Smith', startDate: d.toISOString() }],
+      async () => {
+        const res = await classifyQuery('Do I have any future doctor appointments?');
+        assert('G19 range event beyond 14-day cache is found by generic discovery',
+          { reason: (res as any).reason, resp: res.tier1Response },
+          v => v.reason === 'medical:upcoming_read_generic_calendar'
+            && GENERIC_CAL(v.resp) && /John Smith/i.test(v.resp),
+          'range attributed calendar hit');
+      },
+    );
+  }
+
+  {
+    freshDB();
+    let fetches = 0;
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setMonth(d.getMonth() + 2);
+    d.setHours(11, 0, 0, 0);
+    setCalendarEventFetcher(async () => {
+      fetches += 1;
+      return { status: 'ok' as const, events: [{ id: 'g20', title: 'Dr. Estil Vance', startDate: d.toISOString() }] as any };
+    });
+    try {
+      const res = await classifyQuery('Do I have any future doctor appointments?');
+      assert('G20 generic range query invokes the fetcher (no empty-needle short circuit)',
+        { fetches, resp: res.tier1Response },
+        v => v.fetches >= 1 && GENERIC_CAL(v.resp) && /Estil Vance/i.test(v.resp),
+        'fetcher called and Calendar hit spoken');
+    } finally {
+      resetCalendarEventFetcher();
+    }
+  }
 
   const total = passed + failures.length;
   console.log(
