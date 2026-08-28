@@ -55,6 +55,19 @@ const TTS_ENDPOINT = `${API_BASE}/tts`;
 const TTS_SPEED = 0.88;
 const SENTENCE_PAUSE_MS = 200;
 
+/** Live-generation gate for ExpoSpeech onDone / onError / onStopped. */
+export function applyExpoSpeechTerminal(opts: {
+  callbackGen: number;
+  currentGen: number;
+  markNativeIdle: () => void;
+  continueDrain: () => void;
+}): 'applied' | 'stale' {
+  if (opts.callbackGen !== opts.currentGen) return 'stale';
+  opts.markNativeIdle();
+  opts.continueDrain();
+  return 'applied';
+}
+
 function cleanForSpeech(text: string): string {
   return text
     .replace(/CALENDAR:[^\n]*/g, "")
@@ -307,17 +320,21 @@ export function useSpeech(ensureMicSuspendedRef: EnsureMicSuspendedRef) {
     }
     expoSpeakingRef.current = true;
     latLog('TTS initiation', { turnId: getActiveTurnId(), engine: 'expo-speech' });
+    const utteranceGen = genRef.current;
+    const onTerminal = () => {
+      applyExpoSpeechTerminal({
+        callbackGen: utteranceGen,
+        currentGen: genRef.current,
+        markNativeIdle: () => { expoSpeakingRef.current = false; },
+        continueDrain: drainExpoQueue,
+      });
+    };
     ExpoSpeech.speak(next, {
       rate: 0.9,
       pitch: 1.0,
-      onDone: () => {
-        expoSpeakingRef.current = false;
-        drainExpoQueue();
-      },
-      onError: () => {
-        expoSpeakingRef.current = false;
-        drainExpoQueue();
-      },
+      onDone: onTerminal,
+      onError: onTerminal,
+      onStopped: onTerminal,
     });
   }, []);
 
