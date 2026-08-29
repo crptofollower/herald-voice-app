@@ -25,7 +25,9 @@ import { getActiveTurnId, log as latLog } from '../utils/latencyInstrument';
 import {
   MedicationPresentationHolder,
   answerMedicationOrdinal,
+  isMedicationOrdinalNearMiss,
   parseMedicationOrdinalIndex,
+  MEDICATION_ORDINAL_CONFUSION,
 } from './medicationPresentation';
 
 // D0 commit 2 (S54 addendum): the headless pipeline seam. UI (ChatScreen) calls
@@ -209,8 +211,9 @@ export async function processUtterance(
   //     against the RAM presentation of ordered medication IDs. Not Flow C.
   //     Live presentation + V1 ordinal → index → ID → fresh by-id reread.
   //     Out-of-range retains the presentation so the user can retry.
-  //     Any other next turn clears as unused (same one-following-turn
-  //     discipline as Flow C). Does not consult the LLM or person-subject.
+  //     Bounded near-miss (this speech-act family, exact parse failed) retains
+  //     for ONE repair turn, then clears. Unrelated next turn clears as unused.
+  //     Does not consult the LLM or person-subject.
   if (medicationPresentation?.hasLive()) {
     const livePresentation = medicationPresentation.peek();
     const ordinalIndex = parseMedicationOrdinalIndex(text);
@@ -220,6 +223,15 @@ export async function processUtterance(
         medicationPresentation.renew();
       }
       return { handled: true, source: 'referent_resume', responseText: answered.responseText, commits: [] };
+    }
+    if (livePresentation && isMedicationOrdinalNearMiss(text)) {
+      const responseText = MEDICATION_ORDINAL_CONFUSION;
+      if (livePresentation.repairAvailable) {
+        medicationPresentation.consumeRepair();
+      } else {
+        medicationPresentation.clear();
+      }
+      return { handled: true, source: 'referent_resume', responseText, commits: [] };
     }
     medicationPresentation.clear();
   }

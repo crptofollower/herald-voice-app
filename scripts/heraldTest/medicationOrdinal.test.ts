@@ -16,6 +16,8 @@ import {
   MedicationPresentationHolder,
   MEDICATION_ORDINAL_CONFUSION,
   MEDICATION_ORDINAL_STALE,
+  parseMedicationOrdinalIndex,
+  isMedicationOrdinalNearMiss,
 } from '../../src/routing/medicationPresentation.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
@@ -130,12 +132,13 @@ export async function runMedicationOrdinalTests() {
       'verbatim two-med summary');
     assert('MO4 presentation captures that order', presentation.peek()?.medicationIds,
       v => Array.isArray(v) && v[0] === newer && v[1] === older, 'ids in spoken order');
-    assert('MO5 transient state is IDs only', presentation.peek(),
-      v => v != null && Object.keys(v).sort().join(',') === 'establishedAtTurn,medicationIds'
+    assert('MO5 transient state is IDs plus repair flag only', presentation.peek(),
+      v => v != null && Object.keys(v).sort().join(',') === 'establishedAtTurn,medicationIds,repairAvailable'
+        && v.repairAvailable === true
         && !JSON.stringify(v).includes('Metformin')
         && !JSON.stringify(v).includes('10mg')
         && !JSON.stringify(v).includes('daily'),
-      'medicationIds + establishedAtTurn');
+      'medicationIds + establishedAtTurn + repairAvailable');
     assert('MO6 person subject cleared on medication presentation', subject.hasLive(), v => v === false, 'no subject');
 
     resetClassify();
@@ -422,6 +425,98 @@ export async function runMedicationOrdinalTests() {
     assert('MO46 case/punctuation variant of first one', t,
       v => v.handled === true && v.responseText === "You're currently on Metformin 500mg, twice a day.",
       'Metformin');
+  }
+
+  // Adjacent "that" determiner — exact V1, not near-miss
+  {
+    const { db, say, presentation, resetClassify, getClassifyCalls } = fresh();
+    seedOrderedPair(db);
+    await say('What medications am I taking?');
+    resetClassify();
+    const t1 = await say('Tell me about that first one.');
+    assert('MO48 that first one is Metformin reread', t1,
+      v => v.handled === true && v.source === 'referent_resume'
+        && v.responseText === "You're currently on Metformin 500mg, twice a day.",
+      'Metformin');
+    assert('MO48b classifier unused for that first one', getClassifyCalls(), v => v === 0, '0');
+    assert('MO48c presentation renewed', presentation.hasLive(), v => v === true, 'live');
+    resetClassify();
+    const t2 = await say('Tell me about that second one.');
+    assert('MO49 that second one is Lisinopril reread', t2,
+      v => v.handled === true && v.responseText === "You're currently on Lisinopril 10mg, daily.",
+      'Lisinopril');
+    assert('MO49b classifier unused for that second one', getClassifyCalls(), v => v === 0, '0');
+    resetClassify();
+    const t3 = await say('What was that first one again?');
+    assert('MO50 that first one again is Metformin', t3,
+      v => v.handled === true && v.responseText === "You're currently on Metformin 500mg, twice a day.",
+      'Metformin');
+    resetClassify();
+    const t4 = await say('What was that second one again?');
+    assert('MO51 that second one again is Lisinopril', t4,
+      v => v.handled === true && v.responseText === "You're currently on Lisinopril 10mg, daily.",
+      'Lisinopril');
+    assert('MO51b presentation still live after that-phrases', presentation.hasLive(), v => v === true, 'live');
+  }
+
+  // Near-miss recovery: extra words fail exact parse, retain one repair turn
+  {
+    const NEAR = 'Can you tell me again about that first one?';
+    assert('MO52a near-miss is not an exact V1 parse', parseMedicationOrdinalIndex(NEAR), v => v === null, 'null');
+    assert('MO52b near-miss detector accepts tell-me-about + first one', isMedicationOrdinalNearMiss(NEAR), v => v === true, 'true');
+    const { db, say, presentation, resetClassify, getClassifyCalls } = fresh();
+    seedOrderedPair(db);
+    await say('What medications am I taking?');
+    resetClassify();
+    const miss = await say(NEAR);
+    assert('MO52c near-miss is honest confusion, not a med pick', miss,
+      v => v.handled === true && v.source === 'referent_resume'
+        && v.responseText === MEDICATION_ORDINAL_CONFUSION
+        && !/Metformin|Lisinopril/i.test(v.responseText),
+      MEDICATION_ORDINAL_CONFUSION);
+    assert('MO52d classifier unused on near-miss', getClassifyCalls(), v => v === 0, '0');
+    assert('MO52e presentation retained after first near-miss', presentation.hasLive(), v => v === true, 'live');
+    assert('MO52f repair consumed', presentation.peek()?.repairAvailable, v => v === false, 'false');
+    resetClassify();
+    const repair = await say('Tell me about the first one.');
+    assert('MO52g exact V1 recovers after near-miss', repair,
+      v => v.handled === true && v.responseText === "You're currently on Metformin 500mg, twice a day.",
+      'Metformin');
+    assert('MO52h successful recover renews repair', presentation.peek()?.repairAvailable, v => v === true, 'true');
+  }
+
+  // Second near-miss closes the repair window
+  {
+    const NEAR = 'Can you tell me again about that first one?';
+    const NEAR2 = 'Could you tell me about that second one please?';
+    const { db, say, presentation } = fresh();
+    seedOrderedPair(db);
+    await say('What medications am I taking?');
+    await say(NEAR);
+    assert('MO53a live after first near-miss', presentation.hasLive(), v => v === true, 'live');
+    const miss2 = await say(NEAR2);
+    assert('MO53b second near-miss still honest, not a med pick', miss2,
+      v => v.handled === true && v.responseText === MEDICATION_ORDINAL_CONFUSION
+        && !/Metformin|Lisinopril/i.test(v.responseText),
+      MEDICATION_ORDINAL_CONFUSION);
+    assert('MO53c presentation cleared after second near-miss', presentation.hasLive(), v => v === false, 'cleared');
+    const late = await say('Tell me about the first one.');
+    assert('MO53d exact ordinal cannot resurrect after repair window closes', late,
+      v => !(v.handled === true && /Metformin/i.test(v.responseText)),
+      'no Metformin');
+  }
+
+  // Bare "first one" without tell-about/what-was is unused, not a near-miss
+  {
+    const { db, say, presentation } = fresh();
+    seedOrderedPair(db);
+    await say('What medications am I taking?');
+    assert('MO54a "the first one" is not a near-miss', isMedicationOrdinalNearMiss('The first one.'), v => v === false, 'false');
+    const t = await say('The first one.');
+    assert('MO54b unused fragment clears presentation', presentation.hasLive(), v => v === false, 'cleared');
+    assert('MO54c did not resolve a medication', t,
+      v => !(v.handled === true && 'responseText' in v && /Metformin/i.test(v.responseText)),
+      'no Metformin');
   }
 
   const total = passed + failures.length;

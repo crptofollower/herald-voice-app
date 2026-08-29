@@ -14,18 +14,20 @@ import {
 export type MedicationPresentation = {
   medicationIds: string[];
   establishedAtTurn: number;
+  /** One near-miss repair remaining. Not medical truth. Not a retry budget system. */
+  repairAvailable: boolean;
 };
 
 export const MEDICATION_ORDINAL_CONFUSION = `I'm not sure which one you mean.`;
 export const MEDICATION_ORDINAL_STALE =
   `I don't see that medication on your list right now.`;
 
-// V1 only: first/second + "one". Optional "the", optional "again" on what-was,
-// optional trailing punctuation. Not third/last/that/it.
+// V1: first/second + "one". Determiner is optional the|that. Optional "again"
+// on what-was. Optional trailing punctuation. Not third/last/this/it/other.
 const TELL_ABOUT_ORDINAL_RE =
-  /^\s*tell\s+me\s+about\s+(?:the\s+)?(first|second)\s+one\s*[?.!]?\s*$/i;
+  /^\s*tell\s+me\s+about\s+(?:(?:the|that)\s+)?(first|second)\s+one\s*[?.!]?\s*$/i;
 const WHAT_WAS_ORDINAL_RE =
-  /^\s*what\s+was\s+(?:the\s+)?(first|second)\s+one(?:\s+again)?\s*[?.!]?\s*$/i;
+  /^\s*what\s+was\s+(?:(?:the|that)\s+)?(first|second)\s+one(?:\s+again)?\s*[?.!]?\s*$/i;
 
 export function parseMedicationOrdinalIndex(text: string): number | null {
   const tell = text.match(TELL_ABOUT_ORDINAL_RE);
@@ -35,6 +37,18 @@ export function parseMedicationOrdinalIndex(text: string): number | null {
   if (word === 'first') return 0;
   if (word === 'second') return 1;
   return null;
+}
+
+// Bounded near-miss of THIS speech-act family only: tell/telling-me-about or
+// what-was, plus first|second + one, but not an exact V1 parse. Not a generic
+// ordinal/anaphora detector.
+export function isMedicationOrdinalNearMiss(text: string): boolean {
+  if (parseMedicationOrdinalIndex(text) !== null) return false;
+  const tellAbout =
+    /\btell(?:ing)?\s+me\b[\s\S]*\babout\b[\s\S]*\b(?:(?:the|that)\s+)?(first|second)\s+one\b/i.test(text);
+  const whatWas =
+    /\bwhat\s+was\b[\s\S]*\b(?:(?:the|that)\s+)?(first|second)\s+one\b/i.test(text);
+  return tellAbout || whatWas;
 }
 
 export function answerMedicationOrdinal(
@@ -75,6 +89,7 @@ export class MedicationPresentationHolder {
     this.presentation = {
       medicationIds: [...medicationIds],
       establishedAtTurn: this.turn,
+      repairAvailable: true,
     };
   }
 
@@ -83,6 +98,15 @@ export class MedicationPresentationHolder {
     this.presentation = {
       medicationIds: this.presentation.medicationIds,
       establishedAtTurn: this.turn,
+      repairAvailable: true,
+    };
+  }
+
+  consumeRepair(): void {
+    if (!this.presentation) return;
+    this.presentation = {
+      ...this.presentation,
+      repairAvailable: false,
     };
   }
 }
