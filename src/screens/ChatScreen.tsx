@@ -94,6 +94,7 @@ import { ConversationSession } from '../routing/conversationSession';
 import { classifyEmergencyCallReply } from '../utils/emergencyCallConfirm';
 import { ConversationalSubjectHolder } from '../routing/conversationalSubject';
 import { MedicationPresentationHolder } from '../routing/medicationPresentation';
+import { OrderedPresentationHolder } from '../routing/orderedPresentation';
 import { processUtterance, applyIntents } from '../routing/processUtterance';
 import { alreadyClassifiedByRouteIntent, mayInvokeBackendStream } from '../utils/llmClassificationOwnership';
 import {
@@ -428,6 +429,7 @@ export default function ChatScreen() {
   const sessionRef = useRef<ConversationSession>(new ConversationSession());
   const subjectRef = useRef<ConversationalSubjectHolder>(new ConversationalSubjectHolder());
   const medicationPresentationRef = useRef<MedicationPresentationHolder>(new MedicationPresentationHolder());
+  const orderedPresentationRef = useRef<OrderedPresentationHolder>(new OrderedPresentationHolder());
 
   // Step 5a: bounded HOT narrative ring — RAM-only, peek semantics, written ONLY
   // from the three authorized Step 4 sites (ephemeral success ×2, chit_chat read).
@@ -1117,6 +1119,7 @@ export default function ChatScreen() {
       if (sessionRef.current.hasPending()) sessionRef.current.clearPending();
       subjectRef.current.clear();
       medicationPresentationRef.current.clear();
+      orderedPresentationRef.current.clear();
       hotRingRef.current.clear();
       await dispatchEmergency(text);
       setInputText('');
@@ -1151,6 +1154,7 @@ export default function ChatScreen() {
     if (pendingContactCollectRef.current) {
       subjectRef.current.clear();
       medicationPresentationRef.current.clear();
+      orderedPresentationRef.current.clear();
       const pending = pendingContactCollectRef.current;
       const phoneMatch = text.match(/([\d\s\-\(\)\+\.]{7,})/);
       const isLikelyAddress = text.length > 8 && /\d/.test(text) && /\b(st|ave|blvd|rd|dr|ln|way|ct|pl|circle|drive|street|road|court|lane|avenue)\b/i.test(text);
@@ -1357,7 +1361,7 @@ export default function ChatScreen() {
         lists: getKnownListNames(),
       },
       resolveContact: resolveContactPhoneRef.current ?? undefined,
-    }, subjectRef.current, medicationPresentationRef.current);
+    }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current);
     if (outcome.handled && outcome.source === 'emergency') {
       hotRingRef.current.clear();
       await dispatchEmergency(text);
@@ -2872,6 +2876,9 @@ export default function ChatScreen() {
     session: sessionRef.current,
     platformOS: Platform.OS,
     openURL: (url) => Linking.openURL(url),
+    orderedPresentation: orderedPresentationRef.current,
+    medicationPresentation: medicationPresentationRef.current,
+    conversationalSubject: subjectRef.current,
   }), [addMessage, speak, llmStatus, getCtx]);
 
   // ── Render ────────────────────────────────────────────────────────────────

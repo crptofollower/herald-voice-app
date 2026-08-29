@@ -13,9 +13,16 @@ import type { LlamaContext } from 'llama.rn';
 import type { Message } from '../../api/herald';
 import type { TierDecision } from '../../routing/tierRouter';
 import type { ConversationSession } from '../../routing/conversationSession';
+import type { ConversationalSubjectHolder } from '../../routing/conversationalSubject';
+import type { MedicationPresentationHolder } from '../../routing/medicationPresentation';
+import type { OrderedPresentationHolder } from '../../routing/orderedPresentation';
 import * as IntentLauncher from 'expo-intent-launcher';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getDB } from '../../db/schema';
+import {
+  composeOpenListSpeech,
+  getPresentedOpenListItems,
+} from '../../db/listRead';
 import { isPersonalDestination, isRelationshipTerm, RELATIONSHIP_WORDS, resolvePersonIdentity, contactHasCapability, resolvePersonCapability } from '../../db/contactsDB';
 import { normalizePersonTarget, liftRelationshipName } from '../../utils/personReference';
 import { answerHouseholdRead } from '../../utils/householdRead';
@@ -82,6 +89,9 @@ export interface DispatchDeps extends DispatchPendingRefs {
   handleLaunchActionRef: MutableRefObject<((appName: string) => Promise<void>) | null>;
   platformOS: string;
   openURL: (url: string) => Promise<void>;
+  orderedPresentation?: OrderedPresentationHolder | null;
+  medicationPresentation?: MedicationPresentationHolder | null;
+  conversationalSubject?: ConversationalSubjectHolder | null;
 }
 
 /** Shared launch ACK. True → success copy. False/throw → honest fail. Never "Opening" on fail. */
@@ -141,6 +151,7 @@ export async function dispatchAction(
     resolveContactPhone, handleCalendarAction, handleMapsAction, launchAndroidTimer,
     handleLaunchActionRef, pendingContactCollectRef,
     platformOS, openURL, session,
+    orderedPresentation, medicationPresentation, conversationalSubject,
   } = deps;
 
   // === arms copied from ChatScreen.tsx below ===
@@ -815,28 +826,18 @@ export async function dispatchAction(
         if (actionIntent.type === 'list_read') {
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
           try {
-            const { getDB } = await import('../../db/schema');
-            const db = getDB();
             const listName = actionIntent.listName;
-            const items = db.getAllSync<{ body: string }>(
-              `SELECT li.body FROM list_items li
-               JOIN lists l ON l.id = li.list_id
-               WHERE l.name = ? AND li.checked = 0
-               ORDER BY li.created_at ASC;`,
-              [listName]
-            );
-            // Dedup — case-insensitive, keep first occurrence
-            const seen = new Set<string>();
-            const unique = items.filter(i => {
-              const key = i.body.trim().toLowerCase();
-              if (seen.has(key)) return false;
-              seen.add(key);
-              return true;
-            });
-            const deterministicReply = unique.length === 0
-              ? `Your ${listName} list is empty.`
-              : `On your ${listName} list: ${unique.map(i => i.body).join(', ')}.`;
-            let reply = deterministicReply;
+            const items = getPresentedOpenListItems(listName);
+            const reply = composeOpenListSpeech(listName, items);
+            if (listName === 'grocery') {
+              if (items.length === 0) {
+                orderedPresentation?.clear();
+              } else {
+                conversationalSubject?.clear();
+                medicationPresentation?.clear();
+                orderedPresentation?.establish('grocery', items.map((i) => i.id));
+              }
+            }
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
           } catch {

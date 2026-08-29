@@ -29,6 +29,15 @@ import {
   parseMedicationOrdinalIndex,
   MEDICATION_ORDINAL_CONFUSION,
 } from './medicationPresentation';
+import {
+  OrderedPresentationHolder,
+  parseGroceryReadPosition,
+  isGroceryPositionNearMiss,
+  resolvePositions,
+  ORDERED_PRESENTATION_CONFUSION,
+  GROCERY_POSITION_STALE,
+} from './orderedPresentation';
+import { getOpenListItemById, formatGroceryItemReadback } from '../db/listRead';
 
 // D0 commit 2 (S54 addendum): the headless pipeline seam. UI (ChatScreen) calls
 // this and renders the result; P-tests call it directly. No React, no UI, no TTS.
@@ -92,6 +101,7 @@ function maybeEstablishMedicationPresentation(
   routeDecision: RouteDecision,
   holder: MedicationPresentationHolder,
   subject: ConversationalSubjectHolder | null,
+  orderedPresentation?: OrderedPresentationHolder | null,
 ): void {
   if (routeDecision.kind !== 'device_read' || routeDecision.reason !== 'medical:summary') {
     return;
@@ -103,6 +113,7 @@ function maybeEstablishMedicationPresentation(
   }
   // A live person-subject must not compete with medication ordinals.
   subject?.clear();
+  orderedPresentation?.clear();
   holder.establish(ids);
 }
 
@@ -165,11 +176,13 @@ export async function processUtterance(
   deps: RouteDeps,
   subject?: ConversationalSubjectHolder | null,
   medicationPresentation?: MedicationPresentationHolder | null,
+  orderedPresentation?: OrderedPresentationHolder | null,
 ): Promise<UtteranceOutcome> {
   const turnId = getActiveTurnId();
   latLog('processUtterance START', { turnId });
   subject?.beginUserTurn();
   medicationPresentation?.beginUserTurn();
+  orderedPresentation?.beginUserTurn();
   // 0) Law 0 — emergency preempts everything (Spine §3a). Checked before pending
   //    resolution, before routing, before any classifier. A held pending is
   //    RELEASED, never resumed — no re-ask, no ladder, no ack generated here
@@ -179,6 +192,7 @@ export async function processUtterance(
     if (session.hasPending()) session.clearPending();
     subject?.clear();
     medicationPresentation?.clear();
+    orderedPresentation?.clear();
     return { handled: true, source: 'emergency' };
   }
   // 1) Pending continuation — the confirm-primitive (Law 2: a pending state
@@ -204,6 +218,7 @@ export async function processUtterance(
   if (session.hasPending()) {
     subject?.clear();
     medicationPresentation?.clear();
+    orderedPresentation?.clear();
     const result = await session.resolvePending(text);
     return { handled: true, source: 'pending_resume', responseText: composeAck([result]), commits: [result] };
   }
@@ -234,6 +249,51 @@ export async function processUtterance(
       return { handled: true, source: 'referent_resume', responseText, commits: [] };
     }
     medicationPresentation.clear();
+  }
+  // 1a2) Grocery ordered-presentation read-back — position → frozen ID →
+  //      fresh by-id reread. Not mutation. Not medication. Not Flow C.
+  if (orderedPresentation?.hasLive()) {
+    const liveOrdered = orderedPresentation.peek();
+    if (liveOrdered?.owner === 'grocery') {
+      const position = parseGroceryReadPosition(text);
+      if (position != null) {
+        const resolved = resolvePositions(liveOrdered.presentedIds, [position]);
+        if (!resolved.ok) {
+          return {
+            handled: true,
+            source: 'referent_resume',
+            responseText: ORDERED_PRESENTATION_CONFUSION,
+            commits: [],
+          };
+        }
+        const row = getOpenListItemById(resolved.ids[0], 'grocery');
+        if (!row) {
+          return {
+            handled: true,
+            source: 'referent_resume',
+            responseText: GROCERY_POSITION_STALE,
+            commits: [],
+          };
+        }
+        orderedPresentation.renew();
+        return {
+          handled: true,
+          source: 'referent_resume',
+          responseText: formatGroceryItemReadback(row.body),
+          commits: [],
+        };
+      }
+      if (isGroceryPositionNearMiss(text)) {
+        const responseText = ORDERED_PRESENTATION_CONFUSION;
+        if (liveOrdered.repairAvailable) {
+          orderedPresentation.consumeRepair();
+        } else {
+          orderedPresentation.clear();
+        }
+        return { handled: true, source: 'referent_resume', responseText, commits: [] };
+      }
+    }
+    orderedPresentation.clear();
   }
   // 1b) Flow C — closed pronoun-phone speech act against the one-turn
   //     conversational subject. Eligible referent consumes and clears.
@@ -301,6 +361,7 @@ export async function processUtterance(
   if (routeDecision.kind === 'phone_repair_needed') {
     subject?.clear();
     medicationPresentation?.clear();
+    orderedPresentation?.clear();
     session.setPending({
       pendingKey: routeDecision.pending.pendingKey,
       resume: routeDecision.pending.resume,
@@ -315,6 +376,7 @@ export async function processUtterance(
   if (routeDecision.kind === 'medical_read_pending') {
     subject?.clear();
     medicationPresentation?.clear();
+    orderedPresentation?.clear();
     session.setPending({
       pendingKey: routeDecision.pending.pendingKey,
       resume: routeDecision.pending.resume,
@@ -346,8 +408,14 @@ export async function processUtterance(
     : false;
   if (personEstablished) {
     medicationPresentation?.clear();
+    orderedPresentation?.clear();
   } else if (medicationPresentation) {
-    maybeEstablishMedicationPresentation(routeDecision, medicationPresentation, subject ?? null);
+    maybeEstablishMedicationPresentation(
+      routeDecision,
+      medicationPresentation,
+      subject ?? null,
+      orderedPresentation,
+    );
   }
   return { handled: false, routeDecision };
 }
