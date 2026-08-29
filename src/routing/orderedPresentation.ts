@@ -66,6 +66,53 @@ const TENS_CARDINAL: Record<string, number> = {
   ninety: 90,
 };
 
+const ONES_CARDINAL: Record<string, number> = {
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+};
+
+const TEENS_CARDINAL: Record<string, number> = {
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+  thirteen: 13,
+  fourteen: 14,
+  fifteen: 15,
+  sixteen: 16,
+  seventeen: 17,
+  eighteen: 18,
+  nineteen: 19,
+};
+
+/** Spoken cardinal → 1-based position. Not ordinals (`third`). Not `last`. */
+export function cardinalWordToNumber(raw: string): number | null {
+  const phrase = raw.trim().toLowerCase().replace(/-/g, ' ').replace(/\s+/g, ' ');
+  if (!phrase || phrase === 'last') return null;
+  if (phrase === 'hundred' || phrase === 'one hundred') return 100;
+
+  const simple = ONES_CARDINAL[phrase] ?? TEENS_CARDINAL[phrase] ?? TENS_CARDINAL[phrase];
+  if (simple != null) return simple;
+
+  const parts = phrase.split(' ');
+  if (parts.length === 2) {
+    const tens = TENS_CARDINAL[parts[0]];
+    const ones = ONES_CARDINAL[parts[1]];
+    if (tens != null && ones != null) return tens + ones;
+  }
+  return null;
+}
+
+function parseSlotValue(raw: string): number | null {
+  return positiveInt(raw.trim()) ?? cardinalWordToNumber(raw);
+}
+
 /** Word ordinal → 1-based position. `last` is never a position. */
 export function ordinalWordToNumber(raw: string): number | null {
   const phrase = raw.trim().toLowerCase().replace(/-/g, ' ').replace(/\s+/g, ' ');
@@ -115,82 +162,92 @@ function positiveInt(raw: string): number | null {
 }
 
 /**
- * Full-utterance cued list-position parse. Requires a slot cue
- * (one / item / number / #). Does not steal bare dates, doses, or times.
+ * Bounded list-position operators inside ordinary speech.
+ * Cue required: the/that + ordinal + one, number/item + slot, or #digits.
+ * Does not steal bare dates, doses, times, or "the red one".
+ */
+function collectCuedPositionHits(text: string): number[] {
+  const hits: number[] = [];
+
+  for (const m of text.matchAll(/#\s*(\d+)/g)) {
+    const n = positiveInt(m[1]);
+    if (n != null) hits.push(n);
+  }
+
+  for (const m of text.matchAll(/\b(?:number|item)\s+(\d+|[a-z]+(?:[-\s][a-z]+)?)\b/gi)) {
+    const n = parseSlotValue(m[1]);
+    if (n != null) hits.push(n);
+  }
+
+  for (const m of text.matchAll(/\b(?:the|that)\s+(.+?)\s+one\b/gi)) {
+    const n = parseOrdinalOrNth(m[1]);
+    if (n != null) hits.push(n);
+  }
+
+  return hits;
+}
+
+function uniquePositions(hits: number[]): number[] {
+  const out: number[] = [];
+  const seen = new Set<number>();
+  for (const n of hits) {
+    if (seen.has(n)) continue;
+    seen.add(n);
+    out.push(n);
+  }
+  return out;
+}
+
+function parseWholeUtteranceNumberList(t: string): number[] | null {
+  const numbersList = t.match(
+    /^\s*numbers?\s+(\d+(?:\s*,\s*\d+)*(?:\s*,?\s*and\s+\d+)?)\s*[?.!]?\s*$/i,
+  );
+  if (!numbersList) return null;
+  const out: number[] = [];
+  for (const piece of numbersList[1].match(/\d+/g) ?? []) {
+    const n = positiveInt(piece);
+    if (n == null) return null;
+    out.push(n);
+  }
+  return out.length > 0 ? out : null;
+}
+
+/**
+ * Cued list-position parse. When a single operator is present anywhere in
+ * the utterance, returns that position. Whole-utterance `numbers 2, 4, and 5`
+ * remains the reserved multi-position form.
  */
 export function parseCuedListPositions(text: string): number[] | null {
   if (POSITION_MUTATION_RE.test(text)) return null;
   const t = text.trim();
   if (!t) return null;
 
-  const hash = t.match(/^\s*#\s*(\d+)\s*[?.!]?\s*$/i);
-  if (hash) {
-    const n = positiveInt(hash[1]);
-    return n == null ? null : [n];
-  }
+  const unique = uniquePositions(collectCuedPositionHits(t));
+  if (unique.length === 1) return unique;
+  if (unique.length > 1) return unique;
 
-  const numbered = t.match(
-    /^\s*(?:(?:the|that)\s+)?(?:number|item)\s+(\d+)\s*[?.!]?\s*$/i,
-  );
-  if (numbered) {
-    const n = positiveInt(numbered[1]);
-    return n == null ? null : [n];
-  }
-
-  const numbersList = t.match(
-    /^\s*numbers?\s+(\d+(?:\s*,\s*\d+)*(?:\s*,?\s*and\s+\d+)?)\s*[?.!]?\s*$/i,
-  );
-  if (numbersList) {
-    const out: number[] = [];
-    for (const piece of numbersList[1].match(/\d+/g) ?? []) {
-      const n = positiveInt(piece);
-      if (n == null) return null;
-      out.push(n);
-    }
-    return out.length > 0 ? out : null;
-  }
-
-  const stripped = t.replace(/^\s*(?:tell\s+me(?:\s+about)?\s+)/i, '');
-  const oneCue = stripped.match(
-    /^\s*(?:(?:the|that)\s+)?(.+?)\s+one\s*[?.!]?\s*$/i,
-  );
-  if (oneCue) {
-    const n = parseOrdinalOrNth(oneCue[1]);
-    return n == null ? null : [n];
-  }
-
-  return null;
+  return parseWholeUtteranceNumberList(t);
 }
 
-function extractLooseCuedPosition(text: string): number | null {
-  const hash = text.match(/#\s*(\d+)/);
-  if (hash) return positiveInt(hash[1]);
-
-  const numbered = text.match(/\b(?:number|item)\s+(\d+)\b/i);
-  if (numbered) return positiveInt(numbered[1]);
-
-  const oneCue = text.match(/\b(?:the|that)\s+(.+?)\s+one\b/i);
-  if (oneCue) return parseOrdinalOrNth(oneCue[1]);
-
-  return null;
-}
-
-/** Exact grocery read/select continuation. Single position only. */
+/** Exact grocery read/select continuation. Single unambiguous position only. */
 export function parseGroceryReadPosition(text: string): number | null {
-  const positions = parseCuedListPositions(text);
-  if (positions == null || positions.length !== 1) return null;
-  return positions[0];
+  if (POSITION_MUTATION_RE.test(text)) return null;
+  const t = text.trim();
+  if (!t) return null;
+  const unique = uniquePositions(collectCuedPositionHits(t));
+  if (unique.length !== 1) return null;
+  return unique[0];
 }
 
 /**
- * Position-shaped but not an exact grocery read-back.
- * Requires a real slot cue and a parseable ordinal/number — not "the red one"
- * and not bare "the 23rd".
+ * Position-shaped but not a single safe grocery read-back.
+ * Competing operators stay here. Mutation is never a near-miss.
  */
 export function isGroceryPositionNearMiss(text: string): boolean {
   if (parseGroceryReadPosition(text) != null) return false;
   if (POSITION_MUTATION_RE.test(text)) return false;
-  return extractLooseCuedPosition(text) != null;
+  const unique = uniquePositions(collectCuedPositionHits(text));
+  return unique.length > 1;
 }
 
 export type ResolvePositionsResult =

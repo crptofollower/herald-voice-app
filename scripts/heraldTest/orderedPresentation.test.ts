@@ -15,6 +15,7 @@ import { MedicationPresentationHolder } from '../../src/routing/medicationPresen
 import {
   OrderedPresentationHolder,
   ordinalWordToNumber,
+  cardinalWordToNumber,
   parseNumericOrdinal,
   parseCuedListPositions,
   parseGroceryReadPosition,
@@ -186,6 +187,26 @@ export async function runOrderedPresentationTests() {
   assert('OP27 tell me about the third one', parseGroceryReadPosition('tell me about the third one'), v => v === 3, '3');
   assert('OP28 numbers 2, 4, and 5', parseCuedListPositions('numbers 2, 4, and 5'),
     v => Array.isArray(v) && v.join(',') === '2,4,5', '[2,4,5]');
+  assert('OP90 What\'s the third one', parseGroceryReadPosition("What's the third one?"), v => v === 3, '3');
+  assert('OP91 What was the third one', parseGroceryReadPosition('What was the third one?'), v => v === 3, '3');
+  assert('OP92 What about the third one', parseGroceryReadPosition('What about the third one?'), v => v === 3, '3');
+  assert('OP93 What was number two', parseGroceryReadPosition('What was number two?'), v => v === 2, '2');
+  assert('OP94 What about number four', parseGroceryReadPosition('What about number four?'), v => v === 4, '4');
+  assert('OP95 What was item six', parseGroceryReadPosition('What was item six?'), v => v === 6, '6');
+  assert('OP96 number two', parseGroceryReadPosition('number two'), v => v === 2, '2');
+  assert('OP97 number four', parseGroceryReadPosition('number four'), v => v === 4, '4');
+  assert('OP98 item six', parseGroceryReadPosition('item six'), v => v === 6, '6');
+  assert('OP99 Which one was number five', parseGroceryReadPosition('Which one was number five?'), v => v === 5, '5');
+  assert('OP100 wrapped that third one', parseGroceryReadPosition("Let's go with that third one."), v => v === 3, '3');
+  assert('OP101 This one', parseGroceryReadPosition('This one'), v => v === null, 'null');
+  assert('OP102 It', parseGroceryReadPosition('It'), v => v === null, 'null');
+  assert('OP103 grocery list ask', parseGroceryReadPosition("What's on my grocery list?"), v => v === null, 'null');
+  assert('OP104 mutation unclaimed', parseGroceryReadPosition('I got number three you can remove it'), v => v === null, 'null');
+  assert('OP105 competing operators not a single read', parseGroceryReadPosition('the first one and the third one'), v => v === null, 'null');
+  assert('OP106 competing is near-miss', isGroceryPositionNearMiss('the first one and the third one'), v => v === true, 'true');
+  assert('OP107 cardinal two', cardinalWordToNumber('two'), v => v === 2, '2');
+  assert('OP108 cardinal four', cardinalWordToNumber('four'), v => v === 4, '4');
+  assert('OP109 cardinal six', cardinalWordToNumber('six'), v => v === 6, '6');
 
   // Cue fences
   assert('OP29 bare the 23rd', parseCuedListPositions('the 23rd'), v => v === null, 'null');
@@ -338,14 +359,19 @@ export async function runOrderedPresentationTests() {
     const { db, say, ordered, subject, medication } = fresh();
     insertItem(db, 'g1', 'Milk', '2026-01-01T00:00:00.000Z');
     insertItem(db, 'g2', 'Eggs', '2026-01-02T00:00:00.000Z');
+    insertItem(db, 'g3', 'Apples', '2026-01-03T00:00:00.000Z');
     presentGrocery(ordered, subject, medication);
-    const miss1 = await say("Let's go with that third one.");
-    assert('OP70 near-miss confusion', miss1, v => v.responseText === ORDERED_PRESENTATION_CONFUSION, 'confusion');
-    assert('OP71 first near-miss retains', ordered.hasLive() && ordered.peek()?.repairAvailable === false,
+    const go = await say("Let's go with that third one.");
+    assert('OP70 wrapped third one resolves', go, v => v.responseText === "That's Apples.", "That's Apples.");
+    assert('OP71 wrapped resolve renews', ordered.hasLive() && ordered.peek()?.repairAvailable === true,
+      v => v === true, 'live, repair restored');
+    const miss1 = await say('the first one and the third one');
+    assert('OP72 competing operators confusion', miss1, v => v.responseText === ORDERED_PRESENTATION_CONFUSION, 'confusion');
+    assert('OP73 first competing near-miss retains', ordered.hasLive() && ordered.peek()?.repairAvailable === false,
       v => v === true, 'live, repair spent');
-    const miss2 = await say("Let's go with that third one.");
-    assert('OP72 second near-miss', miss2, v => v.responseText === ORDERED_PRESENTATION_CONFUSION, 'confusion');
-    assert('OP73 second near-miss clears', ordered.hasLive(), v => v === false, 'cleared');
+    const miss2 = await say('the first one and the third one');
+    assert('OP73b second competing near-miss', miss2, v => v.responseText === ORDERED_PRESENTATION_CONFUSION, 'confusion');
+    assert('OP73c second competing clears', ordered.hasLive(), v => v === false, 'cleared');
   }
 
   {
@@ -413,9 +439,90 @@ export async function runOrderedPresentationTests() {
 
   {
     assert('OP86 formatGroceryItemReadback', formatGroceryItemReadback('Milk'), v => v === "That's Milk.", "That's Milk.");
-    assert('OP87 near-miss not exact', isGroceryPositionNearMiss("Let's go with that third one."), v => v === true, 'true');
+    assert('OP87 wrapped third is not near-miss', isGroceryPositionNearMiss("Let's go with that third one."), v => v === false, 'false');
     assert('OP88 exact is not near-miss', isGroceryPositionNearMiss('the third one'), v => v === false, 'false');
     assert('OP89 the red one not near-miss', isGroceryPositionNearMiss('the red one'), v => v === false, 'false');
+  }
+
+  {
+    const { db, say, ordered, subject, medication, getClassifyCalls } = fresh();
+    insertItem(db, 'g1', 'milk', '2026-01-01T00:00:00.000Z');
+    insertItem(db, 'g2', 'eggs', '2026-01-02T00:00:00.000Z');
+    insertItem(db, 'g3', 'bananas', '2026-01-03T00:00:00.000Z');
+    insertItem(db, 'g4', 'applesauce', '2026-01-04T00:00:00.000Z');
+    insertItem(db, 'g5', 'chocolate milk', '2026-01-05T00:00:00.000Z');
+    insertItem(db, 'g6', 'avocados', '2026-01-06T00:00:00.000Z');
+    insertItem(db, 'g7', 'dates', '2026-01-07T00:00:00.000Z');
+    insertItem(db, 'g8', 'oranges', '2026-01-08T00:00:00.000Z');
+    presentGrocery(ordered, subject, medication);
+    const t1 = await say("What's the third one?");
+    assert('OP110 device What\'s the third one', t1, v => v.responseText === "That's bananas.", "That's bananas.");
+    const t2 = await say('The third one.');
+    assert('OP111 device The third one', t2, v => v.responseText === "That's bananas.", "That's bananas.");
+    const t3 = await say('What was the third one?');
+    assert('OP112 device What was the third one', t3, v => v.responseText === "That's bananas.", "That's bananas.");
+    const t4 = await say('What was number two?');
+    assert('OP113 device What was number two', t4, v => v.responseText === "That's eggs.", "That's eggs.");
+    const t5 = await say('What about number four?');
+    assert('OP114 device What about number four', t5, v => v.responseText === "That's applesauce.", "That's applesauce.");
+    const t6 = await say('What was item six?');
+    assert('OP115 device What was item six', t6, v => v.responseText === "That's avocados.", "That's avocados.");
+    const t7 = await say('number two');
+    assert('OP116 device number two', t7, v => v.responseText === "That's eggs.", "That's eggs.");
+    const t8 = await say('number four');
+    assert('OP117 device number four', t8, v => v.responseText === "That's applesauce.", "That's applesauce.");
+    const t9 = await say('item six');
+    assert('OP118 device item six', t9, v => v.responseText === "That's avocados.", "That's avocados.");
+    assert('OP119 device no classify', getClassifyCalls(), v => v === 0, '0');
+  }
+
+  {
+    const { db, say, ordered, subject, medication } = fresh();
+    insertItem(db, 'g1', 'milk', '2026-01-01T00:00:00.000Z');
+    insertItem(db, 'g2', 'eggs', '2026-01-02T00:00:00.000Z');
+    insertItem(db, 'g3', 'bananas', '2026-01-03T00:00:00.000Z');
+    presentGrocery(ordered, subject, medication);
+    const listAsk = await say("What's on my grocery list?");
+    assert('OP120 live list ask not a position', listAsk,
+      v => v.handled === false && v.routeDecision?.kind === 'device_action'
+        && v.routeDecision.actionIntent?.type === 'list_read',
+      'list_read');
+    assert('OP121 live list ask unused-clears', ordered.hasLive(), v => v === false, 'cleared');
+  }
+
+  {
+    const { db, say, ordered, subject, medication } = fresh();
+    insertItem(db, 'g1', 'milk', '2026-01-01T00:00:00.000Z');
+    insertItem(db, 'g2', 'eggs', '2026-01-02T00:00:00.000Z');
+    insertItem(db, 'g3', 'bananas', '2026-01-03T00:00:00.000Z');
+    presentGrocery(ordered, subject, medication);
+    const thisOne = await say('This one');
+    assert('OP122 This one not a position', thisOne, v => v.handled === false, 'not referent');
+    assert('OP123 This one unused-clears', ordered.hasLive(), v => v === false, 'cleared');
+  }
+
+  {
+    const { db, say, ordered, subject, medication } = fresh();
+    insertItem(db, 'g1', 'milk', '2026-01-01T00:00:00.000Z');
+    insertItem(db, 'g2', 'eggs', '2026-01-02T00:00:00.000Z');
+    insertItem(db, 'g3', 'bananas', '2026-01-03T00:00:00.000Z');
+    presentGrocery(ordered, subject, medication);
+    const it = await say('It');
+    assert('OP124 It not a position', it, v => v.handled === false, 'not referent');
+  }
+
+  {
+    const { db, say, ordered, subject, medication } = fresh();
+    insertItem(db, 'g1', 'milk', '2026-01-01T00:00:00.000Z');
+    insertItem(db, 'g2', 'eggs', '2026-01-02T00:00:00.000Z');
+    insertItem(db, 'g3', 'bananas', '2026-01-03T00:00:00.000Z');
+    presentGrocery(ordered, subject, medication);
+    const mut = await say('I got number three you can remove it');
+    assert('OP125 mutation not OPR read', mut,
+      v => v.handled === false && v.routeDecision?.kind === 'device_action'
+        && v.routeDecision.actionIntent?.type === 'list_remove',
+      'list_remove');
+    assert('OP126 mutation unused-clears', ordered.hasLive(), v => v === false, 'cleared');
   }
 
   const total = passed + failures.length;
