@@ -574,11 +574,34 @@ export function writeMedication(
   return id;
 }
 
+// Shared by list + by-id readers so "active" cannot drift between them.
+const ACTIVE_MEDICATION_PREDICATE = 'is_active = 1 AND removed_at IS NULL';
+
+export function formatMedicationSpokenPhrase(m: Medication): string {
+  let s = m.name;
+  if (m.dosage) s += ` ${m.dosage}`;
+  if (m.frequency) s += `, ${m.frequency}`;
+  return s;
+}
+
+export function formatCurrentMedicationReadback(m: Medication): string {
+  return `You're currently on ${formatMedicationSpokenPhrase(m)}.`;
+}
+
 export function getActiveMedications(): Medication[] {
   const db = getDB();
   return db.getAllSync<Medication>(
-    "SELECT * FROM medications WHERE is_active = 1 AND removed_at IS NULL ORDER BY created_at DESC;"
+    `SELECT * FROM medications WHERE ${ACTIVE_MEDICATION_PREDICATE} ORDER BY created_at DESC;`
   );
+}
+
+export function getActiveMedicationById(id: string): Medication | null {
+  if (!id) return null;
+  const db = getDB();
+  return db.getFirstSync<Medication>(
+    `SELECT * FROM medications WHERE id = ? AND ${ACTIVE_MEDICATION_PREDICATE} LIMIT 1;`,
+    [id],
+  ) ?? null;
 }
 
 export function getAllMedications(): Medication[] {
@@ -767,23 +790,17 @@ export function writeMedicalFact(
 // Returns a spoken summary of the user's medical context.
 // Called by tier1Responses.ts for Tier 1 medical queries.
 
-export function getMedicalSummary(): string {
+export function composeMedicalSummary(): { response: string; medicationIds: string[] } {
   const empty = "I don't have any medical information stored yet.";
   try {
     const meds = getActiveMedications();
     const contacts = getMedicalContacts();
+    const medicationIds = meds.map((m) => m.id);
 
     const parts: string[] = [];
 
     if (meds.length > 0) {
-      const medList = meds
-        .map((m) => {
-          let s = m.name;
-          if (m.dosage) s += ` ${m.dosage}`;
-          if (m.frequency) s += `, ${m.frequency}`;
-          return s;
-        })
-        .join("; ");
+      const medList = meds.map((m) => formatMedicationSpokenPhrase(m)).join("; ");
       parts.push(
         meds.length === 1
           ? `You're currently on ${medList}.`
@@ -796,9 +813,19 @@ export function getMedicalSummary(): string {
       parts.push(`Your primary doctor is ${primary.name}${primary.specialty ? `, ${primary.specialty}` : ""}.`);
     }
 
-    return parts.length > 0 ? parts.join(" ") : empty;
+    return {
+      response: parts.length > 0 ? parts.join(" ") : empty,
+      medicationIds,
+    };
   } catch (err) {
     console.error("[Herald] getMedicalSummary read failed:", err);
-    return "I'm having trouble pulling up your medical information right now — let's try that again in a moment.";
+    return {
+      response: "I'm having trouble pulling up your medical information right now — let's try that again in a moment.",
+      medicationIds: [],
+    };
   }
+}
+
+export function getMedicalSummary(): string {
+  return composeMedicalSummary().response;
 }

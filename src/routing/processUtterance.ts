@@ -22,6 +22,11 @@ import { resolveHouseholdProvider } from '../utils/householdRead';
 import { getLastVisit } from '../db/medicalDB';
 import { extractDoctorName } from '../utils/detectMedicalEvent';
 import { getActiveTurnId, log as latLog } from '../utils/latencyInstrument';
+import {
+  MedicationPresentationHolder,
+  answerMedicationOrdinal,
+  parseMedicationOrdinalIndex,
+} from './medicationPresentation';
 
 // D0 commit 2 (S54 addendum): the headless pipeline seam. UI (ChatScreen) calls
 // this and renders the result; P-tests call it directly. No React, no UI, no TTS.
@@ -43,13 +48,16 @@ function maybeEstablishConversationalSubject(
   text: string,
   routeDecision: RouteDecision,
   holder: ConversationalSubjectHolder,
-): void {
+): boolean {
   if (routeDecision.kind === 'device_read' && routeDecision.reason === 'family:read') {
     const intent = detectFamilyRead(text);
-    if (!intent) return;
+    if (!intent) return false;
     const match = resolveFamilyRead(intent);
-    if (match) holder.establishFamily(match);
-    return;
+    if (match) {
+      holder.establishFamily(match);
+      return true;
+    }
+    return false;
   }
   if (
     routeDecision.kind === 'device_action' &&
@@ -57,8 +65,11 @@ function maybeEstablishConversationalSubject(
     routeDecision.actionIntent.intent.type === 'service_provider'
   ) {
     const match = resolveHouseholdProvider(routeDecision.actionIntent.intent);
-    if (match) holder.establishHousehold(match);
-    return;
+    if (match) {
+      holder.establishHousehold(match);
+      return true;
+    }
+    return false;
   }
   // Continuity Step 3: a completed deterministic most-recent-visit read that
   // identified exactly one doctor establishes that doctor as the subject.
@@ -67,8 +78,30 @@ function maybeEstablishConversationalSubject(
   if (routeDecision.kind === 'device_read' && routeDecision.reason === 'medical:visit_history_read') {
     const visit = getLastVisit(extractDoctorName(text));
     const name = visit?.doctorName?.trim();
-    if (name) holder.establishMedical({ entityId: name, displayName: name });
+    if (name) {
+      holder.establishMedical({ entityId: name, displayName: name });
+      return true;
+    }
   }
+  return false;
+}
+
+function maybeEstablishMedicationPresentation(
+  routeDecision: RouteDecision,
+  holder: MedicationPresentationHolder,
+  subject: ConversationalSubjectHolder | null,
+): void {
+  if (routeDecision.kind !== 'device_read' || routeDecision.reason !== 'medical:summary') {
+    return;
+  }
+  const ids = routeDecision.presentedMedicationIds ?? [];
+  if (ids.length === 0) {
+    holder.clear();
+    return;
+  }
+  // A live person-subject must not compete with medication ordinals.
+  subject?.clear();
+  holder.establish(ids);
 }
 
 /** The single commit loop: run intents through domain writers, arm the session
@@ -129,10 +162,12 @@ export async function processUtterance(
   session: ConversationSession,
   deps: RouteDeps,
   subject?: ConversationalSubjectHolder | null,
+  medicationPresentation?: MedicationPresentationHolder | null,
 ): Promise<UtteranceOutcome> {
   const turnId = getActiveTurnId();
   latLog('processUtterance START', { turnId });
   subject?.beginUserTurn();
+  medicationPresentation?.beginUserTurn();
   // 0) Law 0 — emergency preempts everything (Spine §3a). Checked before pending
   //    resolution, before routing, before any classifier. A held pending is
   //    RELEASED, never resumed — no re-ask, no ladder, no ack generated here
@@ -141,6 +176,7 @@ export async function processUtterance(
   if (detectEmergency(text)) {
     if (session.hasPending()) session.clearPending();
     subject?.clear();
+    medicationPresentation?.clear();
     return { handled: true, source: 'emergency' };
   }
   // 1) Pending continuation — the confirm-primitive (Law 2: a pending state
@@ -165,8 +201,27 @@ export async function processUtterance(
   }
   if (session.hasPending()) {
     subject?.clear();
+    medicationPresentation?.clear();
     const result = await session.resolvePending(text);
     return { handled: true, source: 'pending_resume', responseText: composeAck([result]), commits: [result] };
+  }
+  // 1a) Medication ordinal continuation — closed first/second-one speech act
+  //     against the RAM presentation of ordered medication IDs. Not Flow C.
+  //     Live presentation + V1 ordinal → index → ID → fresh by-id reread.
+  //     Out-of-range retains the presentation so the user can retry.
+  //     Any other next turn clears as unused (same one-following-turn
+  //     discipline as Flow C). Does not consult the LLM or person-subject.
+  if (medicationPresentation?.hasLive()) {
+    const livePresentation = medicationPresentation.peek();
+    const ordinalIndex = parseMedicationOrdinalIndex(text);
+    if (livePresentation && ordinalIndex !== null) {
+      const answered = answerMedicationOrdinal(livePresentation, ordinalIndex);
+      if (answered.kind !== 'oor') {
+        medicationPresentation.renew();
+      }
+      return { handled: true, source: 'referent_resume', responseText: answered.responseText, commits: [] };
+    }
+    medicationPresentation.clear();
   }
   // 1b) Flow C — closed pronoun-phone speech act against the one-turn
   //     conversational subject. Eligible referent consumes and clears.
@@ -233,6 +288,7 @@ export async function processUtterance(
   // DOMAIN_WRITER-originated one.
   if (routeDecision.kind === 'phone_repair_needed') {
     subject?.clear();
+    medicationPresentation?.clear();
     session.setPending({
       pendingKey: routeDecision.pending.pendingKey,
       resume: routeDecision.pending.resume,
@@ -246,6 +302,7 @@ export async function processUtterance(
   // is the first). Not factored out yet — rule of three not met.
   if (routeDecision.kind === 'medical_read_pending') {
     subject?.clear();
+    medicationPresentation?.clear();
     session.setPending({
       pendingKey: routeDecision.pending.pendingKey,
       resume: routeDecision.pending.resume,
@@ -269,6 +326,16 @@ export async function processUtterance(
   // Flow C establishment — single owner. Immediately after routeIntent,
   // before returning the route decision to ChatScreen. ChatScreen must
   // not add family/household establishment fallbacks.
-  if (subject) maybeEstablishConversationalSubject(text, routeDecision, subject);
+  // Person subject and medication presentation are mutually exclusive.
+  // Establishing one clears the other so "the second one" cannot bind a
+  // doctor and "his number" cannot bind a medication ID.
+  const personEstablished = subject
+    ? maybeEstablishConversationalSubject(text, routeDecision, subject)
+    : false;
+  if (personEstablished) {
+    medicationPresentation?.clear();
+  } else if (medicationPresentation) {
+    maybeEstablishMedicationPresentation(routeDecision, medicationPresentation, subject ?? null);
+  }
   return { handled: false, routeDecision };
 }

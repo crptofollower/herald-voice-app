@@ -93,6 +93,7 @@ import { runCommitEffects } from '../utils/commitEffects';
 import { ConversationSession } from '../routing/conversationSession';
 import { classifyEmergencyCallReply } from '../utils/emergencyCallConfirm';
 import { ConversationalSubjectHolder } from '../routing/conversationalSubject';
+import { MedicationPresentationHolder } from '../routing/medicationPresentation';
 import { processUtterance, applyIntents } from '../routing/processUtterance';
 import { alreadyClassifiedByRouteIntent, mayInvokeBackendStream } from '../utils/llmClassificationOwnership';
 import {
@@ -426,6 +427,7 @@ export default function ChatScreen() {
   const pendingContactCollectRef = useRef<{ action: 'call' | 'navigate' | 'text' | 'confirm_phone' | 'confirm_call'; name: string; body?: string; phone?: string } | null>(null);
   const sessionRef = useRef<ConversationSession>(new ConversationSession());
   const subjectRef = useRef<ConversationalSubjectHolder>(new ConversationalSubjectHolder());
+  const medicationPresentationRef = useRef<MedicationPresentationHolder>(new MedicationPresentationHolder());
 
   // Step 5a: bounded HOT narrative ring — RAM-only, peek semantics, written ONLY
   // from the three authorized Step 4 sites (ephemeral success ×2, chit_chat read).
@@ -1114,6 +1116,7 @@ export default function ChatScreen() {
       pendingContactCollectRef.current = null;
       if (sessionRef.current.hasPending()) sessionRef.current.clearPending();
       subjectRef.current.clear();
+      medicationPresentationRef.current.clear();
       hotRingRef.current.clear();
       await dispatchEmergency(text);
       setInputText('');
@@ -1147,6 +1150,7 @@ export default function ChatScreen() {
     releaseOverlappingContactCollect(pendingContactCollectRef, sessionRef.current);
     if (pendingContactCollectRef.current) {
       subjectRef.current.clear();
+      medicationPresentationRef.current.clear();
       const pending = pendingContactCollectRef.current;
       const phoneMatch = text.match(/([\d\s\-\(\)\+\.]{7,})/);
       const isLikelyAddress = text.length > 8 && /\d/.test(text) && /\b(st|ave|blvd|rd|dr|ln|way|ct|pl|circle|drive|street|road|court|lane|avenue)\b/i.test(text);
@@ -1353,7 +1357,7 @@ export default function ChatScreen() {
         lists: getKnownListNames(),
       },
       resolveContact: resolveContactPhoneRef.current ?? undefined,
-    }, subjectRef.current);
+    }, subjectRef.current, medicationPresentationRef.current);
     if (outcome.handled && outcome.source === 'emergency') {
       hotRingRef.current.clear();
       await dispatchEmergency(text);

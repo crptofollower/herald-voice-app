@@ -28,7 +28,7 @@ import type { ReadIntentMeta } from './readIntent';
 type ActionIntent = NonNullable<TierDecision['actionIntent']>;
 
 export type RouteDecision =
-  | { kind: 'device_read'; tier: 1; response: string; isMedical?: boolean; reason: string }
+  | { kind: 'device_read'; tier: 1; response: string; isMedical?: boolean; reason: string; presentedMedicationIds?: string[] }
   | { kind: 'device_action'; tier: 1; actionIntent: ActionIntent; reason: string }
   | { kind: 'capture'; intents: IntentRecord[]; source: 'deterministic' | 'llm'; reason: string }
   | { kind: 'phone_repair_needed'; pending: Extract<CommitResult, { status: 'pending' }>; reason: string }
@@ -1922,6 +1922,7 @@ export async function routeIntent(
       response: decision.tier1Response,
       isMedical: decision.isMedical,
       reason: decision.reason,
+      presentedMedicationIds: decision.presentedMedicationIds,
     };
   }
 

@@ -9,7 +9,7 @@ import { calendarWriteIsRecent } from "../db/calendarState";
 import { getFactsSummary } from "../db/factDB";
 import { normalizeInput } from "../utils/normalizeInput";
 import { getProfileSummary, getProfileField } from "../db/profileDB";
-import { getMedicalSummary, getMedicalRecords, getDiagnosisSummary, getDoctorsSummary } from "../db/medicalDB";
+import { getMedicalSummary, composeMedicalSummary, getMedicalRecords, getDiagnosisSummary, getDoctorsSummary } from "../db/medicalDB";
 import { getRecentMentions, formatRecentMentions } from "../db/recallDB";
 import { detectMedicalEvent, extractDoctorName } from "../utils/detectMedicalEvent";
 import type { MedicalEvent } from "../utils/detectMedicalEvent";
@@ -67,6 +67,8 @@ export interface TierDecision {
     | { type: 'profile_update'; field: string; value: string };
   localContext?: LocalContext;
   reason: string;
+  /** Ordered IDs from the same getActiveMedications() array that produced medical:summary speech. IDs only. */
+  presentedMedicationIds?: string[];
 }
 
 export interface LocalContext {
@@ -1829,8 +1831,14 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
 
   // Tier 1: medical
   if (TIER1_SIGNALS.medical.some((p) => p.test(msg))) {
-    const response = getMedicalSummary();
-    return { tier: 1, tier1Response: response, isMedical: true, reason: "medical:summary" };
+    const summary = composeMedicalSummary();
+    return {
+      tier: 1,
+      tier1Response: summary.response,
+      isMedical: true,
+      reason: "medical:summary",
+      presentedMedicationIds: summary.medicationIds,
+    };
   }
 
   // Tier 1: family read — single reader authority (familyRead.ts). All members per
