@@ -62,7 +62,7 @@
 #     Only fires if medication keywords found in memories
 #   - Version bumped to 8.8 throughout
 
-import os, json, re, random, string, time, http.client, ssl, sqlite3, threading, uuid, math, contextlib
+import os, json, re, random, string, time, http.client, ssl, sqlite3, threading, uuid, math, contextlib, secrets, csv, io
 import urllib.request, urllib.error, urllib.parse
 from datetime import datetime, timedelta, date
 from starlette.concurrency import run_in_threadpool
@@ -98,7 +98,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
@@ -122,6 +122,8 @@ EIA_KEY        = os.environ.get("EIA_API_KEY", "")
 OR_URL         = "https://openrouter.ai/api/v1/chat/completions"
 VM_WEBHOOK_URL = "http://143.198.18.66:8082/webhook/sync"
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
+# Founder growth dashboard only. Separate from WEBHOOK_SECRET / access codes.
+GROWTH_DASHBOARD_SECRET = os.environ.get("GROWTH_DASHBOARD_SECRET", "")
 TTS_URL        = "https://api.openai.com/v1/audio/speech"
 EMPIRE_URL     = "https://raw.githubusercontent.com/crptofollower/herald-voice-app/main/empire_status.json"
 PROFILES_FILE  = os.environ.get("PROFILES_FILE", "/data/profiles.json")
@@ -550,6 +552,138 @@ def _resolve_referral_code(conn, code):
         if used >= int(max_uses):
             return None
     return stored_code
+
+
+# Growth dashboard reads waitlist + partner/campaign/link tables only.
+_GROWTH_SIGNUPS_SQL = """
+SELECT
+    w.created_at,
+    w.email,
+    w.source,
+    w.referral_code,
+    p.name AS partner,
+    c.name AS campaign
+FROM waitlist w
+LEFT JOIN referral_links rl
+    ON w.referral_code IS NOT NULL
+    AND lower(rl.code) = lower(w.referral_code)
+LEFT JOIN campaigns c ON c.id = rl.campaign_id
+LEFT JOIN partners p ON p.id = c.partner_id
+ORDER BY w.created_at DESC
+"""
+
+
+def _growth_founder_authorized(request: Request) -> bool:
+    """Header Bearer only. Query-string secrets are ignored. Fail closed if unset."""
+    expected = GROWTH_DASHBOARD_SECRET
+    if not expected:
+        return False
+    auth = request.headers.get("authorization") or ""
+    if not auth.lower().startswith("bearer "):
+        return False
+    offered = auth[7:].strip()
+    if not offered or len(offered) != len(expected):
+        return False
+    return secrets.compare_digest(offered, expected)
+
+
+def _growth_no_store_headers(extra=None):
+    headers = {"Cache-Control": "no-store"}
+    if extra:
+        headers.update(extra)
+    return headers
+
+
+def _growth_unauthorized():
+    return JSONResponse(
+        {"error": "Unauthorized"},
+        status_code=401,
+        headers=_growth_no_store_headers(),
+    )
+
+
+def _growth_json(payload, status_code=200):
+    return JSONResponse(
+        payload,
+        status_code=status_code,
+        headers=_growth_no_store_headers(),
+    )
+
+
+def _growth_signup_rows(conn):
+    c = conn.cursor()
+    c.execute(_GROWTH_SIGNUPS_SQL)
+    rows = []
+    for created_at, email, source, referral_code, partner, campaign in c.fetchall():
+        rows.append({
+            "created_at": created_at,
+            "email": email,
+            "source": source,
+            "referral_code": referral_code,
+            "partner": partner,
+            "campaign": campaign,
+        })
+    return rows
+
+
+def _growth_summary_from_rows(conn, rows):
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM waitlist")
+    total = c.fetchone()[0]
+    c.execute(
+        "SELECT COUNT(*) FROM waitlist WHERE created_at >= datetime('now', '-7 days')"
+    )
+    new_7d = c.fetchone()[0]
+    referred = 0
+    by_code = {}
+    by_partner_campaign = {}
+    for row in rows:
+        code = (row.get("referral_code") or "").strip()
+        if code:
+            referred += 1
+            by_code[code] = by_code.get(code, 0) + 1
+            partner = row.get("partner")
+            campaign = row.get("campaign")
+            if partner or campaign:
+                key = (partner or "", campaign or "")
+                by_partner_campaign[key] = by_partner_campaign.get(key, 0) + 1
+    organic = total - referred
+    by_referral_code = [
+        {"referral_code": code, "count": count}
+        for code, count in sorted(by_code.items(), key=lambda x: (-x[1], x[0]))
+    ]
+    by_partner = [
+        {"partner": k[0] or None, "campaign": k[1] or None, "count": count}
+        for k, count in sorted(
+            by_partner_campaign.items(), key=lambda x: (-x[1], x[0][0], x[0][1])
+        )
+    ]
+    return {
+        "total": total,
+        "new_last_7_days": new_7d,
+        "organic": organic,
+        "referred": referred,
+        "by_referral_code": by_referral_code,
+        "by_partner_campaign": by_partner,
+    }
+
+
+def _growth_csv_bytes(rows):
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "signup_date", "email", "source", "referral_code", "partner", "campaign",
+    ])
+    for row in rows:
+        writer.writerow([
+            row.get("created_at") or "",
+            row.get("email") or "",
+            row.get("source") or "",
+            row.get("referral_code") or "",
+            row.get("partner") or "",
+            row.get("campaign") or "",
+        ])
+    return buf.getvalue().encode("utf-8")
 
 
 # ── PERSISTENCE (SQLite) ──────────────────────────────────────────────────────
@@ -4937,6 +5071,58 @@ def _send_waitlist_confirmation(email: str):
         print(f"[HERALD] Waitlist confirmation sent to {email}")
     except Exception as e:
         print(f"[HERALD] Waitlist email failed (non-fatal): {e}")
+
+
+@app.get("/growth/summary")
+async def growth_summary(request: Request):
+    """Founder-only waitlist/growth totals. Waitlist + partners/campaigns/links only."""
+    if not _growth_founder_authorized(request):
+        return _growth_unauthorized()
+    try:
+        conn = _db_conn()
+        rows = _growth_signup_rows(conn)
+        payload = _growth_summary_from_rows(conn, rows)
+        conn.close()
+        return _growth_json(payload)
+    except Exception as e:
+        print(f"[HERALD] Growth summary error: {e}")
+        return _growth_json({"error": "Server error"}, status_code=500)
+
+
+@app.get("/growth/signups")
+async def growth_signups(request: Request):
+    """Founder-only waitlist rows with optional partner/campaign join."""
+    if not _growth_founder_authorized(request):
+        return _growth_unauthorized()
+    try:
+        conn = _db_conn()
+        rows = _growth_signup_rows(conn)
+        conn.close()
+        return _growth_json({"count": len(rows), "entries": rows})
+    except Exception as e:
+        print(f"[HERALD] Growth signups error: {e}")
+        return _growth_json({"error": "Server error"}, status_code=500)
+
+
+@app.get("/growth/export.csv")
+async def growth_export_csv(request: Request):
+    """Founder-only CSV of the same waitlist/growth columns as /growth/signups."""
+    if not _growth_founder_authorized(request):
+        return _growth_unauthorized()
+    try:
+        conn = _db_conn()
+        rows = _growth_signup_rows(conn)
+        conn.close()
+        return Response(
+            content=_growth_csv_bytes(rows),
+            media_type="text/csv; charset=utf-8",
+            headers=_growth_no_store_headers({
+                "Content-Disposition": "attachment; filename=herald-growth-waitlist.csv",
+            }),
+        )
+    except Exception as e:
+        print(f"[HERALD] Growth export error: {e}")
+        return _growth_json({"error": "Server error"}, status_code=500)
 
 
 @app.get("/waitlist/list")
