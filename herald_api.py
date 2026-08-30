@@ -4779,6 +4779,7 @@ def _send_waitlist_confirmation(email: str):
         payload = {
             "personalizations": [{"to": [{"email": email}]}],
             "from": {"email": "herald@apexempire.ai", "name": "Herald"},
+            "reply_to": {"email": "mike@apexempire.ai"},
             "subject": "Welcome to the Herald early access list.",
             "content": [{"type": "text/plain", "value": (
                 "Thanks for your interest in Herald.\n\n"

@@ -56,11 +56,34 @@ class WaitlistConfirmationCopyTests(unittest.TestCase):
         self.assertEqual(captured["url"], "https://api.sendgrid.com/v3/mail/send")
         payload = captured["payload"]
         self.assertEqual(payload["from"], {"email": "herald@apexempire.ai", "name": "Herald"})
-        self.assertNotIn("reply_to", payload)
+        self.assertEqual(payload["reply_to"], {"email": "mike@apexempire.ai"})
         self.assertEqual(payload["subject"], EXPECTED_SUBJECT)
         self.assertEqual(payload["content"][0]["type"], "text/plain")
         self.assertEqual(payload["content"][0]["value"], EXPECTED_BODY)
         self.assertEqual(payload["personalizations"][0]["to"][0]["email"], "waitlist-copy-test@example.com")
+
+    def test_confirmation_payload_includes_reply_to(self):
+        captured = {}
+
+        def fake_urlopen(req, timeout=5):
+            captured["payload"] = json.loads(req.data.decode("utf-8"))
+            resp = MagicMock()
+            resp.__enter__.return_value = resp
+            resp.__exit__.return_value = False
+            return resp
+
+        with patch.dict(os.environ, {"SENDGRID_API_KEY": "test-sendgrid-key"}):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                self.api._send_waitlist_confirmation("waitlist-copy-test@example.com")
+
+        self.assertEqual(
+            captured["payload"]["reply_to"],
+            {"email": "mike@apexempire.ai"},
+        )
+        self.assertEqual(
+            captured["payload"]["from"],
+            {"email": "herald@apexempire.ai", "name": "Herald"},
+        )
 
     def test_missing_sendgrid_key_does_not_send(self):
         with patch.dict(os.environ, {"SENDGRID_API_KEY": ""}, clear=False):
