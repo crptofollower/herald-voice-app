@@ -124,6 +124,8 @@ VM_WEBHOOK_URL = "http://143.198.18.66:8082/webhook/sync"
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 # Founder growth dashboard only. Separate from WEBHOOK_SECRET / access codes.
 GROWTH_DASHBOARD_SECRET = os.environ.get("GROWTH_DASHBOARD_SECRET", "")
+# Temporary Phase 1C seed only. Separate from growth/webhook/access/invite secrets.
+PHASE1C_SEED_SECRET = os.environ.get("PHASE1C_SEED_SECRET", "")
 TTS_URL        = "https://api.openai.com/v1/audio/speech"
 EMPIRE_URL     = "https://raw.githubusercontent.com/crptofollower/herald-voice-app/main/empire_status.json"
 PROFILES_FILE  = os.environ.get("PROFILES_FILE", "/data/profiles.json")
@@ -684,6 +686,94 @@ def _growth_csv_bytes(rows):
             row.get("campaign") or "",
         ])
     return buf.getvalue().encode("utf-8")
+
+
+_PHASE1C_CODE = "PHASE1C_TEST"
+_PHASE1C_CONFIRM = "create-PHASE1C_TEST"
+_PHASE1C_PARTNER_NAME = "ApexEmpire Internal"
+_PHASE1C_PARTNER_TYPE = "internal"
+_PHASE1C_PARTNER_STATUS = "active"
+_PHASE1C_CAMPAIGN_NAME = "Phase 1C Live Proof"
+_PHASE1C_CAMPAIGN_CHANNEL = "internal-test"
+_PHASE1C_CODE_TYPE = "test"
+_PHASE1C_MAX_USES = 1
+_PHASE1C_ACTIVE = 1
+
+
+def _phase1c_seed_authorized(request: Request) -> bool:
+    expected = PHASE1C_SEED_SECRET
+    if not expected:
+        return False
+    auth = request.headers.get("authorization") or ""
+    if not auth.lower().startswith("bearer "):
+        return False
+    offered = auth[7:].strip()
+    if not offered or len(offered) != len(expected):
+        return False
+    return secrets.compare_digest(offered, expected)
+
+
+def _phase1c_chain_status(conn):
+    c = conn.cursor()
+    c.execute(
+        """
+        SELECT p.id, camp.id, rl.id, rl.code, rl.max_uses, rl.active
+        FROM referral_links rl
+        JOIN campaigns camp ON camp.id = rl.campaign_id
+        JOIN partners p ON p.id = camp.partner_id
+        WHERE rl.code = ?
+        """,
+        (_PHASE1C_CODE,),
+    )
+    row = c.fetchone()
+    if not row:
+        return {
+            "exists": False,
+            "code": _PHASE1C_CODE,
+            "partner_id": None,
+            "campaign_id": None,
+            "referral_link_id": None,
+            "max_uses": None,
+            "active": None,
+        }
+    return {
+        "exists": True,
+        "partner_id": row[0],
+        "campaign_id": row[1],
+        "referral_link_id": row[2],
+        "code": row[3],
+        "max_uses": row[4],
+        "active": row[5],
+    }
+
+
+def _phase1c_seed_chain(conn):
+    status = _phase1c_chain_status(conn)
+    if status["exists"]:
+        status["created"] = False
+        return status
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO partners (name, partner_type, status) VALUES (?, ?, ?)",
+        (_PHASE1C_PARTNER_NAME, _PHASE1C_PARTNER_TYPE, _PHASE1C_PARTNER_STATUS),
+    )
+    partner_id = c.lastrowid
+    c.execute(
+        "INSERT INTO campaigns (partner_id, name, channel) VALUES (?, ?, ?)",
+        (partner_id, _PHASE1C_CAMPAIGN_NAME, _PHASE1C_CAMPAIGN_CHANNEL),
+    )
+    campaign_id = c.lastrowid
+    c.execute(
+        """
+        INSERT INTO referral_links (campaign_id, code, code_type, max_uses, active)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (campaign_id, _PHASE1C_CODE, _PHASE1C_CODE_TYPE, _PHASE1C_MAX_USES, _PHASE1C_ACTIVE),
+    )
+    conn.commit()
+    status = _phase1c_chain_status(conn)
+    status["created"] = True
+    return status
 
 
 # ── PERSISTENCE (SQLite) ──────────────────────────────────────────────────────
@@ -5122,6 +5212,43 @@ async def growth_export_csv(request: Request):
         )
     except Exception as e:
         print(f"[HERALD] Growth export error: {e}")
+        return _growth_json({"error": "Server error"}, status_code=500)
+
+
+@app.get("/growth/phase1c-seed")
+async def growth_phase1c_seed_get(request: Request):
+    """Temporary Phase 1C seed status. PHASE1C_TEST chain only. Remove after seed."""
+    if not _phase1c_seed_authorized(request):
+        return _growth_unauthorized()
+    try:
+        conn = _db_conn()
+        payload = _phase1c_chain_status(conn)
+        conn.close()
+        return _growth_json(payload)
+    except Exception as e:
+        print(f"[HERALD] Phase 1C seed status error: {e}")
+        return _growth_json({"error": "Server error"}, status_code=500)
+
+
+@app.post("/growth/phase1c-seed")
+async def growth_phase1c_seed_post(request: Request):
+    """Temporary Phase 1C seed. Hardcoded chain only. Remove after seed."""
+    if not _phase1c_seed_authorized(request):
+        return _growth_unauthorized()
+    try:
+        body = await request.json()
+    except Exception:
+        return _growth_json({"error": "Invalid request"}, status_code=400)
+    if not isinstance(body, dict) or body.get("confirm") != _PHASE1C_CONFIRM or len(body) != 1:
+        return _growth_json({"error": "Invalid request"}, status_code=400)
+    try:
+        conn = _db_conn()
+        payload = _phase1c_seed_chain(conn)
+        conn.close()
+        print("[HERALD] Phase 1C seed completed")
+        return _growth_json(payload)
+    except Exception as e:
+        print(f"[HERALD] Phase 1C seed error: {e}")
         return _growth_json({"error": "Server error"}, status_code=500)
 
 
