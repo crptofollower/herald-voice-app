@@ -4779,11 +4779,12 @@ def _send_waitlist_confirmation(email: str):
         payload = {
             "personalizations": [{"to": [{"email": email}]}],
             "from": {"email": "herald@apexempire.ai", "name": "Herald"},
-            "subject": "You are on the Herald early access list.",
+            "subject": "Welcome to the Herald early access list.",
             "content": [{"type": "text/plain", "value": (
-                "Thanks for signing up.\n\n"
-                "You are on the Herald early access list. "
-                "We will reach out when your spot is ready.\n\n"
+                "Thanks for your interest in Herald.\n\n"
+                "We've recorded your place on the Herald early access list.\n\n"
+                "As Herald moves toward a safe, commercially ready beta, we'll invite a limited group of early users to try Herald and share their feedback.\n\n"
+                "We'll contact you at this email address when we're ready.\n\n"
                 "-- The Herald Team\napexempire.ai"
             )}]
         }
