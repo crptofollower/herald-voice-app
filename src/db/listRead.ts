@@ -48,3 +48,18 @@ export function getOpenListItemById(
 export function formatGroceryItemReadback(body: string): string {
   return `That's ${body}.`;
 }
+
+/** Soft-delete one currently-open list row by stable ID. No body/LIKE match. */
+export function markOpenListItemRemovedById(
+  id: string,
+  listName: string,
+): PresentedListItem | null {
+  const row = getOpenListItemById(id, listName);
+  if (!row) return null;
+  const db = getDB();
+  db.runSync(
+    `UPDATE list_items SET checked = 1, removed_at = ? WHERE id = ? AND checked = 0;`,
+    [new Date().toISOString(), id],
+  );
+  return row;
+}

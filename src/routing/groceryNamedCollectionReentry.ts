@@ -2,7 +2,7 @@
 // Position meaning comes from the shared interpreter. This module only
 // grants fresh grocery reread when the utterance names the grocery list.
 
-import { interpretPositionReference } from './positionReference';
+import { interpretPositionReference, isPositionMutationLanguage } from './positionReference';
 
 export type GroceryNamedCollectionRead =
   | { kind: 'not_this_act' }
@@ -17,6 +17,7 @@ export function hasGroceryNamedCollectionCue(text: string): boolean {
 
 export function parseGroceryNamedCollectionRead(text: string): GroceryNamedCollectionRead {
   if (!hasGroceryNamedCollectionCue(text)) return { kind: 'not_this_act' };
+  if (isPositionMutationLanguage(text)) return { kind: 'not_this_act' };
   const interpreted = interpretPositionReference(text);
   if (interpreted.kind === 'unsafe') return { kind: 'not_this_act' };
   if (interpreted.kind === 'ambiguous') return { kind: 'ambiguous' };

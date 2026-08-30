@@ -2,7 +2,7 @@
 // Sibling to MedicationPresentationHolder and ConversationalSubjectHolder.
 // Identity/reference only. No item bodies. No domain truth. RAM only.
 
-import { interpretPositionReference } from './positionReference';
+import { interpretPositionReference, isPositionMutationLanguage } from './positionReference';
 
 export type OrderedPresentationOwner = 'grocery';
 
@@ -150,6 +150,7 @@ function ordinalSuffixOk(n: number, suffix: string): boolean {
  * remains the reserved multi-position form.
  */
 export function parseCuedListPositions(text: string): number[] | null {
+  if (isPositionMutationLanguage(text)) return null;
   const interpreted = interpretPositionReference(text);
   if (interpreted.kind === 'position_reference') return interpreted.positions;
   if (
@@ -164,6 +165,7 @@ export function parseCuedListPositions(text: string): number[] | null {
 
 /** Exact grocery read/select continuation. Single unambiguous position only. */
 export function parseGroceryReadPosition(text: string): number | null {
+  if (isPositionMutationLanguage(text)) return null;
   const interpreted = interpretPositionReference(text);
   if (interpreted.kind !== 'position_reference') return null;
   if (interpreted.positions.length !== 1) return null;
@@ -175,6 +177,7 @@ export function parseGroceryReadPosition(text: string): number | null {
  * Competing operators and unsupported relatives stay here. Mutation is never a near-miss.
  */
 export function isGroceryPositionNearMiss(text: string): boolean {
+  if (isPositionMutationLanguage(text)) return false;
   const interpreted = interpretPositionReference(text);
   return interpreted.kind === 'ambiguous';
 }

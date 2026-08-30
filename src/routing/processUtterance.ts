@@ -40,9 +40,15 @@ import {
   getPresentedOpenListItems,
   composeOpenListSpeech,
   formatGroceryItemReadback,
+  markOpenListItemRemovedById,
 } from '../db/listRead';
 import { parseGroceryNamedCollectionRead } from './groceryNamedCollectionReentry';
-import { interpretPositionReference } from './positionReference';
+import { interpretPositionReference, isPositionMutationLanguage } from './positionReference';
+import {
+  parseGroceryPositionalMutation,
+  hasGroceryNamedMutationCue,
+  formatGroceryRemovalAck,
+} from './groceryPositionalMutation';
 
 // D0 commit 2 (S54 addendum): the headless pipeline seam. UI (ChatScreen) calls
 // this and renders the result; P-tests call it directly. No React, no UI, no TTS.
@@ -309,11 +315,11 @@ export async function processUtterance(
       };
     }
   }
-  // 1a3) Live grocery ordered-presentation continuation — interpret BEFORE
-  //      unused-clear. Position meaning is not an authority grant.
+  // 1a3) Live grocery ordered-presentation READ — interpret BEFORE unused-clear.
+  //      Mutation language is not a read; do not clear a live grocery holder yet.
   if (orderedPresentation?.hasLive()) {
     const liveOrdered = orderedPresentation.peek();
-    if (liveOrdered?.owner === 'grocery') {
+    if (liveOrdered?.owner === 'grocery' && !isPositionMutationLanguage(text)) {
       const interpreted = interpretPositionReference(text);
       if (interpreted.kind === 'position_reference' && interpreted.positions.length === 1) {
         const resolved = resolvePositions(liveOrdered.presentedIds, interpreted.positions);
@@ -351,8 +357,108 @@ export async function processUtterance(
         }
         return { handled: true, source: 'referent_resume', responseText, commits: [] };
       }
+      orderedPresentation.clear();
+    } else if (liveOrdered?.owner !== 'grocery') {
+      orderedPresentation.clear();
     }
-    orderedPresentation.clear();
+  }
+  // 1a4) Grocery positional mutation — after reads, before unused-clear / routeIntent.
+  {
+    const parsed = parseGroceryPositionalMutation(text);
+    if (parsed.kind !== 'not_this_act') {
+      const named = hasGroceryNamedMutationCue(text);
+      const live = orderedPresentation?.peek();
+      const liveGrocery = live?.owner === 'grocery' ? live : null;
+
+      if (parsed.kind === 'ambiguous') {
+        if (named || liveGrocery) {
+          if (liveGrocery) {
+            if (liveGrocery.repairAvailable) {
+              orderedPresentation?.consumeRepair();
+            } else {
+              orderedPresentation?.clear();
+            }
+          }
+          return {
+            handled: true,
+            source: 'referent_resume',
+            responseText: ORDERED_PRESENTATION_CONFUSION,
+            commits: [],
+          };
+        }
+      } else {
+        let presentedIds: string[] | null = null;
+        if (named) {
+          const items = getPresentedOpenListItems('grocery');
+          if (items.length === 0) {
+            orderedPresentation?.clear();
+            return {
+              handled: true,
+              source: 'referent_resume',
+              responseText: composeOpenListSpeech('grocery', items),
+              commits: [],
+            };
+          }
+          presentedIds = items.map((i) => i.id);
+          subject?.clear();
+          medicationPresentation?.clear();
+          orderedPresentation?.establish('grocery', presentedIds);
+        } else if (liveGrocery) {
+          presentedIds = liveGrocery.presentedIds;
+        } else {
+          return {
+            handled: true,
+            source: 'referent_resume',
+            responseText: ORDERED_PRESENTATION_CONFUSION,
+            commits: [],
+          };
+        }
+        const resolved = resolvePositions(presentedIds, [parsed.n]);
+        if (!resolved.ok) {
+          return {
+            handled: true,
+            source: 'referent_resume',
+            responseText: ORDERED_PRESENTATION_CONFUSION,
+            commits: [],
+          };
+        }
+        const row = getOpenListItemById(resolved.ids[0], 'grocery');
+        if (!row) {
+          return {
+            handled: true,
+            source: 'referent_resume',
+            responseText: GROCERY_POSITION_STALE,
+            commits: [],
+          };
+        }
+        const removed = markOpenListItemRemovedById(row.id, 'grocery');
+        if (!removed) {
+          return {
+            handled: true,
+            source: 'referent_resume',
+            responseText: GROCERY_POSITION_STALE,
+            commits: [],
+          };
+        }
+        const remaining = getPresentedOpenListItems('grocery');
+        if (remaining.length === 0) {
+          orderedPresentation?.clear();
+        } else {
+          subject?.clear();
+          medicationPresentation?.clear();
+          orderedPresentation?.establish('grocery', remaining.map((i) => i.id));
+        }
+        return {
+          handled: true,
+          source: 'referent_resume',
+          responseText: formatGroceryRemovalAck(removed.body, remaining),
+          commits: [],
+        };
+      }
+    }
+    if (isPositionMutationLanguage(text) && orderedPresentation?.hasLive()) {
+      orderedPresentation.clear();
+    }
   }
   // 1b) Flow C — closed pronoun-phone speech act against the one-turn
   //     conversational subject. Eligible referent consumes and clears.

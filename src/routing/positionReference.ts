@@ -33,6 +33,15 @@ export type PositionInterpretation =
 const POSITION_MUTATION_RE =
   /\b(?:remove|delete|cross(?:\s+off)?|take\s+off|got|picked\s+up|grabbed|bought|completed?|finished|done\s+with)\b/i;
 
+/** `take the third thing off` — take and off are not adjacent. */
+const TAKE_OFF_SPAN_RE = /\btake\b.{0,80}?\boff\b/i;
+
+export function isPositionMutationLanguage(text: string): boolean {
+  const raw = text.trim();
+  if (!raw) return false;
+  return POSITION_MUTATION_RE.test(raw) || TAKE_OFF_SPAN_RE.test(raw);
+}
+
 const DOSE_RE = /\b\d+\s*mg\b/i;
 const TIME_RE = /\bat\s+\d{1,2}(?::\d{2})?\b|\b\d{1,2}:\d{2}\b/i;
 const DATE_ON_ORDINAL_RE =
@@ -42,6 +51,9 @@ const RELATIVE_RE =
   /\b(?:the|that)\s+(?:next|previous|last)\s+(?:one|thing|item)?\b|\b(?:next|previous)\s+(?:one|thing|item)\b/i;
 const OTHER_ANAPHOR_RE =
   /\bthe\s+other\s+(?:one|thing|item)\b|\banother(?:\s+(?:one|thing|item))?\b|\bany\s+others?\b/i;
+
+const COORDINATED_ORDINALS_RE =
+  /\b(?:the\s+)?(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|\d+(?:st|nd|rd|th))\s+and\s+(?:the\s+)?(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|\d+(?:st|nd|rd|th))\b/gi;
 
 const LEADING_FILLER_RE =
   /^(?:(?:okay|ok|yeah|yep|yes|alright|all right|so|wait|um|uh)[,.]?\s+)+/i;
@@ -159,13 +171,24 @@ function parseWholeUtteranceNumberList(t: string): number[] | null {
   return out.length > 0 ? out : null;
 }
 
+export type InterpretPositionOptions = {
+  /** Extract N even when mutation words are present. Read callers must not set this. */
+  allowMutationLanguage?: boolean;
+};
+
 /**
  * Bounded position meaning. Authority grant is decided by the caller.
+ * Default refuses mutation language so read paths cannot fulfill "Remove the second thing."
  */
-export function interpretPositionReference(text: string): PositionInterpretation {
+export function interpretPositionReference(
+  text: string,
+  options?: InterpretPositionOptions,
+): PositionInterpretation {
   const raw = text.trim();
   if (!raw) return { kind: 'none' };
-  if (POSITION_MUTATION_RE.test(raw)) return { kind: 'unsafe', reason: 'mutation' };
+  if (isPositionMutationLanguage(raw) && !options?.allowMutationLanguage) {
+    return { kind: 'unsafe', reason: 'mutation' };
+  }
   if (DOSE_RE.test(raw)) return { kind: 'unsafe', reason: 'dose' };
   if (TIME_RE.test(raw)) return { kind: 'unsafe', reason: 'time' };
 
@@ -180,6 +203,18 @@ export function interpretPositionReference(text: string): PositionInterpretation
 
   if (DATE_ON_ORDINAL_RE.test(t) && !/\b(?:one|thing|item|number)\b/i.test(t)) {
     return { kind: 'unsafe', reason: 'date_like' };
+  }
+
+  const coordinated: number[] = [];
+  for (const m of t.matchAll(COORDINATED_ORDINALS_RE)) {
+    const a = parseOrdinalOrNth(m[1]);
+    const b = parseOrdinalOrNth(m[2]);
+    if (a != null) coordinated.push(a);
+    if (b != null) coordinated.push(b);
+  }
+  const coordinatedUnique = uniquePositions(coordinated);
+  if (coordinatedUnique.length > 1) {
+    return { kind: 'ambiguous', reason: 'competing_positions', positions: coordinatedUnique };
   }
 
   const hits = collectHits(t);

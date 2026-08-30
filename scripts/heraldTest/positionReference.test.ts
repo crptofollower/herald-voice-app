@@ -1,7 +1,7 @@
 // Bounded position-reference interpretation — semantic family + collisions.
 // Runner: npx tsx scripts/heraldTest/positionReference.test.ts
 
-import { interpretPositionReference } from '../../src/routing/positionReference.ts';
+import { interpretPositionReference, isPositionMutationLanguage } from '../../src/routing/positionReference.ts';
 import { parseGroceryReadPosition, parseCuedListPositions } from '../../src/routing/orderedPresentation.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
@@ -70,8 +70,18 @@ export async function runPositionReferenceTests() {
     v => v.kind === 'unsafe' && v.reason === 'time', 'time');
   assert('PR26 red one', interpretPositionReference('The red one.'),
     v => v.kind === 'none', 'none');
-  assert('PR27 mutation', interpretPositionReference('Remove the second thing on my grocery list.'),
+  assert('PR27 mutation default is unsafe', interpretPositionReference('Remove the second thing on my grocery list.'),
     v => v.kind === 'unsafe' && v.reason === 'mutation', 'mutation');
+  assert('PR37 mutation can extract N', interpretPositionReference('Remove the second thing.', { allowMutationLanguage: true }),
+    pos(2), 'position 2');
+  assert('PR38 take-off span extracts N', interpretPositionReference('Take the third thing off my grocery list.', { allowMutationLanguage: true }),
+    pos(3), 'position 3');
+  assert('PR39 I got extracts N', interpretPositionReference('I got the third item.', { allowMutationLanguage: true }),
+    pos(3), 'position 3');
+  assert('PR40 read parser still refuses mutation', parseGroceryReadPosition('Remove the second thing.'),
+    v => v === null, 'null');
+  assert('PR41 cued parser still refuses mutation', parseCuedListPositions('Delete the fourth item.'),
+    v => v === null, 'null');
   assert('PR28 it', interpretPositionReference('It'), v => v.kind === 'none', 'none');
   assert('PR29 this one', interpretPositionReference('This one'), v => v.kind === 'none', 'none');
   assert('PR30 next', interpretPositionReference('the next one'),
@@ -89,6 +99,10 @@ export async function runPositionReferenceTests() {
   assert('PR36 no IDs on object', interpretPositionReference("What's the third thing?"),
     v => v.kind === 'position_reference' && !('id' in v) && !('body' in v) && !('ids' in v),
     'no id/body');
+  assert('PR42 isPositionMutationLanguage remove', isPositionMutationLanguage('Remove the second thing.'),
+    v => v === true, 'true');
+  assert('PR43 isPositionMutationLanguage read', isPositionMutationLanguage("What's the second thing?"),
+    v => v === false, 'false');
 
   const total = passed + failures.length;
   console.log(`\n${BOLD}Position reference: ${passed}/${total} passed${failures.length > 0 ? ` — ${RED}${failures.length} FAILED${RESET}` : ` — ${GREEN}all green${RESET}`}${RESET}\n`);
