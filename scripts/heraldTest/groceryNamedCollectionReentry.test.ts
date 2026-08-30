@@ -192,8 +192,10 @@ export async function runGroceryNamedCollectionReentryTests() {
     v => v.kind === 'ambiguous', 'ambiguous');
   assert('F2P19 todo list not grocery', parseGroceryNamedCollectionRead('the second thing on my todo list'),
     v => v.kind === 'not_this_act', 'not_this_act');
-  assert('F2P20 OPR intake not widened for thing', parseGroceryReadPosition('What was the second thing on my grocery list?'),
-    v => v === null, 'null');
+  assert('F2P20 named utterance extracts position', parseGroceryReadPosition('What was the second thing on my grocery list?'),
+    v => v === 2, '2');
+  assert('F2P20b named grant still owns named cue', parseGroceryNamedCollectionRead('What was the second thing on my grocery list?'),
+    v => v.kind === 'position' && v.n === 2, 'F2 position 2');
   assert('F2P21 OPR intake still binds third one', parseGroceryReadPosition("What's the third one?"),
     v => v === 3, '3');
 
@@ -300,6 +302,9 @@ export async function runGroceryNamedCollectionReentryTests() {
     const t = await say("What's the third one?");
     assert('F2E20 live OPR third one', t, v => v.responseText === "That's Apples.", "That's Apples.");
     assert('F2E21 live OPR no classify', getClassifyCalls(), v => v === 0, '0');
+    const thing = await say("What's the third thing?");
+    assert('F2E20b live continuation thing', thing, v => v.responseText === "That's Apples.", "That's Apples.");
+    assert('F2E20c thing retains holder', ordered.hasLive(), v => v === true, 'live');
   }
 
   {
@@ -338,6 +343,51 @@ export async function runGroceryNamedCollectionReentryTests() {
     const t = await say('the first thing and the third thing on my grocery list');
     assert('F2E29 ambiguous confusion', t, v => v.responseText === ORDERED_PRESENTATION_CONFUSION, 'confusion');
     assert('F2E30 ambiguous no classify', getClassifyCalls(), v => v === 0, '0');
+  }
+
+  {
+    const { db, say, ordered, getClassifyCalls } = fresh();
+    stockThree(db);
+    await say('What was the second thing on my grocery list?');
+    const t = await say("What's the third thing?");
+    assert('F2E31 F2 then thing continuation', t, v => v.responseText === "That's Apples.", "That's Apples.");
+    assert('F2E32 holder usable after thing', ordered.hasLive(), v => v === true, 'live');
+    const again = await say("What's the first one?");
+    assert('F2E33 canonical after thing', again, v => v.responseText === "That's Milk.", "That's Milk.");
+    assert('F2E34 continuation no classify', getClassifyCalls(), v => v === 0, '0');
+  }
+
+  {
+    const { db, say, ordered, getClassifyCalls } = fresh();
+    stockThree(db);
+    await say('What was the second thing on my grocery list?');
+    const ellipsis = await say('And the third?');
+    assert('F2E35 ellipsis continuation', ellipsis, v => v.responseText === "That's Apples.", "That's Apples.");
+    const invert = await say('Which thing was first?');
+    assert('F2E36 inversion continuation', invert, v => v.responseText === "That's Milk.", "That's Milk.");
+    assert('F2E37 ellipsis/inversion no classify', getClassifyCalls(), v => v === 0, '0');
+    assert('F2E38 holder after ellipsis', ordered.hasLive(), v => v === true, 'live');
+  }
+
+  {
+    const { db, say, ordered, getClassifyCalls } = fresh();
+    stockThree(db);
+    await say('What was the second thing on my grocery list?');
+    const next = await say('the next one');
+    assert('F2E39 next confusion', next, v => v.responseText === ORDERED_PRESENTATION_CONFUSION, 'confusion');
+    assert('F2E40 next retains holder', ordered.hasLive(), v => v === true, 'live');
+    const recover = await say("What's the third thing?");
+    assert('F2E41 recover after next', recover, v => v.responseText === "That's Apples.", "That's Apples.");
+    assert('F2E42 next path no classify', getClassifyCalls(), v => v === 0, '0');
+  }
+
+  {
+    const { db, say, ordered } = fresh();
+    stockThree(db);
+    presentGrocery(ordered, new ConversationalSubjectHolder(), new MedicationPresentationHolder());
+    db.prepare(`UPDATE list_items SET created_at = ? WHERE id = ?`).run('2026-12-01T00:00:00.000Z', 'g1');
+    const named = await say("What's item three on my grocery list?");
+    assert('F2E43 named grant wins over live frozen IDs', named, v => v.responseText === "That's Milk.", "That's Milk.");
   }
 
   const total = passed + failures.length;

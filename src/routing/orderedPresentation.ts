@@ -2,6 +2,8 @@
 // Sibling to MedicationPresentationHolder and ConversationalSubjectHolder.
 // Identity/reference only. No item bodies. No domain truth. RAM only.
 
+import { interpretPositionReference } from './positionReference';
+
 export type OrderedPresentationOwner = 'grocery';
 
 export type OrderedPresentationState = {
@@ -14,10 +16,6 @@ export type OrderedPresentationState = {
 export const ORDERED_PRESENTATION_CONFUSION = `I'm not sure which one you mean.`;
 export const GROCERY_POSITION_STALE =
   `I don't see that on your grocery list right now.`;
-
-// Mutation/action language — grocery read-back must not consume these.
-const POSITION_MUTATION_RE =
-  /\b(?:remove|delete|cross(?:\s+off)?|take\s+off|got|picked\s+up|grabbed|bought|completed?|finished|done\s+with)\b/i;
 
 const ONES_ORDINAL: Record<string, number> = {
   first: 1,
@@ -109,10 +107,6 @@ export function cardinalWordToNumber(raw: string): number | null {
   return null;
 }
 
-function parseSlotValue(raw: string): number | null {
-  return positiveInt(raw.trim()) ?? cardinalWordToNumber(raw);
-}
-
 /** Word ordinal → 1-based position. `last` is never a position. */
 export function ordinalWordToNumber(raw: string): number | null {
   const phrase = raw.trim().toLowerCase().replace(/-/g, ' ').replace(/\s+/g, ' ');
@@ -150,104 +144,39 @@ function ordinalSuffixOk(n: number, suffix: string): boolean {
   return suffix === 'th';
 }
 
-function parseOrdinalOrNth(raw: string): number | null {
-  return ordinalWordToNumber(raw) ?? parseNumericOrdinal(raw);
-}
-
-function positiveInt(raw: string): number | null {
-  if (!/^\d+$/.test(raw)) return null;
-  const n = Number(raw);
-  if (!Number.isInteger(n) || n < 1) return null;
-  return n;
-}
-
-/**
- * Bounded list-position operators inside ordinary speech.
- * Cue required: the/that + ordinal + one, number/item + slot, or #digits.
- * Does not steal bare dates, doses, times, or "the red one".
- */
-function collectCuedPositionHits(text: string): number[] {
-  const hits: number[] = [];
-
-  for (const m of text.matchAll(/#\s*(\d+)/g)) {
-    const n = positiveInt(m[1]);
-    if (n != null) hits.push(n);
-  }
-
-  for (const m of text.matchAll(/\b(?:number|item)\s+(\d+|[a-z]+(?:[-\s][a-z]+)?)\b/gi)) {
-    const n = parseSlotValue(m[1]);
-    if (n != null) hits.push(n);
-  }
-
-  for (const m of text.matchAll(/\b(?:the|that)\s+(.+?)\s+one\b/gi)) {
-    const n = parseOrdinalOrNth(m[1]);
-    if (n != null) hits.push(n);
-  }
-
-  return hits;
-}
-
-function uniquePositions(hits: number[]): number[] {
-  const out: number[] = [];
-  const seen = new Set<number>();
-  for (const n of hits) {
-    if (seen.has(n)) continue;
-    seen.add(n);
-    out.push(n);
-  }
-  return out;
-}
-
-function parseWholeUtteranceNumberList(t: string): number[] | null {
-  const numbersList = t.match(
-    /^\s*numbers?\s+(\d+(?:\s*,\s*\d+)*(?:\s*,?\s*and\s+\d+)?)\s*[?.!]?\s*$/i,
-  );
-  if (!numbersList) return null;
-  const out: number[] = [];
-  for (const piece of numbersList[1].match(/\d+/g) ?? []) {
-    const n = positiveInt(piece);
-    if (n == null) return null;
-    out.push(n);
-  }
-  return out.length > 0 ? out : null;
-}
-
 /**
  * Cued list-position parse. When a single operator is present anywhere in
  * the utterance, returns that position. Whole-utterance `numbers 2, 4, and 5`
  * remains the reserved multi-position form.
  */
 export function parseCuedListPositions(text: string): number[] | null {
-  if (POSITION_MUTATION_RE.test(text)) return null;
-  const t = text.trim();
-  if (!t) return null;
-
-  const unique = uniquePositions(collectCuedPositionHits(t));
-  if (unique.length === 1) return unique;
-  if (unique.length > 1) return unique;
-
-  return parseWholeUtteranceNumberList(t);
+  const interpreted = interpretPositionReference(text);
+  if (interpreted.kind === 'position_reference') return interpreted.positions;
+  if (
+    interpreted.kind === 'ambiguous' &&
+    interpreted.reason === 'competing_positions' &&
+    interpreted.positions.length > 0
+  ) {
+    return interpreted.positions;
+  }
+  return null;
 }
 
 /** Exact grocery read/select continuation. Single unambiguous position only. */
 export function parseGroceryReadPosition(text: string): number | null {
-  if (POSITION_MUTATION_RE.test(text)) return null;
-  const t = text.trim();
-  if (!t) return null;
-  const unique = uniquePositions(collectCuedPositionHits(t));
-  if (unique.length !== 1) return null;
-  return unique[0];
+  const interpreted = interpretPositionReference(text);
+  if (interpreted.kind !== 'position_reference') return null;
+  if (interpreted.positions.length !== 1) return null;
+  return interpreted.positions[0];
 }
 
 /**
  * Position-shaped but not a single safe grocery read-back.
- * Competing operators stay here. Mutation is never a near-miss.
+ * Competing operators and unsupported relatives stay here. Mutation is never a near-miss.
  */
 export function isGroceryPositionNearMiss(text: string): boolean {
-  if (parseGroceryReadPosition(text) != null) return false;
-  if (POSITION_MUTATION_RE.test(text)) return false;
-  const unique = uniquePositions(collectCuedPositionHits(text));
-  return unique.length > 1;
+  const interpreted = interpretPositionReference(text);
+  return interpreted.kind === 'ambiguous';
 }
 
 export type ResolvePositionsResult =

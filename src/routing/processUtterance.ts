@@ -31,8 +31,6 @@ import {
 } from './medicationPresentation';
 import {
   OrderedPresentationHolder,
-  parseGroceryReadPosition,
-  isGroceryPositionNearMiss,
   resolvePositions,
   ORDERED_PRESENTATION_CONFUSION,
   GROCERY_POSITION_STALE,
@@ -44,6 +42,7 @@ import {
   formatGroceryItemReadback,
 } from '../db/listRead';
 import { parseGroceryNamedCollectionRead } from './groceryNamedCollectionReentry';
+import { interpretPositionReference } from './positionReference';
 
 // D0 commit 2 (S54 addendum): the headless pipeline seam. UI (ChatScreen) calls
 // this and renders the result; P-tests call it directly. No React, no UI, no TTS.
@@ -256,54 +255,8 @@ export async function processUtterance(
     }
     medicationPresentation.clear();
   }
-  // 1a2) Grocery ordered-presentation read-back — position → frozen ID →
-  //      fresh by-id reread. Not mutation. Not medication. Not Flow C.
-  if (orderedPresentation?.hasLive()) {
-    const liveOrdered = orderedPresentation.peek();
-    if (liveOrdered?.owner === 'grocery') {
-      const position = parseGroceryReadPosition(text);
-      if (position != null) {
-        const resolved = resolvePositions(liveOrdered.presentedIds, [position]);
-        if (!resolved.ok) {
-          return {
-            handled: true,
-            source: 'referent_resume',
-            responseText: ORDERED_PRESENTATION_CONFUSION,
-            commits: [],
-          };
-        }
-        const row = getOpenListItemById(resolved.ids[0], 'grocery');
-        if (!row) {
-          return {
-            handled: true,
-            source: 'referent_resume',
-            responseText: GROCERY_POSITION_STALE,
-            commits: [],
-          };
-        }
-        orderedPresentation.renew();
-        return {
-          handled: true,
-          source: 'referent_resume',
-          responseText: formatGroceryItemReadback(row.body),
-          commits: [],
-        };
-      }
-      if (isGroceryPositionNearMiss(text)) {
-        const responseText = ORDERED_PRESENTATION_CONFUSION;
-        if (liveOrdered.repairAvailable) {
-          orderedPresentation.consumeRepair();
-        } else {
-          orderedPresentation.clear();
-        }
-        return { handled: true, source: 'referent_resume', responseText, commits: [] };
-      }
-    }
-    orderedPresentation.clear();
-  }
-  // 1a3) F2 grocery named-collection re-entry — explicit grocery cue + one
-  //      position, then a fresh grocery reread. Not F1/OPR intake. Positional
-  //      language alone still has no authority when OPR is empty.
+  // 1a2) Named grocery collection grant (F2) wins over live continuation.
+  //      Explicit naming authorizes a fresh reread, not frozen live IDs.
   {
     const named = parseGroceryNamedCollectionRead(text);
     if (named.kind === 'ambiguous') {
@@ -355,6 +308,51 @@ export async function processUtterance(
         commits: [],
       };
     }
+  }
+  // 1a3) Live grocery ordered-presentation continuation — interpret BEFORE
+  //      unused-clear. Position meaning is not an authority grant.
+  if (orderedPresentation?.hasLive()) {
+    const liveOrdered = orderedPresentation.peek();
+    if (liveOrdered?.owner === 'grocery') {
+      const interpreted = interpretPositionReference(text);
+      if (interpreted.kind === 'position_reference' && interpreted.positions.length === 1) {
+        const resolved = resolvePositions(liveOrdered.presentedIds, interpreted.positions);
+        if (!resolved.ok) {
+          return {
+            handled: true,
+            source: 'referent_resume',
+            responseText: ORDERED_PRESENTATION_CONFUSION,
+            commits: [],
+          };
+        }
+        const row = getOpenListItemById(resolved.ids[0], 'grocery');
+        if (!row) {
+          return {
+            handled: true,
+            source: 'referent_resume',
+            responseText: GROCERY_POSITION_STALE,
+            commits: [],
+          };
+        }
+        orderedPresentation.renew();
+        return {
+          handled: true,
+          source: 'referent_resume',
+          responseText: formatGroceryItemReadback(row.body),
+          commits: [],
+        };
+      }
+      if (interpreted.kind === 'ambiguous') {
+        const responseText = ORDERED_PRESENTATION_CONFUSION;
+        if (liveOrdered.repairAvailable) {
+          orderedPresentation.consumeRepair();
+        } else {
+          orderedPresentation.clear();
+        }
+        return { handled: true, source: 'referent_resume', responseText, commits: [] };
+      }
+    }
+    orderedPresentation.clear();
   }
   // 1b) Flow C — closed pronoun-phone speech act against the one-turn
   //     conversational subject. Eligible referent consumes and clears.
