@@ -37,7 +37,13 @@ import {
   ORDERED_PRESENTATION_CONFUSION,
   GROCERY_POSITION_STALE,
 } from './orderedPresentation';
-import { getOpenListItemById, formatGroceryItemReadback } from '../db/listRead';
+import {
+  getOpenListItemById,
+  getPresentedOpenListItems,
+  composeOpenListSpeech,
+  formatGroceryItemReadback,
+} from '../db/listRead';
+import { parseGroceryNamedCollectionRead } from './groceryNamedCollectionReentry';
 
 // D0 commit 2 (S54 addendum): the headless pipeline seam. UI (ChatScreen) calls
 // this and renders the result; P-tests call it directly. No React, no UI, no TTS.
@@ -294,6 +300,61 @@ export async function processUtterance(
       }
     }
     orderedPresentation.clear();
+  }
+  // 1a3) F2 grocery named-collection re-entry — explicit grocery cue + one
+  //      position, then a fresh grocery reread. Not F1/OPR intake. Positional
+  //      language alone still has no authority when OPR is empty.
+  {
+    const named = parseGroceryNamedCollectionRead(text);
+    if (named.kind === 'ambiguous') {
+      return {
+        handled: true,
+        source: 'referent_resume',
+        responseText: ORDERED_PRESENTATION_CONFUSION,
+        commits: [],
+      };
+    }
+    if (named.kind === 'position') {
+      const items = getPresentedOpenListItems('grocery');
+      if (items.length === 0) {
+        orderedPresentation?.clear();
+        return {
+          handled: true,
+          source: 'referent_resume',
+          responseText: composeOpenListSpeech('grocery', items),
+          commits: [],
+        };
+      }
+      const presentedIds = items.map((i) => i.id);
+      subject?.clear();
+      medicationPresentation?.clear();
+      orderedPresentation?.establish('grocery', presentedIds);
+      const resolved = resolvePositions(presentedIds, [named.n]);
+      if (!resolved.ok) {
+        return {
+          handled: true,
+          source: 'referent_resume',
+          responseText: ORDERED_PRESENTATION_CONFUSION,
+          commits: [],
+        };
+      }
+      const row = getOpenListItemById(resolved.ids[0], 'grocery');
+      if (!row) {
+        return {
+          handled: true,
+          source: 'referent_resume',
+          responseText: GROCERY_POSITION_STALE,
+          commits: [],
+        };
+      }
+      orderedPresentation?.renew();
+      return {
+        handled: true,
+        source: 'referent_resume',
+        responseText: formatGroceryItemReadback(row.body),
+        commits: [],
+      };
+    }
   }
   // 1b) Flow C — closed pronoun-phone speech act against the one-turn
   //     conversational subject. Eligible referent consumes and clears.
