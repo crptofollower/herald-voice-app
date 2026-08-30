@@ -367,11 +367,10 @@ export async function runOrderedPresentationTests() {
       v => v === true, 'live, repair restored');
     const miss1 = await say('the first one and the third one');
     assert('OP72 competing operators confusion', miss1, v => v.responseText === ORDERED_PRESENTATION_CONFUSION, 'confusion');
-    assert('OP73 first competing near-miss retains', ordered.hasLive() && ordered.peek()?.repairAvailable === false,
-      v => v === true, 'live, repair spent');
+    assert('OP73 first competing near-miss retains', ordered.hasLive(), v => v === true, 'live');
     const miss2 = await say('the first one and the third one');
     assert('OP73b second competing near-miss', miss2, v => v.responseText === ORDERED_PRESENTATION_CONFUSION, 'confusion');
-    assert('OP73c second competing clears', ordered.hasLive(), v => v === false, 'cleared');
+    assert('OP73c second competing still retains', ordered.hasLive(), v => v === true, 'live');
   }
 
   {

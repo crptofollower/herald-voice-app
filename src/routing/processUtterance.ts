@@ -43,11 +43,12 @@ import {
   markOpenListItemRemovedById,
 } from '../db/listRead';
 import { parseGroceryNamedCollectionRead } from './groceryNamedCollectionReentry';
-import { interpretPositionReference, isPositionMutationLanguage } from './positionReference';
+import { interpretPositionReference, isPositionMutationLanguage, hasBoundedPositionEvidence } from './positionReference';
 import {
   parseGroceryPositionalMutation,
   hasGroceryNamedMutationCue,
   formatGroceryRemovalAck,
+  isGroceryMutationDomainBlocked,
 } from './groceryPositionalMutation';
 
 // D0 commit 2 (S54 addendum): the headless pipeline seam. UI (ChatScreen) calls
@@ -349,13 +350,10 @@ export async function processUtterance(
         };
       }
       if (interpreted.kind === 'ambiguous') {
-        const responseText = ORDERED_PRESENTATION_CONFUSION;
-        if (liveOrdered.repairAvailable) {
-          orderedPresentation.consumeRepair();
-        } else {
-          orderedPresentation.clear();
-        }
-        return { handled: true, source: 'referent_resume', responseText, commits: [] };
+        return { handled: true, source: 'referent_resume', responseText: ORDERED_PRESENTATION_CONFUSION, commits: [] };
+      }
+      if (interpreted.kind !== 'unsafe' && hasBoundedPositionEvidence(text)) {
+        return { handled: true, source: 'referent_resume', responseText: ORDERED_PRESENTATION_CONFUSION, commits: [] };
       }
       orderedPresentation.clear();
     } else if (liveOrdered?.owner !== 'grocery') {
@@ -370,15 +368,8 @@ export async function processUtterance(
       const live = orderedPresentation?.peek();
       const liveGrocery = live?.owner === 'grocery' ? live : null;
 
-      if (parsed.kind === 'ambiguous') {
+      if (parsed.kind === 'ambiguous' || parsed.kind === 'unresolved') {
         if (named || liveGrocery) {
-          if (liveGrocery) {
-            if (liveGrocery.repairAvailable) {
-              orderedPresentation?.consumeRepair();
-            } else {
-              orderedPresentation?.clear();
-            }
-          }
           return {
             handled: true,
             source: 'referent_resume',
@@ -457,6 +448,19 @@ export async function processUtterance(
       }
     }
     if (isPositionMutationLanguage(text) && orderedPresentation?.hasLive()) {
+      const live = orderedPresentation.peek();
+      if (
+        live?.owner === 'grocery' &&
+        hasBoundedPositionEvidence(text) &&
+        !isGroceryMutationDomainBlocked(text)
+      ) {
+        return {
+          handled: true,
+          source: 'referent_resume',
+          responseText: ORDERED_PRESENTATION_CONFUSION,
+          commits: [],
+        };
+      }
       orderedPresentation.clear();
     }
   }

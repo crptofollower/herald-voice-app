@@ -58,6 +58,31 @@ const COORDINATED_ORDINALS_RE =
 const LEADING_FILLER_RE =
   /^(?:(?:okay|ok|yeah|yep|yes|alright|all right|so|wait|um|uh)[,.]?\s+)+/i;
 
+/** Consecutive identical licensed position tokens only. Not generic STT cleanup. */
+const EQUIVALENT_POSITION_TOKEN_RE =
+  /\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth|thirtieth|number|one|two|three|four|five|six|seven|eight|nine|ten|\d+(?:st|nd|rd|th))(?:\s+\1)+\b/gi;
+
+const ORDINAL_EVIDENCE_RE =
+  /\b(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth|thirtieth|\d+(?:st|nd|rd|th))\b/i;
+
+export function collapseEquivalentPositionTokens(text: string): string {
+  return text.replace(EQUIVALENT_POSITION_TOKEN_RE, '$1');
+}
+
+/**
+ * Licensed positional near-family evidence. Not item IDs. Not "the red one".
+ */
+export function hasBoundedPositionEvidence(text: string): boolean {
+  const t = collapseEquivalentPositionTokens(text.trim());
+  if (!t) return false;
+  if (RELATIVE_RE.test(t) || OTHER_ANAPHOR_RE.test(t)) return true;
+  if (/#\s*\d+/.test(t)) return true;
+  if (/\bnumber\s+(?:\d+|[a-z]+)/i.test(t)) return true;
+  if (/\bitem\s+(?:\d+|[a-z]+)/i.test(t)) return true;
+  if (ORDINAL_EVIDENCE_RE.test(t) && /\b(?:one|thing|item)\b/i.test(t)) return true;
+  return false;
+}
+
 type Hit = {
   n: number;
   surface: PositionSurface;
@@ -76,7 +101,13 @@ function parseSlotValue(raw: string): number | null {
 }
 
 function parseOrdinalOrNth(raw: string): number | null {
-  return ordinalWordToNumber(raw) ?? parseNumericOrdinal(raw);
+  const direct = ordinalWordToNumber(raw) ?? parseNumericOrdinal(raw);
+  if (direct != null) return direct;
+  const collapsed = collapseEquivalentPositionTokens(raw.trim().toLowerCase().replace(/-/g, ' ').replace(/\s+/g, ' '));
+  if (collapsed !== raw.trim().toLowerCase().replace(/-/g, ' ').replace(/\s+/g, ' ')) {
+    return ordinalWordToNumber(collapsed) ?? parseNumericOrdinal(collapsed);
+  }
+  return null;
 }
 
 function uniquePositions(ns: number[]): number[] {
@@ -192,7 +223,7 @@ export function interpretPositionReference(
   if (DOSE_RE.test(raw)) return { kind: 'unsafe', reason: 'dose' };
   if (TIME_RE.test(raw)) return { kind: 'unsafe', reason: 'time' };
 
-  const t = stripFiller(raw);
+  const t = collapseEquivalentPositionTokens(stripFiller(raw));
 
   if (RELATIVE_RE.test(t)) {
     return { kind: 'ambiguous', reason: 'relative', positions: [] };
