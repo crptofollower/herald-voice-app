@@ -441,6 +441,117 @@ owner_user_ids = set()
 invites        = {}
 
 
+# Growth attribution (waitlist only). Do not join these tables to Herald
+# personal-data tables (profiles, medical, contacts, lists, location).
+
+_REFERRAL_CODE_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_VISITOR_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
+_SOURCE_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+
+
+def _ensure_growth_attribution_schema(c):
+    """Additive waitlist columns + generic partner/campaign/link tables."""
+    for _col, _def in (
+        ("referral_code", "TEXT"),
+        ("visitor_id", "TEXT"),
+    ):
+        try:
+            c.execute(f"ALTER TABLE waitlist ADD COLUMN {_col} {_def}")
+        except Exception:
+            pass
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS partners (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            partner_type TEXT NOT NULL,
+            parent_partner_id INTEGER,
+            contact_email TEXT,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (parent_partner_id) REFERENCES partners(id)
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS campaigns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            partner_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            channel TEXT NOT NULL,
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (partner_id) REFERENCES partners(id)
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS referral_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            campaign_id INTEGER NOT NULL,
+            code TEXT NOT NULL UNIQUE,
+            code_type TEXT NOT NULL,
+            max_uses INTEGER,
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (campaign_id) REFERENCES campaigns(id)
+        )
+    """)
+
+
+def _normalize_referral_code(raw):
+    if not isinstance(raw, str):
+        return None
+    code = raw.strip()
+    if not code or not _REFERRAL_CODE_RE.match(code):
+        return None
+    return code
+
+
+def _normalize_visitor_id(raw):
+    if not isinstance(raw, str):
+        return None
+    vid = raw.strip()
+    if not vid or not _VISITOR_ID_RE.match(vid):
+        return None
+    return vid
+
+
+def _normalize_source(raw):
+    if not isinstance(raw, str):
+        return None
+    source = raw.strip()
+    if not source or not _SOURCE_RE.match(source):
+        return None
+    return source[:32]
+
+
+def _resolve_referral_code(conn, code):
+    """Return canonical active code, or None. Unknown/inactive/exhausted codes grant no attribution."""
+    if not code:
+        return None
+    c = conn.cursor()
+    c.execute(
+        """
+        SELECT code, max_uses, active
+        FROM referral_links
+        WHERE lower(code) = lower(?)
+        """,
+        (code,),
+    )
+    row = c.fetchone()
+    if not row:
+        return None
+    stored_code, max_uses, active = row
+    if not active:
+        return None
+    if max_uses is not None:
+        c.execute(
+            "SELECT COUNT(*) FROM waitlist WHERE lower(referral_code) = lower(?)",
+            (stored_code,),
+        )
+        used = c.fetchone()[0]
+        if used >= int(max_uses):
+            return None
+    return stored_code
+
+
 # ── PERSISTENCE (SQLite) ──────────────────────────────────────────────────────
 
 def init_db():
@@ -503,6 +614,8 @@ def init_db():
                 created_at TEXT DEFAULT (datetime('now'))
             )
         """)
+        _ensure_growth_attribution_schema(c)
+        conn.commit()
         # v8.12: Medical memory tables
         c.execute("""
             CREATE TABLE IF NOT EXISTS medical_records (
@@ -4750,22 +4863,47 @@ async def waitlist(request: Request):
         body = await request.json()
     except Exception:
         return JSONResponse({"error": "Invalid request"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "Invalid request"}, status_code=400)
     email = (body.get("email") or "").strip().lower()
     if not email or not re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", email):
         return JSONResponse({"error": "Invalid email address"}, status_code=400)
-    source = (body.get("source") or "landing")[:32]
+
+    referral_in = _normalize_referral_code(body.get("referral_code"))
+    visitor_id = _normalize_visitor_id(body.get("visitor_id"))
+    source_in = _normalize_source(body.get("source"))
+
+    conn = None
     try:
         conn = _db_conn()
+        stored_ref = _resolve_referral_code(conn, referral_in)
+        if source_in:
+            source = source_in
+        else:
+            source = "referral" if stored_ref else "organic"
         c = conn.cursor()
-        c.execute("INSERT INTO waitlist (email, source) VALUES (?, ?)", (email, source))
+        c.execute(
+            """
+            INSERT INTO waitlist (email, source, referral_code, visitor_id)
+            VALUES (?, ?, ?, ?)
+            """,
+            (email, source, stored_ref, visitor_id),
+        )
         conn.commit()
-        conn.close()
-        print(f"[HERALD] Waitlist signup: {email} via {source}")
+        print(f"[HERALD] Waitlist signup via {source}")
     except sqlite3.IntegrityError:
+        if conn:
+            conn.close()
         return JSONResponse({"status": "ok", "message": "You are on the list."})
     except Exception as e:
         print(f"[HERALD] Waitlist DB error: {e}")
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
         return JSONResponse({"error": "Server error"}, status_code=500)
+    conn.close()
     _send_waitlist_confirmation(email)
     return JSONResponse({"status": "ok", "message": "You are on the list."})
 
