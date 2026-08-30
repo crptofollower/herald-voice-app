@@ -107,7 +107,7 @@ PORT           = int(os.environ.get("PORT", 8080))
 OPENROUTER_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 OPENAI_KEY     = os.environ.get("OPENAI_API_KEY", "")
 SENDGRID_KEY   = os.environ.get("SENDGRID_API_KEY", "")
-ACCESS_CODE    = os.environ.get("HERALD_ACCESS_CODE", "herald2026")
+ACCESS_CODE    = os.environ.get("HERALD_ACCESS_CODE", "")
 OWNER_CODE     = os.environ.get("HERALD_OWNER_CODE", "")
 OWNER_ID       = os.environ.get("HERALD_OWNER_ID", "")
 INVITE_SECRET  = os.environ.get("HERALD_INVITE_SECRET", "")
@@ -3953,7 +3953,7 @@ async def auth(request: Request):
     if not user_id:
         return JSONResponse({"error": "user_id required"}, status_code=400)
 
-    valid_codes = [ACCESS_CODE]
+    valid_codes = [ACCESS_CODE] if ACCESS_CODE else []
     if OWNER_CODE:
         valid_codes.append(OWNER_CODE)
 
@@ -4802,7 +4802,7 @@ def _send_waitlist_confirmation(email: str):
 @app.get("/waitlist/list")
 async def waitlist_list(request: Request):
     secret = request.query_params.get("secret", "")
-    if secret != os.environ.get("WEBHOOK_SECRET", ""):
+    if not WEBHOOK_SECRET or secret != WEBHOOK_SECRET:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     try:
         conn = _db_conn()
