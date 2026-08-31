@@ -74,8 +74,10 @@ import { useDeviceMemory } from "../hooks/useDeviceMemory";
 import { useLocalLLM } from '../hooks/useLocalLLM';
 import { classifyWithLLM } from '../hooks/llmLayers';
 import {
-  generateEphemeralConversation,
-} from '../utils/ephemeralConversation';
+  selectConversationalWorker,
+  generateViaSelectedWorker,
+} from '../conversation/conversationalWorker';
+import { createLlamaEphemeralWorker } from '../conversation/llamaEphemeralWorker';
 import {
   resolveEphemeralSeam,
   EPHEMERAL_CLARIFY_REPLY,
@@ -1108,6 +1110,20 @@ export default function ChatScreen() {
     latLog('sendMessage entry', { turnId, inputSource: 'app' });
     setWeatherSurface(null);
 
+    const runEphemeralGenerate = () => {
+      const onPartial = beginEphemeralUiStream(turnId);
+      const worker = selectConversationalWorker([
+        createLlamaEphemeralWorker({ getCtx }),
+      ]);
+      return generateViaSelectedWorker(worker, {
+        userText: text,
+        hotEntries: hotContextForGeneration,
+        onPartial,
+      }).finally(() => {
+        clearEphemeralUiStream(turnId);
+      });
+    };
+
     // ── Law 0 bridge (interim, Step 3) ─────────────────────────────────────────
     // Catches emergency BEFORE the 1 legacy ref-pending can intercept or
     // misread it. TEMPORARY: delete this block once Step 4 migrates
@@ -1424,19 +1440,7 @@ export default function ChatScreen() {
           llmStatus,
           classifierBusy: false,
           ephemeralBusy: false,
-          generate: async () => {
-            const onPartial = beginEphemeralUiStream(turnId);
-            try {
-              return await generateEphemeralConversation(
-                text,
-                getCtx(),
-                hotContextForGeneration,
-                onPartial,
-              );
-            } finally {
-              clearEphemeralUiStream(turnId);
-            }
-          },
+          generate: runEphemeralGenerate,
         });
         reply = seamOutcome.reply;
         if (seamOutcome.kind === 'generative' && seamOutcome.grantContinuation) {
@@ -1856,19 +1860,7 @@ export default function ChatScreen() {
             classifierBusy: false,
             ephemeralBusy: false,
             skipAuthoritativeOwners: true,
-            generate: async () => {
-              const onPartial = beginEphemeralUiStream(turnId);
-              try {
-                return await generateEphemeralConversation(
-                  text,
-                  getCtx(),
-                  hotContextForGeneration,
-                  onPartial,
-                );
-              } finally {
-                clearEphemeralUiStream(turnId);
-              }
-            },
+            generate: runEphemeralGenerate,
           });
           offlineReply = seamOutcome.reply;
           if (seamOutcome.kind === 'generative' && seamOutcome.grantContinuation) {
