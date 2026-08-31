@@ -825,6 +825,37 @@ export async function runDoctorReadTests() {
       'clarification, no doctor name');
   }
 
+  // ── DR48–50: vocative + last-time visit-history reads must not capture ────
+  {
+    freshDB();
+    writeMedicalRecord({ doctor_name: 'Dr. Alvarez', notes: 'visit', visit_date: '2026-07-20' });
+    const d = await classifyQuery('Kit, when did I see Dr Alvarez last?');
+    assert('DR48a "Kit, when did I see Dr Alvarez last?" is visit_history_read', d.reason,
+      (v) => v === 'medical:visit_history_read', 'medical:visit_history_read');
+    assert('DR48b is not a medical capture', d.reason,
+      (v) => v !== 'action:medical_capture', 'not action:medical_capture');
+    assert('DR48c names Alvarez from history', d.tier1Response,
+      (v) => typeof v === 'string' && v.includes('Alvarez') && !/don't have a visit/i.test(v),
+      'response names Alvarez');
+  }
+  {
+    freshDB();
+    writeMedicalRecord({ doctor_name: 'Dr. Alvarez', notes: 'visit', visit_date: '2026-07-20' });
+    const d = await classifyQuery('Kit when did I see Dr Alvarez last?');
+    assert('DR49 "Kit when did I see Dr Alvarez last?" is visit_history_read', d.reason,
+      (v) => v === 'medical:visit_history_read', 'medical:visit_history_read');
+  }
+  {
+    freshDB();
+    writeMedicalRecord({ doctor_name: 'Dr. Alvarez', notes: 'visit', visit_date: '2026-07-20' });
+    const d = await classifyQuery('When was the last time I saw Dr Alvarez?');
+    assert('DR50a "When was the last time I saw Dr Alvarez?" is visit_history_read', d.reason,
+      (v) => v === 'medical:visit_history_read', 'medical:visit_history_read');
+    assert('DR50b names Alvarez from history', d.tier1Response,
+      (v) => typeof v === 'string' && v.includes('Alvarez') && !/don't have a visit/i.test(v),
+      'response names Alvarez');
+  }
+
   const total = passed + failures.length;
   console.log(
     `\n${BOLD}DoctorRead: ${passed}/${total} passed` +

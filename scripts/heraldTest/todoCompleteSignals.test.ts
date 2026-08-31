@@ -119,6 +119,48 @@ export async function runTodoCompleteSignalsTests() {
     );
   }
 
+  console.log(`\n${BOLD}-- Todo-Add Body Capture ---------------------------------${RESET}`);
+
+  {
+    freshDB();
+    const compound = 'Remove that — yeah, but I need to work out and start dinner.';
+    const d = await classifyQuery(compound);
+    assert('compound TODO_ADD does not commit as todo_add',
+      actionType(d), (v) => v !== 'todo_add', 'not todo_add');
+    assert('compound TODO_ADD clarifies instead of storing leading material',
+      { reason: d.reason, body: (d.actionIntent as { body?: string } | undefined)?.body, reply: d.tier1Response },
+      (v) => {
+        const x = v as { reason?: string; body?: string; reply?: string };
+        return x.reason === 'action:todo_add_compound'
+          && !x.body
+          && typeof x.reply === 'string'
+          && !/remove that/i.test(x.reply);
+      },
+      'action:todo_add_compound, no body');
+  }
+
+  const ordinaryAdds: { phrase: string; body: string }[] = [
+    { phrase: 'I need to work out', body: 'work out' },
+    { phrase: 'I have to call the dentist', body: 'call the dentist' },
+    { phrase: 'I gotta wash the car', body: 'wash the car' },
+    { phrase: 'I need to start dinner', body: 'start dinner' },
+    { phrase: 'I should email Jane', body: 'email Jane' },
+    { phrase: 'I must file the taxes', body: 'file the taxes' },
+    { phrase: "don't let me forget to buy stamps", body: 'to buy stamps' },
+    { phrase: 'Kit, I need to work out', body: 'work out' },
+  ];
+  for (const { phrase, body } of ordinaryAdds) {
+    freshDB();
+    const d = await classifyQuery(phrase);
+    assert(`ordinary "${phrase}" → todo_add body "${body}"`,
+      { type: actionType(d), body: (d.actionIntent as { body?: string } | undefined)?.body },
+      (v) => {
+        const x = v as { type?: string; body?: string };
+        return x.type === 'todo_add' && x.body === body;
+      },
+      `todo_add / ${body}`);
+  }
+
   const total = passed + failures.length;
   console.log(
     `\n${BOLD}TodoCompleteSignals: ${passed}/${total} passed` +

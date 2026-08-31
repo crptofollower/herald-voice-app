@@ -251,6 +251,49 @@ export async function runVisitOutcomeHowDidTests() {
     }
   }
 
+  // ── F: historical "see Dr" must not become FUTURE_VISIT / upcoming ────────
+  {
+    freshDB();
+    assert('F1 detectMedicalEvent: "Kit, when did I see Dr Smith last?" is null',
+      detectMedicalEvent('Kit, when did I see Dr Smith last?'),
+      (v) => v === null, 'null');
+    assert('F2 detectMedicalEvent: "When did I last see Dr Smith?" is null',
+      detectMedicalEvent('When did I last see Dr Smith?'),
+      (v) => v === null, 'null');
+    assert('F3 detectMedicalEvent: "When was the last time I saw Dr Smith?" is null',
+      detectMedicalEvent('When was the last time I saw Dr Smith?'),
+      (v) => v === null, 'null');
+
+    const kitRd = await routeIntent('Kit, when did I see Dr Smith last?', ROUTE_DEPS);
+    assert('F4 "Kit, when did I see Dr Smith last?" is not medical_visit_upcoming',
+      kitRd.kind === 'capture' ? kitRd.intents[0]?.type : kitRd.kind,
+      (v) => v !== 'medical_visit_upcoming', 'not medical_visit_upcoming');
+
+    const lastSeeD = await classifyQuery('When did I last see Dr Smith?');
+    assert('F5 "When did I last see Dr Smith?" is visit_history_read', lastSeeD.reason,
+      (v) => v === 'medical:visit_history_read', 'medical:visit_history_read');
+
+    const lastTimeD = await classifyQuery('When was the last time I saw Dr Smith?');
+    assert('F6 "When was the last time I saw Dr Smith?" is visit_history_read', lastTimeD.reason,
+      (v) => v === 'medical:visit_history_read', 'medical:visit_history_read');
+
+    const futureSee = 'I see Dr Hexagon next Tuesday';
+    const ev = detectMedicalEvent(futureSee);
+    assert('F7 detectMedicalEvent: "I see Dr Hexagon next Tuesday" is future visit',
+      ev, (v) => {
+        const e = v as { type?: string; tense?: string; doctor_name?: string } | null;
+        return e?.type === 'visit' && e?.tense === 'future' && e?.doctor_name === 'Dr Hexagon';
+      }, 'visit / future / Dr Hexagon');
+    const futureRd = await routeIntent(futureSee, ROUTE_DEPS);
+    assert('F8 "I see Dr Hexagon next Tuesday" still reaches medical_visit_upcoming',
+      { kind: futureRd.kind, type: futureRd.kind === 'capture' ? futureRd.intents[0]?.type : null },
+      (v) => {
+        const x = v as { kind?: string; type?: string };
+        return x.kind === 'capture' && x.type === 'medical_visit_upcoming';
+      },
+      'capture / medical_visit_upcoming');
+  }
+
   const total = passed + failures.length;
   console.log(
     `\n${BOLD}VisitOutcomeHowDid: ${passed}/${total} passed` +

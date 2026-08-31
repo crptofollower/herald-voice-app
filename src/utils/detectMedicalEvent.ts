@@ -20,7 +20,11 @@ export type MedicalEvent = {
 };
 
 const PAST_VISIT = /\b(saw|visited|visiting|went to|met with|meeting with|had an appointment with|was seeing|were seeing|'ve been seeing|have been seeing|had been seeing)\b/i;
-const FUTURE_VISIT = /\b(have (?:a |an )?(?:doctor'?s?|dentist|dental|follow-?up)?\s?appointment|appointment with|going to see|scheduled with|seeing my|seeing (?:dr\.?|the doctor)|see (?:dr\.?|the doctor))\b/i;
+// Positive forward-looking visit evidence. Bare "see Dr" is NOT sufficient —
+// it collides with historical/interrogative "when did I see Dr X".
+const FUTURE_VISIT = /\b(have (?:a |an )?(?:doctor'?s?|dentist|dental|follow-?up)?\s?appointment|appointment with|going to see|gonna see|will see|scheduled with|seeing my|seeing (?:dr\.?|the doctor))\b/i;
+const FUTURE_SEE_DR = /\bsee (?:dr\.?|the doctor)\b/i;
+const FORWARD_VISIT_EVIDENCE = /\b(?:tomorrow|tonight|soon|coming up|next(?:\s+\w+)?|this (?:afternoon|evening|week|month)|on (?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|at \d)\b/i;
 const MEDICATION = /\b(take|taking|i'm on|prescribed|started|using|use)\b/i;
 const ADVICE = /\b(says i need to|told me to|advised me to|wants me to)\b/i;
 // Question/read-shape guard: a question is never a medical capture. `who` added
@@ -30,8 +34,32 @@ const ADVICE = /\b(says i need to|told me to|advised me to|wants me to)\b/i;
 // closes: PAST_VISIT contains "saw" but not "see", which is why "Who did I see"
 // was already safe and "…I saw" was not. Floor backfill per Spine §3a Law-1
 // corollary — extend the deterministic pattern, never make the fallback smarter.
+const READ_INTERROGATIVE = /^(what|when|who|do i have|show me)\b/i;
 const CALENDAR_READ_START = /^\s*\b(what|when|who|do i have|show me)\b/i;
+// Closed discourse openers only — not arbitrary leading text. A single name
+// token is consumed only when the remainder is immediately read-shaped
+// ("Kit, when…" / "Kit when…") and the token is not a temporal starter.
+const READ_DISCOURSE_OPENER = /^(?:hey|okay|ok|yeah|so|um|uh|please|alright)[,:]?\s+/i;
+const NON_VOCATIVE_READ_TOKEN = /^(yesterday|today|tomorrow|tonight|this|last|next|monday|tuesday|wednesday|thursday|friday|saturday|sunday)$/i;
 const REMINDER_START = /\b(remind me|don't let me forget|set a reminder|reminder to)\b/i;
+
+function afterLeadingReadVocative(text: string): string {
+  let s = text.trim();
+  for (let i = 0; i < 2; i++) {
+    const opener = s.match(READ_DISCOURSE_OPENER);
+    if (!opener) break;
+    s = s.slice(opener[0].length);
+  }
+  const vocative = s.match(/^([A-Za-z]{2,16})[,:]?\s+/);
+  if (
+    vocative &&
+    !NON_VOCATIVE_READ_TOKEN.test(vocative[1]) &&
+    READ_INTERROGATIVE.test(s.slice(vocative[0].length))
+  ) {
+    return s.slice(vocative[0].length);
+  }
+  return text.trim();
+}
 
 // ─── List-context guard (Build A) ─────────────────────────────────────────────
 // List edits collide with medical triggers because "take ... off my list" and
@@ -53,7 +81,8 @@ const DOSAGE = /(\d+(?:\.\d+)?\s*(?:mg|mcg|ml|milligrams?|micrograms?)|\b(?:one|
 // capture guard below uses — exported rather than copy-pasted so the capture
 // decline and the provenance suppression can never drift apart.
 export function isReadShapedUtterance(text: string): boolean {
-  return CALENDAR_READ_START.test(text.trim());
+  const raw = text.trim();
+  return CALENDAR_READ_START.test(raw) || CALENDAR_READ_START.test(afterLeadingReadVocative(raw));
 }
 
 export function extractDoctorName(text: string): string | undefined {
@@ -167,13 +196,14 @@ export function hasMedicalVisitDomainEvidence(text: string): boolean {
 export function detectMedicalEvent(text: string): MedicalEvent | null {
   const raw = text.trim();
   if (!raw) return null;
-  if (CALENDAR_READ_START.test(raw)) return null;
+  if (isReadShapedUtterance(raw)) return null;
   if (REMINDER_START.test(raw)) return null;
   // Build A: never read a list operation as a medical event.
   if (LIST_CONTEXT.test(raw)) return null;
 
   let hasPastVisit = PAST_VISIT.test(raw);
-  const hasFutureVisit = FUTURE_VISIT.test(raw);
+  const hasFutureVisit =
+    FUTURE_VISIT.test(raw) || (FUTURE_SEE_DR.test(raw) && FORWARD_VISIT_EVIDENCE.test(raw));
   const hasMedication = MEDICATION.test(raw);
   const hasAdvice = ADVICE.test(raw);
 

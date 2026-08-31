@@ -45,6 +45,42 @@ export const TODO_ADD_SIGNALS = [
 export const TODO_ADD_PREFIX =
   /^(I need to|I have to|I gotta|I've got to|don't let me forget|I should|I must)\s+/i;
 
+const TODO_ADD_DISCOURSE_OPENER =
+  /^(?:hey|okay|ok|yeah|so|um|uh|please|alright|like)[,:]?\s+/i;
+
+export type TodoAddExtraction =
+  | { kind: 'add'; body: string }
+  | { kind: 'clarify' };
+
+/**
+ * Clause-initial TODO_ADD body capture. A trigger later in a compound
+ * utterance is not authority to commit the whole string as the task body.
+ */
+export function extractTodoAdd(msg: string): TodoAddExtraction | null {
+  if (!TODO_ADD_SIGNALS.some((p) => p.test(msg))) return null;
+  let rest = msg.trim();
+  for (let i = 0; i < 3; i++) {
+    const opener = rest.match(TODO_ADD_DISCOURSE_OPENER);
+    if (!opener) break;
+    rest = rest.slice(opener[0].length);
+  }
+  const prefixAtStart = rest.match(TODO_ADD_PREFIX);
+  if (prefixAtStart) {
+    const body = rest.slice(prefixAtStart[0].length).trim();
+    return body.length > 2 ? { kind: 'add', body } : null;
+  }
+  const vocative = rest.match(/^(?!I\b)([A-Za-z]{2,16})[,:]?\s+(.+)$/s);
+  if (vocative) {
+    const afterName = vocative[2].trim();
+    const namedPrefix = afterName.match(TODO_ADD_PREFIX);
+    if (namedPrefix) {
+      const body = afterName.slice(namedPrefix[0].length).trim();
+      return body.length > 2 ? { kind: 'add', body } : null;
+    }
+  }
+  return { kind: 'clarify' };
+}
+
 // Union of tierRouter TODO_COMPLETE first-person verb patterns (672, 676, 677).
 export const COMPLETED_PAST_FIRST_PERSON_RE =
   /\bI\s+(?:already\s+)?(?:called|finished|completed|did|done|took care of|handled|picked up|dropped off|returned|sent|submitted|paid|filed|bought|got|grabbed|went to|made it to|got to|stopped by)\b/i;

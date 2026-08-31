@@ -24,6 +24,7 @@ import {
   LIST_ADD_SIGNALS,
   TODO_ADD_SIGNALS,
   TODO_ADD_PREFIX,
+  extractTodoAdd,
   COMPLETED_PAST_FIRST_PERSON_RE,
   THIRD_PERSON_REFERENT_RE,
 } from "../utils/instructionSignals";
@@ -351,6 +352,7 @@ const DOCTOR_SUMMARY_READ: RegExp[] = [
 
 const VISIT_HISTORY_READ = [
   /\bwhen did i (?:last )?see\b/i,
+  /\bwhen was the last time i (?:saw|see)\b/i,
   /\bwhen was my (?:last )?(?:appointment|visit)\b/i,
   /\bwhat was (?:it|that) for\b/i,
   // 2026-08-20 (Continuity audit v2 §3.1): subject-complement "who was the
@@ -1195,11 +1197,16 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
 
   // Device: todo add — trigger phrases WITHOUT a resolvable date (date = reminder, not todo)
   if (TODO_ADD_SIGNALS.some((p) => p.test(msg)) && !TODO_DATE_SIGNALS.test(msg) && !detectMedicalEvent(msg)) {
-    const body = msg
-      .replace(/^(I need to|I have to|I gotta|I've got to|don't let me forget|I should|I must)\s*/i, '')
-      .trim();
-    if (body.length > 2) {
-      return { tier: 1, actionIntent: { type: 'todo_add', body }, reason: 'action:todo_add' };
+    const extracted = extractTodoAdd(msg);
+    if (extracted?.kind === 'clarify') {
+      return {
+        tier: 1,
+        tier1Response: "I'm not sure which task to add. Say just the to-do and I'll put it on the list.",
+        reason: 'action:todo_add_compound',
+      };
+    }
+    if (extracted?.kind === 'add' && extracted.body.length > 2) {
+      return { tier: 1, actionIntent: { type: 'todo_add', body: extracted.body }, reason: 'action:todo_add' };
     }
   }
 
@@ -1987,13 +1994,18 @@ export async function scanResidualIntent(
       !TODO_DATE_SIGNALS.test(msg) &&
       !detectMedicalEvent(msg)
     ) {
-      const body = msg
-        .replace(/^(I need to|I have to|I gotta|I've got to|don't let me forget|I should|I must)\s*/i, '')
-        .trim();
-      if (body.length > 2) {
+      const extracted = extractTodoAdd(msg);
+      if (extracted?.kind === 'clarify') {
         return {
           tier: 1,
-          actionIntent: { type: 'todo_add', body },
+          tier1Response: "I'm not sure which task to add. Say just the to-do and I'll put it on the list.",
+          reason: 'residual:todo_add_compound',
+        };
+      }
+      if (extracted?.kind === 'add' && extracted.body.length > 2) {
+        return {
+          tier: 1,
+          actionIntent: { type: 'todo_add', body: extracted.body },
           reason: 'residual:todo_add',
         };
       }
