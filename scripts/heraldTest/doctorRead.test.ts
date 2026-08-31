@@ -855,6 +855,16 @@ export async function runDoctorReadTests() {
       (v) => typeof v === 'string' && v.includes('Alvarez') && !/don't have a visit/i.test(v),
       'response names Alvarez');
   }
+  {
+    freshDB();
+    writeMedicalRecord({ doctor_name: 'Dr. Alvarez', notes: 'visit', visit_date: '2026-07-20' });
+    const d = await classifyQuery('What was the last time I saw Dr Alvarez?');
+    assert('DR51a "What was the last time I saw Dr Alvarez?" is visit_history_read', d.reason,
+      (v) => v === 'medical:visit_history_read', 'medical:visit_history_read');
+    assert('DR51b names Alvarez from history', d.tier1Response,
+      (v) => typeof v === 'string' && v.includes('Alvarez') && !/don't have a visit/i.test(v),
+      'response names Alvarez');
+  }
 
   const total = passed + failures.length;
   console.log(

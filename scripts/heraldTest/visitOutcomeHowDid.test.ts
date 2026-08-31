@@ -277,6 +277,10 @@ export async function runVisitOutcomeHowDidTests() {
     assert('F6 "When was the last time I saw Dr Smith?" is visit_history_read', lastTimeD.reason,
       (v) => v === 'medical:visit_history_read', 'medical:visit_history_read');
 
+    const whatLastTimeD = await classifyQuery('What was the last time I saw Dr Smith?');
+    assert('F6b "What was the last time I saw Dr Smith?" is visit_history_read', whatLastTimeD.reason,
+      (v) => v === 'medical:visit_history_read', 'medical:visit_history_read');
+
     const futureSee = 'I see Dr Hexagon next Tuesday';
     const ev = detectMedicalEvent(futureSee);
     assert('F7 detectMedicalEvent: "I see Dr Hexagon next Tuesday" is future visit',

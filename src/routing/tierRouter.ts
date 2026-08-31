@@ -25,6 +25,9 @@ import {
   TODO_ADD_SIGNALS,
   TODO_ADD_PREFIX,
   extractTodoAdd,
+  extractResidualTodoAdd,
+  boundCapturedTail,
+  splitResidualClauses,
   COMPLETED_PAST_FIRST_PERSON_RE,
   THIRD_PERSON_REFERENT_RE,
 } from "../utils/instructionSignals";
@@ -352,7 +355,7 @@ const DOCTOR_SUMMARY_READ: RegExp[] = [
 
 const VISIT_HISTORY_READ = [
   /\bwhen did i (?:last )?see\b/i,
-  /\bwhen was the last time i (?:saw|see)\b/i,
+  /\b(?:when|what) was the last time i (?:saw|see)\b/i,
   /\bwhen was my (?:last )?(?:appointment|visit)\b/i,
   /\bwhat was (?:it|that) for\b/i,
   // 2026-08-20 (Continuity audit v2 §3.1): subject-complement "who was the
@@ -762,6 +765,30 @@ const LIST_ADD_CONTEXTUAL_SIGNALS = [
   /\b(need\s+to\s+(pick\s+up|get|buy)|gotta\s+get)\s+(.+)/i,
   /\bdon'?t\s+forget\s+(the\s+)?(.+)/i,
 ];
+
+function extractContextualGroceryItem(msg: string): string | null {
+  if (
+    !LIST_ADD_CONTEXTUAL_SIGNALS.some((p) => p.test(msg)) ||
+    LIST_ADD_SIGNALS.some((p) => p.test(msg)) ||
+    /\bdon'?t\s+forget\s+to\b/i.test(msg)
+  ) {
+    return null;
+  }
+  const m =
+    msg.match(/\b(?:running\s+(?:low|out)\s+on?|out\s+of|almost\s+out\s+of)\s+(.+)/i) ??
+    msg.match(/\b(?:need\s+to\s+(?:pick\s+up|get|buy)|gotta\s+get)\s+(.+)/i) ??
+    msg.match(/\bdon'?t\s+forget\s+(?:the\s+)?(.+)/i);
+  const item = boundCapturedTail((m?.[1] ?? '').trim());
+  return item.length > 0 ? item : null;
+}
+
+function extractResidualContextualGroceryItem(msg: string): string | null {
+  for (const clause of splitResidualClauses(msg)) {
+    const item = extractContextualGroceryItem(clause);
+    if (item) return item;
+  }
+  return extractContextualGroceryItem(msg);
+}
 
 const PROFILE_UPDATE_SIGNALS = [
   /\b(change|update|my\s+new)\s+(my\s+)?(insurance|doctor|pharmacy|dentist|specialist|provider)\s+(is\s+|to\s+)(.+)/i,
@@ -1329,16 +1356,8 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   }
 
   // Device: contextual list add
-  if (
-    LIST_ADD_CONTEXTUAL_SIGNALS.some((p) => p.test(msg)) &&
-    !LIST_ADD_SIGNALS.some((p) => p.test(msg)) &&
-    !/\bdon'?t\s+forget\s+to\b/i.test(msg)
-  ) {
-    const m =
-      msg.match(/\b(?:running\s+(?:low|out)\s+on?|out\s+of|almost\s+out\s+of)\s+(.+)/i) ??
-      msg.match(/\b(?:need\s+to\s+(?:pick\s+up|get|buy)|gotta\s+get)\s+(.+)/i) ??
-      msg.match(/\bdon'?t\s+forget\s+(?:the\s+)?(.+)/i);
-    const item = (m?.[1] ?? '').trim();
+  {
+    const item = extractContextualGroceryItem(msg);
     if (item) {
       return {
         tier: 1,
@@ -1967,23 +1986,13 @@ export async function scanResidualIntent(
 
   // Contextual list add — only if primary wasn't list_add
   if (primaryType !== 'list_add') {
-    if (
-      LIST_ADD_CONTEXTUAL_SIGNALS.some((p) => p.test(msg)) &&
-      !LIST_ADD_SIGNALS.some((p) => p.test(msg)) &&
-      !/\bdon'?t\s+forget\s+to\b/i.test(msg)
-    ) {
-      const m =
-        msg.match(/\b(?:running\s+(?:low|out)\s+on?|out\s+of|almost\s+out\s+of)\s+(.+)/i) ??
-        msg.match(/\b(?:need\s+to\s+(?:pick\s+up|get|buy)|gotta\s+get)\s+(.+)/i) ??
-        msg.match(/\bdon'?t\s+forget\s+(?:the\s+)?(.+)/i);
-      const item = (m?.[1] ?? '').trim();
-      if (item) {
-        return {
-          tier: 1,
-          actionIntent: { type: 'list_add', items: [item], listName: 'grocery' },
-          reason: 'residual:list_add:contextual',
-        };
-      }
+    const item = extractResidualContextualGroceryItem(msg);
+    if (item) {
+      return {
+        tier: 1,
+        actionIntent: { type: 'list_add', items: [item], listName: 'grocery' },
+        reason: 'residual:list_add:contextual',
+      };
     }
   }
 
@@ -1994,14 +2003,7 @@ export async function scanResidualIntent(
       !TODO_DATE_SIGNALS.test(msg) &&
       !detectMedicalEvent(msg)
     ) {
-      const extracted = extractTodoAdd(msg);
-      if (extracted?.kind === 'clarify') {
-        return {
-          tier: 1,
-          tier1Response: "I'm not sure which task to add. Say just the to-do and I'll put it on the list.",
-          reason: 'residual:todo_add_compound',
-        };
-      }
+      const extracted = extractResidualTodoAdd(msg);
       if (extracted?.kind === 'add' && extracted.body.length > 2) {
         return {
           tier: 1,

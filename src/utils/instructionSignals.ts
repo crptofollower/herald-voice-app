@@ -45,6 +45,25 @@ export const TODO_ADD_SIGNALS = [
 export const TODO_ADD_PREFIX =
   /^(I need to|I have to|I gotta|I've got to|don't let me forget|I should|I must)\s+/i;
 
+/**
+ * Residual/compound capture boundary. Cuts a captured tail at the start of a
+ * new clause/intent — not at every "and" (so "work out and start dinner" and
+ * "milk and eggs" stay intact). Deliberately omits bare period (protects
+ * "Dr. Smith") and comma (protects list-like bodies).
+ */
+export const RESIDUAL_CLAUSE_SPLIT_RE =
+  /[!?]+|\s+[–—]\s+|\bbut\b|\band\s+(?=I\b|we\b|what\b|when\b|who\b|where\b|why\b|how\b|call\b|remind\b)/i;
+
+export function splitResidualClauses(text: string): string[] {
+  return text.split(RESIDUAL_CLAUSE_SPLIT_RE).map((s) => s.trim()).filter(Boolean);
+}
+
+export function boundCapturedTail(text: string): string {
+  const cut = text.search(RESIDUAL_CLAUSE_SPLIT_RE);
+  if (cut < 0) return text.trim();
+  return text.slice(0, cut).trim();
+}
+
 const TODO_ADD_DISCOURSE_OPENER =
   /^(?:hey|okay|ok|yeah|so|um|uh|please|alright|like)[,:]?\s+/i;
 
@@ -66,7 +85,7 @@ export function extractTodoAdd(msg: string): TodoAddExtraction | null {
   }
   const prefixAtStart = rest.match(TODO_ADD_PREFIX);
   if (prefixAtStart) {
-    const body = rest.slice(prefixAtStart[0].length).trim();
+    const body = boundCapturedTail(rest.slice(prefixAtStart[0].length));
     return body.length > 2 ? { kind: 'add', body } : null;
   }
   const vocative = rest.match(/^(?!I\b)([A-Za-z]{2,16})[,:]?\s+(.+)$/s);
@@ -74,11 +93,27 @@ export function extractTodoAdd(msg: string): TodoAddExtraction | null {
     const afterName = vocative[2].trim();
     const namedPrefix = afterName.match(TODO_ADD_PREFIX);
     if (namedPrefix) {
-      const body = afterName.slice(namedPrefix[0].length).trim();
+      const body = boundCapturedTail(afterName.slice(namedPrefix[0].length));
       return body.length > 2 ? { kind: 'add', body } : null;
     }
   }
   return { kind: 'clarify' };
+}
+
+/**
+ * Residual-seam TODO capture: extract from an isolated clause, never from the
+ * full original utterance through EOS. A leading TODO prefix that primary
+ * already consumed (grocery acquisition, etc.) must not be re-read as the body.
+ */
+export function extractResidualTodoAdd(msg: string): TodoAddExtraction | null {
+  const clauses = splitResidualClauses(msg);
+  if (clauses.length === 0) return null;
+  const skipFirst = clauses.length > 1 && TODO_ADD_PREFIX.test(clauses[0]);
+  for (let i = skipFirst ? 1 : 0; i < clauses.length; i++) {
+    const extracted = extractTodoAdd(clauses[i]);
+    if (extracted?.kind === 'add') return extracted;
+  }
+  return null;
 }
 
 // Union of tierRouter TODO_COMPLETE first-person verb patterns (672, 676, 677).

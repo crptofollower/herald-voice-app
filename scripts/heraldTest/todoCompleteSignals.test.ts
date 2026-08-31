@@ -7,7 +7,7 @@
 
 import Database from 'better-sqlite3';
 import { setDB } from '../../src/db/schema.ts';
-import { classifyQuery } from '../../src/routing/tierRouter.ts';
+import { classifyQuery, scanResidualIntent } from '../../src/routing/tierRouter.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
 
@@ -159,6 +159,103 @@ export async function runTodoCompleteSignalsTests() {
         return x.type === 'todo_add' && x.body === body;
       },
       `todo_add / ${body}`);
+  }
+
+  console.log(`\n${BOLD}-- Residual Capture Bound -------------------------------${RESET}`);
+
+  {
+    freshDB();
+    const d = await classifyQuery('I need to work out and start dinner');
+    assert('multi-word todo "work out and start dinner" stays one body',
+      (d.actionIntent as { body?: string } | undefined)?.body,
+      (v) => v === 'work out and start dinner',
+      'work out and start dinner');
+  }
+  {
+    freshDB();
+    const d = await classifyQuery('I need to work out today');
+    assert('"I need to work out today" is not todo_add (dated contract)',
+      actionType(d), (v) => v !== 'todo_add', 'not todo_add');
+  }
+  {
+    freshDB();
+    const d = await classifyQuery("We're out of milk");
+    assert('simple contextual grocery → list_add milk',
+      { type: actionType(d), items: (d.actionIntent as { items?: string[] } | undefined)?.items },
+      (v) => {
+        const x = v as { type?: string; items?: string[] };
+        return x.type === 'list_add' && x.items?.length === 1 && x.items[0] === 'milk';
+      },
+      'list_add [milk]');
+  }
+  {
+    freshDB();
+    const d = await classifyQuery("We're out of peanut butter");
+    assert('multi-word grocery item peanut butter stays intact',
+      (d.actionIntent as { items?: string[] } | undefined)?.items,
+      (v) => Array.isArray(v) && v.length === 1 && v[0] === 'peanut butter',
+      '[peanut butter]');
+  }
+  {
+    freshDB();
+    const d = await classifyQuery("We're out of milk and eggs");
+    assert('grocery "milk and eggs" conjunction stays one item',
+      (d.actionIntent as { items?: string[] } | undefined)?.items,
+      (v) => Array.isArray(v) && v.length === 1 && v[0] === 'milk and eggs',
+      '[milk and eggs]');
+  }
+  {
+    freshDB();
+    const residual = await scanResidualIntent(
+      'Call Hunter and I need to work out and what is the weather',
+      'call',
+    );
+    assert('residual todo does not persist the weather-question tail',
+      { type: residual?.actionIntent?.type, body: (residual?.actionIntent as { body?: string } | undefined)?.body },
+      (v) => {
+        const x = v as { type?: string; body?: string };
+        return x.type === 'todo_add' && x.body === 'work out';
+      },
+      'todo_add / work out');
+  }
+  {
+    freshDB();
+    const residual = await scanResidualIntent(
+      "Call Hunter and we're out of milk and what is the weather",
+      'call',
+    );
+    assert('residual grocery does not persist the weather-question tail',
+      { type: residual?.actionIntent?.type, items: (residual?.actionIntent as { items?: string[] } | undefined)?.items },
+      (v) => {
+        const x = v as { type?: string; items?: string[] };
+        return x.type === 'list_add' && x.items?.length === 1 && x.items[0] === 'milk';
+      },
+      'list_add [milk]');
+  }
+  {
+    freshDB();
+    const residual = await scanResidualIntent(
+      'I need to pick up milk from the grocery store and I need to work out',
+      'list_add',
+    );
+    assert('residual todo after grocery-acquisition primary is only the later clause',
+      { type: residual?.actionIntent?.type, body: (residual?.actionIntent as { body?: string } | undefined)?.body },
+      (v) => {
+        const x = v as { type?: string; body?: string };
+        return x.type === 'todo_add' && x.body === 'work out' && !/milk/i.test(x.body ?? '');
+      },
+      'todo_add / work out');
+  }
+  {
+    freshDB();
+    const residual = await scanResidualIntent(
+      'Call Hunter and I need to work out and start dinner',
+      'call',
+    );
+    assert('residual todo keeps legitimate and-conjunction body',
+      (residual?.actionIntent as { body?: string } | undefined)?.body,
+      (v) => v === 'work out and start dinner',
+      'work out and start dinner');
   }
 
   const total = passed + failures.length;
