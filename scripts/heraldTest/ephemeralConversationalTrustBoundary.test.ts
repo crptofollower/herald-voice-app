@@ -3,6 +3,8 @@
 
 import {
   EPHEMERAL_CLARIFY_REPLY,
+  hasUnresolvedThirdPartyName,
+  mayRunGenerativeEphemeralPersonalProse,
   resolveEphemeralSeam,
 } from '../../src/utils/ephemeralSeam.ts';
 import { isEligibleForEphemeralConversation } from '../../src/utils/ephemeralConversation.ts';
@@ -137,6 +139,78 @@ export async function runEphemeralConversationalTrustBoundaryTests() {
     assert('A6a ambiguous get-that clarifies', outcome.kind, 'clarify');
     assert('A6b ambiguous get-that uses canned clarify', outcome.reply, EPHEMERAL_CLARIFY_REPLY);
     assertTrue('A6c ambiguous get-that never generates', !generateCalled);
+  }
+
+  // T1 — first mention of a person inside a user-authored interaction report
+  // must continue; names need not already be in thread evidence.
+  {
+    const paulReport =
+      'I talked to Paul yesterday about Herald. He thinks the memory is what really makes this a different product.';
+    assertTrue(
+      'T1 names remain unresolved against empty evidence',
+      hasUnresolvedThirdPartyName(paulReport, ''),
+    );
+    assertTrue(
+      'T1 first-person Paul report may generate on empty evidence',
+      mayRunGenerativeEphemeralPersonalProse({
+        reason: 'default',
+        text: paulReport,
+        hasAuthorizedContinuation: false,
+        hasPendingSession: false,
+        hasContactCollectPending: false,
+        isEligible: true,
+        threadEvidence: '',
+      }),
+    );
+    let generateCalled = false;
+    const outcome = await resolveEphemeralSeam({
+      ...SEAM_READY,
+      text: paulReport,
+      hasAuthorizedContinuation: false,
+      threadEvidence: '',
+      generate: async () => {
+        generateCalled = true;
+        return { status: 'ok', text: 'That tracks with what you heard.' };
+      },
+    });
+    assert('T1a Paul interaction report continues', outcome.kind, 'generative');
+    assertTrue('T1b Paul interaction report reaches generate', generateCalled);
+  }
+  {
+    const danaReport =
+      'I talked to Dana yesterday about the beta. She thinks the local model is what makes it usable.';
+    assertTrue(
+      'T1c Dana names remain unresolved against empty evidence',
+      hasUnresolvedThirdPartyName(danaReport, ''),
+    );
+    let generateCalled = false;
+    const outcome = await resolveEphemeralSeam({
+      ...SEAM_READY,
+      text: danaReport,
+      hasAuthorizedContinuation: false,
+      threadEvidence: '',
+      generate: async () => {
+        generateCalled = true;
+        return { status: 'ok', text: 'Sounds like Dana was focused on the local model.' };
+      },
+    });
+    assert('T1d Dana interaction report continues', outcome.kind, 'generative');
+    assertTrue('T1e Dana interaction report reaches generate', generateCalled);
+  }
+  {
+    let generateCalled = false;
+    const outcome = await resolveEphemeralSeam({
+      ...SEAM_READY,
+      text: 'Tell me about Marcus',
+      hasAuthorizedContinuation: false,
+      threadEvidence: '',
+      generate: async () => {
+        generateCalled = true;
+        return { status: 'ok', text: 'Marcus grew up in Ohio and served overseas.' };
+      },
+    });
+    assert('T1f tell-me-about unresolved name clarifies', outcome.kind, 'clarify');
+    assertTrue('T1g tell-me-about unresolved name never generates', !generateCalled);
   }
 
   // B1 — Paul in evidence, Apollo is a near-miss: clarify, never invent Apollo.

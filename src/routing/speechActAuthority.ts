@@ -58,6 +58,22 @@ export function utteranceHasInteractionReportShape(utterance: string): boolean {
   return INTERACTION_REPORT_RE.test(utterance);
 }
 
+// First-person interaction/report: the user is narrating their own exchange.
+// Same verb class as D1, plus talked/spoke; not a family-relation subject.
+// Questions are excluded so "tell me about NAME" / "what does NAME…" stay closed.
+const FIRST_PERSON_INTERACTION_REPORT_RE = new RegExp(
+  String.raw`^\s*I\s+(?:already\s+)?(?:talked to|spoke with|spoke to|${INTERACTION_REPORT_VERBS})\b`,
+  'i',
+);
+
+/** User-authored interaction report — content is supplied by the speaker, not requested from Herald. */
+export function utteranceHasUserAuthoredInteractionReportShape(utterance: string): boolean {
+  const t = utterance.trim();
+  if (!t || /\?\s*$/.test(t)) return false;
+  if (utteranceHasInteractionReportShape(t)) return true;
+  return FIRST_PERSON_INTERACTION_REPORT_RE.test(t);
+}
+
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

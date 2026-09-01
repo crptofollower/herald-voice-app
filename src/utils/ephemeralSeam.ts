@@ -11,7 +11,10 @@ import { detectFamilyRead, answerFamilyRead } from './familyRead';
 import { answerFromDevice } from './localAnswers';
 import { captureHousehold } from './householdCapture';
 import { dispatchReadIntents, type ReadIntentMeta } from '../routing/readIntent';
-import { utteranceHasInteractionReportShape } from '../routing/speechActAuthority';
+import {
+  utteranceHasInteractionReportShape,
+  utteranceHasUserAuthoredInteractionReportShape,
+} from '../routing/speechActAuthority';
 import { COMPLETED_PAST_FIRST_PERSON_RE } from './instructionSignals';
 import {
   buildBoundedPastEventAcknowledgment,
@@ -131,7 +134,15 @@ export function mayRunGenerativeEphemeralPersonalProse(input: {
   }
   if (isBareZeroEvidenceOpeningFragment(input.text)) return false;
   if (isAmbiguousDemonstrativeQuestion(input.text)) return false;
-  if (hasUnresolvedThirdPartyName(input.text, input.threadEvidence ?? '')) return false;
+  // Unresolved names still contain invention. A first-person interaction
+  // report supplies its own content, so a newly mentioned person is not
+  // itself a reason to refuse conversation.
+  if (
+    hasUnresolvedThirdPartyName(input.text, input.threadEvidence ?? '')
+    && !utteranceHasUserAuthoredInteractionReportShape(input.text)
+  ) {
+    return false;
+  }
   if (input.hasAuthorizedContinuation) return true;
   // Predicate-Extension V1: past personal event reports get bounded ack, not free generative.
   if (utteranceRequiresBoundedPastEventAck(input.text)) return false;
