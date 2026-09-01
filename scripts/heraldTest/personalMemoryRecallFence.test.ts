@@ -281,6 +281,18 @@ export async function runPersonalMemoryRecallFenceTests() {
     );
   }
 
+  {
+    const { decision, llmCalls } = await routeWithHostile('Do you know why I created you?');
+    assert('S4-self kind leftover', decision.kind, (v) => v === 'needs_clarification', 'needs_clarification');
+    assert(
+      'S4-self Herald self-referent is not recall_declined',
+      'reason' in decision ? decision.reason : undefined,
+      (v) => v === 'default',
+      'default',
+    );
+    assert('S4-self no hostile LLM', llmCalls, (v) => v === 0, '0');
+  }
+
   const total = passed + failures.length;
   console.log(
     `\n${BOLD}Personal-Memory Recall Fence: ${passed}/${total} passed` +

@@ -17,6 +17,7 @@ import { withLlamaContextExclusive } from './llamaContextExclusive';
 import { getActiveTurnId, beginCtxCompletion, endCtxCompletion, log as latLog, mono as latMono } from './latencyInstrument';
 import { IMPERATIVE_ACTION_RE } from './instructionSignals';
 import type { HotRingEntry } from './hotNarrativeRing';
+export { isHeraldSelfReferentConversationalShape } from './ephemeralSelfReferent';
 
 // Conversation Ownership Fence (design review 2026-08-15, three rounds;
 // amended same day -- Gap A / Gap B corrections below).
@@ -135,6 +136,8 @@ export function isEligibleForEphemeralConversation(
     // Action and tell-me already returned above. canRunEphemeralConversation
     // (personal-capture, pending, emergency, busy, llmStatus) is unchanged and
     // remains authoritative.
+    // Self-referent Herald-object questions still require thread evidence —
+    // they are not opening-turn eligible, and they do not need app-language.
     return hasAuthorizedImmediateContext;
   }
   return true;

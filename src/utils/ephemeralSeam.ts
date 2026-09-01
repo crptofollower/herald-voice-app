@@ -23,6 +23,35 @@ export const EPHEMERAL_CLARIFY_REPLY =
 
 const FIRST_PERSON_ANCHOR_RE = /\b(I|my|me|we|our)\b/i;
 
+const NAME_CLOSED_CLASS_RE =
+  /^(I|I'm|The|A|An|My|Me|We|Our|You|Your|He|She|They|It|This|That|These|Those|If|When|What|Who|Why|How|Do|Did|Does|Can|Could|Would|Will|Should|And|But|Or|So|For|To|Of|In|On|At|By|With|From|About|Not|No|Yes|Ok|Okay|Herald|Tell|Please|Remind|Call|Text|Make|Set|Add|Let|Thanks|Thank|Yeah|Well|Anyway|Just|Maybe|Actually|Got|Have|Has|Had|Was|Were|Is|Are|Be|Been|Being|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|January|February|March|April|May|June|July|August|September|October|November|December)$/i;
+
+/** Title-case tokens that can stand as third-party person names. STT lowercase is out of scope. */
+export function extractTitleCaseNameTokens(text: string): string[] {
+  const names: string[] = [];
+  const re = /\b([A-Z][a-z]{1,}(?:'[A-Za-z]+)?)\b/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) {
+    if (!NAME_CLOSED_CLASS_RE.test(m[1])) names.push(m[1]);
+  }
+  return names;
+}
+
+/** True when the utterance names a person who is not already in thread evidence. */
+export function hasUnresolvedThirdPartyName(text: string, threadEvidence: string): boolean {
+  const names = extractTitleCaseNameTokens(text);
+  if (names.length === 0) return false;
+  return names.some((n) => !new RegExp(`\\b${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(threadEvidence));
+}
+
+/** Interrogative whose only object is a demonstrative — not Herald identity, not a named person. */
+export function isAmbiguousDemonstrativeQuestion(text: string): boolean {
+  const t = text.trim();
+  if (!t) return false;
+  return /^(?:did|do|can|could|would)\s+you\s+\w+\s+(?:that|this|it)\s*\??\s*$/i.test(t)
+    || /^\s*what about (?:that|this|it)\s*\??\s*$/i.test(t);
+}
+
 export function tryReadIntentReply(meta: ReadIntentMeta | undefined): string | null {
   if (!meta) return null;
   const outcome = dispatchReadIntents(meta.readIntents, { readLabeled: meta.readLabeled });
@@ -90,6 +119,7 @@ export function mayRunGenerativeEphemeralPersonalProse(input: {
   hasPendingSession: boolean;
   hasContactCollectPending: boolean;
   isEligible: boolean;
+  threadEvidence?: string;
 }): boolean {
   if (input.reason !== 'default') return false;
   if (!input.isEligible) return false;
@@ -100,6 +130,8 @@ export function mayRunGenerativeEphemeralPersonalProse(input: {
     return false;
   }
   if (isBareZeroEvidenceOpeningFragment(input.text)) return false;
+  if (isAmbiguousDemonstrativeQuestion(input.text)) return false;
+  if (hasUnresolvedThirdPartyName(input.text, input.threadEvidence ?? '')) return false;
   if (input.hasAuthorizedContinuation) return true;
   // Predicate-Extension V1: past personal event reports get bounded ack, not free generative.
   if (utteranceRequiresBoundedPastEventAck(input.text)) return false;
@@ -108,7 +140,7 @@ export function mayRunGenerativeEphemeralPersonalProse(input: {
 
 export type EphemeralSeamOutcome =
   | { kind: 'authoritative'; reply: string }
-  | { kind: 'clarify'; reply: string }
+  | { kind: 'clarify'; reply: string; grantContinuation: boolean }
   | { kind: 'generative'; reply: string; grantContinuation: boolean };
 
 export async function resolveEphemeralSeam(input: {
@@ -127,6 +159,8 @@ export async function resolveEphemeralSeam(input: {
   generate: () => Promise<EphemeralResult>;
   /** When true, authoritative owners were already run on this turn (offline path). */
   skipAuthoritativeOwners?: boolean;
+  /** Prior HOT-ring user/assistant text — evidence only, not a referent binder. */
+  threadEvidence?: string;
 }): Promise<EphemeralSeamOutcome> {
   if (!input.skipAuthoritativeOwners) {
     const owner = tryAuthoritativeLocalOwnersBeforeEphemeral(input.text, input.readMeta);
@@ -146,6 +180,7 @@ export async function resolveEphemeralSeam(input: {
     hasPendingSession: input.hasPendingSession,
     hasContactCollectPending: input.hasContactCollectPending,
     isEligible: eligible,
+    threadEvidence: input.threadEvidence,
   });
   const repairOwned = hasPendingRepairOwnership({
     hasSessionPending: input.hasPendingSession,
@@ -165,7 +200,9 @@ export async function resolveEphemeralSeam(input: {
   }
 
   if (!mayGenerate) {
-    return { kind: 'clarify', reply: EPHEMERAL_CLARIFY_REPLY };
+    // Clarify still authorizes the next user turn so a repair ("I'm talking
+    // about you") is not a compounding dead end. It does not write HOT prose.
+    return { kind: 'clarify', reply: EPHEMERAL_CLARIFY_REPLY, grantContinuation: true };
   }
 
   const canConverse = canRunEphemeralConversation({
@@ -178,12 +215,12 @@ export async function resolveEphemeralSeam(input: {
     ephemeralBusy: input.ephemeralBusy,
   });
   if (!canConverse) {
-    return { kind: 'clarify', reply: EPHEMERAL_CLARIFY_REPLY };
+    return { kind: 'clarify', reply: EPHEMERAL_CLARIFY_REPLY, grantContinuation: true };
   }
 
   const ephemeral = await input.generate();
   if (ephemeral.status === 'ok') {
     return { kind: 'generative', reply: ephemeral.text, grantContinuation: true };
   }
-  return { kind: 'clarify', reply: EPHEMERAL_CLARIFY_REPLY };
+  return { kind: 'clarify', reply: EPHEMERAL_CLARIFY_REPLY, grantContinuation: true };
 }

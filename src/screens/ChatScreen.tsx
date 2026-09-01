@@ -440,6 +440,10 @@ export default function ChatScreen() {
   const hotRingRef = useRef(createHotNarrativeRing());
   const turnIndexRef = useRef(0);
   const immediateContextAuthorizedRef = useRef(false);
+  // One-turn repair hold after ephemeral clarify — authorizes the next user
+  // turn without writing canned clarify into the HOT ring (evidence stays
+  // generative-only so unresolved names are not laundered into context).
+  const clarifyRepairTurnRef = useRef<number | null>(null);
 
   // ── Scroll snap prevention ────────────────────────────────────────────────
   // Only auto-scroll to bottom when user is already near the bottom, or when
@@ -1105,6 +1109,9 @@ export default function ChatScreen() {
       hotContextForGeneration,
       turnIndexRef.current,
     );
+    if (clarifyRepairTurnRef.current === turnIndexRef.current - 1) {
+      immediateContextAuthorizedRef.current = true;
+    }
 
     const turnId = getActiveTurnId() ?? beginTurn();
     latLog('sendMessage entry', { turnId, inputSource: 'app' });
@@ -1441,6 +1448,9 @@ export default function ChatScreen() {
           classifierBusy: false,
           ephemeralBusy: false,
           generate: runEphemeralGenerate,
+          threadEvidence: hotContextForGeneration
+            .map((e) => (e.assistantHotPolicy === 'include' ? `${e.user}\n${e.assistant}` : e.user))
+            .join('\n'),
         });
         reply = seamOutcome.reply;
         if (seamOutcome.kind === 'generative' && seamOutcome.grantContinuation) {
@@ -1452,6 +1462,9 @@ export default function ChatScreen() {
             assistantHotPolicy: 'include',
           });
           immediateContextAuthorizedRef.current = true;
+          clarifyRepairTurnRef.current = null;
+        } else if (seamOutcome.kind === 'clarify' && seamOutcome.grantContinuation) {
+          clarifyRepairTurnRef.current = turnIndexRef.current;
         }
       }
       addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
@@ -1861,6 +1874,9 @@ export default function ChatScreen() {
             ephemeralBusy: false,
             skipAuthoritativeOwners: true,
             generate: runEphemeralGenerate,
+            threadEvidence: hotContextForGeneration
+              .map((e) => (e.assistantHotPolicy === 'include' ? `${e.user}\n${e.assistant}` : e.user))
+              .join('\n'),
           });
           offlineReply = seamOutcome.reply;
           if (seamOutcome.kind === 'generative' && seamOutcome.grantContinuation) {
@@ -1872,6 +1888,9 @@ export default function ChatScreen() {
               assistantHotPolicy: 'include',
             });
             immediateContextAuthorizedRef.current = true;
+            clarifyRepairTurnRef.current = null;
+          } else if (seamOutcome.kind === 'clarify' && seamOutcome.grantContinuation) {
+            clarifyRepairTurnRef.current = turnIndexRef.current;
           }
         }
         addMessage({ id: generateId('msg'), role: 'user',

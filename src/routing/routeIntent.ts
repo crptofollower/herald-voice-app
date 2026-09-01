@@ -22,6 +22,7 @@ import {
   type CallTextTask,
 } from './callTextReadiness';
 import { isPersonalMemoryRecallQuestion } from './personalMemoryRecall';
+import { isHeraldSelfReferentConversationalShape } from '../utils/ephemeralSelfReferent';
 import { shouldRefuseLlmCaptureProposal } from './speechActAuthority';
 import type { ReadIntentMeta } from './readIntent';
 
@@ -2073,6 +2074,9 @@ export async function routeIntent(
   // Tier-1 device_read paths above already returned; this catches tier-3
   // fallthrough and medical_capture misfires (e.g. "Did you say the doctor…").
   if (isPersonalMemoryRecallQuestion(text)) {
+    if (isHeraldSelfReferentConversationalShape(text)) {
+      return { kind: 'needs_clarification', reason: 'default' };
+    }
     return { kind: 'needs_clarification', reason: 'personal_memory:recall_declined' };
   }
 
