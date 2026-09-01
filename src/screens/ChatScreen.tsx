@@ -82,7 +82,12 @@ import {
   resolveEphemeralSeam,
   EPHEMERAL_CLARIFY_REPLY,
   tryReadIntentReply,
+  mayRunGenerativeEphemeralPersonalProse,
 } from '../utils/ephemeralSeam';
+import {
+  canRunEphemeralConversation,
+  isEligibleForEphemeralConversation,
+} from '../utils/ephemeralConversation';
 import { createHotNarrativeRing, hasImmediatelyAdjacentHotAuthorization } from '../utils/hotNarrativeRing';
 import { answerFromDevice } from '../utils/localAnswers';
 import { parseTimeFromText } from '../utils/parseTime';
@@ -232,6 +237,74 @@ function extractFact(userMsg: string, aiReply: string, category: string): string
   const first = aiReply.split(/[.!?]/)[0]?.trim();
   if (first && first.length >= 15 && first.length <= 100) return first;
   return null;
+}
+
+/** TEMP Gate A device diagnostic — prove canned-clarify vs generate. Remove after proof. */
+async function resolveEphemeralSeamGateADiag(
+  site: 'needs_clarification' | 'offline_fallback',
+  input: Parameters<typeof resolveEphemeralSeam>[0],
+): ReturnType<typeof resolveEphemeralSeam> {
+  const eligible = isEligibleForEphemeralConversation(
+    input.text,
+    input.hasAuthorizedContinuation,
+  );
+  const mayGenerate = mayRunGenerativeEphemeralPersonalProse({
+    reason: input.reason,
+    text: input.text,
+    hasAuthorizedContinuation: input.hasAuthorizedContinuation,
+    hasPendingSession: input.hasPendingSession,
+    hasContactCollectPending: input.hasContactCollectPending,
+    isEligible: eligible,
+    threadEvidence: input.threadEvidence,
+  });
+  const canConverse = canRunEphemeralConversation({
+    rdTier: input.rdTier,
+    hasStructuredCaptures: input.hasStructuredCaptures,
+    isPersonalCaptureRisk: input.isPersonalCaptureRisk,
+    hasPending: input.hasPendingSession,
+    llmStatus: input.llmStatus,
+    classifierBusy: input.classifierBusy,
+    ephemeralBusy: input.ephemeralBusy,
+  });
+  let generateInvoked = false;
+  let generateStatus: string | null = null;
+  let generateReason: string | null = null;
+  let generateTextNonempty: boolean | null = null;
+  const outcome = await resolveEphemeralSeam({
+    ...input,
+    generate: async () => {
+      generateInvoked = true;
+      const result = await input.generate();
+      generateStatus = result.status;
+      generateReason = result.status === 'ok' ? null : result.reason;
+      generateTextNonempty = result.status === 'ok' ? result.text.trim().length > 0 : false;
+      return result;
+    },
+  });
+  console.log('HERALD_GATE_A_DIAG', JSON.stringify({
+    site,
+    text: input.text,
+    routeReason: input.reason,
+    eligible,
+    mayGenerate,
+    canConverse,
+    llmStatus: input.llmStatus,
+    hasPendingSession: input.hasPendingSession,
+    hasContactCollectPending: input.hasContactCollectPending,
+    isPersonalCaptureRisk: input.isPersonalCaptureRisk,
+    hasStructuredCaptures: input.hasStructuredCaptures,
+    classifierBusy: input.classifierBusy,
+    ephemeralBusy: input.ephemeralBusy,
+    rdTier: input.rdTier,
+    hasAuthorizedContinuation: input.hasAuthorizedContinuation,
+    generateInvoked,
+    generateStatus,
+    generateReason,
+    generateTextNonempty,
+    seamKind: outcome.kind,
+    replyNonempty: outcome.reply.trim().length > 0,
+  }));
+  return outcome;
 }
 
 export default function ChatScreen() {
@@ -1434,7 +1507,7 @@ export default function ChatScreen() {
       const canned = EPHEMERAL_CLARIFY_REPLY;
       let reply = canned;
       if (outcome.routeDecision.reason === 'default') {
-        const seamOutcome = await resolveEphemeralSeam({
+        const seamOutcome = await resolveEphemeralSeamGateADiag('needs_clarification', {
           text,
           reason: outcome.routeDecision.reason,
           readMeta: outcome.routeDecision.readMeta,
@@ -1859,7 +1932,7 @@ export default function ChatScreen() {
           offlineReply = offlineReplies[Math.floor(Math.random() * offlineReplies.length)];
         } else {
           // EPHEMERAL CONVERSATION SEAM (Constitution §2) — shared resolveEphemeralSeam.
-          const seamOutcome = await resolveEphemeralSeam({
+          const seamOutcome = await resolveEphemeralSeamGateADiag('offline_fallback', {
             text,
             reason: 'default',
             readMeta: heldReadMeta,
