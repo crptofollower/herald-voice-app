@@ -27,8 +27,10 @@ import {
   extractTodoAdd,
   extractResidualTodoAdd,
   boundCapturedTail,
+  boundMutationObject,
   splitResidualClauses,
-  COMPLETED_PAST_FIRST_PERSON_RE,
+  extractTodoCompleteMutation,
+  extractListRemoveAcquisitionItem,
   THIRD_PERSON_REFERENT_RE,
 } from "../utils/instructionSignals";
 import { isReferentVisitOutcomeQuestion, isReferentUpcomingVisitQuestion, isReferentYearBoundedVisitQuestion, answerUpcomingCalendarEvidence, answerUpcomingGenericDoctorCalendarEvidence } from "./conversationalSubject";
@@ -659,7 +661,6 @@ const TODO_READ_SIGNALS = [
 ];
 
 const TODO_COMPLETE_SIGNALS = [
-  COMPLETED_PAST_FIRST_PERSON_RE,
   /\bcross (off|that off)\b/i,
   /\bmark (that |it )?done\b/i,
   /\bthat('s| is) done\b/i,
@@ -746,7 +747,6 @@ const LIST_REMOVE_SIGNALS = [
   /\b(take|took|taking|get|got|pull|pulled|knock|knocked|cross|crossed|scratch|scratched|mark|marked)\s+(.+?)\s+(off|from|out\s+of)\s+(?:my\s+|the\s+)?(\w+\s+)?lists?\b/i,
   /\b(remove|take\s+off|delete|cross\s+off)\s+(.+?)\s+(from|off)\s+(my\s+)?(\w+\s+)?list\b/i,
   /\b(?:take|get|knock|pull)\s+(.+?)\s+off\s+(?:my\s+|the\s+)?(?:\w+\s+)?lists?\b/i,
-  /\b(i('?ve?)?|we)\s+(got|picked\s+up|grabbed|bought|already\s+have)\s+(?:the\s+)?(.+?)\s*$/i,
   /\b(scratch|cross|mark)\s+off\s+(?:the\s+)?(.+?)\s+(from|on|off)?\s*(my|the)?\s*list\b/i,
 ];
 
@@ -1166,12 +1166,9 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
         /\b(?:take|get|knock|pull)\s+(.+?)\s+off\s+(?:my\s+|the\s+)?(?:(\w+)\s+)?lists?\b/i,
       ) ??
       msg.match(
-        /\b(?:i(?:'?ve?)?|we)\s+(?:got|picked\s+up|grabbed|bought|already\s+have)\s+(?:the\s+)?(.+?)\s*$/i,
-      ) ??
-      msg.match(
         /\b(?:scratch|cross|mark)\s+off\s+(?:the\s+)?(.+?)\s+(?:from|on|off)?\s*(?:my|the)?\s*list\b/i,
       );
-    const item = (m?.[1] ?? '').trim();
+    const item = boundMutationObject(m?.[1] ?? '');
     const listName = (m?.[2] ?? 'grocery').toLowerCase();
     if (item) {
       return {
@@ -1181,12 +1178,23 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
       };
     }
   }
+  {
+    const acquisitionItem = extractListRemoveAcquisitionItem(msg);
+    if (acquisitionItem) {
+      return {
+        tier: 1,
+        actionIntent: { type: 'list_remove', item: acquisitionItem, listName: 'grocery' },
+        reason: 'action:list_remove',
+      };
+    }
+  }
 
   // Device: todo complete — fuzzy match against open items, confirm before write
-  if (TODO_COMPLETE_SIGNALS.some((p) => p.test(msg))) {
+  const todoComplete = extractTodoCompleteMutation(msg);
+  if (todoComplete || TODO_COMPLETE_SIGNALS.some((p) => p.test(msg))) {
     return {
       tier: 1,
-      actionIntent: { type: 'todo_complete', raw: msg },
+      actionIntent: { type: 'todo_complete', raw: todoComplete?.raw ?? msg },
       reason: 'action:todo_complete',
     };
   }

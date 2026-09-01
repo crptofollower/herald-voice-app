@@ -52,7 +52,7 @@ export const TODO_ADD_PREFIX =
  * "Dr. Smith") and comma (protects list-like bodies).
  */
 export const RESIDUAL_CLAUSE_SPLIT_RE =
-  /[!?]+|\s+[–—]\s+|\bbut\b|\band\s+(?=I\b|we\b|what\b|when\b|who\b|where\b|why\b|how\b|call\b|remind\b)/i;
+  /[!?]+|\s+[–—]\s+|\bbut\b|\bbecause\b|\band\s+then\b|\band\s+(?=I\b|we\b|what\b|when\b|who\b|where\b|why\b|how\b|call\b|remind\b)/i;
 
 export function splitResidualClauses(text: string): string[] {
   return text.split(RESIDUAL_CLAUSE_SPLIT_RE).map((s) => s.trim()).filter(Boolean);
@@ -62,6 +62,17 @@ export function boundCapturedTail(text: string): string {
   const cut = text.search(RESIDUAL_CLAUSE_SPLIT_RE);
   if (cut < 0) return text.trim();
   return text.slice(0, cut).trim();
+}
+
+/** Extra object cut for mutation spans. `I need to` is unsafe on the shared
+ *  splitter (it is also a TODO_ADD prefix), so it is applied only here. */
+const MUTATION_OBJECT_TAIL_RE = /\b(?:because|and\s+then|I\s+need\s+to)\b/i;
+
+export function boundMutationObject(text: string): string {
+  const head = boundCapturedTail(text);
+  const cut = head.search(MUTATION_OBJECT_TAIL_RE);
+  if (cut < 0) return head;
+  return head.slice(0, cut).trim();
 }
 
 const TODO_ADD_DISCOURSE_OPENER =
@@ -119,6 +130,82 @@ export function extractResidualTodoAdd(msg: string): TodoAddExtraction | null {
 // Union of tierRouter TODO_COMPLETE first-person verb patterns (672, 676, 677).
 export const COMPLETED_PAST_FIRST_PERSON_RE =
   /\bI\s+(?:already\s+)?(?:called|finished|completed|did|done|took care of|handled|picked up|dropped off|returned|sent|submitted|paid|filed|bought|got|grabbed|went to|made it to|got to|stopped by)\b/i;
+
+const TODO_COMPLETE_EXPLICIT_RE =
+  /\bcross (off|that off)\b|\bmark (that |it )?done\b|\bthat(?:'s| is) done\b/i;
+
+// Longer movement/phrasal verbs first so "got to" does not collapse to "got".
+const TODO_COMPLETE_PAST_EXTRACT_RE =
+  /\bI\s+(?:already\s+)?(took care of|picked up|dropped off|went to|made it to|got to|stopped by|called|finished|completed|did|done|handled|returned|sent|submitted|paid|filed|bought|grabbed|got)\b(.*)$/i;
+
+const MOVEMENT_COMPLETE_VERB_RE =
+  /^(went to|made it to|got to|stopped by)$/i;
+
+const DETERMINED_OR_ANAPHOR_OBJECT_RE =
+  /^(?:the|a|an|my|our|his|her|their|this|that|those|these|it|them)\b/i;
+
+/** Later I/we + verb inside a captured object = a second event, not the referent. */
+const SECOND_EVENT_IN_OBJECT_RE = /\b(?:I|we)\s+\w+/i;
+
+function isMovementCompleteVerb(verb: string): boolean {
+  return MOVEMENT_COMPLETE_VERB_RE.test(verb.trim());
+}
+
+function clauseHasTodoCompleteMutationShape(clause: string): boolean {
+  const t = clause.trim();
+  if (!t) return false;
+  if (TODO_COMPLETE_EXPLICIT_RE.test(t)) return true;
+  const m = t.match(TODO_COMPLETE_PAST_EXTRACT_RE);
+  if (!m) return false;
+  const object = boundMutationObject(m[2] ?? '');
+  if (!object) return false;
+  if (SECOND_EVENT_IN_OBJECT_RE.test(object)) return false;
+  if (isMovementCompleteVerb(m[1] ?? '') && !DETERMINED_OR_ANAPHOR_OBJECT_RE.test(object)) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * True when first-person past (or an explicit complete operator) is a genuine
+ * to-do mutation, not merely narrative that contains overlapping vocabulary.
+ */
+export function extractTodoCompleteMutation(msg: string): { raw: string } | null {
+  const text = msg.trim();
+  if (!text) return null;
+  if (TODO_COMPLETE_EXPLICIT_RE.test(text)) return { raw: text };
+  const clauses = splitResidualClauses(text);
+  const candidates = clauses.length > 0 ? clauses : [text];
+  for (const clause of candidates) {
+    if (clauseHasTodoCompleteMutationShape(clause)) {
+      return { raw: clause.trim() };
+    }
+  }
+  return null;
+}
+
+const LIST_ACQUISITION_CLAUSE_RE =
+  /^(?:i(?:'?ve?)?|we)\s+(?:got|picked\s+up|grabbed|bought)\s+(?:the\s+)?(.+)$/i;
+
+const LIST_ACQUISITION_ALREADY_HAVE_RE =
+  /^(?:i(?:'?ve?)?|we)\s+already\s+have\s+(?:the|my)\s+(.+)$/i;
+
+/**
+ * Clause-initial acquisition-consumption only. A mid-clause "we bought …"
+ * inside a larger report is not list-remove authority.
+ */
+export function extractListRemoveAcquisitionItem(msg: string): string | null {
+  const clauses = splitResidualClauses(msg.trim());
+  const candidates = clauses.length > 0 ? clauses : [msg.trim()];
+  for (const clause of candidates) {
+    const t = clause.trim().replace(/[.,;:]+$/, '');
+    const m = t.match(LIST_ACQUISITION_CLAUSE_RE) ?? t.match(LIST_ACQUISITION_ALREADY_HAVE_RE);
+    if (!m) continue;
+    const item = boundMutationObject(m[1] ?? '');
+    if (item.length > 0 && !SECOND_EVENT_IN_OBJECT_RE.test(item)) return item;
+  }
+  return null;
+}
 
 // Third-person singular referent set. Single owner, shared by Flow C's referent
 // speech acts (conversationalSubject.ts) and the visit-history fail-closed guard
