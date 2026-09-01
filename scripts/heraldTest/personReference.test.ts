@@ -1,7 +1,7 @@
 // scripts/heraldTest/personReference.test.ts
 // Shared person-reference normalization + cross-action extraction consistency.
 
-import { normalizePersonTarget, PERSON_RELATIONSHIP_ALTERNATION, liftRelationshipName } from '../../src/utils/personReference.ts';
+import { normalizePersonTarget, PERSON_RELATIONSHIP_ALTERNATION, liftRelationshipName, isPlausibleSmsContact } from '../../src/utils/personReference.ts';
 import { parseSmsIntent } from '../../src/utils/parseTime.ts';
 import { classifyQuery } from '../../src/routing/tierRouter.ts';
 
@@ -22,6 +22,7 @@ function extractTextContact(msg: string): string | null {
   if (!contactOnlyNorm || SMS_EXCLUDE.test(contactOnlyNorm) || SMS_POSSESSIVE_EXCLUDE.test(contactOnlyNorm)) {
     return null;
   }
+  if (!isPlausibleSmsContact(contactOnlyNorm)) return null;
   return contactOnlyNorm;
 }
 

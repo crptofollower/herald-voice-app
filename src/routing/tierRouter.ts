@@ -14,7 +14,7 @@ import { getRecentMentions, formatRecentMentions } from "../db/recallDB";
 import { detectMedicalEvent, extractDoctorName } from "../utils/detectMedicalEvent";
 import type { MedicalEvent } from "../utils/detectMedicalEvent";
 import { MONTHS, CALENDAR_WRITE_TRIGGER, CALENDAR_WRITE_NAMED_APPOINTMENT, parseDatePhrase } from "../utils/parseTime";
-import { PERSON_RELATIONSHIP_ALTERNATION, normalizePersonTarget, liftRelationshipName } from "../utils/personReference";
+import { PERSON_RELATIONSHIP_ALTERNATION, normalizePersonTarget, liftRelationshipName, isPlausibleSmsContact } from "../utils/personReference";
 import { detectHouseholdRead, type HouseholdReadIntent } from "../utils/householdRead";
 import { detectServiceRemove, detectPhoneCapture } from "../utils/householdCapture";
 import { detectFamilyRead, answerFamilyRead } from "../utils/familyRead";
@@ -1056,7 +1056,12 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     // Normalize before exclude checks so "my wife"-shaped captures become "wife"
     // and possessive/filler tokens still fail SMS_POSSESSIVE_EXCLUDE when bare.
     const contactOnlyNorm = contactOnly ? normalizePersonTarget(contactOnly.trim()) : '';
-    if (contactOnlyNorm && !SMS_EXCLUDE.test(contactOnlyNorm) && !SMS_POSSESSIVE_EXCLUDE.test(contactOnlyNorm)) {
+    if (
+      contactOnlyNorm
+      && !SMS_EXCLUDE.test(contactOnlyNorm)
+      && !SMS_POSSESSIVE_EXCLUDE.test(contactOnlyNorm)
+      && isPlausibleSmsContact(contactOnlyNorm)
+    ) {
       return {
         tier: 1,
         actionIntent: { type: 'sms', contact: contactOnlyNorm, message: '' },
@@ -1117,7 +1122,7 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
 
   // Device: call — resolves contact on device, fires tel: intent
   if (CALL_SIGNALS.some((p) => p.test(msg)) && !REMINDER_SIGNALS.some((p) => p.test(msg)) && !CALL_NUMBER_STATEMENT.test(msg) && !POSSESSIVE_CONTACT_STATEMENT.test(msg) && !TODO_ADD_PREFIX.test(msg) && !READ_QUERY_PREFIX.test(msg)) {
-    const CALL_EXCLUDE = /^(me|you|back|again|later|now|soon|ahead|us|them|it|that|help|ambulance|backup|someone|anyone|911|emergency)$/i;
+    const CALL_EXCLUDE = /^(me|you|back|again|later|now|soon|ahead|us|them|it|that|this|these|those|done|help|ambulance|backup|someone|anyone|911|emergency)$/i;
     // Name token: letters + optional hyphen/apostrophe (O'Brien, Anne-Marie).
     const NAME = String.raw`(?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+|Ms\.?\s+)?[A-Za-z][A-Za-z'-]*(?:\s+[A-Za-z][A-Za-z'-]*)?`;
     // "call for [the] X" — try BEFORE bare "call <name>" so filler "for"/"for the"

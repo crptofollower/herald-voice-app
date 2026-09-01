@@ -8,6 +8,7 @@ import {
   normalizePersonTarget,
   isNameShapedToken,
   SMS_BODY_OPENERS,
+  isPlausibleSmsContact,
 } from './personReference';
 
 export function parseTimeFromText(text: string): { hour: number; minute: number } | null {
@@ -363,11 +364,17 @@ export function parseSmsIntent(text: string): { contact: string; message: string
     const EXCLUDE = /^(me|you|us|them|it|myself|yourself)$/i;
     if (m?.[1] && m?.[2] && !EXCLUDE.test(m[1].trim())) {
       const normalized = normalizeSmsMyRelContact(
-        { contact: m[1].trim(), message: m[2].trim() },
+        {
+          contact: m[1].trim().replace(/[?.!,]+$/g, ''),
+          message: m[2].trim().replace(/[?.!,]+$/g, ''),
+        },
         text,
       );
+      const contact = normalizePersonTarget(normalized.contact);
+      const contactHead = contact.trim().split(/\s+/).filter(Boolean)[0] ?? '';
+      if (!isPlausibleSmsContact(contactHead)) continue;
       return {
-        contact: normalizePersonTarget(normalized.contact),
+        contact,
         message: normalized.message,
       };
     }
@@ -380,6 +387,11 @@ export function parseReminderIntent(
 ): { body: string; time: string } | null {
   const isReminder = /\b(remind me|don't let me forget|remember to|don't forget|set a reminder|reminder to)\b/i.test(text);
   if (!isReminder) return null;
+
+  // Recap / recall "remind me what we've been talking about" is not a timed reminder.
+  if (/\bremind me\s+(what|who|how)\b/i.test(text) && !/\bremind me\s+to\b/i.test(text)) {
+    return null;
+  }
 
   const parsed = parseTimeFromText(text);
   if (!parsed) return null;

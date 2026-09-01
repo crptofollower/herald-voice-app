@@ -4,7 +4,7 @@
 
 // ephemeralConversation.ts — clause-initial imperative action detection.
 export const IMPERATIVE_ACTION_RE =
-  /^\s*(please\s+)?(remind\s+me|don'?t\s+let\s+me\s+forget|make\s+sure\s+i|call|text|add|schedule|set|cancel|delete|remove)\b/i;
+  /^\s*(please\s+)?(remind\s+me(?!\s+what\b)|don'?t\s+let\s+me\s+forget|make\s+sure\s+i|call|text|add|schedule|set|cancel|delete|remove)\b/i;
 
 export const REMINDER_SIGNALS = [
   /\bremind me\b/i,

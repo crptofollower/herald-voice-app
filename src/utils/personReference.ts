@@ -10,6 +10,18 @@ export const PERSON_RELATIONSHIP_ALTERNATION =
 // splitting in the C-4 contact_text arc.
 export const SMS_BODY_OPENERS = /^(?:how|what|when|where|why|that|to|about|i|i'm|im|i'll|ill|hi|hey|hello|please|can|could|will|would|are|is|do|don't|dont|good|thanks|thank|the|a|your|you're|youre|happy|call|come|meet|see|be|we|let's|lets|saying|tell)$/i;
 
+const SMS_NON_CONTACT_RE =
+  /^(me|you|us|them|it|myself|yourself|this|that|these|those|to|talk|chat|speak|speaking|said|saying|done|back|again)$/i;
+
+/** True when a captured SMS target can be a person (name or relationship), not incidental English. */
+export function isPlausibleSmsContact(token: string): boolean {
+  const t = token.trim();
+  if (!t) return false;
+  if (SMS_NON_CONTACT_RE.test(t)) return false;
+  if (/^(my|our|his|her|their|the|a|an)$/i.test(t)) return false;
+  return true;
+}
+
 /** Proper-name token after a relationship word — capitalized, not a sentence-starter/body opener. */
 export function isNameShapedToken(token: string): boolean {
   if (!token || SMS_BODY_OPENERS.test(token)) return false;
