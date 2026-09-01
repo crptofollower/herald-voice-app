@@ -281,7 +281,7 @@ async function resolveEphemeralSeamGateADiag(
       return result;
     },
   });
-  console.log('HERALD_GATE_A_DIAG', JSON.stringify({
+  console.warn('HERALD_GATE_A_DIAG ' + JSON.stringify({
     site,
     text: input.text,
     routeReason: input.reason,
