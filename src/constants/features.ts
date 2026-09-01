@@ -20,6 +20,15 @@ export const LOCAL_LLM_ENABLED = false;
 //   retired classifier, App.tsx Llama-3.2 downloads, or useLocalLLM.
 export const CONVERSATIONAL_WORKER_EXPERIMENT_ENABLED = true;
 
+// LIST_REMOVE_INTERPRETATION_SHADOW_ENABLED:
+//   Bounded diagnostic: independent Qwen ctx proposes list_remove semantics;
+//   deterministic code grounds against a pre-mutation grocery snapshot and
+//   logs a hypothetical authority decision. OFF ⇒ no snapshot, no second
+//   context, no completion, no shadow logs, no production timing from this
+//   path. Never writes, speaks, pending-arms, or shares the conversational
+//   Qwen context.
+export const LIST_REMOVE_INTERPRETATION_SHADOW_ENABLED = true;
+
 // PROACTIVE_SURFACING_ENABLED:
 //   Gates Beat 1 medical appointment surfacing on cold mount
 //   (MEDICAL_SURFACING_DESIGN_SPEC §2.3). Flip false to silence

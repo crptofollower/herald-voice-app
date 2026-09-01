@@ -80,6 +80,15 @@ import {
 import { createLlamaEphemeralWorker } from '../conversation/llamaEphemeralWorker';
 import { createExperimentalQwenLlamaWorker } from '../conversation/experimentalQwenLlamaWorker';
 import { useExperimentalConversationalEngine } from '../conversation/useExperimentalConversationalEngine';
+import { useListRemoveInterpretationShadowEngine } from '../dev/useListRemoveInterpretationShadowEngine';
+import {
+  capturePreTurnGrocerySnapshot,
+  describeProductionOwner,
+  isListRemoveInterpretationShadowEnabled,
+  runListRemoveInterpretationShadow,
+  type ProductionOwnerRecord,
+  type PreTurnGrocerySnapshot,
+} from '../dev/listRemoveInterpretationShadow';
 import {
   resolveEphemeralSeam,
   EPHEMERAL_CLARIFY_REPLY,
@@ -334,6 +343,7 @@ export default function ChatScreen() {
 
   const { status: llmStatus, activeModel, getCtx, getModelIdentity } = useLocalLLM();
   const { status: experimentalConvStatus, getCtx: getExperimentalCtx } = useExperimentalConversationalEngine();
+  const { getCtx: getListRemoveShadowCtx } = useListRemoveInterpretationShadowEngine();
   void activeModel;
 
   type ResolveContactFn = (nameOrRelation: string) => Promise<{ phone: string; name: string; contactId?: string; source: 'herald' | 'device' } | { phone: null; name: string; source: 'device'; candidateNames: string[]; deviceCandidates: { name: string; phone: string }[] } | null>;
@@ -1158,7 +1168,7 @@ export default function ChatScreen() {
     speak(reply);
   }, [addMessage, speak]);
 
-  const sendMessage = useCallback(async (text: string) => {
+  const sendMessage = useCallback(async (text: string, inputSource: 'typed' | 'speech' = 'typed') => {
     const now = Date.now();
     if (now - lastSentRef.current < 1000) return;
     // Allow confirm_call responses through even while sendingRef is locked.
@@ -1246,6 +1256,12 @@ export default function ChatScreen() {
       try {
         await initDB();
       } catch {}
+    }
+
+    let shadowSnapshot: PreTurnGrocerySnapshot | null = null;
+    let shadowProduction: ProductionOwnerRecord | null = null;
+    if (isListRemoveInterpretationShadowEnabled()) {
+      shadowSnapshot = capturePreTurnGrocerySnapshot();
     }
 
     // ── Pending contact collection — user is providing a number or address ──
@@ -1464,6 +1480,19 @@ export default function ChatScreen() {
       },
       resolveContact: resolveContactPhoneRef.current ?? undefined,
     }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current);
+    if (shadowSnapshot) {
+      const rd = outcome.handled ? undefined : outcome.routeDecision;
+      const action = rd && rd.kind === 'device_action' ? rd.actionIntent : undefined;
+      shadowProduction = describeProductionOwner({
+        handled: outcome.handled,
+        source: outcome.handled ? outcome.source : undefined,
+        routeKind: rd?.kind,
+        routeReason: rd && 'reason' in rd ? String(rd.reason) : undefined,
+        actionType: action?.type,
+        productionItem: action?.type === 'list_remove' ? action.item : undefined,
+        productionListName: action?.type === 'list_remove' ? action.listName : undefined,
+      });
+    }
     if (outcome.handled && outcome.source === 'emergency') {
       hotRingRef.current.clear();
       await dispatchEmergency(text);
@@ -2335,6 +2364,18 @@ export default function ChatScreen() {
       }
       resetStreamState();
     } finally {
+      if (shadowSnapshot) {
+        void runListRemoveInterpretationShadow({
+          text,
+          snapshot: shadowSnapshot,
+          production: shadowProduction,
+          asr: {
+            input_source: inputSource,
+            committed_length: text.length,
+          },
+          getShadowCtx: getListRemoveShadowCtx,
+        });
+      }
       // Passive personality observation — fires after every turn, success or failure
       try {
         const lastAssistant = messages[messages.length - 1];
@@ -2347,7 +2388,7 @@ export default function ChatScreen() {
         });
       } catch { /* never block the UI */ }
     }
-  }, [userId, messages, personaKey, lat, lng, locationLabel, getContextBlock, addMessage, setError, resetSpeech, enqueueSentence, resetStreamState, stop, llmStatus, getCtx, getModelIdentity, experimentalConvStatus, getExperimentalCtx, dispatchLocalIntent, dispatchEmergency]);
+  }, [userId, messages, personaKey, lat, lng, locationLabel, getContextBlock, addMessage, setError, resetSpeech, enqueueSentence, resetStreamState, stop, llmStatus, getCtx, getModelIdentity, experimentalConvStatus, getExperimentalCtx, getListRemoveShadowCtx, dispatchLocalIntent, dispatchEmergency]);
 
   const handleSend = useCallback(() => {
     sendMessage(inputText.trim());
@@ -2373,7 +2414,7 @@ export default function ChatScreen() {
       latLog('STT handoff timer fired', { turnId: getActiveTurnId(), delayMs: 600 });
       setInputText('');
       setHeardPreviewText('');
-      sendMessage(trimmed);
+      sendMessage(trimmed, 'speech');
     }, 600);
   }, [sendMessage]);
   const { isRecording, startRecording, stopRecording, suspendForSpeech, partialText } = useMic(handleTranscript, isSpeakingRef);
