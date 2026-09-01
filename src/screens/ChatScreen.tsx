@@ -78,6 +78,8 @@ import {
   generateViaSelectedWorker,
 } from '../conversation/conversationalWorker';
 import { createLlamaEphemeralWorker } from '../conversation/llamaEphemeralWorker';
+import { createExperimentalQwenLlamaWorker } from '../conversation/experimentalQwenLlamaWorker';
+import { useExperimentalConversationalEngine } from '../conversation/useExperimentalConversationalEngine';
 import {
   resolveEphemeralSeam,
   EPHEMERAL_CLARIFY_REPLY,
@@ -331,6 +333,7 @@ export default function ChatScreen() {
   const persona = PERSONAS[personaKey] ?? PERSONAS[DEFAULT_PERSONA];
 
   const { status: llmStatus, activeModel, getCtx, getModelIdentity } = useLocalLLM();
+  const { status: experimentalConvStatus, getCtx: getExperimentalCtx } = useExperimentalConversationalEngine();
   void activeModel;
 
   type ResolveContactFn = (nameOrRelation: string) => Promise<{ phone: string; name: string; contactId?: string; source: 'herald' | 'device' } | { phone: null; name: string; source: 'device'; candidateNames: string[]; deviceCandidates: { name: string; phone: string }[] } | null>;
@@ -1194,6 +1197,7 @@ export default function ChatScreen() {
       const onPartial = beginEphemeralUiStream(turnId);
       const worker = selectConversationalWorker([
         createLlamaEphemeralWorker({ getCtx }),
+        createExperimentalQwenLlamaWorker({ getCtx: getExperimentalCtx }),
       ]);
       return generateViaSelectedWorker(worker, {
         userText: text,
@@ -1203,6 +1207,8 @@ export default function ChatScreen() {
         clearEphemeralUiStream(turnId);
       });
     };
+    const conversationalSeamLlmStatus =
+      experimentalConvStatus === 'ready' ? 'ready' : llmStatus;
 
     // ── Law 0 bridge (interim, Step 3) ─────────────────────────────────────────
     // Catches emergency BEFORE the 1 legacy ref-pending can intercept or
@@ -1517,7 +1523,7 @@ export default function ChatScreen() {
           rdTier: 3,
           hasStructuredCaptures: false,
           isPersonalCaptureRisk: isUnresolvedPersonalCapture(outcome.routeDecision),
-          llmStatus,
+          llmStatus: conversationalSeamLlmStatus,
           classifierBusy: false,
           ephemeralBusy: false,
           generate: runEphemeralGenerate,
@@ -1923,7 +1929,7 @@ export default function ChatScreen() {
         // Model unavailable → "not connected" pool is honest.
         // Model ready but nothing usable → Graceful Confusion (don't claim offline).
         let offlineReply: string;
-        if (llmStatus !== 'ready') {
+        if (llmStatus !== 'ready' && experimentalConvStatus !== 'ready') {
           const offlineReplies = [
             "I'm not connected right now — ask me about your calendar, medications, contacts, or lists.",
             "No connection at the moment. I can still help with anything on your phone — what do you need?",
@@ -1942,7 +1948,7 @@ export default function ChatScreen() {
             rdTier,
             hasStructuredCaptures: false,
             isPersonalCaptureRisk,
-            llmStatus,
+            llmStatus: conversationalSeamLlmStatus,
             classifierBusy: false,
             ephemeralBusy: false,
             skipAuthoritativeOwners: true,
@@ -2341,7 +2347,7 @@ export default function ChatScreen() {
         });
       } catch { /* never block the UI */ }
     }
-  }, [userId, messages, personaKey, lat, lng, locationLabel, getContextBlock, addMessage, setError, resetSpeech, enqueueSentence, resetStreamState, stop, llmStatus, getCtx, getModelIdentity, dispatchLocalIntent, dispatchEmergency]);
+  }, [userId, messages, personaKey, lat, lng, locationLabel, getContextBlock, addMessage, setError, resetSpeech, enqueueSentence, resetStreamState, stop, llmStatus, getCtx, getModelIdentity, experimentalConvStatus, getExperimentalCtx, dispatchLocalIntent, dispatchEmergency]);
 
   const handleSend = useCallback(() => {
     sendMessage(inputText.trim());

@@ -14,6 +14,12 @@
 //   REGISTRY entry in the same session (LLM_LIVE_DESIGN_SPEC P7).
 export const LOCAL_LLM_ENABLED = false;
 
+// CONVERSATIONAL_WORKER_EXPERIMENT_ENABLED:
+//   Independent on-device conversational GGUF (Qwen) offered through
+//   ConversationalWorker → resolveEphemeralSeam. Does NOT enable the
+//   retired classifier, App.tsx Llama-3.2 downloads, or useLocalLLM.
+export const CONVERSATIONAL_WORKER_EXPERIMENT_ENABLED = true;
+
 // PROACTIVE_SURFACING_ENABLED:
 //   Gates Beat 1 medical appointment surfacing on cold mount
 //   (MEDICAL_SURFACING_DESIGN_SPEC §2.3). Flip false to silence
