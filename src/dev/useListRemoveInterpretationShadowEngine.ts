@@ -5,9 +5,17 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { initLlama, type LlamaContext } from 'llama.rn';
 import { LIST_REMOVE_INTERPRETATION_SHADOW_ENABLED } from '../constants/features';
 import { ensureExperimentalQwenModelPath } from '../conversation/experimentalQwenModel';
-import { SHADOW_QWEN_INIT } from './listRemoveInterpretationShadow';
+import { SHADOW_LOG_PREFIX, SHADOW_QWEN_INIT } from './listRemoveInterpretationShadow';
 
 export type ShadowEngineStatus = 'unavailable' | 'loading' | 'ready' | 'error';
+
+function logShadowEngine(event: string, extra: Record<string, unknown> = {}) {
+  console.warn(SHADOW_LOG_PREFIX + ' ' + JSON.stringify({
+    event,
+    fallback_to_conversational_ctx: false,
+    ...extra,
+  }));
+}
 
 export function useListRemoveInterpretationShadowEngine(): {
   status: ShadowEngineStatus;
@@ -29,25 +37,27 @@ export function useListRemoveInterpretationShadowEngine(): {
 
     (async () => {
       setStatus('loading');
+      logShadowEngine('independent_ctx_init_begin');
       try {
         const artifact = await ensureExperimentalQwenModelPath();
-        if (cancelled) return;
+        if (cancelled) {
+          logShadowEngine('independent_ctx_cancelled', { at: 'after_model_path' });
+          return;
+        }
         const ctx = await initLlama({
           model: artifact.path,
           ...SHADOW_QWEN_INIT,
         });
         if (cancelled) {
+          logShadowEngine('independent_ctx_cancelled', { at: 'after_initLlama' });
           await ctx.release().catch(() => {});
           return;
         }
         ctxRef.current = ctx;
         setStatus('ready');
+        logShadowEngine('independent_ctx_ready');
       } catch (e) {
-        console.warn('HERALD_INTERPRETATION_SHADOW ' + JSON.stringify({
-          event: 'independent_ctx_init_failed',
-          error: String(e),
-          fallback_to_conversational_ctx: false,
-        }));
+        logShadowEngine('independent_ctx_init_failed', { error: String(e) });
         ctxRef.current = null;
         if (!cancelled) setStatus('error');
       }

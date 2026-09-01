@@ -2,7 +2,7 @@
 // list_remove interpretation shadow: exact grounding + authority gates.
 // Qwen output is not ground truth. No writer/pending dependency.
 
-import { computeShadowAuthority, fuzzyLikeCandidates, groundExactReferent, normalizeShadowReferent, parseSemanticProposal, type SemanticProposal } from '../../src/dev/listRemoveInterpretationShadow.ts';
+import { computeShadowAuthority, fuzzyLikeCandidates, groundExactReferent, normalizeShadowReferent, parseSemanticProposal, runListRemoveInterpretationShadow, SHADOW_LOG_PREFIX, type SemanticProposal } from '../../src/dev/listRemoveInterpretationShadow.ts';
 import { LIST_REMOVE_SHADOW_CORPUS } from '../../src/dev/listRemoveInterpretationShadowCorpus.ts';
 import { LIST_REMOVE_INTERPRETATION_SHADOW_ENABLED } from '../../src/constants/features.ts';
 import fs from 'node:fs';
@@ -174,19 +174,16 @@ export async function runListRemoveInterpretationShadowTests() {
   );
 
   {
-    const engine = fs.readFileSync(
-      path.join(process.cwd(), 'src/dev/useListRemoveInterpretationShadowEngine.ts'),
-      'utf8',
-    );
-    assert('shadow engine does not import conversational getCtx', engine.includes('useExperimentalConversationalEngine'), (v) => v === false, 'false');
-    assert('shadow engine uses own initLlama', engine.includes('initLlama'), (v) => v === true, 'true');
-  }
-
-  {
     const CHAT = fs.readFileSync(
       path.join(process.cwd(), 'src/screens/ChatScreen.tsx'),
       'utf8',
     );
+    const sendStart = CHAT.indexOf('const sendMessage = useCallback');
+    const sendEnd = CHAT.indexOf('}, [userId, messages, personaKey', sendStart);
+    const sendChunk = CHAT.slice(sendStart, sendEnd);
+    const tryIdx = sendChunk.indexOf('\n    try {');
+    const letIdx = sendChunk.indexOf('let shadowSnapshot');
+    const innerLet = sendChunk.indexOf('let shadowSnapshot', tryIdx);
     assert('ChatScreen schedules shadow after production', CHAT.includes('runListRemoveInterpretationShadow'), (v) => v === true, 'true');
     assert('ChatScreen uses independent shadow ctx', CHAT.includes('getShadowCtx: getListRemoveShadowCtx'), (v) => v === true, 'true');
     assert(
@@ -194,6 +191,112 @@ export async function runListRemoveInterpretationShadowTests() {
       CHAT.includes('isListRemoveInterpretationShadowEnabled()'),
       (v) => v === true,
       'true',
+    );
+    assert(
+      'shadowSnapshot is declared before try (finally-visible)',
+      { letIdx, tryIdx },
+      (v) => {
+        const x = v as { letIdx: number; tryIdx: number };
+        return x.letIdx >= 0 && x.tryIdx >= 0 && x.letIdx < x.tryIdx;
+      },
+      'let before try',
+    );
+    assert(
+      'shadowSnapshot is not redeclared inside try',
+      innerLet,
+      (v) => v === -1,
+      '-1',
+    );
+    assert(
+      'finally still invokes shadow runner',
+      sendChunk.includes('} finally {') && sendChunk.includes('runListRemoveInterpretationShadow'),
+      (v) => v === true,
+      'true',
+    );
+  }
+
+  {
+    const engine = fs.readFileSync(
+      path.join(process.cwd(), 'src/dev/useListRemoveInterpretationShadowEngine.ts'),
+      'utf8',
+    );
+    assert('shadow engine does not import conversational getCtx', engine.includes('useExperimentalConversationalEngine'), (v) => v === false, 'false');
+    assert('shadow engine uses own initLlama', engine.includes('initLlama'), (v) => v === true, 'true');
+    for (const ev of [
+      'independent_ctx_init_begin',
+      'independent_ctx_ready',
+      'independent_ctx_cancelled',
+      'independent_ctx_init_failed',
+    ]) {
+      assert(`engine logs ${ev}`, engine.includes(`'${ev}'`), (v) => v === true, ev);
+    }
+    const flagOff = engine.indexOf('if (!LIST_REMOVE_INTERPRETATION_SHADOW_ENABLED)');
+    const initCall = engine.indexOf('await initLlama(');
+    const flagOffBlockEnd = engine.indexOf('(async () => {', flagOff);
+    assert(
+      'flag OFF returns before initLlama IIFE',
+      { flagOff, initCall, flagOffBlockEnd },
+      (v) => {
+        const x = v as { flagOff: number; initCall: number; flagOffBlockEnd: number };
+        return x.flagOff >= 0 && x.initCall >= 0 && x.flagOffBlockEnd >= 0
+          && x.flagOff < x.flagOffBlockEnd && x.flagOffBlockEnd < x.initCall;
+      },
+      'flag-off before IIFE/initLlama',
+    );
+  }
+
+  {
+    const src = fs.readFileSync(
+      path.join(process.cwd(), 'src/dev/listRemoveInterpretationShadow.ts'),
+      'utf8',
+    );
+    assert(
+      'snapshot is a no-op when flag helper is false',
+      src.includes('if (!isListRemoveInterpretationShadowEnabled()) return null;'),
+      (v) => v === true,
+      'true',
+    );
+    assert(
+      'runner is a no-op when flag helper is false',
+      /export async function runListRemoveInterpretationShadow[\s\S]*?if \(!isListRemoveInterpretationShadowEnabled\(\)\) return;/.test(src),
+      (v) => v === true,
+      'true',
+    );
+  }
+
+  {
+    const warns: string[] = [];
+    const orig = console.warn;
+    console.warn = ((...args: unknown[]) => {
+      warns.push(String(args[0] ?? ''));
+    }) as typeof console.warn;
+    try {
+      await runListRemoveInterpretationShadow({
+        text: 'Remove eggs from my grocery list.',
+        snapshot: { captured_at_ms: 0, elapsed_ms: 0, items: [{ id: 'li_eggs', body: 'eggs' }] },
+        production: null,
+        asr: { input_source: 'typed', committed_length: 12 },
+        getShadowCtx: () => null,
+      });
+    } finally {
+      console.warn = orig;
+    }
+    const row = warns.find((w) => w.startsWith(SHADOW_LOG_PREFIX + ' '));
+    let parsed: { proposal_status?: string; shadow_authorized?: boolean } | null = null;
+    try {
+      parsed = row ? JSON.parse(row.slice(SHADOW_LOG_PREFIX.length + 1)) as { proposal_status?: string; shadow_authorized?: boolean } : null;
+    } catch {
+      parsed = null;
+    }
+    assert('null ctx still emits HERALD_INTERPRETATION_SHADOW turn row', !!row, (v) => v === true, 'true');
+    assert(
+      'null ctx diagnostic is unavailable, not silent',
+      parsed,
+      (v) => {
+        const x = v as { proposal_status?: string; shadow_authorized?: boolean } | null;
+        return x?.proposal_status === 'unavailable' && x.shadow_authorized === false;
+      },
+      'unavailable / not authorized',
     );
   }
 

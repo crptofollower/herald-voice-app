@@ -1242,6 +1242,8 @@ export default function ChatScreen() {
     sendingRef.current = true;
     followTranscriptRef.current = true;
     isAtBottomRef.current = true;
+    let shadowSnapshot: PreTurnGrocerySnapshot | null = null;
+    let shadowProduction: ProductionOwnerRecord | null = null;
     try {
     const historySnapshot = messages.slice(-20).map(({ role, content }) => ({ role, content }));
 
@@ -1258,8 +1260,6 @@ export default function ChatScreen() {
       } catch {}
     }
 
-    let shadowSnapshot: PreTurnGrocerySnapshot | null = null;
-    let shadowProduction: ProductionOwnerRecord | null = null;
     if (isListRemoveInterpretationShadowEnabled()) {
       shadowSnapshot = capturePreTurnGrocerySnapshot();
     }
