@@ -1,0 +1,262 @@
+// Thin Journey Harness V1 — Scenario 17 only.
+// Production seam: normalizeInput → processUtterance → ConversationSession → setDB.
+// No ChatScreen. No second router. No Qwen.
+
+import { execSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import Database from 'better-sqlite3';
+import { setDB } from '../../src/db/schema.ts';
+import { processUtterance, type UtteranceOutcome } from '../../src/routing/processUtterance.ts';
+import { ConversationSession } from '../../src/routing/conversationSession.ts';
+import { classifyQuery } from '../../src/routing/tierRouter.ts';
+import { normalizeInput } from '../../src/utils/normalizeInput.ts';
+import type { RouteDecision } from '../../src/routing/routeIntent.ts';
+
+export const JOURNEY_SCHEMA_VERSION = 'herald.journey.v1';
+
+export type ContractVerdict = 'PASS' | 'FAIL' | 'NOT_GRADEABLE';
+
+export type MedicationRow = {
+  id: string;
+  name: string;
+  dosage: string | null;
+  frequency: string | null;
+  is_active: number;
+  notes: string | null;
+};
+
+export type DbSnapshot = { medications: MedicationRow[] };
+
+export type DbDiff = {
+  added: MedicationRow[];
+  removed: MedicationRow[];
+  changed: Array<{ before: MedicationRow; after: MedicationRow }>;
+};
+
+export type ContractResult = {
+  id: string;
+  description: string;
+  verdict: ContractVerdict;
+  evidence: string;
+};
+
+export type TurnRecord = {
+  turn: number;
+  input: string;
+  input_normalized: string;
+  route_owner: string | null;
+  route_kind: string | null;
+  route_reason: string | null;
+  route_source: string | null;
+  pending_key_before: string | null;
+  pending_key_after: string | null;
+  pending_after: boolean;
+  response: string | null;
+  db_before: DbSnapshot;
+  db_after: DbSnapshot;
+  db_diff: DbDiff;
+  contracts: ContractResult[];
+  result: ContractVerdict;
+};
+
+export type JourneyPacket = {
+  schema_version: string;
+  journey_id: string;
+  run_id: string;
+  git: { branch: string; head: string; dirty: boolean; status_short: string };
+  seed: string;
+  production_seam: string;
+  contracts: string[];
+  turns: TurnRecord[];
+  overall: ContractVerdict;
+  first_material_divergence: string | null;
+  failure_class: 'none' | 'PRODUCT_FAIL' | 'HARNESS_FAIL';
+};
+
+const SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS medications (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, dosage TEXT, frequency TEXT,
+    prescribing_doctor TEXT, start_date TEXT, end_date TEXT,
+    is_active INTEGER DEFAULT 1, notes TEXT, created_at TEXT, removed_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS medical_records (
+    id TEXT PRIMARY KEY, visit_date TEXT, doctor_name TEXT, facility TEXT,
+    reason TEXT, diagnosis TEXT, follow_up TEXT, notes TEXT,
+    status TEXT DEFAULT 'noted', surfaced_at TEXT, removed_at TEXT, created_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS medical_contacts (
+    id TEXT PRIMARY KEY, name TEXT, specialty TEXT, phone TEXT, address TEXT,
+    is_primary INTEGER DEFAULT 0, notes TEXT, created_at TEXT, removed_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS local_profile (
+    key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS calendar_cache (
+    id TEXT PRIMARY KEY, title TEXT NOT NULL, start_ms INTEGER NOT NULL,
+    end_ms INTEGER NOT NULL, all_day INTEGER DEFAULT 0, notes TEXT, cached_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS facts (
+    id TEXT PRIMARY KEY, fact TEXT NOT NULL, category TEXT,
+    confidence TEXT, source_date TEXT, use_count INTEGER DEFAULT 0,
+    last_used TEXT, context_type TEXT, valid_until TEXT, importance_score INTEGER
+  );
+  CREATE TABLE IF NOT EXISTS contacts (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, relationship TEXT, phone TEXT,
+    email TEXT, birthday TEXT, importance INTEGER DEFAULT 5, entity_id TEXT,
+    os_contact_id TEXT, notes TEXT, last_contact TEXT, created_at TEXT,
+    updated_at TEXT, address TEXT, removed_at TEXT, location TEXT, is_emergency INTEGER DEFAULT 0
+  );
+`;
+
+function makeShim(db: Database.Database) {
+  return {
+    getAllSync: (s: string, p: unknown[] = []) => {
+      try { return db.prepare(s).all(...p); } catch { return []; }
+    },
+    getFirstSync: (s: string, p: unknown[] = []) => {
+      try { return db.prepare(s).get(...p) ?? null; } catch { return null; }
+    },
+    runSync: (s: string, p: unknown[] = []) => db.prepare(s).run(...p),
+    execSync: (s: string) => db.exec(s),
+  };
+}
+
+export function snapshotMedications(db: Database.Database): DbSnapshot {
+  const medications = db.prepare(
+    `SELECT id, name, dosage, frequency, is_active, notes
+     FROM medications ORDER BY created_at, id`,
+  ).all() as MedicationRow[];
+  return { medications };
+}
+
+export function diffMedications(before: DbSnapshot, after: DbSnapshot): DbDiff {
+  const beforeById = new Map(before.medications.map((r) => [r.id, r]));
+  const afterById = new Map(after.medications.map((r) => [r.id, r]));
+  const added: MedicationRow[] = [];
+  const removed: MedicationRow[] = [];
+  const changed: DbDiff['changed'] = [];
+  for (const [id, row] of afterById) {
+    const prev = beforeById.get(id);
+    if (!prev) added.push(row);
+    else if (JSON.stringify(prev) !== JSON.stringify(row)) changed.push({ before: prev, after: row });
+  }
+  for (const [id, row] of beforeById) {
+    if (!afterById.has(id)) removed.push(row);
+  }
+  return { added, removed, changed };
+}
+
+export function describeOutcome(outcome: UtteranceOutcome): {
+  route_owner: string | null;
+  route_kind: string | null;
+  route_reason: string | null;
+  route_source: string | null;
+  response: string | null;
+} {
+  if (outcome.handled) {
+    if (outcome.source === 'emergency') {
+      return {
+        route_owner: 'emergency',
+        route_kind: 'emergency',
+        route_reason: null,
+        route_source: 'emergency',
+        response: null,
+      };
+    }
+    const pendingCommit = outcome.commits.find((c) => c.status === 'pending');
+    const reason = pendingCommit && pendingCommit.status === 'pending'
+      ? pendingCommit.pendingKey
+      : outcome.source;
+    return {
+      route_owner: outcome.source,
+      route_kind: outcome.source,
+      route_reason: reason,
+      route_source: outcome.source,
+      response: outcome.responseText,
+    };
+  }
+  const rd: RouteDecision = outcome.routeDecision;
+  const response = rd.kind === 'device_read' ? rd.response : null;
+  return {
+    route_owner: rd.kind,
+    route_kind: rd.kind,
+    route_reason: 'reason' in rd ? String(rd.reason ?? '') : null,
+    route_source: null,
+    response,
+  };
+}
+
+export function captureGitMeta(cwd: string): JourneyPacket['git'] {
+  const run = (cmd: string) => execSync(cmd, { cwd, encoding: 'utf8' }).trim();
+  try {
+    return {
+      branch: run('git rev-parse --abbrev-ref HEAD'),
+      head: run('git rev-parse HEAD'),
+      dirty: run('git status --porcelain') !== '',
+      status_short: run('git status --short'),
+    };
+  } catch {
+    return { branch: 'unknown', head: 'unknown', dirty: true, status_short: 'git unavailable' };
+  }
+}
+
+export function openJourneyDb() {
+  const db = new Database(':memory:');
+  db.exec(SCHEMA_SQL);
+  setDB(makeShim(db));
+  const session = new ConversationSession();
+  const deps = {
+    classifyQuery,
+    classifyLLM: async () => ({ status: 'ok' as const, intents: [] }),
+    llmReady: false,
+    captureContext: { contacts: [] as string[], lists: [] as string[] },
+  };
+  return { db, session, deps };
+}
+
+export async function runJourneyTurn(
+  db: Database.Database,
+  session: ConversationSession,
+  deps: Parameters<typeof processUtterance>[2],
+  turn: number,
+  input: string,
+): Promise<TurnRecord> {
+  const pending_key_before = session.peekPendingKey();
+  const db_before = snapshotMedications(db);
+  const input_normalized = normalizeInput(input);
+  const outcome = await processUtterance(input_normalized, session, deps);
+  const described = describeOutcome(outcome);
+  const db_after = snapshotMedications(db);
+  return {
+    turn,
+    input,
+    input_normalized,
+    ...described,
+    pending_key_before,
+    pending_key_after: session.peekPendingKey(),
+    pending_after: session.hasPending(),
+    db_before,
+    db_after,
+    db_diff: diffMedications(db_before, db_after),
+    contracts: [],
+    result: 'NOT_GRADEABLE',
+  };
+}
+
+export function requiredTurnEvidencePresent(t: TurnRecord): boolean {
+  if (!t.input) return false;
+  if (t.response == null || t.response === '') return false;
+  if (!t.db_before || !t.db_after || !t.db_diff) return false;
+  if (typeof t.pending_after !== 'boolean') return false;
+  return true;
+}
+
+export function writeJourneyPacket(packet: JourneyPacket, filename: string): string {
+  const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'evidence');
+  fs.mkdirSync(dir, { recursive: true });
+  const out = path.join(dir, filename);
+  fs.writeFileSync(out, `${JSON.stringify(packet, null, 2)}\n`, 'utf8');
+  return out;
+}
