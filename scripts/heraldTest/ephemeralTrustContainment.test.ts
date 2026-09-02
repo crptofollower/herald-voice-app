@@ -69,8 +69,8 @@ export async function runEphemeralTrustContainmentTests() {
   // ── 3. Grounded narrative remains generative-eligible ─────────────────────
   assertTrue('ETC-5 grounded narrative not bare zero-evidence',
     !isBareZeroEvidenceOpeningFragment('My son called this morning.'));
-  assertTrue('ETC-6 interaction report blocked from free generative prose',
-    !mayRunGenerativeEphemeralPersonalProse({
+  assertTrue('ETC-6 interaction report may run Conversation Foundation generate',
+    mayRunGenerativeEphemeralPersonalProse({
       reason: 'default',
       text: 'My son called this morning.',
       hasAuthorizedContinuation: false,
@@ -190,8 +190,9 @@ export async function runEphemeralTrustContainmentTests() {
     assertTrue('ETC-15 bare seam never invoked generate', !generateCalled);
   }
 
-  // ── 8. Interaction report — bounded ack even when generate would fail ─────
+  // ── 8. Interaction report — generate failure is fail-closed, not PEC echo ─
   {
+    let generateCalled = false;
     const outcome = await resolveEphemeralSeam({
       text: 'My son called this morning.',
       reason: 'default',
@@ -204,15 +205,17 @@ export async function runEphemeralTrustContainmentTests() {
       llmStatus: 'ready',
       classifierBusy: false,
       ephemeralBusy: false,
-      generate: async () => ({ status: 'unavailable', reason: 'empty-output' }),
+      generate: async () => {
+        generateCalled = true;
+        return { status: 'unavailable', reason: 'empty-output' };
+      },
     });
-    assert('ETC-16 interaction report returns bounded ack not clarify', outcome.kind, 'generative');
-    assert('ETC-17 interaction report bounded reply on generate skip',
-      outcome.reply,
-      'Your son called this morning.');
+    assert('ETC-16 interaction report generate is invoked', generateCalled, true);
+    assert('ETC-17 generate failure clarifies rather than pronoun-shift echo', outcome.kind, 'clarify');
+    assert('ETC-17b generate failure uses canned clarify', outcome.reply, EPHEMERAL_CLARIFY_REPLY);
   }
 
-  // ── 9. Interaction report — bounded ack without free generative ───────────
+  // ── 9. Interaction report — Conversation Foundation owns the reply ────────
   {
     let generateCalled = false;
     const outcome = await resolveEphemeralSeam({
@@ -232,11 +235,11 @@ export async function runEphemeralTrustContainmentTests() {
         return { status: 'ok', text: 'That sounds nice.' };
       },
     });
-    assert('ETC-18 interaction report returns generative kind with bounded reply', outcome.kind, 'generative');
-    assert('ETC-19 interaction report reply stays evidence-bounded',
+    assert('ETC-18 interaction report returns generative kind', outcome.kind, 'generative');
+    assert('ETC-19 interaction report uses generate reply not PEC echo',
       outcome.reply,
-      'Your son called this morning.');
-    assertTrue('ETC-19b interaction report never invoked generate', !generateCalled);
+      'That sounds nice.');
+    assertTrue('ETC-19b interaction report invoked generate', generateCalled);
   }
 
   // ── 10. v1 accepted tradeoff — short reaction may fail bare floor ─────────

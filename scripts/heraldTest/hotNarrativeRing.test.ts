@@ -168,8 +168,12 @@ export async function runHotNarrativeRingTests() {
   }
 
   assertTrue(
-    'auth: ring fullness cannot latch authorization true',
-    !isEligibleForEphemeralConversation('How far away is it?', false),
+    'auth: residual interrogative does not require a continuation slot',
+    isEligibleForEphemeralConversation('How far away is it?', false),
+  );
+  assertTrue(
+    'auth: tell-me still requires an authorized continuation slot',
+    !isEligibleForEphemeralConversation('Tell me more.', false),
   );
 
   // ── Trust-critical policy (existing owner) ────────────────────────────────

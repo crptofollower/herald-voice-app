@@ -63,22 +63,25 @@ export async function runConversationOwnershipFenceTests() {
   assert('21: what would you do', 'What would you do?', true);
   assert('22: do you think should call', 'Do you think I should call him?', true);
 
-  // BLOCK: fact-seeking personal/world questions (round 1 + round 2)
-  assert('23: what do you know about me', 'What do you know about me?', false);
-  assert('24: what do you remember about me', 'What do you remember about me?', false);
-  assert('25: what have I told you', 'What have I told you about myself?', false);
-  assert('26: what do you know family', 'What do you know about my family?', false);
-  assert('27: remember about Hunter', 'What do you remember about Hunter?', false);
-  assert('28: his name again', 'What\'s his name again?', false);
-  assert('29: mRNA vaccines', 'Why do doctors prescribe mRNA vaccines?', false);
-  assert('30: who won game', 'Who won the game last night?', false);
+  // Residual interrogatives (no tell-me wrapper, no imperative): Conversation
+  // Foundation V1 may offer a bounded hop once deterministic owners declined.
+  // This layer does not own calendar/device/family/memory/capability — those
+  // remain upstream. Tell-me fact requests stay fail-closed here (#31, 41-43).
+  assert('23: what do you know about me', 'What do you know about me?', true);
+  assert('24: what do you remember about me', 'What do you remember about me?', true);
+  assert('25: what have I told you', 'What have I told you about myself?', true);
+  assert('26: what do you know family', 'What do you know about my family?', true);
+  assert('27: remember about Hunter', 'What do you remember about Hunter?', true);
+  assert('28: his name again', 'What\'s his name again?', true);
+  assert('29: mRNA vaccines', 'Why do doctors prescribe mRNA vaccines?', true);
+  assert('30: who won game', 'Who won the game last night?', true);
   assert('31: stocks sell', 'Tell me exactly what stocks I should sell.', false);
-  assert('32: Hunters phone number', 'What\'s Hunter\'s phone number?', false);
-  assert('33: what did doctor say', 'What did my doctor say?', false);
-  assert('34: when doctor appointment', 'When is my doctor appointment?', false);
-  assert('35: checking account', 'How much money is in my checking account?', false);
-  assert('36: medications taking', 'What medications am I taking?', false);
-  assert('37: weather tomorrow', 'What\'s the weather tomorrow?', false);
+  assert('32: Hunters phone number', 'What\'s Hunter\'s phone number?', true);
+  assert('33: what did doctor say', 'What did my doctor say?', true);
+  assert('34: when doctor appointment', 'When is my doctor appointment?', true);
+  assert('35: checking account', 'How much money is in my checking account?', true);
+  assert('36: medications taking', 'What medications am I taking?', true);
+  assert('37: weather tomorrow', 'What\'s the weather tomorrow?', true);
 
   // BLOCK: imperative/action-shaped (round 1; #40 is the motivating
   // embedded-clause case for Gap B below)
@@ -120,10 +123,8 @@ export async function runConversationOwnershipFenceTests() {
   assert('54: talked about alarm', 'We talked about setting an alarm.', true);
   assert('55: shannon texted', 'Shannon texted me that she\'ll call later.', true);
 
-  // ── 7b-A: Herald-response-meta leftover interrogative ────────────────────
-  // Exception lives inside the existing interrogative rejection path.
-  // Requires authorized immediate context AND verb∧manner. Default (no
-  // second arg / false) must keep every existing case identical.
+  // Ordinary residual meta-questions are conversational language. They do
+  // not require a continuation slot merely for being interrogative.
   const META_POS = [
     'Are you going to answer the same way each time?',
     'Do you always answer like that?',
@@ -131,7 +132,7 @@ export async function runConversationOwnershipFenceTests() {
     'Are you always going to respond like that?',
   ];
   for (const [i, phrase] of META_POS.entries()) {
-    assert(`56.${i + 1}a no-context "${phrase}" stays blocked`, phrase, false);
+    assert(`56.${i + 1}a no-context "${phrase}" eligible residual`, phrase, true);
     assertWithContext(`56.${i + 1}b with-context "${phrase}" eligible`, phrase, true, true);
   }
 
@@ -153,9 +154,16 @@ export async function runConversationOwnershipFenceTests() {
     assertWithContext(`58.${i + 1} ctx=true "${phrase}" eligible`, phrase, true, true);
   }
 
-  // ── Step 4 Group B: same six with ctx=false ⇒ ineligible (load-bearing) ──
+  // Residual interrogatives are opening-turn eligible. Tell-me wrappers
+  // remain fail-closed without an authorized continuation slot.
   for (const [i, phrase] of STEP4_CTX_ELIGIBLE.entries()) {
-    assertWithContext(`59.${i + 1} ctx=false "${phrase}" ineligible`, phrase, false, false);
+    const tellMe = /^\s*(please\s+)?(can\s+you\s+)?tell\s+me\b/i.test(phrase);
+    assertWithContext(
+      `59.${i + 1} ctx=false "${phrase}" ${tellMe ? 'ineligible tell-me' : 'eligible residual'}`,
+      phrase,
+      false,
+      !tellMe,
+    );
   }
 
   // ── Step 4 Group C: imperatives stay ineligible even with context ─────────

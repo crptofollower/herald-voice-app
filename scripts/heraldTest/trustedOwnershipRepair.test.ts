@@ -19,7 +19,6 @@ import {
   EPHEMERAL_CLARIFY_REPLY,
   resolveEphemeralSeam,
 } from '../../src/utils/ephemeralSeam.ts';
-import { buildBoundedPastEventAcknowledgment } from '../../src/utils/predicateExtensionContainment.ts';
 import type { ClassifyOutcome } from '../../src/hooks/llmLayers.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
@@ -145,15 +144,15 @@ export async function runTrustedOwnershipRepairTests() {
       },
     });
 
-    assert('TOR-T1.7 seam bounded ack path (generative kind)', seamOutcome.kind, 'generative');
+    assert('TOR-T1.7 seam Conversation Foundation path (generative kind)', seamOutcome.kind, 'generative');
     assert(
-      'TOR-T1.8 bounded acknowledgment reply',
+      'TOR-T1.8 generate reply not pronoun-shift echo',
       seamOutcome.reply,
-      buildBoundedPastEventAcknowledgment(sonCaughtUp),
+      'Glad you two talked.',
     );
-    assertTrue('TOR-T1.9 generate never invoked', !generateCalled);
+    assertTrue('TOR-T1.9 generate invoked', generateCalled);
     assertTrue(
-      'TOR-T1.10 bounded ack grants continuation',
+      'TOR-T1.10 generative hop grants continuation',
       seamOutcome.kind === 'generative' && seamOutcome.grantContinuation === true,
     );
     assertTrue(

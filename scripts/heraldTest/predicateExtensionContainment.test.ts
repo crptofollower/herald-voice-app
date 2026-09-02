@@ -1,5 +1,6 @@
 // scripts/heraldTest/predicateExtensionContainment.test.ts
-// Predicate-Extension Containment V1 — production contract (pre-generate bounded ack).
+// Predicate-Extension Containment — helper still exists; it is not a terminal
+// reply owner for otherwise-safe residual narrative.
 
 import {
   buildBoundedPastEventAcknowledgment,
@@ -81,8 +82,8 @@ export async function runPredicateExtensionContainmentTests() {
     buildBoundedPastEventAcknowledgment('I met Michael yesterday.'),
     'You met Michael yesterday.');
 
-  assertTrue('PEC-15 bounded son report blocked from free generative prose',
-    !mayRunGenerativeEphemeralPersonalProse({
+  assertTrue('PEC-15 bounded son report may run Conversation Foundation generate',
+    mayRunGenerativeEphemeralPersonalProse({
       reason: 'default',
       text: sonCalled,
       hasAuthorizedContinuation: false,
@@ -123,8 +124,10 @@ export async function runPredicateExtensionContainmentTests() {
       },
     });
     assert('PEC-18 son called seam returns generative kind', outcome.kind, 'generative');
-    assert('PEC-19 son called bounded reply', outcome.reply, 'Your son called this morning.');
-    assertTrue('PEC-20 son called never invokes generate', !generateCalled);
+    assert('PEC-19 son called uses generate reply not pronoun-shift echo',
+      outcome.reply,
+      "That's great that you got to catch up with him.");
+    assertTrue('PEC-20 son called invokes generate', generateCalled);
   }
 
   {
@@ -146,10 +149,10 @@ export async function runPredicateExtensionContainmentTests() {
         return { status: 'ok', text: 'Glad you two talked.' };
       },
     });
-    assertTrue('PEC-21 rich report bypasses generate', !generateCalled);
-    assert('PEC-22 rich report bounded reply preserves caught up',
+    assertTrue('PEC-21 rich report invokes generate', generateCalled);
+    assert('PEC-22 rich report uses generate reply not pronoun-shift echo',
       outcome.reply,
-      'You saw your son and we caught up for an hour.');
+      'Glad you two talked.');
   }
 
   {

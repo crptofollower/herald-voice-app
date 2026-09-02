@@ -38,6 +38,15 @@ const SCHEMA_SQL = `
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS calendar_cache (
+    id        TEXT PRIMARY KEY,
+    title     TEXT NOT NULL,
+    start_ms  INTEGER NOT NULL,
+    end_ms    INTEGER NOT NULL,
+    all_day   INTEGER DEFAULT 0,
+    notes     TEXT,
+    cached_at TEXT NOT NULL
+  );
 `;
 
 function makeShim(db: Database.Database) {
@@ -464,6 +473,217 @@ export async function runConversationFoundationV1Tests() {
         && inquiryPacket.unverifiedPersonNames.includes('Marcus'),
       (v) => v === true,
       'no verified Marcus facts',
+    );
+  }
+
+  const OPENING_ORDINARY_QUESTIONS = [
+    'What should we do this afternoon?',
+    'Any thoughts on dinner?',
+    "What's a good way to start the morning?",
+    'What do you think I should focus on today?',
+    "What's our plan for today?",
+    "What's our plan for the weekend?",
+  ];
+  for (const phrase of OPENING_ORDINARY_QUESTIONS) {
+    freshDB();
+    const cls = await classifyQuery(phrase);
+    assert(
+      `CF-43 no deterministic owner "${phrase}"`,
+      cls,
+      (v) => {
+        const d = v as { reason?: string; actionIntent?: unknown };
+        return d.reason === 'default' && d.actionIntent == null;
+      },
+      'reason default, no actionIntent',
+    );
+    assert(
+      `CF-44 opening interrogative eligible without continuation "${phrase}"`,
+      isEligible(phrase, false),
+      (v) => v === true,
+      'true',
+    );
+    {
+      let generateCalled = false;
+      const outcome = await resolveEphemeralSeam({
+        ...SEAM_READY,
+        text: phrase,
+        hasAuthorizedContinuation: false,
+        threadEvidence: '',
+        generate: async () => {
+          generateCalled = true;
+          return { status: 'ok', text: 'We could keep it light and decide as we go.' };
+        },
+      });
+      assert(
+        `CF-45 opening question not canned clarify "${phrase}"`,
+        outcome.kind === 'generative' && outcome.reply !== EPHEMERAL_CLARIFY_REPLY,
+        (v) => v === true,
+        'generative',
+      );
+      assert(
+        `CF-46 opening question invokes generate "${phrase}"`,
+        generateCalled,
+        (v) => v === true,
+        'true',
+      );
+    }
+  }
+
+  const BENIGN_NARRATIVES = [
+    'I had lunch with some friends yesterday.',
+    'I went to the park this morning.',
+    'I met an old friend last night.',
+    'I visited my sister over the weekend.',
+  ];
+  for (const phrase of BENIGN_NARRATIVES) {
+    freshDB();
+    const cls = await classifyQuery(phrase);
+    assert(
+      `CF-47 benign narrative is not a write owner "${phrase}"`,
+      cls,
+      (v) => {
+        const d = v as { actionIntent?: { type?: string } | null };
+        const t = d.actionIntent?.type;
+        return t !== 'list_remove' && t !== 'todo_complete' && t !== 'medical_capture'
+          && t !== 'reminder' && t !== 'call' && t !== 'sms';
+      },
+      'no write actionIntent',
+    );
+    {
+      let generateCalled = false;
+      const outcome = await resolveEphemeralSeam({
+        ...SEAM_READY,
+        text: phrase,
+        hasAuthorizedContinuation: false,
+        threadEvidence: '',
+        generate: async () => {
+          generateCalled = true;
+          return { status: 'ok', text: 'Sounds like a good stretch of the day.' };
+        },
+      });
+      assert(
+        `CF-48 benign narrative invokes generate "${phrase}"`,
+        generateCalled && outcome.kind === 'generative',
+        (v) => v === true,
+        'true',
+      );
+      assert(
+        `CF-49 benign narrative is not a terminal PEC echo "${phrase}"`,
+        outcome.reply,
+        (v) => v === 'Sounds like a good stretch of the day.'
+          && !/^You (saw|had|went|met|visited)\b/i.test(String(v)),
+        'generate reply',
+      );
+    }
+  }
+
+  {
+    let generateCalled = false;
+    const first = await resolveEphemeralSeam({
+      ...SEAM_READY,
+      text: 'What should we do this afternoon?',
+      hasAuthorizedContinuation: false,
+      generate: async () => {
+        generateCalled = true;
+        return { status: 'ok', text: 'A walk and an early dinner could work.' };
+      },
+    });
+    assert('CF-50 first hop grants continuation', first.kind === 'generative' && first.grantContinuation === true, (v) => v === true, 'true');
+    generateCalled = false;
+    const second = await resolveEphemeralSeam({
+      ...SEAM_READY,
+      text: 'Why did you suggest that?',
+      hasAuthorizedContinuation: true,
+      generate: async () => {
+        generateCalled = true;
+        return { status: 'ok', text: 'It keeps the day simple without locking you in.' };
+      },
+    });
+    assert(
+      'CF-51 contextual follow-up still reaches generate',
+      generateCalled && second.kind === 'generative',
+      (v) => v === true,
+      'true',
+    );
+  }
+
+  freshDB();
+  const calToday = await classifyQuery("What's on my calendar today?");
+  assert(
+    'CF-52 calendar today remains deterministic',
+    calToday,
+    (v) => {
+      const d = v as { reason?: string; actionIntent?: unknown };
+      return d.reason !== 'default' || d.actionIntent != null;
+    },
+    'not residual default',
+  );
+  freshDB();
+  const plannedToday = await classifyQuery("What's planned for today?");
+  assert(
+    'CF-53 planned-for-today remains calendar-owned',
+    plannedToday,
+    (v) => {
+      const d = v as { reason?: string };
+      return d.reason !== 'default';
+    },
+    'not default',
+  );
+
+  {
+    let generateCalled = false;
+    const pendingSeam = await resolveEphemeralSeam({
+      ...SEAM_READY,
+      text: 'What should we do this afternoon?',
+      hasAuthorizedContinuation: false,
+      hasPendingSession: true,
+      generate: async () => {
+        generateCalled = true;
+        return { status: 'ok', text: 'stolen' };
+      },
+    });
+    assert(
+      'CF-54 pending confirmation blocks Qwen',
+      pendingSeam.kind === 'clarify' && !generateCalled,
+      (v) => v === true,
+      'clarify',
+    );
+  }
+  {
+    let generateCalled = false;
+    const amb = await resolveEphemeralSeam({
+      ...SEAM_READY,
+      text: 'Did you get that?',
+      hasAuthorizedContinuation: false,
+      generate: async () => {
+        generateCalled = true;
+        return { status: 'ok', text: 'stolen' };
+      },
+    });
+    assert(
+      'CF-55 ambiguous demonstrative stays fail-closed',
+      amb.kind === 'clarify' && !generateCalled && amb.reply === EPHEMERAL_CLARIFY_REPLY,
+      (v) => v === true,
+      'clarify',
+    );
+  }
+  {
+    let generateCalled = false;
+    const marcus = await resolveEphemeralSeam({
+      ...SEAM_READY,
+      text: 'Tell me about Marcus.',
+      hasAuthorizedContinuation: false,
+      threadEvidence: '',
+      generate: async () => {
+        generateCalled = true;
+        return { status: 'ok', text: 'Marcus loves flying.' };
+      },
+    });
+    assert(
+      'CF-56 Marcus biography inquiry remains honest miss',
+      !generateCalled && marcus.kind === 'generative' && /don't have anything stored about Marcus/i.test(String(marcus.reply)),
+      (v) => v === true,
+      'honest miss',
     );
   }
 

@@ -17,6 +17,7 @@ import { withLlamaContextExclusive } from './llamaContextExclusive';
 import { getActiveTurnId, beginCtxCompletion, endCtxCompletion, log as latLog, mono as latMono } from './latencyInstrument';
 import { IMPERATIVE_ACTION_RE } from './instructionSignals';
 import type { HotRingEntry } from './hotNarrativeRing';
+import { isHeraldSelfReferentConversationalShape } from './ephemeralSelfReferent';
 export { isHeraldSelfReferentConversationalShape } from './ephemeralSelfReferent';
 
 // Conversation Ownership Fence (design review 2026-08-15, three rounds;
@@ -123,22 +124,17 @@ export function isEligibleForEphemeralConversation(
   }
 
   if (INTERROGATIVE_RE.test(t) && !OPINION_SEEKING_RE.test(t)) {
-    // Step 4 (2026-08-20): supersedes 7b-A's verb∧manner conjunction, which
-    // could only be extended by growing word lists — the exact move this file
-    // forbids. The division is architectural: the LLM handles conversational
-    // language; Herald handles authority and boundaries. Authority is already
-    // established upstream — reaching here requires reason:'default', meaning
-    // every deterministic owner declined, the classifier itself returned
-    // unclear/none, it is not live-data, and it is not a personal-memory recall
-    // question (routeIntent Site-A fence). Combined with a live authorized
-    // slot, that is sufficient; Herald does not additionally need to recognise
-    // that "it"/"that"/"more" constitute anaphora.
-    // Action and tell-me already returned above. canRunEphemeralConversation
-    // (personal-capture, pending, emergency, busy, llmStatus) is unchanged and
-    // remains authoritative.
-    // Self-referent Herald-object questions still require thread evidence —
-    // they are not opening-turn eligible, and they do not need app-language.
-    return hasAuthorizedImmediateContext;
+    // Conversation Foundation residual reachability: once deterministic
+    // owners have declined (seam only runs on reason:'default'), an ordinary
+    // interrogative is conversational language — not a canned miss merely
+    // because no continuation slot exists. Tell-me wrappers and imperatives
+    // already returned above. Ambiguous demonstratives are refused in the
+    // seam. Self-referent Herald-object questions still require thread
+    // evidence (they are not opening-turn eligible).
+    if (isHeraldSelfReferentConversationalShape(t)) {
+      return hasAuthorizedImmediateContext;
+    }
+    return true;
   }
   return true;
 }
