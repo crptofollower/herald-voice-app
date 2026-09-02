@@ -12,6 +12,7 @@ import { getProfileSummary, getProfileField } from "../db/profileDB";
 import { getMedicalSummary, composeMedicalSummary, getMedicalRecords, getDiagnosisSummary, getDoctorsSummary } from "../db/medicalDB";
 import { getRecentMentions, formatRecentMentions } from "../db/recallDB";
 import { detectMedicalEvent, extractDoctorName } from "../utils/detectMedicalEvent";
+import { answerNamedMedicationInquiry } from "../utils/medicationInquiry";
 import type { MedicalEvent } from "../utils/detectMedicalEvent";
 import { MONTHS, CALENDAR_WRITE_TRIGGER, CALENDAR_WRITE_NAMED_APPOINTMENT, parseDatePhrase } from "../utils/parseTime";
 import { PERSON_RELATIONSHIP_ALTERNATION, normalizePersonTarget, liftRelationshipName, isPlausibleSmsContact } from "../utils/personReference";
@@ -1555,6 +1556,19 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
       isMedical: true,
       reason: "medical:visit_year_unresolved_referent",
     };
+  }
+
+  // Named medication inquiry (dose/frequency/schedule/stored record) — read, never capture.
+  {
+    const namedMed = answerNamedMedicationInquiry(msg);
+    if (namedMed) {
+      return {
+        tier: 1,
+        tier1Response: namedMed,
+        isMedical: true,
+        reason: "medical:named_inquiry",
+      };
+    }
   }
 
   // Device: medical capture — past-tense medical events only

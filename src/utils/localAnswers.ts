@@ -14,6 +14,7 @@
 import { getProfileField } from '../db/profileDB';
 import { getActiveMedications, getMedicalRecords } from '../db/medicalDB';
 import { getTopFacts } from '../db/factDB';
+import { answerNamedMedicationInquiry } from './medicationInquiry';
 
 const NAME_PATTERNS = [
   /what('?s| is) my name/i,
@@ -127,6 +128,9 @@ export function answerFromDevice(message: string): string | null {
     if (city) return `You're based in ${city}.`;
     return `I don't have your location saved yet.`;
   }
+
+  const namedMed = answerNamedMedicationInquiry(msg);
+  if (namedMed) return namedMed;
 
   // ── Profile summary ─────────────────────────────────────────────────────────
   if (matchesAny(msg, PROFILE_PATTERNS)) {

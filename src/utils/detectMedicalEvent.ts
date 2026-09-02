@@ -71,6 +71,26 @@ function afterLeadingReadVocative(text: string): string {
 // recoverable; a corrupted medications table is a trust failure.
 const LIST_CONTEXT =
   /\b(grocery|shopping|to-?do|todo)\s+lists?\b|\b(off|from|on|to)\s+(my|the)\s+lists?\b|\bmy\s+lists?\b/i;
+const FREQUENCY_INQUIRY = /\bhow\s+often\b|\bhow\s+many\s+times\b/i;
+const TIMING_INQUIRY = /\bwhen\s+do\s+i\s+take\b/i;
+const DO_I_TAKE_INQUIRY = /\bdo\s+i\s+take\b/i;
+const DOSE_INQUIRY = /\b(?:dose|dosage)\b/i;
+const CATALOG_MED_READ =
+  /\bdo i take (any )?(medication|meds|pills)\b|\bwhat (medication|medications|meds|pills) am i (on|taking)\b|\bwhat do i take\b|\bwhat am i (taking|on)\b/i;
+
+/** Medication taking/dose/frequency questions are reads, never capture. */
+export function isMedicationInquirySpeechAct(text: string): boolean {
+  const raw = text.trim();
+  if (!raw || LIST_CONTEXT.test(raw)) return false;
+  if (CATALOG_MED_READ.test(raw)) return false;
+  if (FREQUENCY_INQUIRY.test(raw) && /\btake\b/i.test(raw)) return true;
+  if (TIMING_INQUIRY.test(raw)) return true;
+  if (DO_I_TAKE_INQUIRY.test(raw)) return true;
+  if (DOSE_INQUIRY.test(raw) && (/\bmy\b/i.test(raw) || /\btake\b/i.test(raw) || /\b(?:of|for)\b/i.test(raw))) {
+    return true;
+  }
+  return false;
+}
 
 const DR_NAME = /Dr\.?\s+(\w+)/i;
 const SPECIALTY =
@@ -197,6 +217,7 @@ export function detectMedicalEvent(text: string): MedicalEvent | null {
   const raw = text.trim();
   if (!raw) return null;
   if (isReadShapedUtterance(raw)) return null;
+  if (isMedicationInquirySpeechAct(raw)) return null;
   if (REMINDER_START.test(raw)) return null;
   // Build A: never read a list operation as a medical event.
   if (LIST_CONTEXT.test(raw)) return null;
