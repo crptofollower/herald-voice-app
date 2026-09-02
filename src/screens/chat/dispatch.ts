@@ -24,6 +24,7 @@ import {
   getPresentedOpenListItems,
 } from '../../db/listRead';
 import { isPersonalDestination, isRelationshipTerm, RELATIONSHIP_WORDS, resolvePersonIdentity, contactHasCapability, resolvePersonCapability } from '../../db/contactsDB';
+import { osNameQuery, osNameFullyCovered } from '../../utils/osContactDestination';
 import { normalizePersonTarget, liftRelationshipName } from '../../utils/personReference';
 import { answerHouseholdRead } from '../../utils/householdRead';
 import { guessMedicationName, deactivateMedicationByName } from '../../db/medicalDB';
@@ -327,7 +328,10 @@ export async function dispatchAction(
               // the raw utterance. Cardinality is derived exclusively from
               // phone-bearing deviceCandidates — candidateNames is never used for
               // the count, and no candidate without a phone is ever selectable.
-              const broadSms = await resolveContactPhone(contact);
+              const osLookup = osNameQuery(contact, only.name);
+              const broadSms = osLookup
+                ? await resolveContactPhone(osLookup)
+                : await resolveContactPhone(contact);
               const reachableCandidates =
                 broadSms &&
                 !broadSms.phone &&
@@ -344,6 +348,14 @@ export async function dispatchAction(
                     return;
                   }
                   await openSmsTo({ name: only.name, phone: cap.value });
+                  return;
+                }
+                if (broadSms?.phone && osNameFullyCovered(osLookup || contact, broadSms.name)) {
+                  if (!message.trim()) {
+                    armSmsRecovery('missing_content', broadSms.name, '');
+                    return;
+                  }
+                  await openSmsTo({ name: broadSms.name, phone: broadSms.phone });
                   return;
                 }
                 if (cap.status === 'ambiguous') {
@@ -388,7 +400,7 @@ export async function dispatchAction(
               resolvedSms = broadSms;
             } else {
               // identity.status === 'none' — temporary exception: existing OS fall-through.
-              resolvedSms = await resolveContactPhone(contact);
+              resolvedSms = await resolveContactPhone(osNameQuery(contact) || contact);
             }
 
             if (resolvedSms?.phone) {

@@ -127,6 +127,7 @@ import {
 import { detectEmergency } from '../routing/emergencySignals';
 import type { IntentRecord } from '../hooks/llmLayers';
 import { dispatchRead, dispatchAction, launchAppAndCompose, releaseOverlappingContactCollect } from './chat/dispatch';
+import { bindOsFiniteSmsDisambiguate } from '../routing/callTextReadiness';
 import type { DispatchDeps } from './chat/dispatch';
 import { canonicalKey } from './chat/launchIdentity';
 import { handleTier1, buildTier2DeviceContext, buildAmbientDeviceContext, writeProfileFromOnboarding } from "../routing/tier1Responses";
@@ -143,10 +144,16 @@ import {
   findContactByName,
   getEmergencyContact,
   setEmergencyContact,
-  nameMatchesQuery,
   normalizeAddressInput,
   setOsPersonCapabilitySearch,
 } from "../db/contactsDB";
+import {
+  osDestinationShape,
+  osNameFullyCovered,
+  osNameQuery,
+  refineOsNameQuery,
+  selectPhoneableOsDestinations,
+} from "../utils/osContactDestination";
 import { writeMedicalRecord, writeMedication, writeMedicalContact, guessMedicationName, confirmMedicationCapture, deactivateMedicationByName } from "../db/medicalDB";
 import { extractDosage } from "../utils/detectMedicalEvent";
 import { drainPendingWrites, getPendingCount, queueWrite } from "../db/pendingWritesDB";
@@ -369,6 +376,9 @@ export default function ChatScreen() {
       return { phone: byName.phone, name: byName.name, contactId: byName.id, source: 'herald' as const };
     }
 
+    const osQuery = osNameQuery(nameOrRelation, byRelation?.name ?? byName?.name);
+    if (!osQuery) return null;
+
     // Pass 2: OS device contacts
     try {
       const Contacts = await import('expo-contacts');
@@ -376,63 +386,20 @@ export default function ChatScreen() {
       if (status !== 'granted') return null;
 
       const { data } = await Contacts.getContactsAsync({
-        fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name],
+        fields: [
+          Contacts.Fields.PhoneNumbers,
+          Contacts.Fields.Name,
+          Contacts.Fields.FirstName,
+          Contacts.Fields.LastName,
+        ],
       });
 
       if (!data?.length) return null;
 
-      // Union of exact + partial name matches (never prefer exact-only over the
-      // full set). Deduplicate, then keep only contacts with a usable phone.
-      const exactMatches = data.filter(c =>
-        c.name?.toLowerCase() === clean ||
-        c.firstName?.toLowerCase() === clean ||
-        c.lastName?.toLowerCase() === clean
-      );
-      // Token-based, order-independent — same distinguishing-word rule as
-      // Herald's own contacts table (contactsDB.ts), so OS-contact matching
-      // and Herald-contact matching can never disagree on what counts as a
-      // match. Fixes S_CONTACT §9 K2: reversed word order ("Clevenger David"
-      // vs stored "David Clevenger") previously returned zero candidates —
-      // a silent miss — instead of even offering ambiguity.
-      const partialMatches = data.filter(c => nameMatchesQuery(c.name, clean));
-
-      const beforeDedup = [...exactMatches, ...partialMatches];
-
-      const deduped = new Map<string, (typeof data)[number]>();
-      for (const c of beforeDedup) {
-        const phoneDigits = c.phoneNumbers?.[0]?.number?.replace(/\D/g, '') ?? '';
-        const key = c.id
-          ? `id:${c.id}`
-          : `np:${(c.name ?? '').trim().toLowerCase()}|${phoneDigits}`;
-        if (!deduped.has(key)) deduped.set(key, c);
-      }
-      const afterDedup = [...deduped.values()];
-
-      const phoneable = afterDedup.filter(c => !!c.phoneNumbers?.[0]?.number?.trim());
-
-      if (phoneable.length === 0) return null;
-
-      // Multiple phoneable matches — honest ambiguity, never a silent guess.
-      // Surface the real names so the caller can ask which one
-      // (Graceful Confusion Rule, CLAUDE.md) instead of claiming no number exists.
-      if (phoneable.length >= 2) {
-        const candidateNames = phoneable
-          .map(c => c.name)
-          .filter((n): n is string => !!n)
-          .slice(0, 5);
-        const deviceCandidates = phoneable
-          .map(c => ({
-            name: c.name ?? nameOrRelation,
-            phone: c.phoneNumbers![0].number!.replace(/\D/g, ''),
-          }))
-          .slice(0, 5);
-        return { phone: null, name: nameOrRelation, source: 'device' as const, candidateNames, deviceCandidates };
-      }
-
-      const match = phoneable[0];
-      const phone = match.phoneNumbers![0].number!.replace(/\D/g, '');
-      const name = match.name ?? nameOrRelation;
-      return { phone, name, source: 'device' as const };
+      const destinations = selectPhoneableOsDestinations(data, osQuery);
+      const shape = osDestinationShape(destinations, nameOrRelation);
+      if (!shape) return null;
+      return shape;
     } catch (e) {
       console.warn('[resolveContactPhone] expo-contacts failed:', e);
     }
@@ -451,24 +418,17 @@ export default function ChatScreen() {
         const { status } = await Contacts.requestPermissionsAsync();
         if (status !== 'granted') return [];
         const { data } = await Contacts.getContactsAsync({
-          fields: [Contacts.Fields.PhoneNumbers, Contacts.Fields.Name],
+          fields: [
+            Contacts.Fields.PhoneNumbers,
+            Contacts.Fields.Name,
+            Contacts.Fields.FirstName,
+            Contacts.Fields.LastName,
+          ],
         });
         if (!data?.length) return [];
-        const query = identity.name.trim().toLowerCase();
+        const query = osNameQuery(identity.name);
         if (!query) return [];
-        const exactMatches = data.filter(c =>
-          c.name?.toLowerCase() === query ||
-          c.firstName?.toLowerCase() === query ||
-          c.lastName?.toLowerCase() === query
-        );
-        const partialMatches = data.filter(c => nameMatchesQuery(c.name, query));
-        const candidates = exactMatches.length > 0 ? exactMatches : partialMatches;
-        return candidates
-          .filter(c => !!c.phoneNumbers?.[0]?.number)
-          .map(c => ({
-            name: c.name ?? identity.name,
-            phone: c.phoneNumbers![0].number!.replace(/\D/g, ''),
-          }));
+        return selectPhoneableOsDestinations(data, query);
       } catch (e) {
         console.warn('[osPersonCapabilitySearch] expo-contacts failed:', e);
         return [];
@@ -1456,6 +1416,75 @@ export default function ChatScreen() {
         sendingRef.current = false;
         setInputText('');
         return;
+      }
+
+      if (pending.action === 'text' && !phoneMatch) {
+        const osQuery = refineOsNameQuery(pending.name, text);
+        if (osQuery) {
+          const device = await resolveContactPhone(osQuery);
+          if (device?.phone && osNameFullyCovered(osQuery, device.name)) {
+            addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+            pendingContactCollectRef.current = null;
+            try {
+              const smsUrl = pending.body
+                ? `sms:${device.phone}?body=${encodeURIComponent(pending.body)}`
+                : `sms:${device.phone}`;
+              await Linking.openURL(smsUrl);
+              const reply = pending.body
+                ? `Opening a message to ${device.name} with your note ready.`
+                : `Opening a message to ${device.name}.`;
+              addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+              speak(reply);
+            } catch {
+              const reply = `I couldn't open a message to ${device.name} — try again.`;
+              addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+              speak(reply);
+            }
+            sendingRef.current = false;
+            setInputText('');
+            return;
+          }
+          if (device && !device.phone && 'deviceCandidates' in device && device.deviceCandidates.length > 0) {
+            addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+            pendingContactCollectRef.current = null;
+            const reachable = device.deviceCandidates.filter(c => !!c.phone?.trim());
+            const names = reachable.map(c => c.name).join(', ');
+            const body = pending.body ?? '';
+            const reply = `I found more than one ${pending.name} in your contacts — ${names}. Which one did you mean?`;
+            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+            speak(reply);
+            const boundOs = bindOsFiniteSmsDisambiguate(
+              reachable.map(c => ({ name: c.name, phone: c.phone })),
+              body,
+              pending.name,
+              async (person) => {
+                const smsUrl = `sms:${person.phone}${body ? `?body=${encodeURIComponent(body)}` : ''}`;
+                try {
+                  await Linking.openURL(smsUrl);
+                  return {
+                    status: 'committed' as const,
+                    ack: body
+                      ? `Opening a message to ${person.name} with your note ready.`
+                      : `Opening a message to ${person.name}.`,
+                  };
+                } catch {
+                  return { status: 'failed' as const, ack: `I couldn't open a message to ${person.name} — try again.` };
+                }
+              },
+            );
+            sessionRef.current.setPending({
+              pendingKey: boundOs.pendingKey,
+              kind: 'standard',
+              budget: boundOs.budget,
+              reaskPrompt: boundOs.reaskPrompt,
+              releasePrompt: boundOs.releasePrompt,
+              resume: boundOs.resume,
+            });
+            sendingRef.current = false;
+            setInputText('');
+            return;
+          }
+        }
       }
 
       // Reply didn't match the expected number/address AND wasn't caught above.

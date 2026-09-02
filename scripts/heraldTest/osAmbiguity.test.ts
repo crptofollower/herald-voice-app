@@ -11,10 +11,15 @@ import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 import { setDB } from '../../src/db/schema.ts';
 import {
-  nameMatchesQuery,
   findContactByRelationship,
   type Contact,
 } from '../../src/db/contactsDB.ts';
+import {
+  firstUsablePhoneDigits,
+  osDestinationShape,
+  selectPhoneableOsDestinations,
+  type OsContactLike,
+} from '../../src/utils/osContactDestination.ts';
 import {
   resolveContactCallIntent,
   DOMAIN_WRITERS,
@@ -103,54 +108,17 @@ type OsContact = {
 };
 
 /**
- * Mirror of ChatScreen.resolveContactPhone Pass-2 phoneable selection
- * (union exact+partial → dedupe → phoneable). Kept in sync via T-OSA-SRC-*.
+ * Production OS phoneable selection (ChatScreen.resolveContactPhone Pass-2).
  */
-function phoneableOsMatches(data: OsContact[], clean: string): OsContact[] {
-  const exactMatches = data.filter(c =>
-    c.name?.toLowerCase() === clean ||
-    c.firstName?.toLowerCase() === clean ||
-    c.lastName?.toLowerCase() === clean
-  );
-  const partialMatches = data.filter(c => nameMatchesQuery(c.name, clean));
-  const deduped = new Map<string, OsContact>();
-  for (const c of [...exactMatches, ...partialMatches]) {
-    const phoneDigits = c.phoneNumbers?.[0]?.number?.replace(/\D/g, '') ?? '';
-    const key = c.id
-      ? `id:${c.id}`
-      : `np:${(c.name ?? '').trim().toLowerCase()}|${phoneDigits}`;
-    if (!deduped.has(key)) deduped.set(key, c);
-  }
-  return [...deduped.values()].filter(c => !!c.phoneNumbers?.[0]?.number?.trim());
+function phoneableOsMatches(data: OsContact[], clean: string) {
+  return selectPhoneableOsDestinations(data as OsContactLike[], clean);
 }
 
-function osShapeFromPhoneable(phoneable: OsContact[], nameOrRelation: string) {
-  if (phoneable.length === 0) return null;
-  if (phoneable.length === 1) {
-    const match = phoneable[0];
-    return {
-      phone: match.phoneNumbers![0].number!.replace(/\D/g, ''),
-      name: match.name ?? nameOrRelation,
-      source: 'device' as const,
-    };
-  }
-  const candidateNames = phoneable
-    .map(c => c.name)
-    .filter((n): n is string => !!n)
-    .slice(0, 5);
-  const deviceCandidates = phoneable
-    .map(c => ({
-      name: c.name ?? nameOrRelation,
-      phone: c.phoneNumbers![0].number!.replace(/\D/g, ''),
-    }))
-    .slice(0, 5);
-  return {
-    phone: null as null,
-    name: nameOrRelation,
-    source: 'device' as const,
-    candidateNames,
-    deviceCandidates,
-  };
+function osShapeFromPhoneable(
+  phoneable: ReturnType<typeof selectPhoneableOsDestinations>,
+  nameOrRelation: string,
+) {
+  return osDestinationShape(phoneable, nameOrRelation);
 }
 
 type ResolveContactResult =
@@ -227,10 +195,14 @@ export async function runOsAmbiguityTests() {
     resolveFnSrc.includes('exactMatches.length > 0 ? exactMatches : partialMatches'),
     v => v === false,
     'ternary absent from resolveContactPhone');
-  assert('T-OSA-SRC-2 phoneable.length >= 2 ambiguity gate present in resolveContactPhone',
-    /phoneable\.length\s*>=\s*2/.test(resolveFnSrc),
-    v => v === true,
-    'phoneable.length >= 2 present');
+  assert('T-OSA-SRC-2 resolveContactPhone uses selectPhoneableOsDestinations + osDestinationShape',
+    {
+      select: resolveFnSrc.includes('selectPhoneableOsDestinations'),
+      shape: resolveFnSrc.includes('osDestinationShape'),
+      slice: resolveFnSrc.includes('.slice(0, 5)'),
+    },
+    v => v.select && v.shape && !v.slice,
+    'shared destination helper; no top-five slice');
 
   // ── Named-person: ChatScreen OS match algorithm (mirrors Pass-2) ─────────
   {
@@ -294,9 +266,9 @@ export async function runOsAmbiguityTests() {
     ];
     const phoneable = phoneableOsMatches(data, 'paul');
     assert('T-OSA-MATCH-4 duplicate id deduped without dropping distinct people',
-      phoneable.map(c => c.id).sort(),
-      v => Array.isArray(v) && v.length === 2 && v.includes('dup') && v.includes('other'),
-      "['dup', 'other']");
+      phoneable.map(c => c.name).sort(),
+      v => Array.isArray(v) && v.length === 2 && v.includes('Paul Smith') && v.includes('Paul Jones'),
+      "['Paul Jones', 'Paul Smith']");
   }
   {
     // No id — distinct name+phone pairs must both remain.
@@ -306,7 +278,7 @@ export async function runOsAmbiguityTests() {
     ];
     const phoneable = phoneableOsMatches(data, 'paul');
     assert('T-OSA-MATCH-5 distinct name+phone pairs kept (no false collapse)',
-      phoneable.map(c => c.phoneNumbers![0].number!.replace(/\D/g, '')).sort(),
+      phoneable.map(c => c.phone).sort(),
       v => Array.isArray(v) && v.length === 2 && v[0] === '5551112222' && v[1] === '5559998888',
       'two distinct phones');
   }
@@ -320,6 +292,32 @@ export async function runOsAmbiguityTests() {
       shape,
       v => !!v && v.phone === null && (v.deviceCandidates?.length ?? 0) >= 2,
       'phone:null with ≥2 deviceCandidates');
+  }
+  {
+    const data: OsContact[] = [
+      { id: 'a', name: 'Jane Adams', phoneNumbers: [{ number: '555-000-0001' }] },
+      { id: 'b', name: 'Jane Brown', phoneNumbers: [{ number: '555-000-0002' }] },
+      { id: 'c', name: 'Jane Clark', phoneNumbers: [{ number: '555-000-0003' }] },
+      { id: 'd', name: 'Jane Davis', phoneNumbers: [{ number: '555-000-0004' }] },
+      { id: 'e', name: 'Jane Evans', phoneNumbers: [{ number: '555-000-0005' }] },
+      { id: 'f', name: 'Jane Smith', phoneNumbers: [{ number: '555-000-0006' }] },
+    ];
+    const given = phoneableOsMatches(data, 'jane');
+    const refined = phoneableOsMatches(data, 'jane smith');
+    assert('T-OSA-MATCH-7 six given-name hits remain; surname refine keeps Jane Smith',
+      { given: given.length, smith: refined.map(c => c.name) },
+      v => v.given === 6 && v.smith.length === 1 && v.smith[0] === 'Jane Smith',
+      'no top-five identity loss; Jane Smith discoverable after refine');
+  }
+  {
+    const data: OsContact[] = [
+      { id: 'later', name: 'Jane Smith', phoneNumbers: [{ number: '' }, { number: '555-222-3333' }] },
+    ];
+    const phoneable = phoneableOsMatches(data, 'jane smith');
+    assert('T-OSA-MATCH-8 first phone empty, later usable → still phoneable',
+      { n: phoneable.length, phone: phoneable[0]?.phone, digits: firstUsablePhoneDigits(data[0].phoneNumbers) },
+      v => v.n === 1 && v.phone === '5552223333' && v.digits === '5552223333',
+      'first-usable-number, not index 0');
   }
 
   // ── CALL named-person: resolveContactCallIntent + contact_call writer ─────

@@ -11,6 +11,7 @@ import { getDB } from '../db/schema';
 import { capturePerson } from '../db/capturePerson';
 import { findContactByName, setEmergencyContact, getEmergencyContact, retireRelationshipHolder, RELATIONSHIP_WORDS, resolvePersonIdentity, contactHasCapability, resolvePersonCapability, attachPhoneToContactById } from '../db/contactsDB';
 import { normalizePersonTarget, liftRelationshipName } from '../utils/personReference';
+import { osNameQuery, refineOsNameQuery, osNameFullyCovered } from '../utils/osContactDestination';
 import { getActiveTurnId, log as latLog, mono as latMono } from '../utils/latencyInstrument';
 import { normalizePhone } from '../utils/phone';
 import { buildPhoneConfirmPending, formatPhoneForSpeech } from '../utils/phoneConfirm';
@@ -95,6 +96,11 @@ export async function resolveContactCallIntent(
   const cleaned = liftRelationshipName(normalizePersonTarget(contactName));
 
   const identity = resolvePersonIdentity(contactName);
+  const osQueryFor = (heraldName?: string) => {
+    const fromContact = osNameQuery(contactName, heraldName) || osNameQuery(cleaned, heraldName);
+    const fromRaw = osNameQuery(raw, heraldName);
+    return refineOsNameQuery(fromContact, fromRaw) || fromContact || fromRaw;
+  };
 
   if (identity.status === 'ambiguous') {
     return {
@@ -120,15 +126,29 @@ export async function resolveContactCallIntent(
     // path. Only phone-bearing device candidates count toward cardinality; a
     // candidate that cannot be dialed is not a candidate.
     if (deps.resolveContact) {
-      const deviceQuery = cleaned || contactName.trim().toLowerCase()
-        .replace(/[\u2018\u2019\u02BC\u0060]/g, "'")
-        .replace(/^(?:my|the|a)\s+/, '');
-      const broad = await deps.resolveContact(deviceQuery);
+      const deviceQuery = osQueryFor(c.name);
+      const broad = deviceQuery ? await deps.resolveContact(deviceQuery) : null;
+      if (broad && broad.phone) {
+        const heraldPhone = (c.phone ?? '').trim();
+        if (!heraldPhone && osNameFullyCovered(deviceQuery, broad.name)) {
+          return {
+            type: 'contact_call',
+            contact: contactName,
+            candidates: [{
+              name: broad.name,
+              relationship: c.relationship,
+              phone: broad.phone,
+              importance: c.importance,
+            }],
+            raw,
+          };
+        }
+      }
       const reachableCandidates =
         broad &&
         !broad.phone &&
         'deviceCandidates' in broad
-          ? broad.deviceCandidates.filter(c => !!c.phone?.trim())
+          ? broad.deviceCandidates.filter(dc => !!dc.phone?.trim())
           : [];
       if (reachableCandidates.length > 1) {
         const candidates = reachableCandidates.map(dc => ({ name: dc.name, phone: dc.phone, importance: 5 }));
@@ -178,10 +198,8 @@ export async function resolveContactCallIntent(
   }
 
   // identity.status === 'none' — temporary exception: existing OS fall-through.
-  const deviceQuery = cleaned || contactName.trim().toLowerCase()
-    .replace(/[\u2018\u2019\u02BC\u0060]/g, "'")
-    .replace(/^(?:my|the|a)\s+/, '');
-  const device = deps.resolveContact ? await deps.resolveContact(deviceQuery) : null;
+  const deviceQuery = osQueryFor() || contactName;
+  const device = deviceQuery && deps.resolveContact ? await deps.resolveContact(deviceQuery) : null;
   if (device && device.phone) {
     return { type: 'contact_call', contact: contactName, devicePhone: device.phone, deviceName: device.name, raw };
   }
@@ -1493,7 +1511,8 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
             if (known && !lookupTarget) {
               return { status: 'noop', ack: '' };
             }
-            const replyIdentity = resolvePersonIdentity(lookupTarget!);
+            const osQuery = refineOsNameQuery(contactLabel, lookupTarget!);
+            const replyIdentity = resolvePersonIdentity(osQuery || lookupTarget!);
             if (replyIdentity.status === 'single' && contactHasCapability(replyIdentity.contact, 'phone')) {
               const match = replyIdentity.contact;
 
@@ -1509,13 +1528,12 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
             // initial routing. Reached here because the first ask had zero
             // candidates of either kind.
             if (ctx?.resolveContact) {
-              const device = await ctx.resolveContact(lookupTarget!);
-              if (device && device.phone) {
+              const device = await ctx.resolveContact(osQuery || lookupTarget!);
+              const osLookup = osQuery || lookupTarget!;
+              if (device && device.phone && osNameFullyCovered(osLookup, device.name)) {
 
                 if (known) {
-                  const herald = resolvePersonIdentity(contact);
-                  const heraldContactId = herald.status === 'single' ? herald.contact.id : undefined;
-                  return knownPersonOsConfirmStage(device.name, device.phone, heraldContactId);
+                  return commitDial(device.name, device.phone);
                 }
                 if (RELATIONSHIP_WORDS.test(contactLabel.trim())) {
                   retireRelationshipHolder(contactLabel, device.name);
@@ -1689,8 +1707,9 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
                 return commitDial(fresh.name, fresh.phone!);
               }
               if (ctx?.resolveContact) {
-                const device = await ctx.resolveContact(reply);
-                if (device && device.phone) {
+                const osLookup = refineOsNameQuery(contactLabel, reply);
+                const device = await ctx.resolveContact(osLookup);
+                if (device && device.phone && osNameFullyCovered(osLookup, device.name)) {
 
                   if (RELATIONSHIP_WORDS.test(contactLabel.trim())) {
                     retireRelationshipHolder(contactLabel, device.name);

@@ -915,27 +915,19 @@ export async function runContactCallTests() {
       }),
     });
     const confirm = await collect.resume('Josh Durand');
-    assert('T-CT-W5a known-person OS single → confirm pending, not immediate dial',
+    assert('T-CT-W5a known-person OS full-name clarification → dial (transient, not confirm)',
       {
         status: confirm.status,
         phone: dialPhone(confirm),
-        prompt: confirm.status === 'pending' ? confirm.prompt : '',
       },
-      v => v.status === 'pending'
-        && !v.phone
-        && /I found Josh Durand in your contacts/i.test(v.prompt)
-        && /is that who you meant/i.test(v.prompt),
-      'confirm pending; no dial yet');
+      v => v.status === 'committed' && v.phone === '5557778888',
+      'dial Josh Durand after surname/full-name refine');
     const before = contactCount(db);
     const joshBefore = db.prepare(`SELECT phone FROM contacts WHERE id = 'c_bro'`).get() as { phone: string | null };
-    const yesResult = confirm.status === 'pending' ? await confirm.resume('yes') : confirm;
     const after = contactCount(db);
     const joshAfter = db.prepare(`SELECT phone, name, relationship FROM contacts WHERE id = 'c_bro'`).get() as { phone: string | null; name: string; relationship: string | null };
-    // CONTRACT CHANGE 2026-08-19: previously asserted no write; now asserts phone IS persisted, per confirmed-phone-attachment design.
-    assert('T-CT-W5b known-person OS confirm YES → dial AND persists phone on existing Herald row',
+    assert('T-CT-W5b transient OS dial does not bind phone onto Herald row',
       {
-        status: yesResult.status,
-        phone: dialPhone(yesResult),
         before,
         after,
         joshPhoneBefore: joshBefore.phone,
@@ -943,15 +935,13 @@ export async function runContactCallTests() {
         joshName: joshAfter.name,
         joshRelationship: joshAfter.relationship,
       },
-      v => v.status === 'committed'
-        && v.phone === '5557778888'
-        && v.before === 1
+      v => v.before === 1
         && v.after === 1
         && !(v.joshPhoneBefore ?? '').trim()
-        && v.joshPhoneAfter === '5557778888'
+        && !(v.joshPhoneAfter ?? '').trim()
         && v.joshName === 'Josh'
         && v.joshRelationship === 'brother',
-      'dial Josh Durand; phone persisted on c_bro; no new contact row');
+      'no new row; Herald phone stays empty');
     const db2 = freshDB();
     insertContact(db2, { id: 'c_bro2', name: 'Josh', relationship: 'brother', importance: 7 });
     const intent2 = await resolveContactCallIntent('brother', 'call my brother', { resolveContact: async () => null });
@@ -963,13 +953,10 @@ export async function runContactCallTests() {
       }),
     });
     const confirm2 = await collect2.resume('Josh Durand');
-    const noResult = confirm2.status === 'pending' ? await confirm2.resume('no') : confirm2;
-    assert('T-CT-W5c known-person OS confirm NO → ack, no dial',
-      { status: noResult.status, phone: dialPhone(noResult), ack: noResult.status === 'noop' ? noResult.ack : '' },
-      v => v.status === 'noop'
-        && !v.phone
-        && /No problem — who were you trying to reach/i.test(v.ack),
-      'noop ack; no dial');
+    assert('T-CT-W5c second full-name refine also dials transiently',
+      { status: confirm2.status, phone: dialPhone(confirm2) },
+      v => v.status === 'committed' && v.phone === '5557778888',
+      'repeatable transient OS dial; still no Herald bind');
   }
   {
     // contactLabel matches RELATIONSHIP_WORDS when Herald row name is the rel word
@@ -994,8 +981,7 @@ export async function runContactCallTests() {
     const yesResult = confirm.status === 'pending' ? await confirm.resume('yes') : confirm;
     const after = contactCount(db);
     const holder = findContactByRelationship('brother');
-    // W5d: capturePerson/name-shadowing checks unchanged; phone now persisted by id attach (same contract as W5b).
-    assert('T-CT-W5d known-person OS confirm YES: no capturePerson even when contactLabel is relationship word',
+    assert('T-CT-W5d known-person OS refine: no capturePerson even when contactLabel is relationship word',
       {
         status: yesResult.status,
         phone: dialPhone(yesResult),
@@ -1009,8 +995,8 @@ export async function runContactCallTests() {
         && v.before === 1
         && v.after === 1
         && v.holderName === 'brother'
-        && v.holderPhone === '5556667777',
-      'no capturePerson/name shadowing; phone persisted on c_rel by id attach');
+        && !(v.holderPhone ?? '').trim(),
+      'no capturePerson/name shadowing; Herald row stays phoneless');
   }
 
   // ── T-CT-W5e: YES persists confirmed device phone on Herald row by id ─────
@@ -1034,7 +1020,7 @@ export async function runContactCallTests() {
       name: string;
       relationship: string | null;
     };
-    assert('T-CT-W5e known-person OS confirm YES → phone on c_bro by id',
+    assert('T-CT-W5e transient OS dial does not persist phone on c_bro',
       {
         status: yesResult.status,
         phone: dialPhone(yesResult),
@@ -1048,55 +1034,42 @@ export async function runContactCallTests() {
         && v.phone === '5557778888'
         && v.before === 1
         && v.after === 1
-        && v.rowPhone === '5557778888'
+        && !(v.rowPhone ?? '').trim()
         && v.rowName === 'Josh'
         && v.rowRelationship === 'brother',
-      'confirmed phone on existing Herald row; row count unchanged');
+      'dial uses OS destination; Herald phone remains empty');
   }
 
-  // ── T-CT-W5f: second call dials Herald phone without resolveContact ───────
+  // ── T-CT-W5f: unique extra-token OS hit is not a silent first-turn dial ──
   {
     const db = freshDB();
     insertContact(db, { id: 'c_bro', name: 'Josh', relationship: 'brother', importance: 7 });
-    const intent1 = await resolveContactCallIntent('brother', 'call my brother', { resolveContact: async () => null });
-    const collect1 = await addPending(intent1, {
+    const intent = await resolveContactCallIntent('brother', 'call my brother', {
       resolveContact: async () => ({
-        phone: '5557778888',
-        name: 'Josh Durand',
+        phone: '5550001111',
+        name: 'Josh Boss',
         source: 'device' as const,
       }),
     });
-    const confirm1 = await collect1.resume('Josh Durand');
-    await (confirm1.status === 'pending' ? confirm1.resume('yes') : confirm1);
-    setOsPersonCapabilitySearch(async () => {
-      throw new Error('OS must not be consulted when Herald brother has phone');
+    const result = await DOMAIN_WRITERS['contact_call']!.add(intent, '', {
+      resolveContact: async () => ({
+        phone: '5550001111',
+        name: 'Josh Boss',
+        source: 'device' as const,
+      }),
     });
-    try {
-      let resolveContactCalledInAdd = false;
-      const intent2 = await resolveContactCallIntent('brother', 'call my brother', {
-        resolveContact: async () => null,
-      });
-      const result2 = await DOMAIN_WRITERS['contact_call']!.add(intent2, '', {
-        resolveContact: async () => {
-          resolveContactCalledInAdd = true;
-          throw new Error('resolveContact must not be called in writer when Herald phone is stored');
-        },
-      });
-      assert('T-CT-W5f second brother call → immediate Herald dial, no OS lookup',
-        {
-          status: result2.status,
-          phone: dialPhone(result2),
-          resolveContactCalledInAdd,
-          heraldPhone: (db.prepare(`SELECT phone FROM contacts WHERE id = 'c_bro'`).get() as { phone: string | null }).phone,
-        },
-        v => v.status === 'committed'
-          && v.phone === '5557778888'
-          && !v.resolveContactCalledInAdd
-          && v.heraldPhone === '5557778888',
-        'immediate dial from stored Herald phone; writer resolveContact not invoked');
-    } finally {
-      setOsPersonCapabilitySearch(null);
-    }
+    assert('T-CT-W5f unique OS Josh Boss for given-name Josh → collect, never silent dial',
+      {
+        status: result.status,
+        phone: dialPhone(result),
+        intentPhone: (intent.candidates?.[0]?.phone ?? '').trim(),
+        heraldPhone: (db.prepare(`SELECT phone FROM contacts WHERE id = 'c_bro'`).get() as { phone: string | null }).phone,
+      },
+      v => v.status === 'pending'
+        && !v.phone
+        && !v.intentPhone
+        && !(v.heraldPhone ?? '').trim(),
+      'underspecified unique OS destination is not authorized');
   }
 
   // ── T-CT-W5h: attachPhoneToContactById is fill-only — never clobbers phone ─
@@ -1202,24 +1175,21 @@ export async function runContactCallTests() {
         resolveContact: async (n: string) => {
           capturedArg = n;
           return n.trim().toLowerCase() === 'josh duran'
-            ? { phone: '5557778888', name: 'Josh Durand', source: 'device' as const }
+            ? { phone: '5557778888', name: 'Josh Duran', source: 'device' as const }
             : null;
         },
       });
       const confirm = await collect.resume(utterance);
-      assert(`T-CT-W6 framed "${utterance}" → OS-single confirm pending`,
+      assert(`T-CT-W6 framed "${utterance}" → unique OS destination dials`,
         {
           status: confirm.status,
           phone: dialPhone(confirm),
-          prompt: confirm.status === 'pending' ? confirm.prompt : '',
           capturedArg,
         },
-        v => v.status === 'pending'
-          && !v.phone
-          && v.capturedArg === 'Josh Duran'
-          && /I found Josh Durand in your contacts/i.test(v.prompt)
-          && /is that who you meant/i.test(v.prompt),
-        'confirm pending; extracted Josh Duran; no immediate dial');
+        v => v.status === 'committed'
+          && v.phone === '5557778888'
+          && v.capturedArg === 'Josh Duran',
+        'extracted Josh Duran; transient OS dial');
     }
   }
   {
@@ -1231,7 +1201,7 @@ export async function runContactCallTests() {
       resolveContact: async (n: string) => {
         capturedArg = n;
         return n.trim().toLowerCase() === 'josh duran'
-          ? { phone: '5557778888', name: 'Josh Durand', source: 'device' as const }
+          ? { phone: '5557778888', name: 'Josh Duran', source: 'device' as const }
           : null;
       },
     });
@@ -1242,8 +1212,7 @@ export async function runContactCallTests() {
     const yesResult = confirm.status === 'pending' ? await confirm.resume('yes') : confirm;
     const after = contactCount(db);
     const joshAfter = db.prepare(`SELECT phone FROM contacts WHERE id = 'c_bro'`).get() as { phone: string | null };
-    // CONTRACT CHANGE 2026-08-19: same as W5b — YES persists phone on existing Herald row.
-    assert('T-CT-W7 framed reply YES → dial AND persists phone on existing Herald row',
+    assert('T-CT-W7 framed reply unique OS → dial without persisting Herald phone',
       {
         status: yesResult.status,
         phone: dialPhone(yesResult),
@@ -1259,8 +1228,8 @@ export async function runContactCallTests() {
         && v.before === 1
         && v.after === 1
         && !(v.joshPhoneBefore ?? '').trim()
-        && v.joshPhoneAfter === '5557778888',
-      'dial Josh Durand; extracted Josh Duran; phone persisted on Herald Josh');
+        && !(v.joshPhoneAfter ?? '').trim(),
+      'dial Josh Duran; Herald Josh stays phoneless');
     const db2 = freshDB();
     insertContact(db2, { id: 'c_bro2', name: 'Josh', relationship: 'brother', importance: 7 });
     const intent2 = await resolveContactCallIntent('brother', 'call my brother', { resolveContact: async () => null });
@@ -1268,25 +1237,20 @@ export async function runContactCallTests() {
     const collect2 = await addPending(intent2, {
       resolveContact: async (n: string) => {
         capturedArg2 = n;
-        return n.trim().toLowerCase() === 'josh duran'
-          ? { phone: '5557778888', name: 'Josh Durand', source: 'device' as const }
-          : null;
+        return null;
       },
     });
     const confirm2 = await collect2.resume(framed);
-    const noResult = confirm2.status === 'pending' ? await confirm2.resume('no') : confirm2;
-    assert('T-CT-W8 framed reply NO → ack, no dial',
+    assert('T-CT-W8 framed reply with no OS hit → noop, no dial',
       {
-        status: noResult.status,
-        phone: dialPhone(noResult),
-        ack: noResult.status === 'noop' ? noResult.ack : '',
+        status: confirm2.status,
+        phone: dialPhone(confirm2),
         capturedArg: capturedArg2,
       },
       v => v.status === 'noop'
         && !v.phone
-        && v.capturedArg === 'Josh Duran'
-        && /No problem — who were you trying to reach/i.test(v.ack),
-      'noop ack; extracted Josh Duran; no dial');
+        && v.capturedArg === 'Josh Duran',
+      'extracted Josh Duran; OS miss stays fail-closed');
   }
   {
     const db = freshDB();
@@ -1306,7 +1270,7 @@ export async function runContactCallTests() {
       { status: result.status, phone: dialPhone(result), capturedArg },
       v => v.status === 'noop'
         && !v.phone
-        && v.capturedArg === 'real quick',
+        && v.capturedArg === 'josh real quick',
       'extracts trailing span but OS lookup rejects; no authority leak');
   }
   {
