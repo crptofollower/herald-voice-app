@@ -104,18 +104,21 @@ export async function runTodoCompleteSignalsTests() {
     assert(`reg "${phrase}" → todo_complete`, actionType(d), (v) => v === 'todo_complete', 'todo_complete');
   }
 
-  // Pre-existing router order (list_remove before todo_complete — see tierRouter
-  // comment at the list_remove gate). "I picked up …" / "I got …" acquisition
-  // phrasing is claimed by list_remove; this is not a TODO_COMPLETE_SIGNALS
-  // regression from the "I already" tightening.
+  // Bare past acquisition is not list_remove and not todo_complete.
   {
     freshDB();
     const d = await classifyQuery('I picked up the prescription');
     assert(
-      'reg "I picked up the prescription" → list_remove (pre-existing order)',
+      'reg "I picked up the prescription" → not list_remove',
       actionType(d),
-      (v) => v === 'list_remove',
-      'list_remove',
+      (v) => v !== 'list_remove',
+      'not list_remove',
+    );
+    assert(
+      'reg "I picked up the prescription" → not todo_complete',
+      actionType(d),
+      (v) => v !== 'todo_complete',
+      'not todo_complete',
     );
   }
 

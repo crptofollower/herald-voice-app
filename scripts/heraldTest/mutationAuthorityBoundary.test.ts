@@ -72,36 +72,43 @@ export async function runMutationAuthorityBoundaryTests() {
     const d = await classifyQuery('remove oranges from my grocery list');
     assert('pos explicit list_remove', actionType(d), (v) => v === 'list_remove', 'list_remove');
   }
+
+  console.log(`\n${BOLD}Negative — bare past acquisition is not list_remove${RESET}`);
   {
     freshDB();
     const d = await classifyQuery('I got eggs');
     assert(
-      'pos standalone I-got acquisition',
-      { type: actionType(d), item: (d.actionIntent as { item?: string } | undefined)?.item },
-      (v) => {
-        const x = v as { type?: string; item?: string };
-        return x.type === 'list_remove' && x.item === 'eggs';
-      },
-      'list_remove eggs',
+      'bare I-got report ≠ list_remove',
+      actionType(d),
+      (v) => v !== 'list_remove',
+      'not list_remove',
     );
   }
   {
     freshDB();
     const d = await classifyQuery('we bought milk');
     assert(
-      'pos standalone we-bought acquisition',
-      { type: actionType(d), item: (d.actionIntent as { item?: string } | undefined)?.item },
-      (v) => {
-        const x = v as { type?: string; item?: string };
-        return x.type === 'list_remove' && x.item === 'milk';
-      },
-      'list_remove milk',
+      'bare we-bought report ≠ list_remove',
+      actionType(d),
+      (v) => v !== 'list_remove',
+      'not list_remove',
     );
   }
   {
     freshDB();
     const d = await classifyQuery('I picked up the prescription');
-    assert('pos I-picked-up acquisition', actionType(d), (v) => v === 'list_remove', 'list_remove');
+    assert(
+      'bare I-picked-up report ≠ list_remove',
+      actionType(d),
+      (v) => v !== 'list_remove',
+      'not list_remove',
+    );
+    assert(
+      'bare I-picked-up report ≠ todo_complete',
+      actionType(d),
+      (v) => v !== 'todo_complete',
+      'not todo_complete',
+    );
   }
 
   console.log(`\n${BOLD}Ambiguous genuine mutation stays deterministic${RESET}`);
@@ -119,10 +126,10 @@ export async function runMutationAuthorityBoundaryTests() {
     freshDB();
     const d = await classifyQuery('I got that');
     assert(
-      'ambiguous I-got anaphor remains list_remove',
+      'bare I-got anaphor ≠ list_remove',
       actionType(d),
-      (v) => v === 'list_remove',
-      'list_remove',
+      (v) => v !== 'list_remove',
+      'not list_remove',
     );
   }
 
@@ -187,26 +194,20 @@ export async function runMutationAuthorityBoundaryTests() {
     freshDB();
     const d = await classifyQuery('I got milk but I need to get eggs');
     assert(
-      'I-got mutation keeps authority; but-clause is not the item',
-      { type: actionType(d), item: (d.actionIntent as { item?: string } | undefined)?.item },
-      (v) => {
-        const x = v as { type?: string; item?: string };
-        return x.type === 'list_remove' && x.item === 'milk';
-      },
-      'list_remove milk',
+      'I-got report is not list_remove; but-clause is not an inferred grocery item',
+      actionType(d),
+      (v) => v !== 'list_remove',
+      'not list_remove',
     );
   }
   {
     freshDB();
     const d = await classifyQuery('I got eggs I need to do that tomorrow');
     assert(
-      'I-need-to tail is not captured as the grocery item',
-      { type: actionType(d), item: (d.actionIntent as { item?: string } | undefined)?.item },
-      (v) => {
-        const x = v as { type?: string; item?: string };
-        return x.type === 'list_remove' && x.item === 'eggs' && !/need/i.test(x.item ?? '');
-      },
-      'list_remove eggs',
+      'I-got report is not list_remove; I-need-to tail is not a grocery item',
+      actionType(d),
+      (v) => v !== 'list_remove',
+      'not list_remove',
     );
   }
   {

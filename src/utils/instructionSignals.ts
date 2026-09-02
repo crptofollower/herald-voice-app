@@ -138,8 +138,15 @@ const TODO_COMPLETE_EXPLICIT_RE =
 const TODO_COMPLETE_PAST_EXTRACT_RE =
   /\bI\s+(?:already\s+)?(took care of|picked up|dropped off|went to|made it to|got to|stopped by|called|finished|completed|did|done|handled|returned|sent|submitted|paid|filed|bought|grabbed|got)\b(.*)$/i;
 
+/** Past acquisition/consumption reports are not to-do completion operators. */
+const PAST_ACQUISITION_REPORT_VERB_RE = /^(got|bought|grabbed|picked up)$/i;
+
 const MOVEMENT_COMPLETE_VERB_RE =
   /^(went to|made it to|got to|stopped by)$/i;
+
+/** Place/outing locatives — not a to-do referent even when determined. */
+const MOVEMENT_OUTING_LOCATIVE_RE =
+  /\b(?:grocery\s+store|store|shop|market|mall|restaurant|cafe|park|beach|movies?|lunch|dinner|breakfast)\b/i;
 
 const DETERMINED_OR_ANAPHOR_OBJECT_RE =
   /^(?:the|a|an|my|our|his|her|their|this|that|those|these|it|them)\b/i;
@@ -157,11 +164,15 @@ function clauseHasTodoCompleteMutationShape(clause: string): boolean {
   if (TODO_COMPLETE_EXPLICIT_RE.test(t)) return true;
   const m = t.match(TODO_COMPLETE_PAST_EXTRACT_RE);
   if (!m) return false;
+  if (PAST_ACQUISITION_REPORT_VERB_RE.test((m[1] ?? '').trim())) return false;
   const object = boundMutationObject(m[2] ?? '');
   if (!object) return false;
   if (SECOND_EVENT_IN_OBJECT_RE.test(object)) return false;
-  if (isMovementCompleteVerb(m[1] ?? '') && !DETERMINED_OR_ANAPHOR_OBJECT_RE.test(object)) {
-    return false;
+  if (isMovementCompleteVerb(m[1] ?? '')) {
+    if (!DETERMINED_OR_ANAPHOR_OBJECT_RE.test(object)) return false;
+    if (MOVEMENT_OUTING_LOCATIVE_RE.test(object) && LIST_ACQUISITION_TEMPORAL_RE.test(t)) {
+      return false;
+    }
   }
   return true;
 }
@@ -184,26 +195,15 @@ export function extractTodoCompleteMutation(msg: string): { raw: string } | null
   return null;
 }
 
-const LIST_ACQUISITION_CLAUSE_RE =
-  /^(?:i(?:'?ve?)?|we)\s+(?:got|picked\s+up|grabbed|bought)\s+(?:the\s+)?(.+)$/i;
-
-const LIST_ACQUISITION_ALREADY_HAVE_RE =
-  /^(?:i(?:'?ve?)?|we)\s+already\s+have\s+(?:the|my)\s+(.+)$/i;
+const LIST_ACQUISITION_TEMPORAL_RE =
+  /\b(yesterday|today|tonight|this\s+morning|this\s+afternoon|last\s+(?:night|week|weekend|month))\b/i;
 
 /**
- * Clause-initial acquisition-consumption only. A mid-clause "we bought …"
- * inside a larger report is not list-remove authority.
+ * Past-tense I/we acquisition reports ("I got eggs", "we bought milk") are
+ * not list-remove authority. Explicit list operators and independently
+ * authorized positional/pending grocery acts live elsewhere.
  */
-export function extractListRemoveAcquisitionItem(msg: string): string | null {
-  const clauses = splitResidualClauses(msg.trim());
-  const candidates = clauses.length > 0 ? clauses : [msg.trim()];
-  for (const clause of candidates) {
-    const t = clause.trim().replace(/[.,;:]+$/, '');
-    const m = t.match(LIST_ACQUISITION_CLAUSE_RE) ?? t.match(LIST_ACQUISITION_ALREADY_HAVE_RE);
-    if (!m) continue;
-    const item = boundMutationObject(m[1] ?? '');
-    if (item.length > 0 && !SECOND_EVENT_IN_OBJECT_RE.test(item)) return item;
-  }
+export function extractListRemoveAcquisitionItem(_msg: string): string | null {
   return null;
 }
 

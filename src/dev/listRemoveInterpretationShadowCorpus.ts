@@ -69,7 +69,7 @@ export const LIST_REMOVE_SHADOW_CORPUS: ListRemoveShadowCorpusRow[] = [
     expected_speech_act: 'narrative',
     expected_shadow_authority: 'reject',
     expected_referent: null,
-    expected_production_risk: 'list_remove',
+    expected_production_risk: 'conversation_or_other',
     grocery_open_bodies: ['eggs'],
   },
   {

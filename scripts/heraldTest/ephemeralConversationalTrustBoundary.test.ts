@@ -209,11 +209,19 @@ export async function runEphemeralConversationalTrustBoundaryTests() {
         return { status: 'ok', text: 'Marcus grew up in Ohio and served overseas.' };
       },
     });
-    assert('T1f tell-me-about unresolved name clarifies', outcome.kind, 'clarify');
-    assertTrue('T1g tell-me-about unresolved name never generates', !generateCalled);
+    assert('T1f tell-me-about unresolved name is an honest miss', outcome.kind, 'generative');
+    assertTrue('T1g tell-me-about unresolved name never invents via generate', !generateCalled);
+    assertTrue(
+      'T1h tell-me-about unresolved name is not canned follow-confusion',
+      outcome.reply !== EPHEMERAL_CLARIFY_REPLY,
+    );
+    assertTrue(
+      'T1i tell-me-about unresolved name does not invent biography',
+      /don't have anything stored about Marcus/i.test(outcome.reply ?? ''),
+    );
   }
 
-  // B1 — Paul in evidence, Apollo is a near-miss: clarify, never invent Apollo.
+  // B1 — user-authored named report is conversation (invention is generation-side).
   {
     let generateCalled = false;
     const outcome = await resolveEphemeralSeam({
@@ -223,15 +231,15 @@ export async function runEphemeralConversationalTrustBoundaryTests() {
       threadEvidence: 'Paul is reviewing the beta tomorrow.',
       generate: async () => {
         generateCalled = true;
-        return { status: 'ok', text: 'Apollo has struggled with anxiety for years.' };
+        return { status: 'ok', text: 'That sounds like a lot to carry.' };
       },
     });
-    assert('B1a Apollo near-miss clarifies', outcome.kind, 'clarify');
-    assertTrue('B1b Apollo near-miss never generates biography', !generateCalled);
-    assertTrue('B1c reply does not contain Apollo biography', !/anxious|anxiety/i.test(outcome.reply ?? ''));
+    assert('B1a Apollo user report reaches conversation', outcome.kind, 'generative');
+    assertTrue('B1b Apollo user report invokes generate', generateCalled);
+    assertTrue('B1c Apollo user report is not canned follow-confusion', outcome.reply !== EPHEMERAL_CLARIFY_REPLY);
   }
 
-  // B3 — genuinely new Marcus: clarify, no biography.
+  // B3 — genuinely new Marcus in user-authored narrative reaches conversation.
   {
     let generateCalled = false;
     const outcome = await resolveEphemeralSeam({
@@ -244,8 +252,8 @@ export async function runEphemeralConversationalTrustBoundaryTests() {
         return { status: 'ok', text: 'Marcus carried that trauma for decades.' };
       },
     });
-    assert('B3a new Marcus clarifies', outcome.kind, 'clarify');
-    assertTrue('B3b new Marcus never generates biography', !generateCalled);
+    assert('B3a new Marcus user report reaches conversation', outcome.kind, 'generative');
+    assertTrue('B3b new Marcus user report invokes generate', generateCalled);
   }
 
   // B5 — explicit correction back to an evidenced name recovers.

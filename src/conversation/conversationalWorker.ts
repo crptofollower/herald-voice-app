@@ -5,6 +5,7 @@
 
 import type { HotRingEntry } from '../utils/hotNarrativeRing';
 import type { EphemeralResult } from '../utils/ephemeralConversation';
+import type { VerifiedConversationalPacket } from './verifiedConversationalPacket';
 
 export type ConversationUnavailableReason =
   | 'no-ctx'
@@ -16,6 +17,8 @@ export type ConversationRequest = {
   userText: string;
   hotEntries: HotRingEntry[];
   onPartial?: (accumulatedText: string) => void;
+  /** Per-turn labeled facts/evidence. Generation-only; never a write source. */
+  packet?: VerifiedConversationalPacket;
 };
 
 export type ConversationResponse =

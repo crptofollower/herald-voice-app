@@ -11,10 +11,7 @@ import { detectFamilyRead, answerFamilyRead } from './familyRead';
 import { answerFromDevice } from './localAnswers';
 import { captureHousehold } from './householdCapture';
 import { dispatchReadIntents, type ReadIntentMeta } from '../routing/readIntent';
-import {
-  utteranceHasInteractionReportShape,
-  utteranceHasUserAuthoredInteractionReportShape,
-} from '../routing/speechActAuthority';
+import { utteranceHasInteractionReportShape } from '../routing/speechActAuthority';
 import { COMPLETED_PAST_FIRST_PERSON_RE } from './instructionSignals';
 import {
   buildBoundedPastEventAcknowledgment,
@@ -23,6 +20,26 @@ import {
 
 export const EPHEMERAL_CLARIFY_REPLY =
   "I'm not sure I'm following you — can you help me understand?";
+
+export function buildUnverifiedBiographyInquiryMiss(name: string): string {
+  const n = name.trim();
+  if (!n) return "I don't have anything stored about that person.";
+  return `I don't have anything stored about ${n}.`;
+}
+
+/** Inquiry for a third-party biography, not a family-relation read. */
+export function extractBiographyInquiryName(text: string): string | null {
+  const t = text.trim();
+  const m = t.match(
+    /\b(?:tell me about|what do you know about|who is|who was)\s+([A-Za-z][A-Za-z'-]*)/i,
+  );
+  if (!m) return null;
+  const first = (m[1] ?? '').trim();
+  if (!first || /^(the|a|an|my|you|yourself|me|myself|us|we|herald|kit)$/i.test(first)) {
+    return null;
+  }
+  return first;
+}
 
 const FIRST_PERSON_ANCHOR_RE = /\b(I|my|me|we|our)\b/i;
 
@@ -134,15 +151,6 @@ export function mayRunGenerativeEphemeralPersonalProse(input: {
   }
   if (isBareZeroEvidenceOpeningFragment(input.text)) return false;
   if (isAmbiguousDemonstrativeQuestion(input.text)) return false;
-  // Unresolved names still contain invention. A first-person interaction
-  // report supplies its own content, so a newly mentioned person is not
-  // itself a reason to refuse conversation.
-  if (
-    hasUnresolvedThirdPartyName(input.text, input.threadEvidence ?? '')
-    && !utteranceHasUserAuthoredInteractionReportShape(input.text)
-  ) {
-    return false;
-  }
   if (input.hasAuthorizedContinuation) return true;
   // Predicate-Extension V1: past personal event reports get bounded ack, not free generative.
   if (utteranceRequiresBoundedPastEventAck(input.text)) return false;
@@ -177,6 +185,22 @@ export async function resolveEphemeralSeam(input: {
     const owner = tryAuthoritativeLocalOwnersBeforeEphemeral(input.text, input.readMeta);
     if (owner.handled) {
       return { kind: 'authoritative', reply: owner.reply };
+    }
+  }
+
+  const inquiryName = extractBiographyInquiryName(input.text);
+  if (inquiryName) {
+    const evidence = input.threadEvidence ?? '';
+    const known = new RegExp(
+      `\\b${inquiryName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`,
+      'i',
+    ).test(evidence);
+    if (!known) {
+      return {
+        kind: 'generative',
+        reply: buildUnverifiedBiographyInquiryMiss(inquiryName),
+        grantContinuation: true,
+      };
     }
   }
 

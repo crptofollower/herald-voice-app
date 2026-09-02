@@ -12,6 +12,7 @@ import type {
   ConversationResponse,
 } from './conversationalWorker';
 import { sanitizeConversationalPresentation } from './conversationalPresentation';
+import { formatVerifiedConversationalPacket } from './verifiedConversationalPacket';
 
 /** Snapshot of Herald ephemeral persona — copied, not imported, so this
  *  adapter cannot drag production generation into the engine. */
@@ -20,7 +21,8 @@ Respond naturally and briefly to what the person says, usually in one or two sen
 Be interested without being needy -- do not ask a question after every statement. Sometimes simple acknowledgment is enough.
 Do not invent facts about the person. Do not claim to remember, save, or have stored anything -- you have no memory authority here.
 Do not claim to have performed an action, made a call, sent a message, or changed anything.
-Do not diagnose medical conditions, provide financial recommendations, or claim professional (medical, mental-health, financial, legal) authority. If the person asks for that kind of judgment directly, state the limit naturally in one sentence and keep the conversation going -- never end the exchange with a disclaimer alone.`;
+Do not diagnose medical conditions, provide financial recommendations, or claim professional (medical, mental-health, financial, legal) authority. If the person asks for that kind of judgment directly, state the limit naturally in one sentence and keep the conversation going -- never end the exchange with a disclaimer alone.
+Names the user mentions are their story, not stored biography. Third-party attributes may come only from VERIFIED PERSONAL FACTS or USER-SUPPLIED MENTIONS in the context packet. Do not add relationships, occupation, medical history, preferences, inner thoughts, or personal history that are not in those labeled sections. If asked what you know about someone and verified facts are empty, say you do not have that stored -- do not fill gaps from prior knowledge.`;
 
 export const EXPERIMENTAL_QWEN_GENERATION = {
   n_predict: 128,
@@ -43,9 +45,13 @@ export const EXPERIMENTAL_QWEN_INIT = {
 function buildMessages(
   userText: string,
   hotEntries: HotRingEntry[],
+  packetText?: string,
 ): { role: 'system' | 'user' | 'assistant'; content: string }[] {
+  const system = packetText
+    ? `${EXPERIMENTAL_QWEN_SYSTEM_PROMPT}\n\n${packetText}`
+    : EXPERIMENTAL_QWEN_SYSTEM_PROMPT;
   const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
-    { role: 'system', content: EXPERIMENTAL_QWEN_SYSTEM_PROMPT },
+    { role: 'system', content: system },
   ];
   for (const e of hotEntries) {
     messages.push({ role: 'user', content: e.user });
@@ -77,7 +83,11 @@ export function createExperimentalQwenLlamaWorker(deps: {
       try {
         const result = await ctx.completion(
           {
-            messages: buildMessages(request.userText, request.hotEntries),
+            messages: buildMessages(
+              request.userText,
+              request.hotEntries,
+              request.packet ? formatVerifiedConversationalPacket(request.packet) : undefined,
+            ),
             ...EXPERIMENTAL_QWEN_GENERATION,
           },
           (data) => {

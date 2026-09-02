@@ -233,9 +233,10 @@ export async function runGroceryGrantRetentionTests() {
     stockFour(db);
     presentGrocery(ordered, subject, medication);
     const t = await say('I got eggs.');
-    assert('CGR19 I got eggs still list_remove', t,
-      v => v.handled === false && v.routeDecision?.actionIntent?.type === 'list_remove',
-      'list_remove');
+    assert('CGR19 I got eggs is not list_remove', t,
+      v => (v as { routeDecision?: { actionIntent?: { type?: string } } }).routeDecision?.actionIntent?.type !== 'list_remove',
+      'not list_remove');
+    assert('CGR19b I got eggs does not write eggs', rowChecked(db, 'g2'), v => v === 0, '0');
   }
 
   {

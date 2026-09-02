@@ -518,10 +518,9 @@ export async function runOrderedPresentationTests() {
     presentGrocery(ordered, subject, medication);
     const mut = await say('I got number three you can remove it');
     assert('OP125 mutation not OPR read', mut,
-      v => v.handled === false && v.routeDecision?.kind === 'device_action'
-        && v.routeDecision.actionIntent?.type === 'list_remove',
-      'list_remove');
-    assert('OP126 mutation unused-clears', ordered.hasLive(), v => v === false, 'cleared');
+      v => (v as { routeDecision?: { actionIntent?: { type?: string } } }).routeDecision?.actionIntent?.type !== 'list_remove',
+      'not list_remove');
+    assert('OP126 inferred got+number does not write bananas', getOpenListItemById('g3', 'grocery')?.body, v => v === 'bananas', 'bananas still open');
   }
 
   const total = passed + failures.length;

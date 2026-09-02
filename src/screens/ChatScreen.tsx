@@ -80,6 +80,7 @@ import {
 import { createLlamaEphemeralWorker } from '../conversation/llamaEphemeralWorker';
 import { createExperimentalQwenLlamaWorker } from '../conversation/experimentalQwenLlamaWorker';
 import { useExperimentalConversationalEngine } from '../conversation/useExperimentalConversationalEngine';
+import { buildVerifiedConversationalPacket } from '../conversation/verifiedConversationalPacket';
 import { useListRemoveInterpretationShadowEngine } from '../dev/useListRemoveInterpretationShadowEngine';
 import {
   capturePreTurnGrocerySnapshot,
@@ -1209,10 +1210,21 @@ export default function ChatScreen() {
         createLlamaEphemeralWorker({ getCtx }),
         createExperimentalQwenLlamaWorker({ getCtx: getExperimentalCtx }),
       ]);
+      const packet = buildVerifiedConversationalPacket({
+        verifiedPersonalFacts: getContextBlock() || '',
+        sessionEvidenceLines: [
+          ...hotContextForGeneration.map((e) => e.user),
+          text,
+        ],
+        pendingLabel: sessionRef.current.hasPending()
+          ? 'A confirmation is pending for a previously authorized action. It is not committed truth.'
+          : null,
+      });
       return generateViaSelectedWorker(worker, {
         userText: text,
         hotEntries: hotContextForGeneration,
         onPartial,
+        packet,
       }).finally(() => {
         clearEphemeralUiStream(turnId);
       });

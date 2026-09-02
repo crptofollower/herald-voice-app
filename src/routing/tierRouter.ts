@@ -516,7 +516,7 @@ const TIER3_SIGNALS = [
 
 const CHIT_CHAT_SOCIAL_CHECKIN: RegExp[] = [
   /^how(?:'s| is) it going\s*[?.!]*$/i,
-  /^how are you\s*[?.!]*$/i,
+  /^how are you(?:\s+\w+)?\s*[?.!]*$/i,
   /^how (?:are you|you) doing\s*[?.!]*$/i,
 ];
 
@@ -1156,7 +1156,7 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     return { tier: 1, actionIntent: { type: 'note_read' }, reason: 'action:note_read' };
   }
 
-  // Device: list remove — before todo_complete so "I got X" doesn't become todo_complete
+  // Device: list remove — explicit list operators only (not past-tense reports)
   if (LIST_REMOVE_SIGNALS.some((p) => p.test(msg))) {
     const m =
       msg.match(
