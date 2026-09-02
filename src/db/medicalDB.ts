@@ -731,7 +731,8 @@ export function guessMedicationName(value: string): string {
 export function confirmMedicationCapture(
   name: string,
   dosage?: string,
-  rawValue?: string
+  rawValue?: string,
+  frequency?: string
 ): { id: string; action: 'created' | 'superseded'; previousId?: string } {
   const db = getDB();
   const trimmedName = name.trim();
@@ -741,10 +742,15 @@ export function confirmMedicationCapture(
   if (dosage && !passesSubstringGate(dosage, rawValue)) {
     throw new SubstringGateRejection(dosage, rawValue ?? '');
   }
-  const existing = db.getFirstSync<{ id: string }>(
-    "SELECT id FROM medications WHERE LOWER(name) = ? AND is_active = 1 LIMIT 1;",
+  const incomingFrequency = frequency?.trim() || undefined;
+  if (incomingFrequency && !passesSubstringGate(incomingFrequency, rawValue)) {
+    throw new SubstringGateRejection(incomingFrequency, rawValue ?? '');
+  }
+  const existing = db.getFirstSync<{ id: string; frequency: string | null }>(
+    "SELECT id, frequency FROM medications WHERE LOWER(name) = ? AND is_active = 1 LIMIT 1;",
     [trimmedName.toLowerCase()]
   );
+  const frequencyToWrite = incomingFrequency ?? existing?.frequency?.trim() ?? undefined;
   if (existing) {
     const now = new Date().toISOString();
     db.runSync(
@@ -754,6 +760,7 @@ export function confirmMedicationCapture(
     const newId = writeMedication({
       name: trimmedName,
       dosage,
+      frequency: frequencyToWrite,
       notes: rawValue,
       is_active: 1,
     });
@@ -762,6 +769,7 @@ export function confirmMedicationCapture(
   const newId = writeMedication({
     name: trimmedName,
     dosage,
+    frequency: incomingFrequency,
     notes: rawValue,
     is_active: 1,
   });

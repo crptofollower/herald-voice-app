@@ -790,14 +790,17 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       }
       const raw = intent.raw ?? rawPhrase;
       const { guessMedicationName } = await import('../db/medicalDB');
+      const { extractFrequency } = await import('../utils/detectMedicalEvent');
       const name = intent.drug?.trim() || guessMedicationName(raw);
       const dosage = intent.dosage?.trim() || undefined;
+      const frequency = intent.frequency?.trim() || extractFrequency(raw) || undefined;
       if (!name || name.trim().length < 2) {
         return { status: 'failed', ack: 'What medication is that?' };
       }
       const { isMedicationCorroborated } = await import('../db/factDB');
+      const confirmedBits = [name, dosage, frequency].filter(Boolean).join(', ');
       const confirmPrompt = isMedicationCorroborated(raw)
-        ? (dosage ? `Got it — ${name}, ${dosage}. Sound right?` : `Got it — ${name}. Sound right?`)
+        ? `Got it — ${confirmedBits}. Sound right?`
         : `Want me to remember ${name} as a medication?`;
       return {
         status: 'pending',
@@ -810,7 +813,7 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
           if (!YES.test(userText.trim())) return { status: 'noop', ack: '' };
           try {
             const { confirmMedicationCapture, getActiveMedications } = await import('../db/medicalDB');
-            const result = confirmMedicationCapture(name, dosage, raw);
+            const result = confirmMedicationCapture(name, dosage, raw, frequency);
             const verified = getActiveMedications().some(m => m.id === result.id);
             if (!verified) {
               return { status: 'failed', ack: "I'm having trouble holding onto that — say it once more?" };
@@ -2079,7 +2082,7 @@ export async function routeIntent(
     const intents: IntentRecord[] = [];
     if (medEvent && medEvent.type === 'medication' && medEvent.tense === 'past') {
       intents.push({ type: 'medical_capture', drug: medEvent.drug_name,
-                     dosage: medEvent.dosage, raw: medEvent.raw });
+                     dosage: medEvent.dosage, frequency: medEvent.frequency, raw: medEvent.raw });
     }
     intents.push(decision.actionIntent);
     return { kind: 'capture', intents, source: 'deterministic',
@@ -2108,7 +2111,7 @@ export async function routeIntent(
     if (ev.type === 'medication') {
       return {
         kind: 'capture',
-        intents: [{ type: 'medical_capture', drug: ev.drug_name, dosage: ev.dosage, raw: ev.raw }],
+        intents: [{ type: 'medical_capture', drug: ev.drug_name, dosage: ev.dosage, frequency: ev.frequency, raw: ev.raw }],
         source: 'deterministic',
         reason: 'tier1:medication_intercept',
       };

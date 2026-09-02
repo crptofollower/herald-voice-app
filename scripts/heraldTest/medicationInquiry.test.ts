@@ -298,12 +298,13 @@ export async function runMedicationInquiryTests() {
       yes.status === 'committed' && getActiveMedications()[0]?.dosage === '1000 mg');
   }
 
-  // Capture path still does not persist first-class frequency (documented, not repaired)
+  // Capture notes may contain frequency; the first-class column is filled only
+  // when confirmMedicationCapture is passed an explicit frequency argument.
   {
     freshDB();
     confirmMedicationCapture('Eliquis', '5 milligrams', 'I take Eliquis 5 milligrams twice a day.');
     const row = getActiveMedications()[0];
-    check('F1 confirmMedicationCapture still leaves frequency empty',
+    check('F1 confirmMedicationCapture does not scrape frequency from notes',
       !!row && !row.frequency);
   }
 

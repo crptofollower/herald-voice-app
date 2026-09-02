@@ -15,6 +15,7 @@ export type MedicalEvent = {
   specialty?: string;
   drug_name?: string;
   dosage?: string;
+  frequency?: string;
   advice?: string;
   raw: string;
 };
@@ -197,6 +198,35 @@ export function extractDosage(text: string): string | undefined {
   return `${digit}${unit}`;
 }
 
+// Closed explicit-frequency families only. Match the spoken span verbatim.
+// Multiple distinct hits → ambiguous; do not pick a structured value.
+const FREQUENCY_SPANS: RegExp[] = [
+  /\bmorning and night\b/i,
+  /\bevery morning\b/i,
+  /\bevery night\b/i,
+  /\b(?:once|twice|thrice|(?:one|two|three)\s+times)\s+a\s+day\b/i,
+  /\b(?:once|twice|three times)\s+daily\b/i,
+  /\bnightly\b/i,
+];
+
+export function extractFrequency(text: string): string | undefined {
+  const hits: string[] = [];
+  for (const re of FREQUENCY_SPANS) {
+    const m = text.match(re);
+    if (m?.[0]) hits.push(m[0]);
+  }
+  if (hits.length === 0) return undefined;
+  if (hits.length === 1) return hits[0];
+  const unique = [...new Set(hits.map((h) => h.toLowerCase()))];
+  if (unique.length === 1) return hits[0];
+  const longest = hits.reduce((a, b) => (a.length >= b.length ? a : b));
+  const restDistinct = hits.some(
+    (h) => h.toLowerCase() !== longest.toLowerCase() && !longest.toLowerCase().includes(h.toLowerCase()),
+  );
+  if (restDistinct) return undefined;
+  return longest;
+}
+
 function extractAdvice(text: string): string | undefined {
   const m =
     text.match(/\b(?:says i need to|told me to|advised me to|wants me to)\s+(.+)/i);
@@ -255,6 +285,7 @@ export function detectMedicalEvent(text: string): MedicalEvent | null {
   const specialty = extractSpecialty(raw);
   const drug_name = hasMedication ? extractDrugName(raw) : undefined;
   const dosage = raw.match(DOSAGE)?.[1];
+  const frequency = hasMedication ? extractFrequency(raw) : undefined;
   const advice = hasAdvice ? extractAdvice(raw) : undefined;
 
   return {
@@ -264,6 +295,7 @@ export function detectMedicalEvent(text: string): MedicalEvent | null {
     specialty,
     drug_name,
     dosage,
+    frequency,
     advice,
     raw,
   };
