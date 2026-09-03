@@ -233,6 +233,21 @@ function extractAdvice(text: string): string | undefined {
   return m?.[1]?.trim().replace(/[.,;:!?]+$/, "");
 }
 
+// Reportative doctor-attributed speech (said / told me that), not the
+// imperative advice family (told me to / wants me to). Complement is the
+// exact clause span — never paraphrased. Imperative "to …" is declined so
+// this path cannot steal extractAdvice's grounded instruction.
+const DOCTOR_ATTRIBUTED_OUTCOME =
+  /\b(?:(?:he|she|they|the doctor|my doctor)|(?:dr\.?\s+\w+))\s+(?:said|says|told me|tells me)(?:\s+that)?\s+([^.!?]+)/i;
+
+export function extractDoctorAttributedOutcome(text: string): string | undefined {
+  const m = text.match(DOCTOR_ATTRIBUTED_OUTCOME);
+  const span = m?.[1]?.trim().replace(/[.,;:!?]+$/, "").trim();
+  if (!span) return undefined;
+  if (/^to\b/i.test(span)) return undefined;
+  return span;
+}
+
 /** Past/future visit claims require domain evidence — generic "saw/visited" alone is not authority. */
 const MEDICAL_VISIT_DOMAIN_EVIDENCE =
   /\b(?:doctor|dentist|physician|therapist|cardiologist|neurologist|oncologist|psychiatrist|specialist|appointment|dr\.?\s+\w+)\b/i;

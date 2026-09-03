@@ -887,12 +887,14 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       if (intent.type !== 'medical_visit') {
         return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
       }
-      const { writeMedicalRecord } = await import('../db/medicalDB');
-      const { extractDoctorName } = await import('../utils/detectMedicalEvent');
+      const { writeMedicalRecord, attachVisitOutcome } = await import('../db/medicalDB');
+      const { extractDoctorName, extractDoctorAttributedOutcome } = await import('../utils/detectMedicalEvent');
       const { parseDatePhrase } = await import('../utils/parseTime');
+      const { CONFIRM_YES_RE, CONFIRM_NO_RE } = await import('./conversationSession');
       const raw = intent.raw ?? rawPhrase;
       const advice = intent.advice?.trim();
       const visitDate = parseDatePhrase(raw) ?? new Date().toLocaleDateString('en-CA');
+      const visitOutcome = extractDoctorAttributedOutcome(raw);
 
       // Trust repair 2026-08-20 (Continuity audit v2 §3.3): `raw` is the
       // CAPTURE turn's utterance and was device-proven storing a read question
@@ -906,18 +908,39 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
         : (advice ? `${raw} — ${advice}` : raw);
 
       const commitVisit = (doctorName: string): CommitResult => {
-        writeMedicalRecord({
+        const id = writeMedicalRecord({
           doctor_name: doctorName,
           notes: visitNotes,
           visit_date: visitDate,
         });
+        if (visitOutcome) {
+          attachVisitOutcome(id, visitOutcome, raw);
+        }
         return { status: 'committed', ack: composeCaptureAck('medical_visit', `I'll remember you saw ${doctorName}.`) };
       };
 
-      // A clean doctor name is HEARD (Dr. X), not guessed → write immediately
-      // (Spine §3/§5). No confirm gate — unlike a guessed drug name.
+      const confirmVisit = (doctorName: string): CommitResult => {
+        const outcomeBit = visitOutcome ? ` — ${visitOutcome}` : '';
+        return {
+          status: 'pending',
+          prompt: `Want me to remember you saw ${doctorName}${outcomeBit}?`,
+          pendingKey: 'medical_visit',
+          resume: async (userText: string): Promise<CommitResult> => {
+            const trimmed = userText.trim();
+            if (CONFIRM_NO_RE.test(trimmed)) {
+              return { status: 'noop', ack: `No problem — I won't add that.` };
+            }
+            if (!CONFIRM_YES_RE.test(trimmed)) return { status: 'noop', ack: '' };
+            return commitVisit(doctorName);
+          },
+        };
+      };
+
+      // Heard "Dr. X" is identity evidence, not a write license. Confirmation
+      // owns the commit (same CONFIRM_YES/NO authority as other trust-critical
+      // medical writes). Nameless visits still ask who, then confirm.
       const heardName = intent.doctor_name?.trim();
-      if (heardName) return commitVisit(heardName);
+      if (heardName) return confirmVisit(heardName);
 
       // No clean name (specialty-only / nameless) → ask, write NOTHING (Spine §5,
       // Graceful Confusion). Replaces the old writeClarification('', ...) empty-id bug.
@@ -937,7 +960,7 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
           // re-ask ladder and budgeted release own the interaction from there.
           const name = extractDoctorName(userText);
           if (!name) return { status: 'noop', ack: '' }; // not a name → ladder re-asks
-          return commitVisit(name);
+          return confirmVisit(name);
         },
       };
     },
@@ -2124,7 +2147,7 @@ export async function routeIntent(
         reason: 'tier1:visit_upcoming_intercept',
       };
     }
-    // visit | advice → medical_visit (heard "Dr. X" writes; nameless asks who).
+    // visit | advice → medical_visit (heard "Dr. X" still confirms; nameless asks who).
     return {
       kind: 'capture',
       intents: [{ type: 'medical_visit', doctor_name: ev.doctor_name, specialty: ev.specialty, advice: ev.advice, raw: ev.raw }],

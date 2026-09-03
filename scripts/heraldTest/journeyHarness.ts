@@ -27,12 +27,24 @@ export type MedicationRow = {
   notes: string | null;
 };
 
-export type DbSnapshot = { medications: MedicationRow[] };
+export type MedicalRecordRow = {
+  id: string;
+  doctor_name: string | null;
+  notes: string | null;
+  visit_date: string | null;
+  visit_outcome: string | null;
+  status: string | null;
+};
+
+export type DbSnapshot = { medications: MedicationRow[]; medical_records: MedicalRecordRow[] };
 
 export type DbDiff = {
   added: MedicationRow[];
   removed: MedicationRow[];
   changed: Array<{ before: MedicationRow; after: MedicationRow }>;
+  medical_records_added: MedicalRecordRow[];
+  medical_records_removed: MedicalRecordRow[];
+  medical_records_changed: Array<{ before: MedicalRecordRow; after: MedicalRecordRow }>;
 };
 
 export type ContractResult = {
@@ -84,7 +96,8 @@ const SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS medical_records (
     id TEXT PRIMARY KEY, visit_date TEXT, doctor_name TEXT, facility TEXT,
     reason TEXT, diagnosis TEXT, follow_up TEXT, notes TEXT,
-    status TEXT DEFAULT 'noted', surfaced_at TEXT, removed_at TEXT, created_at TEXT
+    status TEXT DEFAULT 'noted', surfaced_at TEXT, visit_outcome TEXT,
+    outcome_asked_at TEXT, removed_at TEXT, created_at TEXT
   );
   CREATE TABLE IF NOT EXISTS medical_contacts (
     id TEXT PRIMARY KEY, name TEXT, specialty TEXT, phone TEXT, address TEXT,
@@ -128,15 +141,22 @@ export function snapshotMedications(db: Database.Database): DbSnapshot {
     `SELECT id, name, dosage, frequency, is_active, notes
      FROM medications ORDER BY created_at, id`,
   ).all() as MedicationRow[];
-  return { medications };
+  const medical_records = db.prepare(
+    `SELECT id, doctor_name, notes, visit_date, visit_outcome, status
+     FROM medical_records ORDER BY created_at, id`,
+  ).all() as MedicalRecordRow[];
+  return { medications, medical_records };
 }
 
-export function diffMedications(before: DbSnapshot, after: DbSnapshot): DbDiff {
-  const beforeById = new Map(before.medications.map((r) => [r.id, r]));
-  const afterById = new Map(after.medications.map((r) => [r.id, r]));
-  const added: MedicationRow[] = [];
-  const removed: MedicationRow[] = [];
-  const changed: DbDiff['changed'] = [];
+function diffRows<T extends { id: string }>(
+  before: T[],
+  after: T[],
+): { added: T[]; removed: T[]; changed: Array<{ before: T; after: T }> } {
+  const beforeById = new Map(before.map((r) => [r.id, r]));
+  const afterById = new Map(after.map((r) => [r.id, r]));
+  const added: T[] = [];
+  const removed: T[] = [];
+  const changed: Array<{ before: T; after: T }> = [];
   for (const [id, row] of afterById) {
     const prev = beforeById.get(id);
     if (!prev) added.push(row);
@@ -146,6 +166,19 @@ export function diffMedications(before: DbSnapshot, after: DbSnapshot): DbDiff {
     if (!afterById.has(id)) removed.push(row);
   }
   return { added, removed, changed };
+}
+
+export function diffMedications(before: DbSnapshot, after: DbSnapshot): DbDiff {
+  const meds = diffRows(before.medications, after.medications);
+  const recs = diffRows(before.medical_records, after.medical_records);
+  return {
+    added: meds.added,
+    removed: meds.removed,
+    changed: meds.changed,
+    medical_records_added: recs.added,
+    medical_records_removed: recs.removed,
+    medical_records_changed: recs.changed,
+  };
 }
 
 export function describeOutcome(outcome: UtteranceOutcome): {

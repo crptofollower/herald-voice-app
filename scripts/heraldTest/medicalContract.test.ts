@@ -15,6 +15,7 @@
 import Database from 'better-sqlite3';
 import { setDB } from '../../src/db/schema.ts';
 import { DOMAIN_WRITERS } from '../../src/routing/routeIntent.ts';
+import { extractDoctorAttributedOutcome } from '../../src/utils/detectMedicalEvent.ts';
 import {
   writeMedication,
   confirmMedicationCapture,
@@ -25,6 +26,8 @@ import {
   getMedicalSummary,
   deactivateMedicationByName,
   getMedicalRecords,
+  getLastVisitOutcomeSummary,
+  getVisitAwaitingOutcome,
   supersedeStaleUpcomingAppointments,
   getTodaysUpcomingAppointment,
   markAppointmentSurfaced,
@@ -64,6 +67,8 @@ const SCHEMA_SQL = `
     notes TEXT,
     status TEXT DEFAULT 'noted',
     surfaced_at TEXT,
+    visit_outcome TEXT,
+    outcome_asked_at TEXT,
     removed_at TEXT,
     created_at TEXT
   );
@@ -328,17 +333,23 @@ export async function runMedicalContractTests() {
     );
   }
 
-  // ── M17: clean doctor name → exactly one visit record, doctor_name verbatim ─
+  // ── M17: clean doctor name → confirm-gated write, doctor_name verbatim ─────
   // "I saw Dr. Sarver today" — a clean "Dr. X" name is HEARD, not guessed.
-  // Visit policy + Spine §5: write immediately, verbatim. This case SHOULD write.
+  // Immediate write was the mechanism defect: confirmation owns the commit.
   freshDB();
-  await DOMAIN_WRITERS.medical_visit!.add({
+  const visit17 = await DOMAIN_WRITERS.medical_visit!.add({
     type: 'medical_visit',
     doctor_name: 'Dr. Sarver',
     raw: 'I saw Dr. Sarver today',
   }, 'I saw Dr. Sarver today');
+  assert('M17 named visit is pending before confirm', visit17.status,
+    v => v === 'pending', 'pending');
+  assert('M17 named visit writes ZERO records before confirm', getMedicalRecords().length,
+    v => v === 0, '0');
+  const visit17yes = visit17.status === 'pending' ? await visit17.resume('Yes') : visit17;
   const recs17 = getMedicalRecords();
-  assert('M17 clean-name visit writes exactly one record', recs17.length,
+  assert('M17 Yes commits', visit17yes.status, v => v === 'committed', 'committed');
+  assert('M17 clean-name visit writes exactly one record after Yes', recs17.length,
     v => v === 1, '1');
   assert('M17 doctor_name stored verbatim', recs17[0]?.doctor_name,
     v => v === 'Dr. Sarver', '"Dr. Sarver"');
@@ -350,11 +361,12 @@ export async function runMedicalContractTests() {
   {
     freshDB();
     const raw = 'I saw Dr. Sarver next Tuesday';
-    await DOMAIN_WRITERS.medical_visit!.add({
+    const pending = await DOMAIN_WRITERS.medical_visit!.add({
       type: 'medical_visit',
       doctor_name: 'Dr. Sarver',
       raw,
     }, raw);
+    if (pending.status === 'pending') await pending.resume('Yes');
     const { parseDatePhrase } = await import('../../src/utils/parseTime.ts');
     const expected = parseDatePhrase(raw);
     const today = new Date().toLocaleDateString('en-CA');
@@ -374,11 +386,12 @@ export async function runMedicalContractTests() {
   {
     freshDB();
     const raw = 'I saw Dr. Sarver';
-    await DOMAIN_WRITERS.medical_visit!.add({
+    const pending = await DOMAIN_WRITERS.medical_visit!.add({
       type: 'medical_visit',
       doctor_name: 'Dr. Sarver',
       raw,
     }, raw);
+    if (pending.status === 'pending') await pending.resume('Yes');
     const today = new Date().toLocaleDateString('en-CA');
     assert(
       'M17c undated phrase → visit_date falls back to today',
@@ -414,8 +427,12 @@ export async function runMedicalContractTests() {
   }, 'I saw my cardiologist');
   assert('M19 specialty-only returns pending', visit19.status,
     v => v === 'pending', 'pending');
-  const resumed19 = await visit19.resume('Dr. Chen');
-  assert('M19 resume commits', resumed19.status,
+  const named19 = visit19.status === 'pending' ? await visit19.resume('Dr. Chen') : visit19;
+  assert('M19 name resume asks confirm, does not write yet', named19.status,
+    v => v === 'pending', 'pending');
+  assert('M19 no record before confirm', getMedicalRecords().length, v => v === 0, '0');
+  const resumed19 = named19.status === 'pending' ? await named19.resume('Yes') : named19;
+  assert('M19 Yes commits', resumed19.status,
     v => v === 'committed', 'committed');
   const recs19 = getMedicalRecords();
   assert('M19 resume writes exactly one record', recs19.length,
@@ -425,18 +442,92 @@ export async function runMedicalContractTests() {
 
   // ── M20: advice appended to notes verbatim ─────────────────────────────────
   freshDB();
-  await DOMAIN_WRITERS.medical_visit!.add({
+  const visit20 = await DOMAIN_WRITERS.medical_visit!.add({
     type: 'medical_visit',
     doctor_name: 'Dr. Lee',
     advice: 'cut salt',
     raw: 'I saw Dr. Lee today',
   }, 'I saw Dr. Lee today');
+  if (visit20.status === 'pending') await visit20.resume('Yes');
   const recs20 = getMedicalRecords();
   assert('M20 advice visit writes one record', recs20.length,
     v => v === 1, '1');
   assert('M20 notes include raw and advice verbatim', recs20[0]?.notes,
     v => v === 'I saw Dr. Lee today — cut salt',
     '"I saw Dr. Lee today — cut salt"');
+  assert('M20 advice-only visit does not fabricate visit_outcome', recs20[0]?.visit_outcome,
+    v => v == null || v === '', 'null');
+
+  // ── M29: canonical visit + attributed outcome → confirm → visit_outcome ───
+  {
+    freshDB();
+    const raw = 'I saw Dr. Patel today. He said my knee looked good.';
+    assert('M29 extractDoctorAttributedOutcome is the grounded clause',
+      extractDoctorAttributedOutcome(raw),
+      v => v === 'my knee looked good', '"my knee looked good"');
+    assert('M29 "told me to" is not an outcome (advice family)',
+      extractDoctorAttributedOutcome('Dr. Lee told me to cut salt'),
+      v => v === undefined, 'undefined');
+    assert('M29 visit without attributed speech has no outcome span',
+      extractDoctorAttributedOutcome('I saw Dr. Patel today.'),
+      v => v === undefined, 'undefined');
+    assert('M29 first-person "I said" is not doctor-attributed',
+      extractDoctorAttributedOutcome('I said my knee looked good'),
+      v => v === undefined, 'undefined');
+
+    const pending = await DOMAIN_WRITERS.medical_visit!.add({
+      type: 'medical_visit',
+      doctor_name: 'Dr. Patel',
+      raw,
+    }, raw);
+    assert('M29 capture is pending', pending.status, v => v === 'pending', 'pending');
+    assert('M29 no medical_records before Yes', getMedicalRecords().length, v => v === 0, '0');
+    const committed = pending.status === 'pending' ? await pending.resume('Yes') : pending;
+    assert('M29 Yes commits', committed.status, v => v === 'committed', 'committed');
+    const recs = getMedicalRecords();
+    assert('M29 one visit row', recs.length, v => v === 1, '1');
+    assert('M29 doctor_name is Dr. Patel', recs[0]?.doctor_name, v => v === 'Dr. Patel', '"Dr. Patel"');
+    assert('M29 visit_outcome is the grounded clause', recs[0]?.visit_outcome,
+      v => v === 'my knee looked good', '"my knee looked good"');
+    const spoken = getLastVisitOutcomeSummary('Dr. Patel');
+    assert('M29 existing outcome reader returns the committed span', spoken,
+      v => typeof v === 'string' && v.includes('my knee looked good') && !/healthy|prognosis|normal exam/i.test(v),
+      'summary contains my knee looked good');
+  }
+
+  // ── M30: deny does not commit visit or outcome ────────────────────────────
+  {
+    freshDB();
+    const raw = 'I saw Dr. Patel today. He said my knee looked good.';
+    const pending = await DOMAIN_WRITERS.medical_visit!.add({
+      type: 'medical_visit',
+      doctor_name: 'Dr. Patel',
+      raw,
+    }, raw);
+    const denied = pending.status === 'pending' ? await pending.resume('No') : pending;
+    assert('M30 deny is recognized noop', denied.status, v => v === 'noop', 'noop');
+    assert('M30 deny writes zero medical_records', getMedicalRecords().length, v => v === 0, '0');
+  }
+
+  // ── M31: visit with doctor but no spoken outcome — no fabricated outcome ──
+  {
+    freshDB();
+    const raw = 'I saw Dr. Patel last Monday.';
+    const pending = await DOMAIN_WRITERS.medical_visit!.add({
+      type: 'medical_visit',
+      doctor_name: 'Dr. Patel',
+      raw,
+    }, raw);
+    if (pending.status === 'pending') await pending.resume('Yes');
+    const recs = getMedicalRecords();
+    assert('M31 writes the visit', recs.length, v => v === 1, '1');
+    assert('M31 visit_outcome stays empty', recs[0]?.visit_outcome,
+      v => v == null || v === '', 'null');
+    markAppointmentSurfaced(recs[0]!.id);
+    const awaiting = getVisitAwaitingOutcome();
+    assert('M31 later outcome-ask candidate remains available', awaiting,
+      v => v !== null && (v as { id: string }).id === recs[0]!.id, recs[0]!.id);
+  }
 
   // ── M21: Substring Gate rejects an inferred diagnosis value ────────────────
   // MEDICAL_SURFACING_DESIGN_SPEC §1.2, case 1. "prediabetes" is not a

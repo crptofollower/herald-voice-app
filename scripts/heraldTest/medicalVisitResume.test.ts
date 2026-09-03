@@ -131,12 +131,16 @@ export async function runMedicalVisitResumeTests() {
       (v) => v === false, 'false');
   }
 
-  // ── W5: explicit "Dr. Patel" still commits ────────────────────────────────
+  // ── W5: explicit "Dr. Patel" still reaches confirm, then commits on Yes ───
   {
     freshDB();
     const { session } = await sessionFromPending(NAMELESS_CAPTURE);
-    const result = await session.resolvePending('Dr. Patel');
-    assert('W5 "Dr. Patel" commits', result,
+    const named = await session.resolvePending('Dr. Patel');
+    assert('W5 "Dr. Patel" asks confirm (does not write yet)', named,
+      (v) => (v as { status?: string }).status === 'pending', 'pending');
+    assert('W5 no row before confirm', getMedicalRecords().length, (v) => v === 0, '0');
+    const result = await session.resolvePending('Yes');
+    assert('W5 Yes commits', result,
       (v) => (v as { status?: string }).status === 'committed', 'committed');
     const recs = getMedicalRecords();
     assert('W5 writes exactly one medical_records row', recs.length,
@@ -174,6 +178,7 @@ export async function runMedicalVisitResumeTests() {
     assert('P-A writer reached intentionally (pending armed)', armed,
       (v) => v === true, 'pending armed');
     await session.resolvePending('Dr. Patel');
+    await session.resolvePending('Yes');
     const recs = getMedicalRecords();
     assert('P-A resume Dr. Patel writes one row', recs.length,
       (v) => v === 1, '1');
@@ -201,6 +206,7 @@ export async function runMedicalVisitResumeTests() {
     const expectedDate = parseDatePhrase(captureRaw) ?? new Date().toLocaleDateString('en-CA');
     const { session } = await sessionFromPending(captureRaw);
     await session.resolvePending('Dr. Patel');
+    await session.resolvePending('Yes');
     const recs = getMedicalRecords();
     assert('P-B visit still writes', recs.length, (v) => v === 1, '1');
     assert('P-B visit_date still follows writer derivation from raw', recs[0]?.visit_date,

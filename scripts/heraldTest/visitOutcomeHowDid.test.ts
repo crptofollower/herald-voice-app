@@ -189,14 +189,25 @@ export async function runVisitOutcomeHowDidTests() {
 
     const session = new ConversationSession();
     const out = await processUtterance(phrase, session, ROUTE_DEPS);
-    assert('D2 processUtterance still commits medical_visit ack',
-      { handled: out.handled, text: out.handled ? out.responseText : null },
+    assert('D2 processUtterance confirmation-gates named past visit',
+      { handled: out.handled, text: out.handled ? out.responseText : null, pending: session.hasPending() },
+      (v) => {
+        const x = v as { handled?: boolean; text?: string | null; pending?: boolean };
+        return x.handled === true && x.pending === true
+          && typeof x.text === 'string' && /remember you saw Dr\. Sarver/i.test(x.text);
+      },
+      'handled; pending confirm for Dr. Sarver');
+    assert('D3 no medical_records row before confirmation', getMedicalRecords().length,
+      (v) => v === 0, '0');
+    const yes = await processUtterance('Yes.', session, ROUTE_DEPS);
+    assert('D3b Yes commits medical_visit ack',
+      { handled: yes.handled, text: yes.handled ? yes.responseText : null },
       (v) => {
         const x = v as { handled?: boolean; text?: string | null };
         return x.handled === true && x.text === "I'll remember you saw Dr. Sarver.";
       },
       "handled; I'll remember you saw Dr. Sarver.");
-    assert('D3 still writes exactly one medical_records row', getMedicalRecords().length,
+    assert('D3c Yes writes exactly one medical_records row', getMedicalRecords().length,
       (v) => v === 1, '1');
   }
 
