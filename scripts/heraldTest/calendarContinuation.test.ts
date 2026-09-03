@@ -1,4 +1,4 @@
-// Calendar Continuation V1 — bounded temporal follow-up after authoritative calendar read.
+// Calendar Continuation V1/V2 — bounded temporal follow-up after authoritative calendar read.
 //
 // Runner: npx tsx scripts/heraldTest/calendarContinuation.test.ts
 // Gate:   wired from run.mjs.
@@ -325,6 +325,157 @@ export async function runCalendarContinuationTests() {
       t3,
       (o) => !o.handled && o.routeDecision.kind === 'needs_clarification',
       'needs_clarification',
+    );
+  }
+
+  console.log(`\n${BOLD}-- calendarContinuation V2 (deictic) Tests ----------------------${RESET}\n`);
+
+  assert(
+    'CCV2-P0 parse deictic tomorrow follow-up',
+    parseCalendarTemporalFollowUp("What's on there for tomorrow?"),
+    (v) => v === 'tomorrow',
+    'tomorrow',
+  );
+  assert(
+    'CCV2-P0b parse deictic without "for"',
+    parseCalendarTemporalFollowUp('What is on there tomorrow'),
+    (v) => v === 'tomorrow',
+    'tomorrow',
+  );
+  assert(
+    'CCV2-P0c explicit calendar phrase still not a narrow follow-up',
+    parseCalendarTemporalFollowUp("What's on my calendar tomorrow?"),
+    (v) => v === null,
+    'null',
+  );
+
+  {
+    const { say, calendar } = freshHarness();
+    const t1 = await say("What's on my calendar this week?");
+    assert(
+      'CCV2-P1 turn 1 → calendar:week device_read',
+      t1,
+      (o) =>
+        !o.handled &&
+        o.routeDecision.kind === 'device_read' &&
+        o.routeDecision.reason === 'calendar:week',
+      'calendar:week',
+    );
+    assert(
+      'CCV2-P2 holder established before deictic follow-up',
+      calendar.peek()?.authorizedReason,
+      (v) => v === 'calendar:week',
+      'calendar:week',
+    );
+    const t2 = await say("What's on there for tomorrow?");
+    assert(
+      'CCV2-P3 deictic follow-up → fresh tomorrow read',
+      t2,
+      (o) =>
+        o.handled === true &&
+        o.source === 'referent_resume' &&
+        o.responseText.includes('TOMORROW_ONLY_MEETING') &&
+        !o.responseText.includes(CLARIFY),
+      'TOMORROW_ONLY_MEETING via deictic continuation',
+    );
+    assert(
+      'CCV2-P4 holder consumed after deictic follow-up',
+      calendar.hasLive(),
+      (v) => v === false,
+      'false',
+    );
+  }
+
+  {
+    const { say } = freshHarness();
+    const t = await say("What's on there for tomorrow?");
+    assert(
+      'CCV2-N1 no holder → needs_clarification (parser match alone is not authority)',
+      t,
+      (o) => !o.handled && o.routeDecision.kind === 'needs_clarification',
+      'needs_clarification',
+    );
+  }
+
+  {
+    const { say } = freshHarness();
+    await say("What's on my calendar this week?");
+    await say('Add milk to my grocery list.');
+    const t3 = await say("What's on there for tomorrow?");
+    assert(
+      'CCV2-N2 expired holder → no calendar hijack',
+      t3,
+      (o) => !o.handled && o.routeDecision.kind === 'needs_clarification',
+      'needs_clarification after expiry',
+    );
+  }
+
+  {
+    const { say } = freshHarness();
+    await say("What's on my grocery list?");
+    const t2 = await say("What's on there for tomorrow?");
+    assert(
+      'CCV2-N3 live grocery holder without calendar → no calendar read',
+      t2,
+      (o) =>
+        !o.handled &&
+        o.routeDecision.kind === 'needs_clarification' &&
+        !(o.handled && o.source === 'referent_resume' && o.responseText?.includes('TOMORROW')),
+      'needs_clarification not calendar',
+    );
+  }
+
+  {
+    const { say } = freshHarness();
+    await say("What's on my calendar this week?");
+    const t2 = await say('What about tomorrow?');
+    assert(
+      'CCV2-N4 certified V1 follow-up unchanged',
+      t2,
+      (o) => o.handled && o.responseText.includes('TOMORROW_ONLY_MEETING'),
+      'V1 what-about path still works',
+    );
+  }
+
+  {
+    const { calendar } = freshHarness();
+    const d = await classifyQuery("What's on my calendar tomorrow?");
+    assert(
+      'CCV2-N5 explicit tomorrow read unchanged',
+      d,
+      (v) => v.tier === 1 && v.reason === 'calendar:tomorrow',
+      'calendar:tomorrow',
+    );
+    assert(
+      'CCV2-N5b no holder required for explicit read',
+      calendar.hasLive(),
+      (v) => v === false,
+      'false',
+    );
+  }
+
+  {
+    const { say, session, calendar } = freshHarness();
+    await say("What's on my calendar this week?");
+    assert(
+      'CCV2-N6a holder established before pending preempt',
+      calendar.peek()?.authorizedReason,
+      (v) => v === 'calendar:week',
+      'calendar:week',
+    );
+    session.setPending({
+      pendingKey: 'medical_capture',
+      resume: async () => ({ status: 'noop', ack: 'Pending wins over calendar continuation.' }),
+    });
+    const t2 = await say("What's on there for tomorrow?");
+    assert(
+      'CCV2-N6b pending preempts calendar deictic continuation',
+      t2,
+      (o) =>
+        o.handled === true &&
+        o.source === 'pending_resume' &&
+        o.responseText.includes('Pending wins'),
+      'pending_resume',
     );
   }
 
