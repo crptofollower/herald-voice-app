@@ -1,8 +1,8 @@
 /**
  * Call/Text authority-readiness helpers for the minimum graceful-recovery slice.
- * Not a completeness engine. Gaps are only: missing person, ambiguous person,
- * missing content. Structural genitive recovery and relationship capture are
- * out of scope.
+ * Not a completeness engine. Gaps: missing person, ambiguous person, missing
+ * content, missing phone (SMS reachability). Structural genitive recovery and
+ * relationship capture are out of scope.
  */
 
 import type { PersonIdentityResolution } from '../db/contactsDB';
@@ -10,6 +10,9 @@ import { matchingCandidates, CONFIRM_YES_RE, CONFIRM_NO_RE } from './conversatio
 import { proposeConstrainedCandidate } from './candidateConstrainedMatch';
 import type { CommitResult } from './routeIntent';
 import type { TierDecision } from './tierRouter';
+import { normalizePhone } from '../utils/phone';
+import { refineOsNameQuery, osNameFullyCovered } from '../utils/osContactDestination';
+import { distinctiveNameTokens } from '../db/contactsDB';
 
 export const CALL_TEXT_RECOVERY_KEY = 'call_text_recovery';
 /** OS finite-candidate SMS pending. Not Herald identity. */
@@ -21,7 +24,7 @@ export const RECOVERY_BUDGET = 1;
 /** Initial pending: a non-advancing answer stops immediately (progress-or-stop). */
 const DEFAULT_RECOVERY_ASK_BUDGET = 1;
 
-export type CallTextGap = 'missing_person' | 'ambiguous_person' | 'missing_content';
+export type CallTextGap = 'missing_person' | 'ambiguous_person' | 'missing_content' | 'missing_phone';
 
 export type CallTextTask = {
   action: 'sms' | 'call';
@@ -35,8 +38,12 @@ export type CallTextTask = {
   proposedNames?: string[];
   /** Consecutive candidate-set replies that did not narrow. */
   failedMatchTurns?: number;
+  /** SMS only: Herald resolved this person but lacks phone reachability. */
+  recipientKnown?: boolean;
   gap: CallTextGap;
   turnsAsked: number;
+  /** SMS only: phone resolved during missing_phone repair (not Herald identity). */
+  directPhone?: string;
 };
 
 const UNRESOLVED_PERSON_RE = /^(him|her|he|she|they|them|his|hers)$/i;
@@ -51,6 +58,14 @@ export function missingPersonPrompt(action: 'sms' | 'call'): string {
 
 export function missingContentPrompt(person: string): string {
   return `What would you like me to tell ${person}?`;
+}
+
+export function missingPhonePrompt(name: string, knownPerson?: boolean): string {
+  const who = name.trim() || 'them';
+  if (knownPerson) {
+    return `I know ${who} but I don't have a phone number for them. What's their number?`;
+  }
+  return `I don't have a number for ${who}. What's their number?`;
 }
 
 const COUNT_WORDS = ['', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
@@ -91,6 +106,12 @@ export function promptForGap(task: CallTextTask): string {
   if (proposed.length === 2) return `Did you mean ${proposed[0]} or ${proposed[1]}?`;
   if (task.gap === 'missing_person') return missingPersonPrompt(task.action);
   if (task.gap === 'ambiguous_person') return ambiguousPersonPrompt(task.candidateNames, task.spokenQuery);
+  if (task.gap === 'missing_phone') {
+    return missingPhonePrompt(
+      task.contactName || task.spokenQuery || '',
+      task.recipientKnown === true,
+    );
+  }
   return missingContentPrompt(task.contactName || 'them');
 }
 
@@ -162,8 +183,17 @@ export function isMonotonicAdvance(prev: CallTextTask, next: CallTextTask): bool
     personAdvanced = false;
   }
 
-  if (p.kind === 'one' && (n.kind !== 'one' || n.name !== p.name)) return false;
+  if (p.kind === 'one' && (n.kind !== 'one' || n.name !== p.name)) {
+    const prevPhone = prev.directPhone?.trim();
+    const nextPhone = next.directPhone?.trim();
+    if (!prevPhone && nextPhone) personAdvanced = true;
+    else return false;
+  }
   if (p.kind === 'set' && n.kind === 'none') return false;
+
+  const prevPhone = prev.directPhone?.trim();
+  const nextPhone = next.directPhone?.trim();
+  if (!prevPhone && nextPhone) personAdvanced = true;
 
   const prevProp = (prev.proposedNames ?? []).map(x => x.trim()).filter(Boolean);
   const nextProp = (next.proposedNames ?? []).map(x => x.trim()).filter(Boolean);
@@ -202,7 +232,28 @@ export function isPlausibleRecoveryReply(
     const identity = resolveIdentity(trimmed.replace(/[.,!?]+$/g, ''));
     return identity.status !== 'none';
   }
+  if (task.gap === 'missing_phone') {
+    const phoneMatch = trimmed.match(/([\d\s\-\(\)\+\.]{7,})/);
+    if (phoneMatch && normalizePhone(phoneMatch[1]).valid) return true;
+    const prior = task.spokenQuery?.trim() || task.contactName.trim();
+    if (plausibleOsNameRefinement(prior, trimmed)) return true;
+    const identity = resolveIdentity(trimmed.replace(/[.,!?]+$/g, ''));
+    return identity.status !== 'none';
+  }
   return false;
+}
+
+/** Clarification looks like a person-name refinement, not an unrelated command. */
+function plausibleOsNameRefinement(prior: string, clarification: string): boolean {
+  if (/\b(timer|alarm|minute|minutes|hour|hours|weather|calendar|remind|grocery|todo)\b/i.test(clarification)) {
+    return false;
+  }
+  const osQuery = refineOsNameQuery(prior, clarification);
+  if (!osQuery || osQuery === prior.trim()) return false;
+  const priorTokens = distinctiveNameTokens(prior) ?? [];
+  const queryTokens = distinctiveNameTokens(osQuery) ?? [];
+  if (queryTokens.length === 0) return false;
+  return priorTokens.length === 0 || priorTokens.every(t => queryTokens.includes(t));
 }
 
 function proposeOrReask(task: CallTextTask, trimmed: string): AdvanceResult {
@@ -290,10 +341,41 @@ function afterPersonKnown(task: CallTextTask, contactName: string): AdvanceResul
   return { kind: 'ready', task: ready };
 }
 
+export type CallTextRecoveryOpts = {
+  resolveOsPhone?: (query: string) => Promise<{ name: string; phone: string } | null>;
+};
+
+export async function tryOsRefinementAdvance(
+  task: CallTextTask,
+  userText: string,
+  resolveOsPhone: (query: string) => Promise<{ name: string; phone: string } | null>,
+): Promise<AdvanceResult | null> {
+  if (task.gap !== 'missing_person' && task.gap !== 'missing_phone') return null;
+  const trimmed = userText.trim();
+  const prior = task.spokenQuery?.trim() || task.contactName.trim();
+  const osQuery = refineOsNameQuery(prior, trimmed);
+  if (!osQuery) return null;
+  const device = await resolveOsPhone(osQuery);
+  if (!device?.phone?.trim()) return null;
+  if (!osNameFullyCovered(osQuery, device.name)) return null;
+  const ready: CallTextTask = {
+    ...task,
+    contactName: device.name,
+    directPhone: device.phone.replace(/\D/g, ''),
+    candidateNames: [],
+    proposedNames: [],
+  };
+  if (!isMonotonicAdvance(task, ready)) {
+    return { kind: 'stop', ack: GRACEFUL_STOP_WHO };
+  }
+  return { kind: 'ready', task: ready };
+}
+
 export function bindCallTextRecovery(
   initial: CallTextTask,
   resolveIdentity: (raw: string) => PersonIdentityResolution,
   onReady: (task: CallTextTask) => Promise<CommitResult>,
+  opts?: CallTextRecoveryOpts,
 ): {
   prompt: string;
   pendingKey: string;
@@ -306,10 +388,29 @@ export function bindCallTextRecovery(
   let task = { ...initial };
   const ownsReply = (userText: string) => isPlausibleRecoveryReply(task, userText, resolveIdentity);
   const resume = async (userText: string): Promise<CommitResult> => {
-    const r = advanceCallTextTask(task, userText, resolveIdentity);
+    let r = advanceCallTextTask(task, userText, resolveIdentity);
+    if (r.kind === 'non_advance' && opts?.resolveOsPhone) {
+      const os = await tryOsRefinementAdvance(task, userText, opts.resolveOsPhone);
+      if (os) r = os;
+    }
     // Non-advance is not a re-ask. Clarification continues only on
     // deterministic monotonic progress; otherwise graceful stop.
     if (r.kind === 'non_advance' || r.kind === 'stop') {
+      if (r.kind === 'non_advance'
+        && task.gap === 'missing_phone'
+        && task.action === 'sms'
+        && task.message.trim()) {
+        const reask = promptForGap(task);
+        return {
+          status: 'pending',
+          prompt: reask,
+          pendingKey: CALL_TEXT_RECOVERY_KEY,
+          resume,
+          reaskPrompt: reask,
+          budget: RECOVERY_BUDGET,
+          releasePrompt: GRACEFUL_STOP_WHO,
+        };
+      }
       return { status: 'noop', ack: r.kind === 'stop' ? r.ack : GRACEFUL_STOP_WHO };
     }
     if (r.kind === 'pending') {
@@ -352,6 +453,33 @@ export function advanceCallTextTask(
     const ready: CallTextTask = { ...task, message: trimmed };
     if (!isMonotonicAdvance(task, ready)) return { kind: 'non_advance' };
     return { kind: 'ready', task: ready };
+  }
+
+  if (task.gap === 'missing_phone') {
+    const phoneMatch = trimmed.match(/([\d\s\-\(\)\+\.]{7,})/);
+    if (phoneMatch) {
+      const reCheck = normalizePhone(phoneMatch[1]);
+      if (reCheck.valid) {
+        const ready: CallTextTask = {
+          ...task,
+          directPhone: reCheck.normalized,
+          contactName: task.contactName.trim() || task.spokenQuery?.trim() || 'them',
+        };
+        if (!isMonotonicAdvance(task, ready)) return { kind: 'non_advance' };
+        return { kind: 'ready', task: ready };
+      }
+    }
+    const identity = resolveIdentity(trimmed.replace(/[.,!?]+$/g, ''));
+    if (identity.status === 'single') {
+      return afterPersonKnown(task, identity.contact.name);
+    }
+    if (identity.status === 'ambiguous') {
+      const names = identity.candidates.map(c => c.name).filter(Boolean);
+      if (names.length >= 2) {
+        return stopOrPending(task, 'ambiguous_person', { candidateNames: names, spokenQuery: trimmed });
+      }
+    }
+    return { kind: 'non_advance' };
   }
 
   const proposed = (task.proposedNames ?? []).map(n => n.trim()).filter(Boolean);

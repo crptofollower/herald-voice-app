@@ -625,12 +625,13 @@ export async function runOsAmbiguityTests() {
       resolveContactPhone: async () => null,
     });
     await dispatchAction({ type: 'sms', contact: 'Paul', message: '' }, 'text Paul', deps);
-    assert('T-OSA-TEXT-0 zero phoneable OS → honest number collect',
-      { messages, pending: pendingRef.current },
+    assert('T-OSA-TEXT-0 zero phoneable OS → session-owned missing_phone recovery',
+      { messages, pending: pendingRef.current, sessionPending: deps.session.hasPending(), key: deps.session.peekPendingKey() },
       v => v.messages.some((m: string) => /don't have a number for Paul/i.test(m))
-        && v.pending?.action === 'text'
-        && v.pending?.name === 'Paul',
-      'ask for number; pendingContactCollectRef set');
+        && v.pending == null
+        && v.sessionPending === true
+        && v.key === 'call_text_recovery',
+      'call_text_recovery; no legacy collect-ref');
   }
   {
     freshDB();

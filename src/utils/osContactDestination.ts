@@ -33,6 +33,7 @@ export function osNameQuery(raw: string, heraldName?: string): string {
   let t = raw.trim().replace(/[.!?]+$/g, '').trim();
   t = t.replace(/^(?:please\s+)?(?:call|text|message|sms|dial)\s+/i, '');
   t = t.replace(/^it'?s\s+/i, '');
+  t = t.replace(/^under\s+/i, '');
   const cleaned = liftRelationshipName(normalizePersonTarget(t));
   const stripped = stripRelationshipLead(cleaned);
   if (stripped) return stripped;

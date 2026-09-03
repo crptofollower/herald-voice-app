@@ -34,6 +34,7 @@ import {
   isUnresolvedPersonRef,
   SMS_OS_DISAMBIGUATE_KEY,
   type CallTextGap,
+  type CallTextTask,
 } from '../../routing/callTextReadiness';
 
 // Pending-confirmation refs the dispatch handlers set so the NEXT user turn can
@@ -214,7 +215,20 @@ export async function dispatchAction(
           const { contact, message } = actionIntent;
           addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
 
-          const completeReadySms = async (ready: { contactName: string; message: string }): Promise<CommitResult> => {
+          const completeReadySms = async (ready: CallTextTask): Promise<CommitResult> => {
+            if (ready.directPhone?.trim()) {
+              const who = ready.contactName.trim() || 'them';
+              const smsUrl = `sms:${ready.directPhone.replace(/\D/g, '')}${ready.message ? `?body=${encodeURIComponent(ready.message)}` : ''}`;
+              try {
+                await openURL(smsUrl);
+                const okReply = ready.message
+                  ? `Opening a message to ${who} with your note ready.`
+                  : `Opening a message to ${who}.`;
+                return { status: 'committed', ack: okReply };
+              } catch {
+                return { status: 'failed', ack: `I couldn't open a message to ${who} — try again.` };
+              }
+            }
             const identity = resolvePersonIdentity(ready.contactName);
             if (identity.status !== 'single') {
               return { status: 'failed', ack: `I don't have a number for ${ready.contactName}.` };
@@ -238,6 +252,14 @@ export async function dispatchAction(
             }
           };
 
+          const resolveOsPhoneForRecovery = async (query: string) => {
+            const device = await resolveContactPhone(query);
+            if (device?.phone?.trim()) {
+              return { name: device.name, phone: device.phone };
+            }
+            return null;
+          };
+
           const armSmsRecovery = (
             gap: CallTextGap,
             contactName: string,
@@ -257,6 +279,7 @@ export async function dispatchAction(
               },
               resolvePersonIdentity,
               completeReadySms,
+              { resolveOsPhone: resolveOsPhoneForRecovery },
             );
             session.setPending({
               pendingKey: bound.pendingKey,
@@ -291,23 +314,40 @@ export async function dispatchAction(
               speak(reply);
             };
 
-            const askForNumber = (name: string, opts?: { knownPerson?: boolean }) => {
-              if (sessionOwnsContactPending(session)) {
-                releaseOverlappingContactCollect(pendingContactCollectRef, session);
-                return;
-              }
-              const reply = opts?.knownPerson
-                ? `I know ${name} but I don't have a phone number for them. What's their number?`
-                : `I don't have a number for ${name}. What's their number?`;
-              addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-              speak(reply);
-              pendingContactCollectRef.current = { action: 'text', name, body: message };
-            };
+          const armMissingPhoneRecovery = (name: string, opts?: { heraldKnown?: boolean }) => {
+            const bound = bindCallTextRecovery(
+              {
+                action: 'sms',
+                contactName: name,
+                message: message,
+                candidateNames: [],
+                spokenQuery: name,
+                gap: 'missing_phone',
+                turnsAsked: 1,
+                recipientKnown: opts?.heraldKnown === true,
+              },
+              resolvePersonIdentity,
+              completeReadySms,
+              { resolveOsPhone: resolveOsPhoneForRecovery },
+            );
+            session.setPending({
+              pendingKey: bound.pendingKey,
+              resume: bound.resume,
+              kind: 'standard',
+              budget: bound.budget,
+              reaskPrompt: bound.reaskPrompt,
+              releasePrompt: bound.releasePrompt,
+              ownsReply: bound.ownsReply,
+            });
+            releaseOverlappingContactCollect(pendingContactCollectRef, session);
+            addMessage({ id: generateId('msg'), role: 'assistant', content: bound.prompt, timestamp: Date.now() });
+            speak(bound.prompt);
+          };
 
             if (identity.status === 'ambiguous') {
               const names = identity.candidates.map(c => c.name.trim()).filter(Boolean);
               if (names.length < 2) {
-                askForNumber(contact);
+                armMissingPhoneRecovery(contact);
                 return;
               }
               armSmsRecovery('ambiguous_person', '', message, names, contact);
@@ -386,7 +426,7 @@ export async function dispatchAction(
                   releaseOverlappingContactCollect(pendingContactCollectRef, session);
                   return;
                 }
-                askForNumber(only.name, { knownPerson: true });
+                armMissingPhoneRecovery(only.name, { heraldKnown: true });
                 return;
               }
               // broadIsMulti === true: fall through — resolvedSms holds the
@@ -452,7 +492,7 @@ export async function dispatchAction(
                 speak(reply);
                 return;
               }
-              askForNumber(contact);
+              armMissingPhoneRecovery(contact);
             }
           } catch (err) {
             console.error('[dispatch sms] openURL failed', resolvedSms?.phone, err);
