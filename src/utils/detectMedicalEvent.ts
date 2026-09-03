@@ -72,6 +72,30 @@ function afterLeadingReadVocative(text: string): string {
 // recoverable; a corrupted medications table is a trust failure.
 const LIST_CONTEXT =
   /\b(grocery|shopping|to-?do|todo)\s+lists?\b|\b(off|from|on|to)\s+(my|the)\s+lists?\b|\bmy\s+lists?\b/i;
+
+/** Medication discontinuation — not list-removal operator shape. */
+const MEDICATION_DISCONTINUATION_TAKE_OFF =
+  /\btake\s+(?:me|us|him|her|them)\s+off(?:\s+of)?\b/i;
+
+/**
+ * List-removal operator shape without an explicit "list" token.
+ * Blocks "take eggs off" / "take off eggs" from becoming medication capture.
+ * Medication discontinuation ("take me off Eliquis") is excluded.
+ */
+export function isListRemovalOperatorShape(text: string): boolean {
+  const raw = text.trim();
+  if (!raw || LIST_CONTEXT.test(raw)) return false;
+  if (MEDICATION_DISCONTINUATION_TAKE_OFF.test(raw)) return false;
+  if (/\b(?:take|get|knock|pull)\s+(?!me\b|us\b|him\b|her\b|them\b)(?:the\s+)?(.+?)\s+off\b/i.test(raw)) {
+    return true;
+  }
+  if (/\b(?:take|get|knock|pull)\s+off\s+(?:the\s+)?\S/i.test(raw)) return true;
+  if (/\b(?:cross|scratch|mark)\s+off\s+(?:the\s+)?\S/i.test(raw)) return true;
+  return false;
+}
+
+/** Structural list operators — never a medication name. */
+const STRUCTURAL_LIST_OPERATORS = new Set(['off', 'out', 'from']);
 const FREQUENCY_INQUIRY = /\bhow\s+often\b|\bhow\s+many\s+times\b/i;
 const TIMING_INQUIRY = /\bwhen\s+do\s+i\s+take\b/i;
 const DO_I_TAKE_INQUIRY = /\bdo\s+i\s+take\b/i;
@@ -141,9 +165,20 @@ const DRUG_FILLER_WORDS = new Set([
   'tablet', 'tablets', 'capsule', 'capsules', 'prescription', 'prescriptions',
   'medicine', 'medicines', 'dose', 'dosage',
   'blood', 'pressure', 'sugar', 'heart', 'thyroid', 'cholesterol', 'pain',
+  'off', 'out', 'from',
 ]);
 
 export function extractDrugName(text: string): string | undefined {
+  const discontinuation = text.match(
+    /\btake\s+(?:me|us|him|her|them)\s+off(?:\s+of)?\s+(.+)/i,
+  );
+  if (discontinuation?.[1]) {
+    const token = discontinuation[1].trim().split(/\s+/)[0]?.replace(/[.,;:!?]+$/, '');
+    if (token && !DRUG_FILLER_WORDS.has(token.toLowerCase()) && !STRUCTURAL_LIST_OPERATORS.has(token.toLowerCase())) {
+      return token;
+    }
+  }
+
   const triggerMatch = text.match(DRUG_TRIGGER);
   if (!triggerMatch) return undefined;
 
@@ -155,7 +190,9 @@ export function extractDrugName(text: string): string | undefined {
   for (const rawToken of tokens) {
     const token = rawToken.replace(/[.,;:!?]+$/, "");
     if (!token) continue;
-    if (DRUG_FILLER_WORDS.has(token.toLowerCase())) continue;
+    const lower = token.toLowerCase();
+    if (DRUG_FILLER_WORDS.has(lower)) continue;
+    if (STRUCTURAL_LIST_OPERATORS.has(lower)) continue;
     if (/^\d+$/.test(token)) continue; // bare number — dosage handled separately
     if (token.length < 3 && !/^[A-Z]/.test(token)) continue; // short lowercase noise
     return token;
@@ -266,6 +303,7 @@ export function detectMedicalEvent(text: string): MedicalEvent | null {
   if (REMINDER_START.test(raw)) return null;
   // Build A: never read a list operation as a medical event.
   if (LIST_CONTEXT.test(raw)) return null;
+  if (isListRemovalOperatorShape(raw)) return null;
 
   let hasPastVisit = PAST_VISIT.test(raw);
   const hasFutureVisit =
@@ -340,6 +378,7 @@ export function detectDiagnosisCapture(text: string): IntentRecord[] {
   if (!raw) return [];
   if (DIAGNOSIS_READ_GUARD.test(raw)) return [];
   if (LIST_CONTEXT.test(raw)) return []; // never read a list op as a diagnosis
+  if (isListRemovalOperatorShape(raw)) return [];
 
   const cue = raw.match(DIAGNOSIS_CUE);
   if (cue?.[1]) {
