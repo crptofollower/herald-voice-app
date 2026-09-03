@@ -114,6 +114,7 @@ import { classifyEmergencyCallReply } from '../utils/emergencyCallConfirm';
 import { ConversationalSubjectHolder } from '../routing/conversationalSubject';
 import { MedicationPresentationHolder } from '../routing/medicationPresentation';
 import { OrderedPresentationHolder } from '../routing/orderedPresentation';
+import { CalendarContinuationHolder } from '../routing/calendarContinuation';
 import { processUtterance, applyIntents } from '../routing/processUtterance';
 import { alreadyClassifiedByRouteIntent, mayInvokeBackendStream } from '../utils/llmClassificationOwnership';
 import {
@@ -479,6 +480,7 @@ export default function ChatScreen() {
   const subjectRef = useRef<ConversationalSubjectHolder>(new ConversationalSubjectHolder());
   const medicationPresentationRef = useRef<MedicationPresentationHolder>(new MedicationPresentationHolder());
   const orderedPresentationRef = useRef<OrderedPresentationHolder>(new OrderedPresentationHolder());
+  const calendarContinuationRef = useRef<CalendarContinuationHolder>(new CalendarContinuationHolder());
 
   // Step 5a: bounded HOT narrative ring — RAM-only, peek semantics, written ONLY
   // from the three authorized Step 4 sites (ephemeral success ×2, chit_chat read).
@@ -1204,6 +1206,7 @@ export default function ChatScreen() {
       subjectRef.current.clear();
       medicationPresentationRef.current.clear();
       orderedPresentationRef.current.clear();
+      calendarContinuationRef.current.clear();
       hotRingRef.current.clear();
       await dispatchEmergency(text);
       setInputText('');
@@ -1245,6 +1248,7 @@ export default function ChatScreen() {
       subjectRef.current.clear();
       medicationPresentationRef.current.clear();
       orderedPresentationRef.current.clear();
+      calendarContinuationRef.current.clear();
       const pending = pendingContactCollectRef.current;
       const phoneMatch = text.match(/([\d\s\-\(\)\+\.]{7,})/);
       const isLikelyAddress = text.length > 8 && /\d/.test(text) && /\b(st|ave|blvd|rd|dr|ln|way|ct|pl|circle|drive|street|road|court|lane|avenue)\b/i.test(text);
@@ -1520,7 +1524,7 @@ export default function ChatScreen() {
         lists: getKnownListNames(),
       },
       resolveContact: resolveContactPhoneRef.current ?? undefined,
-    }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current);
+    }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current, calendarContinuationRef.current);
     if (shadowSnapshot) {
       const rd = outcome.handled ? undefined : outcome.routeDecision;
       const action = rd && rd.kind === 'device_action' ? rd.actionIntent : undefined;

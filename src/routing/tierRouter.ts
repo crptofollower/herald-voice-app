@@ -207,7 +207,7 @@ const CALENDAR_TODAY_DEFAULT_READ: RegExp[] = [
   /\bdo i have anything scheduled\b/i,
 ];
 
-function hasCalendarReadEvidence(msg: string): boolean {
+export function hasCalendarReadEvidence(msg: string): boolean {
   const trimmed = msg.trim();
   return (
     CALENDAR_READ_FREE.some((p) => p.test(trimmed)) ||
@@ -819,6 +819,26 @@ function calendarSpeech(
     return "I don't have your calendar loaded yet. Connect once with calendar access granted, then try again offline.";
   }
   return formatCachedEventsForSpeech(events, window);
+}
+
+export type CalendarScopeWindow = "today" | "tomorrow" | "this week" | "next week";
+
+const CALENDAR_SCOPE_REASON: Record<CalendarScopeWindow, string> = {
+  today: "calendar:today",
+  tomorrow: "calendar:tomorrow",
+  "this week": "calendar:week",
+  "next week": "calendar:next_week",
+};
+
+/** Fresh authoritative calendar read for a fixed window — no cached answer text. */
+export async function readCalendarScope(
+  window: CalendarScopeWindow,
+): Promise<{ response: string; reason: string }> {
+  const events = await getTier1CalendarEvents(window);
+  return {
+    response: calendarSpeech(window, events),
+    reason: CALENDAR_SCOPE_REASON[window],
+  };
 }
 
 // ─── Visit read authority (§4a one-reader for the medical_visit domain) ───────

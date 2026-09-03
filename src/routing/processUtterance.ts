@@ -50,6 +50,11 @@ import {
   formatGroceryRemovalAck,
   isGroceryMutationDomainBlocked,
 } from './groceryPositionalMutation';
+import {
+  CalendarContinuationHolder,
+  parseCalendarTemporalFollowUp,
+} from './calendarContinuation';
+import { hasCalendarReadEvidence, readCalendarScope } from './tierRouter';
 
 // D0 commit 2 (S54 addendum): the headless pipeline seam. UI (ChatScreen) calls
 // this and renders the result; P-tests call it directly. No React, no UI, no TTS.
@@ -148,6 +153,16 @@ function maybeEstablishGroceryPresentation(
   holder?.establish('grocery', ids);
 }
 
+function maybeEstablishCalendarContinuation(
+  routeDecision: RouteDecision,
+  holder: CalendarContinuationHolder | null | undefined,
+): void {
+  if (!holder) return;
+  if (routeDecision.kind !== 'device_read') return;
+  if (!routeDecision.reason.startsWith('calendar:')) return;
+  holder.establish(routeDecision.reason);
+}
+
 /** The single commit loop: run intents through domain writers, arm the session
  *  if a writer returned pending. Returns the composed ACK and raw results.
  *  `source` is required — the RouteDecision's capture source for this whole
@@ -208,12 +223,14 @@ export async function processUtterance(
   subject?: ConversationalSubjectHolder | null,
   medicationPresentation?: MedicationPresentationHolder | null,
   orderedPresentation?: OrderedPresentationHolder | null,
+  calendarContinuation?: CalendarContinuationHolder | null,
 ): Promise<UtteranceOutcome> {
   const turnId = getActiveTurnId();
   latLog('processUtterance START', { turnId });
   subject?.beginUserTurn();
   medicationPresentation?.beginUserTurn();
   orderedPresentation?.beginUserTurn();
+  calendarContinuation?.beginUserTurn();
   // 0) Law 0 — emergency preempts everything (Spine §3a). Checked before pending
   //    resolution, before routing, before any classifier. A held pending is
   //    RELEASED, never resumed — no re-ask, no ladder, no ack generated here
@@ -224,6 +241,7 @@ export async function processUtterance(
     subject?.clear();
     medicationPresentation?.clear();
     orderedPresentation?.clear();
+    calendarContinuation?.clear();
     return { handled: true, source: 'emergency' };
   }
   // 1) Pending continuation — the confirm-primitive (Law 2: a pending state
@@ -250,8 +268,24 @@ export async function processUtterance(
     subject?.clear();
     medicationPresentation?.clear();
     orderedPresentation?.clear();
+    calendarContinuation?.clear();
     const result = await session.resolvePending(text);
     return { handled: true, source: 'pending_resume', responseText: composeAck([result]), commits: [result] };
+  }
+  // 1a-cal) Calendar temporal continuation — one-turn follow-up after an
+  //     authoritative calendar read. Fresh tier-1 read only; no answer replay.
+  if (calendarContinuation?.canContinue()) {
+    if (hasCalendarReadEvidence(text)) {
+      calendarContinuation.clear();
+    } else {
+      const scope = parseCalendarTemporalFollowUp(text);
+      if (scope) {
+        calendarContinuation.clear();
+        const { response } = await readCalendarScope(scope);
+        return { handled: true, source: 'referent_resume', responseText: response, commits: [] };
+      }
+      calendarContinuation.clear();
+    }
   }
   // 1a) Medication ordinal continuation — closed first/second-one speech act
   //     against the RAM presentation of ordered medication IDs. Not Flow C.
@@ -611,5 +645,6 @@ export async function processUtterance(
     subject ?? null,
     medicationPresentation,
   );
+  maybeEstablishCalendarContinuation(routeDecision, calendarContinuation);
   return { handled: false, routeDecision };
 }
