@@ -260,15 +260,15 @@ export async function runOrderedPresentationTests() {
     insertItem(db, 'g3dup', 'apples', '2026-01-04T00:00:00.000Z');
     const routed = await say("What's on my grocery list?");
     assert('OP48 list_read routes', routed,
-      v => v.handled === false && v.routeDecision?.kind === 'device_action'
-        && v.routeDecision.actionIntent?.type === 'list_read'
-        && v.routeDecision.actionIntent?.listName === 'grocery',
-      'list_read grocery');
-    const presented = presentGrocery(ordered, subject, medication);
-    assert('OP49 speech from post-dedupe', presented.speech,
-      v => v === 'On your grocery list: Milk, Eggs, Apples.',
+      v => v.handled === false && v.routeDecision?.kind === 'device_read'
+        && v.routeDecision.reason === 'action:list_read'
+        && v.routeDecision.presentedGroceryIds?.join(',') === 'g1,g2,g3',
+      'device_read action:list_read grocery IDs');
+    assert('OP49 speech from post-dedupe', routed,
+      v => v.handled === false && v.routeDecision?.kind === 'device_read'
+        && v.routeDecision.response === 'On your grocery list: Milk, Eggs, Apples.',
       'Milk, Eggs, Apples');
-    assert('OP50 IDs skip duplicate body', presented.items.map((i) => i.id).join(','),
+    assert('OP50 IDs skip duplicate body', ordered.peek()?.presentedIds.join(','),
       v => v === 'g1,g2,g3', 'g1,g2,g3');
     assert('OP51 holder matches speech IDs', ordered.peek()?.presentedIds.join(','),
       v => v === 'g1,g2,g3', 'g1,g2,g3');
@@ -483,10 +483,11 @@ export async function runOrderedPresentationTests() {
     presentGrocery(ordered, subject, medication);
     const listAsk = await say("What's on my grocery list?");
     assert('OP120 live list ask not a position', listAsk,
-      v => v.handled === false && v.routeDecision?.kind === 'device_action'
-        && v.routeDecision.actionIntent?.type === 'list_read',
-      'list_read');
-    assert('OP121 live list ask unused-clears', ordered.hasLive(), v => v === false, 'cleared');
+      v => v.handled === false && v.routeDecision?.kind === 'device_read'
+        && v.routeDecision.reason === 'action:list_read',
+      'device_read list_read');
+    assert('OP121 live list ask re-grants current presentation', ordered.peek()?.presentedIds.join(','),
+      v => v === 'g1,g2,g3', 'g1,g2,g3');
   }
 
   {

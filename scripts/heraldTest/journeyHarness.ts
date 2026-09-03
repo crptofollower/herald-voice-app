@@ -10,6 +10,7 @@ import Database from 'better-sqlite3';
 import { setDB } from '../../src/db/schema.ts';
 import { processUtterance, type UtteranceOutcome } from '../../src/routing/processUtterance.ts';
 import { ConversationSession } from '../../src/routing/conversationSession.ts';
+import { OrderedPresentationHolder } from '../../src/routing/orderedPresentation.ts';
 import { classifyQuery } from '../../src/routing/tierRouter.ts';
 import { normalizeInput } from '../../src/utils/normalizeInput.ts';
 import type { RouteDecision } from '../../src/routing/routeIntent.ts';
@@ -94,6 +95,7 @@ export type TurnRecord = {
   response: string | null;
   commit_statuses: string[];
   commit_pending_keys: Array<string | null>;
+  opr_presented_ids: string[] | null;
   db_before: DbSnapshot;
   db_after: DbSnapshot;
   db_diff: DbDiff;
@@ -113,6 +115,7 @@ export type JourneyPacket = {
   overall: ContractVerdict;
   first_material_divergence: string | null;
   failure_class: 'none' | 'PRODUCT_FAIL' | 'HARNESS_FAIL';
+  journey_contracts?: ContractResult[];
 };
 
 const SCHEMA_SQL = `
@@ -309,13 +312,14 @@ export function openJourneyDb() {
   db.exec(SCHEMA_SQL);
   setDB(makeShim(db));
   const session = new ConversationSession();
+  const orderedPresentation = new OrderedPresentationHolder();
   const deps = {
     classifyQuery,
     classifyLLM: async () => ({ status: 'ok' as const, intents: [] }),
     llmReady: false,
     captureContext: { contacts: [] as string[], lists: [] as string[] },
   };
-  return { db, session, deps };
+  return { db, session, deps, orderedPresentation };
 }
 
 export async function runJourneyTurn(
@@ -324,13 +328,22 @@ export async function runJourneyTurn(
   deps: Parameters<typeof processUtterance>[2],
   turn: number,
   input: string,
+  orderedPresentation?: OrderedPresentationHolder | null,
 ): Promise<TurnRecord> {
   const pending_key_before = session.peekPendingKey();
   const db_before = snapshotMedications(db);
   const input_normalized = normalizeInput(input);
-  const outcome = await processUtterance(input_normalized, session, deps);
+  const outcome = await processUtterance(
+    input_normalized,
+    session,
+    deps,
+    null,
+    null,
+    orderedPresentation ?? null,
+  );
   const described = describeOutcome(outcome);
   const db_after = snapshotMedications(db);
+  const live = orderedPresentation?.peek();
   return {
     turn,
     input,
@@ -339,6 +352,7 @@ export async function runJourneyTurn(
     pending_key_before,
     pending_key_after: session.peekPendingKey(),
     pending_after: session.hasPending(),
+    opr_presented_ids: live?.owner === 'grocery' ? [...live.presentedIds] : null,
     db_before,
     db_after,
     db_diff: diffMedications(db_before, db_after),

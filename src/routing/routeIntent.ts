@@ -30,7 +30,7 @@ import type { ReadIntentMeta } from './readIntent';
 type ActionIntent = NonNullable<TierDecision['actionIntent']>;
 
 export type RouteDecision =
-  | { kind: 'device_read'; tier: 1; response: string; isMedical?: boolean; reason: string; presentedMedicationIds?: string[] }
+  | { kind: 'device_read'; tier: 1; response: string; isMedical?: boolean; reason: string; presentedMedicationIds?: string[]; presentedGroceryIds?: string[] }
   | { kind: 'device_action'; tier: 1; actionIntent: ActionIntent; reason: string }
   | { kind: 'capture'; intents: IntentRecord[]; source: 'deterministic' | 'llm'; reason: string }
   | { kind: 'phone_repair_needed'; pending: Extract<CommitResult, { status: 'pending' }>; reason: string }
@@ -2017,6 +2017,20 @@ export async function routeIntent(
         const intent = await resolveContactCallIntent(contactName, text, deps);
         return { kind: 'capture', intents: [intent], source: 'deterministic', reason: 'routeIntent:contact_call_intercept' };
       }
+    }
+    if (actionType === 'list_read') {
+      const listName = decision.actionIntent.type === 'list_read'
+        ? decision.actionIntent.listName
+        : 'grocery';
+      const { getPresentedOpenListItems, composeOpenListSpeech } = await import('../db/listRead');
+      const items = getPresentedOpenListItems(listName);
+      return {
+        kind: 'device_read',
+        tier: 1,
+        response: composeOpenListSpeech(listName, items),
+        reason: decision.reason,
+        ...(listName === 'grocery' ? { presentedGroceryIds: items.map((i) => i.id) } : {}),
+      };
     }
     if (actionType === 'todo_read') {
       const { getPresentedOpenListItems, composeTodoOpenSpeech } = await import('../db/listRead');

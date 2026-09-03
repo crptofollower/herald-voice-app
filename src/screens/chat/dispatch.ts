@@ -19,10 +19,6 @@ import type { OrderedPresentationHolder } from '../../routing/orderedPresentatio
 import * as IntentLauncher from 'expo-intent-launcher';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getDB } from '../../db/schema';
-import {
-  composeOpenListSpeech,
-  getPresentedOpenListItems,
-} from '../../db/listRead';
 import { isPersonalDestination, isRelationshipTerm, RELATIONSHIP_WORDS, resolvePersonIdentity, contactHasCapability, resolvePersonCapability } from '../../db/contactsDB';
 import { osNameQuery, osNameFullyCovered } from '../../utils/osContactDestination';
 import { normalizePersonTarget, liftRelationshipName } from '../../utils/personReference';
@@ -152,7 +148,6 @@ export async function dispatchAction(
     resolveContactPhone, handleCalendarAction, handleMapsAction, launchAndroidTimer,
     handleLaunchActionRef, pendingContactCollectRef,
     platformOS, openURL, session,
-    orderedPresentation, medicationPresentation, conversationalSubject,
   } = deps;
 
   // === arms copied from ChatScreen.tsx below ===
@@ -828,32 +823,6 @@ export async function dispatchAction(
             speak(reply);
           } catch {
             const reply = `I couldn't read your notes right now. Try again.`;
-            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-            speak(reply);
-          }
-          return;
-        }
-
-        // List read — read from device SQLite, zero network
-        if (actionIntent.type === 'list_read') {
-          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-          try {
-            const listName = actionIntent.listName;
-            const items = getPresentedOpenListItems(listName);
-            const reply = composeOpenListSpeech(listName, items);
-            if (listName === 'grocery') {
-              if (items.length === 0) {
-                orderedPresentation?.clear();
-              } else {
-                conversationalSubject?.clear();
-                medicationPresentation?.clear();
-                orderedPresentation?.establish('grocery', items.map((i) => i.id));
-              }
-            }
-            addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-            speak(reply);
-          } catch {
-            const reply = `I couldn't read your list right now. Try again.`;
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
           }

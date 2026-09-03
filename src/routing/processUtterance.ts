@@ -129,6 +129,25 @@ function maybeEstablishMedicationPresentation(
   holder.establish(ids);
 }
 
+function maybeEstablishGroceryPresentation(
+  routeDecision: RouteDecision,
+  holder: OrderedPresentationHolder | null | undefined,
+  subject: ConversationalSubjectHolder | null,
+  medicationPresentation: MedicationPresentationHolder | null | undefined,
+): void {
+  if (routeDecision.kind !== 'device_read' || routeDecision.presentedGroceryIds === undefined) {
+    return;
+  }
+  const ids = routeDecision.presentedGroceryIds;
+  if (ids.length === 0) {
+    holder?.clear();
+    return;
+  }
+  subject?.clear();
+  medicationPresentation?.clear();
+  holder?.establish('grocery', ids);
+}
+
 /** The single commit loop: run intents through domain writers, arm the session
  *  if a writer returned pending. Returns the composed ACK and raw results.
  *  `source` is required — the RouteDecision's capture source for this whole
@@ -586,5 +605,11 @@ export async function processUtterance(
       orderedPresentation,
     );
   }
+  maybeEstablishGroceryPresentation(
+    routeDecision,
+    orderedPresentation,
+    subject ?? null,
+    medicationPresentation,
+  );
   return { handled: false, routeDecision };
 }

@@ -140,8 +140,8 @@ const CASES = [
   [
     "list read beats LLM",
     "what's on my grocery list",
-    { kind: "device_action", actionType: "list_read" },
-    { kind: "device_action", actionType: "list_read" },
+    { kind: "device_read", reason: "action:list_read" },
+    { kind: "device_read", reason: "action:list_read" },
   ],
   [
     "todo is there hyphen → todo_read",
@@ -170,8 +170,8 @@ const CASES = [
   [
     "list whats on grocery exact → list_read",
     "what is on my grocery list",
-    { kind: "device_action", actionType: "list_read" },
-    { kind: "device_action", actionType: "list_read" },
+    { kind: "device_read", reason: "action:list_read" },
+    { kind: "device_read", reason: "action:list_read" },
   ],
   [
     "hear me → backend",

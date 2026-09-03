@@ -279,10 +279,10 @@ export async function runGroceryNamedCollectionReentryTests() {
     stockThree(db);
     const t = await say("What's on my grocery list?");
     assert('F2E18 LIST_READ intact', t,
-      v => v.handled === false && v.routeDecision?.kind === 'device_action'
-        && v.routeDecision.actionIntent?.type === 'list_read'
-        && v.routeDecision.actionIntent?.listName === 'grocery',
-      'list_read grocery');
+      v => v.handled === false && v.routeDecision?.kind === 'device_read'
+        && v.routeDecision.reason === 'action:list_read'
+        && Array.isArray(v.routeDecision.presentedGroceryIds),
+      'device_read list_read grocery');
   }
 
   {
@@ -290,9 +290,9 @@ export async function runGroceryNamedCollectionReentryTests() {
     stockThree(db);
     const t = await say("What's on my list?");
     assert('F2E19 my list still list_read', t,
-      v => v.handled === false && v.routeDecision?.kind === 'device_action'
-        && v.routeDecision.actionIntent?.type === 'list_read',
-      'list_read');
+      v => v.handled === false && v.routeDecision?.kind === 'device_read'
+        && v.routeDecision.reason === 'action:list_read',
+      'device_read list_read');
   }
 
   {
