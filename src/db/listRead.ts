@@ -29,6 +29,40 @@ export function composeOpenListSpeech(listName: string, items: PresentedListItem
     : `On your ${listName} list: ${items.map((i) => i.body).join(', ')}.`;
 }
 
+/** Exact historic ChatScreen todo_read copy. Do not swap onto composeOpenListSpeech. */
+export function composeTodoOpenSpeech(items: PresentedListItem[]): string {
+  return items.length === 0
+    ? `You're all clear — nothing on your to-do list.`
+    : `You've got ${items.length} open: ${items.map((i) => i.body).join(', ')}.`;
+}
+
+// Historic ChatScreen todo_complete scorer. Highest score wins; ties keep the
+// first item in iteration order (`score > bestScore` only). Do not "improve".
+const TODO_COMPLETE_STOP_WORDS = new Set([
+  'i', 'the', 'a', 'an', 'to', 'of', 'and', 'or', 'my', 'me', 'it',
+  'that', 'this', 'have', 'had', 'been', 'was', 'did', 'do',
+]);
+
+export function matchTodoCompleteItem(
+  raw: string,
+  items: PresentedListItem[],
+): PresentedListItem | null {
+  const rawLower = raw.toLowerCase();
+  const keywords = rawLower.split(/\W+/).filter((w) => w.length > 2 && !TODO_COMPLETE_STOP_WORDS.has(w));
+  let bestMatch: PresentedListItem | null = null;
+  let bestScore = 0;
+  for (const item of items) {
+    const itemLower = item.body.toLowerCase();
+    const score = keywords.filter((k) => itemLower.includes(k)).length;
+    if (score > bestScore) {
+      bestScore = score;
+      bestMatch = item;
+    }
+  }
+  if (!bestMatch || bestScore === 0) return null;
+  return bestMatch;
+}
+
 /** Fresh live row by stable ID. Same eligibility as open-list presentation. */
 export function getOpenListItemById(
   id: string,

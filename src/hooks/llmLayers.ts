@@ -52,9 +52,11 @@ export type IntentRecord =
       phonelessNames?: string[];
       devicePhone?: string; deviceName?: string; raw: string }
   | { type: 'todo_add'; body: string }
+  | { type: 'todo_complete'; raw: string }
   | { type: 'pass' };
 
-// Keep in sync with every type literal in IntentRecord above — cannot drift apart.
+// Classifier-surviving types only. `todo_complete` is deterministic capture
+// (P4c: never LLM vocabulary) and is therefore omitted from this set.
 const KNOWN_TYPES = new Set<IntentRecord['type']>([
   'list_add', 'insurance_capture', 'medical_capture',
   'medical_visit', 'medical_visit_upcoming', 'doctor_intro_capture',
@@ -388,6 +390,7 @@ function isCaptureComplete(rec: IntentRecord): boolean {
     case 'list_add':          return Array.isArray(rec.items) && rec.items.some(i => !!i?.trim());
     case 'insurance_capture': return !!rec.carrier?.trim() && !!rec.insType?.trim();
     case 'todo_add':          return !!rec.body?.trim();
+    case 'todo_complete':     return !!rec.raw?.trim();
     case 'phone_capture':
       return !!(rec.name?.trim() && rec.phone?.trim());
     case 'address_capture':

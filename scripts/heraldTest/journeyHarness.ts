@@ -36,7 +36,27 @@ export type MedicalRecordRow = {
   status: string | null;
 };
 
-export type DbSnapshot = { medications: MedicationRow[]; medical_records: MedicalRecordRow[] };
+export type ListRow = {
+  id: string;
+  name: string;
+};
+
+export type ListItemRow = {
+  id: string;
+  list_id: string;
+  list_name: string;
+  body: string;
+  checked: number;
+  removed_at: string | null;
+  created_at: string;
+};
+
+export type DbSnapshot = {
+  medications: MedicationRow[];
+  medical_records: MedicalRecordRow[];
+  lists: ListRow[];
+  list_items: ListItemRow[];
+};
 
 export type DbDiff = {
   added: MedicationRow[];
@@ -45,6 +65,12 @@ export type DbDiff = {
   medical_records_added: MedicalRecordRow[];
   medical_records_removed: MedicalRecordRow[];
   medical_records_changed: Array<{ before: MedicalRecordRow; after: MedicalRecordRow }>;
+  lists_added: ListRow[];
+  lists_removed: ListRow[];
+  lists_changed: Array<{ before: ListRow; after: ListRow }>;
+  list_items_added: ListItemRow[];
+  list_items_removed: ListItemRow[];
+  list_items_changed: Array<{ before: ListItemRow; after: ListItemRow }>;
 };
 
 export type ContractResult = {
@@ -66,6 +92,8 @@ export type TurnRecord = {
   pending_key_after: string | null;
   pending_after: boolean;
   response: string | null;
+  commit_statuses: string[];
+  commit_pending_keys: Array<string | null>;
   db_before: DbSnapshot;
   db_after: DbSnapshot;
   db_diff: DbDiff;
@@ -121,6 +149,20 @@ const SCHEMA_SQL = `
     os_contact_id TEXT, notes TEXT, last_contact TEXT, created_at TEXT,
     updated_at TEXT, address TEXT, removed_at TEXT, location TEXT, is_emergency INTEGER DEFAULT 0
   );
+  CREATE TABLE IF NOT EXISTS lists (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS list_items (
+    id TEXT PRIMARY KEY,
+    list_id TEXT NOT NULL,
+    body TEXT NOT NULL,
+    checked INTEGER DEFAULT 0,
+    removed_at TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (list_id) REFERENCES lists(id)
+  );
 `;
 
 function makeShim(db: Database.Database) {
@@ -145,7 +187,16 @@ export function snapshotMedications(db: Database.Database): DbSnapshot {
     `SELECT id, doctor_name, notes, visit_date, visit_outcome, status
      FROM medical_records ORDER BY created_at, id`,
   ).all() as MedicalRecordRow[];
-  return { medications, medical_records };
+  const lists = db.prepare(
+    `SELECT id, name FROM lists ORDER BY created_at, id`,
+  ).all() as ListRow[];
+  const list_items = db.prepare(
+    `SELECT li.id, li.list_id, l.name AS list_name, li.body, li.checked, li.removed_at, li.created_at
+     FROM list_items li
+     JOIN lists l ON l.id = li.list_id
+     ORDER BY li.created_at, li.id`,
+  ).all() as ListItemRow[];
+  return { medications, medical_records, lists, list_items };
 }
 
 function diffRows<T extends { id: string }>(
@@ -171,6 +222,8 @@ function diffRows<T extends { id: string }>(
 export function diffMedications(before: DbSnapshot, after: DbSnapshot): DbDiff {
   const meds = diffRows(before.medications, after.medications);
   const recs = diffRows(before.medical_records, after.medical_records);
+  const lists = diffRows(before.lists, after.lists);
+  const items = diffRows(before.list_items, after.list_items);
   return {
     added: meds.added,
     removed: meds.removed,
@@ -178,6 +231,12 @@ export function diffMedications(before: DbSnapshot, after: DbSnapshot): DbDiff {
     medical_records_added: recs.added,
     medical_records_removed: recs.removed,
     medical_records_changed: recs.changed,
+    lists_added: lists.added,
+    lists_removed: lists.removed,
+    lists_changed: lists.changed,
+    list_items_added: items.added,
+    list_items_removed: items.removed,
+    list_items_changed: items.changed,
   };
 }
 
@@ -187,6 +246,8 @@ export function describeOutcome(outcome: UtteranceOutcome): {
   route_reason: string | null;
   route_source: string | null;
   response: string | null;
+  commit_statuses: string[];
+  commit_pending_keys: Array<string | null>;
 } {
   if (outcome.handled) {
     if (outcome.source === 'emergency') {
@@ -196,6 +257,8 @@ export function describeOutcome(outcome: UtteranceOutcome): {
         route_reason: null,
         route_source: 'emergency',
         response: null,
+        commit_statuses: [],
+        commit_pending_keys: [],
       };
     }
     const pendingCommit = outcome.commits.find((c) => c.status === 'pending');
@@ -208,6 +271,10 @@ export function describeOutcome(outcome: UtteranceOutcome): {
       route_reason: reason,
       route_source: outcome.source,
       response: outcome.responseText,
+      commit_statuses: outcome.commits.map((c) => c.status),
+      commit_pending_keys: outcome.commits.map((c) => (
+        c.status === 'pending' ? c.pendingKey : null
+      )),
     };
   }
   const rd: RouteDecision = outcome.routeDecision;
@@ -216,8 +283,10 @@ export function describeOutcome(outcome: UtteranceOutcome): {
     route_owner: rd.kind,
     route_kind: rd.kind,
     route_reason: 'reason' in rd ? String(rd.reason ?? '') : null,
-    route_source: null,
+    route_source: rd.kind === 'device_read' ? 'device_read' : null,
     response,
+    commit_statuses: [],
+    commit_pending_keys: [],
   };
 }
 
@@ -282,6 +351,8 @@ export function requiredTurnEvidencePresent(t: TurnRecord): boolean {
   if (!t.input) return false;
   if (t.response == null || t.response === '') return false;
   if (!t.db_before || !t.db_after || !t.db_diff) return false;
+  if (!Array.isArray(t.db_before.list_items) || !Array.isArray(t.db_after.list_items)) return false;
+  if (!Array.isArray(t.db_before.lists) || !Array.isArray(t.db_after.lists)) return false;
   if (typeof t.pending_after !== 'boolean') return false;
   return true;
 }

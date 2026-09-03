@@ -528,6 +528,30 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
     },
   },
+  todo_complete: {
+    async add(intent: IntentRecord, rawPhrase: string): Promise<CommitResult> {
+      if (intent.type !== 'todo_complete') {
+        return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
+      }
+      const { getPresentedOpenListItems, matchTodoCompleteItem } = await import('../db/listRead');
+      const items = getPresentedOpenListItems('todos');
+      if (items.length === 0) {
+        return { status: 'noop', ack: 'Nothing open on your to-do list.' };
+      }
+      const raw = intent.raw ?? rawPhrase;
+      const bestMatch = matchTodoCompleteItem(raw, items);
+      if (!bestMatch) {
+        return { status: 'noop', ack: "I couldn't match that to anything on your list. Want me to read your to-dos?" };
+      }
+      return DOMAIN_WRITERS.todo_add!.remove(bestMatch.id);
+    },
+    async remove(_item: string): Promise<CommitResult> {
+      return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
+    },
+    async clear(): Promise<CommitResult> {
+      return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
+    },
+  },
   phone_capture: {
     async add(intent: IntentRecord, rawPhrase: string): Promise<CommitResult> {
       if (intent.type !== 'phone_capture') {
@@ -1993,6 +2017,27 @@ export async function routeIntent(
         const intent = await resolveContactCallIntent(contactName, text, deps);
         return { kind: 'capture', intents: [intent], source: 'deterministic', reason: 'routeIntent:contact_call_intercept' };
       }
+    }
+    if (actionType === 'todo_read') {
+      const { getPresentedOpenListItems, composeTodoOpenSpeech } = await import('../db/listRead');
+      const items = getPresentedOpenListItems('todos');
+      return {
+        kind: 'device_read',
+        tier: 1,
+        response: composeTodoOpenSpeech(items),
+        reason: decision.reason,
+      };
+    }
+    if (actionType === 'todo_complete') {
+      const raw = decision.actionIntent.type === 'todo_complete'
+        ? (decision.actionIntent.raw ?? text)
+        : text;
+      return {
+        kind: 'capture',
+        intents: [{ type: 'todo_complete', raw }],
+        source: 'deterministic',
+        reason: decision.reason,
+      };
     }
     if (actionType !== 'list_add' && actionType !== 'todo_add' && !isMedicalCapture && !isInsuranceProfileUpdate) {
       return {

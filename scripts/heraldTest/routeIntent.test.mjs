@@ -16,6 +16,14 @@
 
 import { classifyQuery } from "../../src/routing/tierRouter.ts";
 import { routeIntent } from "../../src/routing/routeIntent.ts";
+import { setDB } from "../../src/db/schema.ts";
+
+setDB({
+  getAllSync: (_sql, _params) => [],
+  getFirstSync: (_sql, _params) => null,
+  runSync: (_sql, _params) => ({ changes: 0, lastInsertRowId: 0 }),
+  execSync: (_sql) => {},
+});
 
 const RESET = "\x1b[0m";
 const GREEN = "\x1b[32m";
@@ -138,26 +146,26 @@ const CASES = [
   [
     "todo is there hyphen → todo_read",
     "is there anything on my to-do list",
-    { kind: "device_action", actionType: "todo_read" },
-    { kind: "device_action", actionType: "todo_read" },
+    { kind: "device_read", reason: "action:todo_read" },
+    { kind: "device_read", reason: "action:todo_read" },
   ],
   [
     "todo is there no hyphen → todo_read",
     "is there anything on my todo list",
-    { kind: "device_action", actionType: "todo_read" },
-    { kind: "device_action", actionType: "todo_read" },
+    { kind: "device_read", reason: "action:todo_read" },
+    { kind: "device_read", reason: "action:todo_read" },
   ],
   [
     "todo do i have → todo_read",
     "do i have anything on my to-do list",
-    { kind: "device_action", actionType: "todo_read" },
-    { kind: "device_action", actionType: "todo_read" },
+    { kind: "device_read", reason: "action:todo_read" },
+    { kind: "device_read", reason: "action:todo_read" },
   ],
   [
     "todo whats on → todo_read",
     "what is on my to-do list",
-    { kind: "device_action", actionType: "todo_read" },
-    { kind: "device_action", actionType: "todo_read" },
+    { kind: "device_read", reason: "action:todo_read" },
+    { kind: "device_read", reason: "action:todo_read" },
   ],
   [
     "list whats on grocery exact → list_read",
@@ -234,8 +242,8 @@ const CASES = [
   [
     "todo complete",
     "i called the doctor",
-    { kind: "device_action", actionType: "todo_complete" },
-    { kind: "device_action", actionType: "todo_complete" },
+    { kind: "capture", intentType: "todo_complete" },
+    { kind: "capture", intentType: "todo_complete" },
   ],
   [
     "list remove explicit",
@@ -246,8 +254,8 @@ const CASES = [
   [
     "i got → todo_complete (router order)",
     "i got the eggs",
-    { kind: "device_action", actionType: "todo_complete" },
-    { kind: "device_action", actionType: "todo_complete" },
+    { kind: "capture", intentType: "todo_complete" },
+    { kind: "capture", intentType: "todo_complete" },
   ],
   [
     "named weekday + calendar → unresolved (not today)",
@@ -314,7 +322,8 @@ function describeDecision(d) {
     return `device_action/${d.actionIntent.type}`;
   }
   if (d.kind === "capture") {
-    return `capture/${d.intent.type}`;
+    const t = d.intents?.[0]?.type ?? d.intent?.type;
+    return `capture/${t}`;
   }
   if (d.kind === "device_read" && d.reason) {
     return `device_read/${d.reason}`;
@@ -341,7 +350,8 @@ function matches(decision, expect) {
     );
   }
   if (expect.intentType) {
-    return decision.kind === "capture" && decision.intent.type === expect.intentType;
+    const t = decision.intents?.[0]?.type ?? decision.intent?.type;
+    return decision.kind === "capture" && t === expect.intentType;
   }
   if (expect.reason && decision.reason !== expect.reason) return false;
   if (expect.responseEquals && decision.response !== expect.responseEquals) return false;
