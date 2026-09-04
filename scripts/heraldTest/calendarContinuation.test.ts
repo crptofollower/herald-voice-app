@@ -345,7 +345,13 @@ export async function runCalendarContinuationTests() {
     'tomorrow',
   );
   assert(
-    'CCV2-P0c explicit calendar phrase still not a narrow follow-up',
+    'CCV2-P0c parse ASR apostrophe-less whats',
+    parseCalendarTemporalFollowUp('whats on there for tomorrow'),
+    (v) => v === 'tomorrow',
+    'tomorrow',
+  );
+  assert(
+    'CCV2-P0d explicit calendar phrase still not a narrow follow-up',
     parseCalendarTemporalFollowUp("What's on my calendar tomorrow?"),
     (v) => v === null,
     'null',
@@ -390,9 +396,51 @@ export async function runCalendarContinuationTests() {
 
   {
     const { say } = freshHarness();
+    await say("What's on my calendar this week?");
+    const t2 = await say('whats on there for tomorrow');
+    assert(
+      'CCV2-P5 ASR whats deictic → fresh tomorrow read',
+      t2,
+      (o) =>
+        o.handled === true &&
+        o.source === 'referent_resume' &&
+        o.responseText.includes('TOMORROW_ONLY_MEETING') &&
+        !o.responseText.includes(CLARIFY),
+      'TOMORROW_ONLY_MEETING via apostrophe-less deictic',
+    );
+  }
+
+  {
+    const { say } = freshHarness();
+    await say("What's on my calendar this week?");
+    const t2 = await say('What is on there tomorrow');
+    assert(
+      'CCV2-P6 what-is deictic without for → fresh tomorrow read',
+      t2,
+      (o) =>
+        o.handled === true &&
+        o.source === 'referent_resume' &&
+        o.responseText.includes('TOMORROW_ONLY_MEETING'),
+      'TOMORROW_ONLY_MEETING via what-is form',
+    );
+  }
+
+  {
+    const { say } = freshHarness();
     const t = await say("What's on there for tomorrow?");
     assert(
       'CCV2-N1 no holder → needs_clarification (parser match alone is not authority)',
+      t,
+      (o) => !o.handled && o.routeDecision.kind === 'needs_clarification',
+      'needs_clarification',
+    );
+  }
+
+  {
+    const { say } = freshHarness();
+    const t = await say('whats on there for tomorrow');
+    assert(
+      'CCV2-N1b ASR whats without authority → needs_clarification',
       t,
       (o) => !o.handled && o.routeDecision.kind === 'needs_clarification',
       'needs_clarification',
@@ -478,6 +526,39 @@ export async function runCalendarContinuationTests() {
         o.source === 'pending_resume' &&
         o.responseText.includes('Pending wins'),
       'pending_resume',
+    );
+  }
+
+  {
+    const { say } = freshHarness();
+    await say("What's on my calendar this week?");
+    const t2 = await say('I need help');
+    assert(
+      'CCV2-N7 emergency outranks calendar continuation',
+      t2,
+      (o) => o.handled === true && o.source === 'emergency',
+      'emergency',
+    );
+  }
+
+  {
+    const { say, calendar } = freshHarness();
+    await say("What's on my calendar this week?");
+    const t2 = await say("What's on my calendar tomorrow?");
+    assert(
+      'CCV2-N8 explicit calendar read uses full-read path (not deictic resume)',
+      t2,
+      (o) =>
+        !o.handled &&
+        o.routeDecision.kind === 'device_read' &&
+        o.routeDecision.reason === 'calendar:tomorrow',
+      'calendar:tomorrow device_read',
+    );
+    assert(
+      'CCV2-N8b prior continuation grant cleared by explicit calendar evidence',
+      calendar.hasLive(),
+      (v) => v === false,
+      'false',
     );
   }
 

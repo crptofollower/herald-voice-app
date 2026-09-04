@@ -21,9 +21,11 @@ const FOLLOW_UP_RE = new RegExp(
   'i',
 );
 
-/** V2 — bounded deictic temporal follow-up after an authoritative calendar read. */
+/** V2 — bounded deictic temporal follow-up after an authoritative calendar read.
+ *  Grammar accepts ASR/typed contraction variants of "what is":
+ *  what's | whats | what is — not an open semantic match on bare "there". */
 const DEICTIC_FOLLOW_UP_RE = new RegExp(
-  `^\\s*what(?:'s| is)\\s+on\\s+there(?:\\s+for)?\\s+${TEMPORAL_SCOPE}\\s*[?.!]*\\s*$`,
+  `^\\s*what(?:'s|s|\\s+is)\\s+on\\s+there(?:\\s+for)?\\s+${TEMPORAL_SCOPE}\\s*[?.!]*\\s*$`,
   'i',
 );
 
