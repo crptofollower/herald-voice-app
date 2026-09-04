@@ -14,6 +14,8 @@ design_handoff_persona_system/
 scripts/**
 !scripts/heraldTest/
 !scripts/heraldTest/**
+!scripts/evidence/
+!scripts/evidence/**
 scripts/heraldTest/node_modules/
 # ...but track the heraldTest harness so the routing gate travels with the repo
 !scripts/heraldTest/
@@ -72,3 +74,4 @@ android/app/src/main/assets/
 
 # Local GGUF weights — never commit
 *.gguf
+artifacts/

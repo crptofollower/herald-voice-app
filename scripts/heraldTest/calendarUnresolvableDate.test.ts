@@ -12,8 +12,8 @@ const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', R
 const REFUSAL =
   'I can only tell you about today, tomorrow, this week, or next week right now.';
 
-// Minimal replica — calendar_cache only (schema v2 Unix-ms shape). Same pattern
-// as doctorRead.test.ts freshDB(); empty table is enough for CUD1–8.
+// calendar_cache + local_profile for CUD; medications + medical_contacts so CNE-N8
+// medical fallthrough (medication vocabulary → medical:summary) does not throw on empty DB.
 const SCHEMA_SQL = `
     CREATE TABLE IF NOT EXISTS calendar_cache (
       id        TEXT PRIMARY KEY,
@@ -28,6 +28,15 @@ const SCHEMA_SQL = `
       key        TEXT PRIMARY KEY,
       value      TEXT NOT NULL,
       updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS medications (
+      id TEXT PRIMARY KEY, name TEXT NOT NULL, dosage TEXT, frequency TEXT,
+      prescribing_doctor TEXT, start_date TEXT, end_date TEXT, is_active INTEGER DEFAULT 1,
+      notes TEXT, created_at TEXT, removed_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS medical_contacts (
+      id TEXT PRIMARY KEY, name TEXT, specialty TEXT, phone TEXT, address TEXT,
+      is_primary INTEGER DEFAULT 0, notes TEXT, created_at TEXT, removed_at TEXT
     );
   `;
 
