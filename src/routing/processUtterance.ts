@@ -54,6 +54,11 @@ import {
   CalendarContinuationHolder,
   parseCalendarTemporalFollowUp,
 } from './calendarContinuation';
+import {
+  CalendarPresentationHolder,
+  parseCalendarTimeInquiry,
+  answerCalendarTimeInquiry,
+} from './calendarPresentation';
 import { hasCalendarReadEvidence, readCalendarScope } from './tierRouter';
 
 // D0 commit 2 (S54 addendum): the headless pipeline seam. UI (ChatScreen) calls
@@ -119,6 +124,7 @@ function maybeEstablishMedicationPresentation(
   holder: MedicationPresentationHolder,
   subject: ConversationalSubjectHolder | null,
   orderedPresentation?: OrderedPresentationHolder | null,
+  calendarPresentation?: CalendarPresentationHolder | null,
 ): void {
   if (routeDecision.kind !== 'device_read' || routeDecision.reason !== 'medical:summary') {
     return;
@@ -131,6 +137,7 @@ function maybeEstablishMedicationPresentation(
   // A live person-subject must not compete with medication ordinals.
   subject?.clear();
   orderedPresentation?.clear();
+  calendarPresentation?.clear();
   holder.establish(ids);
 }
 
@@ -139,6 +146,7 @@ function maybeEstablishGroceryPresentation(
   holder: OrderedPresentationHolder | null | undefined,
   subject: ConversationalSubjectHolder | null,
   medicationPresentation: MedicationPresentationHolder | null | undefined,
+  calendarPresentation?: CalendarPresentationHolder | null,
 ): void {
   if (routeDecision.kind !== 'device_read' || routeDecision.presentedGroceryIds === undefined) {
     return;
@@ -150,6 +158,7 @@ function maybeEstablishGroceryPresentation(
   }
   subject?.clear();
   medicationPresentation?.clear();
+  calendarPresentation?.clear();
   holder?.establish('grocery', ids);
 }
 
@@ -161,6 +170,28 @@ function maybeEstablishCalendarContinuation(
   if (routeDecision.kind !== 'device_read') return;
   if (!routeDecision.reason.startsWith('calendar:')) return;
   holder.establish(routeDecision.reason);
+}
+
+function maybeEstablishCalendarPresentation(
+  routeDecision: RouteDecision,
+  holder: CalendarPresentationHolder | null | undefined,
+  subject: ConversationalSubjectHolder | null,
+  medicationPresentation: MedicationPresentationHolder | null | undefined,
+  orderedPresentation: OrderedPresentationHolder | null | undefined,
+): void {
+  if (!holder) return;
+  if (routeDecision.kind !== 'device_read') return;
+  if (!routeDecision.reason.startsWith('calendar:')) return;
+  if (routeDecision.presentedCalendarEventIds === undefined) return;
+  const ids = routeDecision.presentedCalendarEventIds;
+  if (ids.length === 0) {
+    holder.clear();
+    return;
+  }
+  subject?.clear();
+  medicationPresentation?.clear();
+  orderedPresentation?.clear();
+  holder.establish(ids);
 }
 
 /** The single commit loop: run intents through domain writers, arm the session
@@ -223,6 +254,7 @@ export async function processUtterance(
   subject?: ConversationalSubjectHolder | null,
   medicationPresentation?: MedicationPresentationHolder | null,
   orderedPresentation?: OrderedPresentationHolder | null,
+  calendarPresentation?: CalendarPresentationHolder | null,
   calendarContinuation?: CalendarContinuationHolder | null,
 ): Promise<UtteranceOutcome> {
   const turnId = getActiveTurnId();
@@ -230,6 +262,7 @@ export async function processUtterance(
   subject?.beginUserTurn();
   medicationPresentation?.beginUserTurn();
   orderedPresentation?.beginUserTurn();
+  calendarPresentation?.beginUserTurn();
   calendarContinuation?.beginUserTurn();
   // 0) Law 0 — emergency preempts everything (Spine §3a). Checked before pending
   //    resolution, before routing, before any classifier. A held pending is
@@ -241,6 +274,7 @@ export async function processUtterance(
     subject?.clear();
     medicationPresentation?.clear();
     orderedPresentation?.clear();
+    calendarPresentation?.clear();
     calendarContinuation?.clear();
     return { handled: true, source: 'emergency' };
   }
@@ -268,6 +302,7 @@ export async function processUtterance(
     subject?.clear();
     medicationPresentation?.clear();
     orderedPresentation?.clear();
+    calendarPresentation?.clear();
     calendarContinuation?.clear();
     const result = await session.resolvePending(text);
     return { handled: true, source: 'pending_resume', responseText: composeAck([result]), commits: [result] };
@@ -277,15 +312,29 @@ export async function processUtterance(
   if (calendarContinuation?.canContinue()) {
     if (hasCalendarReadEvidence(text)) {
       calendarContinuation.clear();
+      calendarPresentation?.clear();
     } else {
       const scope = parseCalendarTemporalFollowUp(text);
       if (scope) {
         calendarContinuation.clear();
+        calendarPresentation?.clear();
         const { response } = await readCalendarScope(scope);
         return { handled: true, source: 'referent_resume', responseText: response, commits: [] };
       }
       calendarContinuation.clear();
     }
+  }
+  // 1a-pres) Calendar ordinal time inquiry — one turn after authoritative calendar read.
+  //     Fresh by-id reread only; not transcript replay.
+  if (calendarPresentation?.canContinue()) {
+    const position = parseCalendarTimeInquiry(text);
+    const livePresentation = calendarPresentation.peek();
+    if (position !== null && livePresentation) {
+      calendarPresentation.clear();
+      const answered = answerCalendarTimeInquiry(livePresentation, position);
+      return { handled: true, source: 'referent_resume', responseText: answered.responseText, commits: [] };
+    }
+    calendarPresentation.clear();
   }
   // 1a) Medication ordinal continuation — closed first/second-one speech act
   //     against the RAM presentation of ordered medication IDs. Not Flow C.
@@ -584,6 +633,7 @@ export async function processUtterance(
     subject?.clear();
     medicationPresentation?.clear();
     orderedPresentation?.clear();
+    calendarPresentation?.clear();
     session.setPending({
       pendingKey: routeDecision.pending.pendingKey,
       resume: routeDecision.pending.resume,
@@ -599,6 +649,7 @@ export async function processUtterance(
     subject?.clear();
     medicationPresentation?.clear();
     orderedPresentation?.clear();
+    calendarPresentation?.clear();
     session.setPending({
       pendingKey: routeDecision.pending.pendingKey,
       resume: routeDecision.pending.resume,
@@ -631,12 +682,14 @@ export async function processUtterance(
   if (personEstablished) {
     medicationPresentation?.clear();
     orderedPresentation?.clear();
+    calendarPresentation?.clear();
   } else if (medicationPresentation) {
     maybeEstablishMedicationPresentation(
       routeDecision,
       medicationPresentation,
       subject ?? null,
       orderedPresentation,
+      calendarPresentation,
     );
   }
   maybeEstablishGroceryPresentation(
@@ -644,7 +697,15 @@ export async function processUtterance(
     orderedPresentation,
     subject ?? null,
     medicationPresentation,
+    calendarPresentation,
   );
   maybeEstablishCalendarContinuation(routeDecision, calendarContinuation);
+  maybeEstablishCalendarPresentation(
+    routeDecision,
+    calendarPresentation,
+    subject ?? null,
+    medicationPresentation,
+    orderedPresentation,
+  );
   return { handled: false, routeDecision };
 }

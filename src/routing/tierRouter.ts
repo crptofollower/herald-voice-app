@@ -76,6 +76,8 @@ export interface TierDecision {
   reason: string;
   /** Ordered IDs from the same getActiveMedications() array that produced medical:summary speech. IDs only. */
   presentedMedicationIds?: string[];
+  /** Ordered IDs from the same calendar event rows that produced tier-1 calendar speech. IDs only. */
+  presentedCalendarEventIds?: string[];
 }
 
 export interface LocalContext {
@@ -190,6 +192,61 @@ const CALENDAR_READ_TERSE: RegExp[] = [
   ),
 ];
 
+/**
+ * Bounded first-person personal-schedule inquiries — no calendar/schedule noun.
+ * Temporal scope is mandatory; "going on" must connect directly to scope (no
+ * "with/at" topic object). Mirrors positionReference LEADING_FILLER_RE — keep
+ * in sync if that list changes.
+ */
+const CALENDAR_LEADING_DISCOURSE_RE =
+  /^(?:(?:okay|ok|yeah|yep|yes|alright|all right|so|um|uh|please)[,:]?\s+)+/i;
+
+const CALENDAR_PERSONAL_SCHEDULE_INQUIRY: RegExp[] = [
+  // "What's going on tomorrow?" — not "... going on with/at X tomorrow"
+  new RegExp(
+    `^what(?:'s| is)\\s+going\\s+on(?:\\s+(?:for\\s+)?${CALENDAR_TERSE_TEMPORAL})\\s*[?.!]*$`,
+    'i',
+  ),
+  // "What do I have going on tomorrow?" — going on must abut temporal scope
+  new RegExp(
+    `^what\\s+do\\s+i\\s+have\\s+going\\s+on(?:\\s+(?:for\\s+)?${CALENDAR_TERSE_TEMPORAL})\\s*[?.!]*$`,
+    'i',
+  ),
+  // "What have I got (going on) tomorrow?"
+  new RegExp(
+    `^what\\s+have\\s+i\\s+(?:got|'ve\\s+got)(?:\\s+going\\s+on)?(?:\\s+(?:for\\s+)?${CALENDAR_TERSE_TEMPORAL})\\s*[?.!]*$`,
+    'i',
+  ),
+  // Ordinal ask still authorizes a full schedule read — no ordinal resolution here.
+  new RegExp(
+    `^what(?:'s| is)\\s+(?:the\\s+)?(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\\s+(?:thing|one)\\s+(?:(?:i(?:'ve|\\s+have)\\s+got)|(?:do\\s+i\\s+have))(?:\\s+going\\s+on)?(?:\\s+(?:for\\s+)?${CALENDAR_TERSE_TEMPORAL})\\s*[?.!]*$`,
+    'i',
+  ),
+];
+
+function stripLeadingCalendarDiscourse(text: string): string {
+  let s = text.trim();
+  for (let i = 0; i < 2; i++) {
+    const opener = s.match(CALENDAR_LEADING_DISCOURSE_RE);
+    if (!opener) break;
+    s = s.slice(opener[0].length);
+  }
+  return s;
+}
+
+function calendarReadShapeCandidates(msg: string): string[] {
+  const trimmed = msg.trim();
+  const stripped = stripLeadingCalendarDiscourse(trimmed);
+  return stripped === trimmed ? [trimmed] : [trimmed, stripped];
+}
+
+function matchesCalendarReadShape(text: string): boolean {
+  if (CALENDAR_READ_FREE.some((p) => p.test(text))) return true;
+  if (CALENDAR_READ_TERSE.some((p) => p.test(text))) return true;
+  if (CALENDAR_PERSONAL_SCHEDULE_INQUIRY.some((p) => p.test(text))) return true;
+  return false;
+}
+
 // Travel/agenda probes historically route to the week window (unchanged behavior).
 const CALENDAR_TRAVEL_READ: RegExp[] = [
   /\bany (flights?|hotels?|stays?|trips?|travel|reservations?)\b/i,
@@ -208,11 +265,7 @@ const CALENDAR_TODAY_DEFAULT_READ: RegExp[] = [
 ];
 
 export function hasCalendarReadEvidence(msg: string): boolean {
-  const trimmed = msg.trim();
-  return (
-    CALENDAR_READ_FREE.some((p) => p.test(trimmed)) ||
-    CALENDAR_READ_TERSE.some((p) => p.test(trimmed))
-  );
+  return calendarReadShapeCandidates(msg).some(matchesCalendarReadShape);
 }
 
 function hasCalendarTravelRead(msg: string): boolean {
@@ -819,6 +872,19 @@ function calendarSpeech(
     return "I don't have your calendar loaded yet. Connect once with calendar access granted, then try again offline.";
   }
   return formatCachedEventsForSpeech(events, window);
+}
+
+function tier1CalendarReadDecision(
+  events: Awaited<ReturnType<typeof getTier1CalendarEvents>>,
+  response: string,
+  reason: string,
+): TierDecision {
+  return {
+    tier: 1,
+    tier1Response: response,
+    reason,
+    presentedCalendarEventIds: events.map((e) => e.id),
+  };
 }
 
 export type CalendarScopeWindow = "today" | "tomorrow" | "this week" | "next week";
@@ -1629,11 +1695,11 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
         const dayLabel =
           resolved.getTime() === todayStart.getTime() ? "today" : `next ${weekdayName}`;
         const events = getCachedEventsForDate(resolvedDate);
-        return {
-          tier: 1,
-          tier1Response: formatEventsForSpecificDay(events, dayLabel),
-          reason: "calendar:specific_day",
-        };
+        return tier1CalendarReadDecision(
+          events,
+          formatEventsForSpecificDay(events, dayLabel),
+          "calendar:specific_day",
+        );
       }
 
       const dayLabel = `last ${weekdayName}`;
@@ -1679,14 +1745,14 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   ) {
     const events = await getTier1CalendarEvents("today");
     const response = calendarSpeech("today", events);
-    return { tier: 1, tier1Response: response, reason: "calendar:today" };
+    return tier1CalendarReadDecision(events, response, "calendar:today");
   }
 
   // Tier 1: calendar tomorrow
   if (calendarRead && hasTomorrow && !hasWeatherTomorrow && !hasNextWeek) {
     const events = await getTier1CalendarEvents("tomorrow");
     const response = calendarSpeech("tomorrow", events);
-    return { tier: 1, tier1Response: response, reason: "calendar:tomorrow" };
+    return tier1CalendarReadDecision(events, response, "calendar:tomorrow");
   }
 
   // Tier 1: calendar next week (before this week — "next week" must not fall through).
@@ -1700,7 +1766,7 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   ) {
     const events = await getTier1CalendarEvents("next week");
     const response = calendarSpeech("next week", events);
-    return { tier: 1, tier1Response: response, reason: "calendar:next_week" };
+    return tier1CalendarReadDecision(events, response, "calendar:next_week");
   }
 
   // Tier 1: upcoming medical appointment recall (forward-looking). MUST precede
@@ -1864,7 +1930,7 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   if (((calendarRead && hasThisWeek) || calendarTravel) && !hasNearMe && !hasNextWeek) {
     const events = await getTier1CalendarEvents("this week");
     const response = calendarSpeech("this week", events);
-    return { tier: 1, tier1Response: response, reason: "calendar:week" };
+    return tier1CalendarReadDecision(events, response, "calendar:week");
   }
 
   // Device: reminder — parse on device, schedule local notification

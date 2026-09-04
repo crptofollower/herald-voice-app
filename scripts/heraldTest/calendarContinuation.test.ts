@@ -15,6 +15,7 @@ import {
   CalendarContinuationHolder,
   parseCalendarTemporalFollowUp,
 } from '../../src/routing/calendarContinuation.ts';
+import { CalendarPresentationHolder } from '../../src/routing/calendarPresentation.ts';
 import { EPHEMERAL_CLARIFY_REPLY } from '../../src/utils/ephemeralSeam.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
@@ -119,6 +120,7 @@ function freshHarness() {
   const subject = new ConversationalSubjectHolder();
   const medication = new MedicationPresentationHolder();
   const ordered = new OrderedPresentationHolder();
+  const calendarPresentation = new CalendarPresentationHolder();
   const calendar = new CalendarContinuationHolder();
   const deps = {
     classifyQuery: async (t: string) => classifyQuery(t),
@@ -128,8 +130,8 @@ function freshHarness() {
     captureContext: { contacts: [], lists: ['grocery'] },
   };
   const say = (text: string) =>
-    processUtterance(text, session, deps, subject, medication, ordered, calendar);
-  return { db, session, calendar, say };
+    processUtterance(text, session, deps, subject, medication, ordered, calendarPresentation, calendar);
+  return { db, session, calendar, calendarPresentation, say };
 }
 
 function isListAddOutcome(o: Awaited<ReturnType<typeof processUtterance>>): boolean {

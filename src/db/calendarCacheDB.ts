@@ -231,6 +231,34 @@ export function getCachedEventsForDate(dateISO: string): CachedEvent[] {
   );
 }
 
+// ─── getCachedEventById ──────────────────────────────────────────────────────
+//
+// Fresh authoritative reread of one cached event by stable ID.
+
+export function getCachedEventById(id: string): CachedEvent | null {
+  const db = getDB();
+  return db.getFirstSync<CachedEvent>(
+    `SELECT * FROM calendar_cache WHERE id = ?;`,
+    [id],
+  );
+}
+
+// ─── formatCalendarEventTimeForSpeech ────────────────────────────────────────
+//
+// Time-only answer for calendar presentation ordinal follow-ups.
+
+export function formatCalendarEventTimeForSpeech(event: CachedEvent): string {
+  if (event.all_day) {
+    return `It doesn't have a specific time — it's all day.`;
+  }
+  const start = new Date(event.start_ms);
+  const timeStr = start.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return `It's at ${timeStr}.`;
+}
+
 // ─── formatEventsForSpecificDay ────────────────────────────────────────────
 //
 // Formats events for one caller-labeled day ("next Thursday", "today").

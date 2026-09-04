@@ -589,6 +589,154 @@ export async function runCalendarUnresolvableDateTests() {
     );
   }
 
+  // CNE — Calendar Natural-Language Entrance V1 (personal-schedule inquiry)
+  {
+    const d = await classifyQuery('What do I have going on tomorrow?');
+    assert(
+      'CNE1 "What do I have going on tomorrow?" → calendar:tomorrow',
+      d,
+      (v) => (v as { reason?: string }).reason === 'calendar:tomorrow',
+      'reason: calendar:tomorrow',
+    );
+  }
+  {
+    const d = await classifyQuery('What do I have tomorrow?');
+    assert(
+      'CNE2 "What do I have tomorrow?" → calendar:tomorrow',
+      d,
+      (v) => (v as { reason?: string }).reason === 'calendar:tomorrow',
+      'reason: calendar:tomorrow',
+    );
+  }
+  {
+    const d = await classifyQuery('What have I got going on tomorrow?');
+    assert(
+      'CNE3 "What have I got going on tomorrow?" → calendar:tomorrow',
+      d,
+      (v) => (v as { reason?: string }).reason === 'calendar:tomorrow',
+      'reason: calendar:tomorrow',
+    );
+  }
+  {
+    const d = await classifyQuery('What have I got tomorrow?');
+    assert(
+      'CNE4 "What have I got tomorrow?" → calendar:tomorrow',
+      d,
+      (v) => (v as { reason?: string }).reason === 'calendar:tomorrow',
+      'reason: calendar:tomorrow',
+    );
+  }
+  {
+    const d = await classifyQuery("What's going on tomorrow?");
+    assert(
+      'CNE5 "What\'s going on tomorrow?" → calendar:tomorrow',
+      d,
+      (v) => (v as { reason?: string }).reason === 'calendar:tomorrow',
+      'reason: calendar:tomorrow',
+    );
+  }
+  {
+    const d = await classifyQuery('Yeah, what do I have going on tomorrow?');
+    assert(
+      'CNE6 "Yeah, what do I have going on tomorrow?" → calendar:tomorrow (discourse strip)',
+      d,
+      (v) => (v as { reason?: string }).reason === 'calendar:tomorrow',
+      'reason: calendar:tomorrow',
+    );
+  }
+  {
+    const d = await classifyQuery("What's the first thing I've got going on tomorrow?");
+    assert(
+      'CNE7 ordinal preface → calendar:tomorrow (full schedule, no ordinal answer)',
+      d,
+      (v) => (v as { reason?: string }).reason === 'calendar:tomorrow',
+      'reason: calendar:tomorrow',
+    );
+  }
+
+  // CNE falsifiers — topic/object between going-on and scope must stay closed
+  {
+    const d = await classifyQuery("What's going on with Henderson tomorrow?");
+    assert(
+      'CNE-N1 "What\'s going on with Henderson tomorrow?" → no calendar',
+      d,
+      noCalendarDispatch,
+      'no calendar read dispatch',
+    );
+  }
+  {
+    const d = await classifyQuery("What's going on with Paul tomorrow?");
+    assert(
+      'CNE-N2 "What\'s going on with Paul tomorrow?" → no calendar',
+      d,
+      noCalendarDispatch,
+      'no calendar read dispatch',
+    );
+  }
+  {
+    const d = await classifyQuery("What's going on with the project tomorrow?");
+    assert(
+      'CNE-N3 "What\'s going on with the project tomorrow?" → no calendar',
+      d,
+      noCalendarDispatch,
+      'no calendar read dispatch',
+    );
+  }
+  {
+    const d = await classifyQuery("What's going on at work tomorrow?");
+    assert(
+      'CNE-N4 "What\'s going on at work tomorrow?" → no calendar',
+      d,
+      noCalendarDispatch,
+      'no calendar read dispatch',
+    );
+  }
+  {
+    const d = await classifyQuery("What's happening with the Hendersons next week?");
+    assert(
+      'CNE-N5 "What\'s happening with the Hendersons next week?" → no calendar',
+      d,
+      noCalendarDispatch,
+      'no calendar read dispatch',
+    );
+  }
+  {
+    const d = await classifyQuery("What's going on?");
+    assert(
+      'CNE-N6 bare "What\'s going on?" → no calendar',
+      d,
+      noCalendarDispatch,
+      'no calendar read dispatch',
+    );
+  }
+  {
+    const d = await classifyQuery("What's happening?");
+    assert(
+      'CNE-N7 bare "What\'s happening?" → no calendar',
+      d,
+      noCalendarDispatch,
+      'no calendar read dispatch',
+    );
+  }
+  {
+    const d = await classifyQuery("What's going on with my medication tomorrow?");
+    assert(
+      'CNE-N8 medication topic → no calendar hijack',
+      d,
+      noCalendarDispatch,
+      'no calendar read dispatch',
+    );
+  }
+  {
+    const d = await classifyQuery("What's going on with my grocery list tomorrow?");
+    assert(
+      'CNE-N9 grocery topic → no calendar hijack',
+      d,
+      noCalendarDispatch,
+      'no calendar read dispatch',
+    );
+  }
+
   const total = passed + failures.length;
   console.log(
     `\n${BOLD}calendarUnresolvableDate: ${passed}/${total} passed` +
