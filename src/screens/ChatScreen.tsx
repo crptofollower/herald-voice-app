@@ -81,6 +81,8 @@ import { createLlamaEphemeralWorker } from '../conversation/llamaEphemeralWorker
 import { createExperimentalQwenLlamaWorker } from '../conversation/experimentalQwenLlamaWorker';
 import { useExperimentalConversationalEngine } from '../conversation/useExperimentalConversationalEngine';
 import { buildVerifiedConversationalPacket } from '../conversation/verifiedConversationalPacket';
+import { adoptContinuationRecoveryCandidates } from '../conversation/continuationRecovery';
+import type { ContinuationRecoveryCandidate } from '../conversation/continuationRecovery';
 import { useListRemoveInterpretationShadowEngine } from '../dev/useListRemoveInterpretationShadowEngine';
 import {
   capturePreTurnGrocerySnapshot,
@@ -1168,7 +1170,9 @@ export default function ChatScreen() {
     latLog('sendMessage entry', { turnId, inputSource: 'app' });
     setWeatherSurface(null);
 
-    const runEphemeralGenerate = () => {
+    const runEphemeralGenerate = (
+      continuationRecoveryCandidates: readonly ContinuationRecoveryCandidate[] = [],
+    ) => {
       const onPartial = beginEphemeralUiStream(turnId);
       const worker = selectConversationalWorker([
         createLlamaEphemeralWorker({ getCtx }),
@@ -1183,6 +1187,7 @@ export default function ChatScreen() {
         pendingLabel: sessionRef.current.hasPending()
           ? 'A confirmation is pending for a previously authorized action. It is not committed truth.'
           : null,
+        continuationRecoveryCandidates: [...continuationRecoveryCandidates],
       });
       return generateViaSelectedWorker(worker, {
         userText: text,
@@ -1591,6 +1596,10 @@ export default function ChatScreen() {
       const canned = EPHEMERAL_CLARIFY_REPLY;
       let reply = canned;
       if (outcome.routeDecision.reason === 'default') {
+        const adoptedRecovery = adoptContinuationRecoveryCandidates(
+          text,
+          outcome.continuationRecoveryCandidates,
+        );
         const seamOutcome = await resolveEphemeralSeamGateADiag('needs_clarification', {
           text,
           reason: outcome.routeDecision.reason,
@@ -1604,7 +1613,7 @@ export default function ChatScreen() {
           llmStatus: conversationalSeamLlmStatus,
           classifierBusy: false,
           ephemeralBusy: false,
-          generate: runEphemeralGenerate,
+          generate: () => runEphemeralGenerate(adoptedRecovery),
           threadEvidence: hotContextForGeneration
             .map((e) => (e.assistantHotPolicy === 'include' ? `${e.user}\n${e.assistant}` : e.user))
             .join('\n'),

@@ -23,6 +23,11 @@ import { getLastVisit } from '../db/medicalDB';
 import { extractDoctorName } from '../utils/detectMedicalEvent';
 import { getActiveTurnId, log as latLog } from '../utils/latencyInstrument';
 import {
+  CONTINUATION_RECOVERY_SAFE_LABEL,
+  recordContinuationRecoveryCandidate,
+  type ContinuationRecoveryCandidate,
+} from '../conversation/continuationRecovery';
+import {
   MedicationPresentationHolder,
   answerMedicationOrdinal,
   isMedicationOrdinalNearMiss,
@@ -75,7 +80,11 @@ export type RouteDeps = Parameters<typeof routeIntent>[1];
 export type UtteranceOutcome =
   | { handled: true; source: 'pending_resume' | 'capture' | 'referent_resume'; responseText: string; commits: CommitResult[] }
   | { handled: true; source: 'emergency' }
-  | { handled: false; routeDecision: RouteDecision };
+  | {
+      handled: false;
+      routeDecision: RouteDecision;
+      continuationRecoveryCandidates: ContinuationRecoveryCandidate[];
+    };
 
 function maybeEstablishConversationalSubject(
   text: string,
@@ -264,6 +273,7 @@ export async function processUtterance(
   orderedPresentation?.beginUserTurn();
   calendarPresentation?.beginUserTurn();
   calendarContinuation?.beginUserTurn();
+  const continuationRecoveryCandidates: ContinuationRecoveryCandidate[] = [];
   // 0) Law 0 — emergency preempts everything (Spine §3a). Checked before pending
   //    resolution, before routing, before any classifier. A held pending is
   //    RELEASED, never resumed — no re-ask, no ladder, no ack generated here
@@ -321,6 +331,11 @@ export async function processUtterance(
         const { response } = await readCalendarScope(scope);
         return { handled: true, source: 'referent_resume', responseText: response, commits: [] };
       }
+      recordContinuationRecoveryCandidate(
+        continuationRecoveryCandidates,
+        'calendar',
+        CONTINUATION_RECOVERY_SAFE_LABEL.calendar,
+      );
       calendarContinuation.clear();
     }
   }
@@ -334,6 +349,11 @@ export async function processUtterance(
       const answered = answerCalendarTimeInquiry(livePresentation, position);
       return { handled: true, source: 'referent_resume', responseText: answered.responseText, commits: [] };
     }
+    recordContinuationRecoveryCandidate(
+      continuationRecoveryCandidates,
+      'calendar',
+      CONTINUATION_RECOVERY_SAFE_LABEL.calendar,
+    );
     calendarPresentation.clear();
   }
   // 1a) Medication ordinal continuation — closed first/second-one speech act
@@ -362,6 +382,11 @@ export async function processUtterance(
       }
       return { handled: true, source: 'referent_resume', responseText, commits: [] };
     }
+    recordContinuationRecoveryCandidate(
+      continuationRecoveryCandidates,
+      'medication',
+      CONTINUATION_RECOVERY_SAFE_LABEL.medication,
+    );
     medicationPresentation.clear();
   }
   // 1a2) Named grocery collection grant (F2) wins over live continuation.
@@ -457,6 +482,11 @@ export async function processUtterance(
       if (interpreted.kind !== 'unsafe' && hasBoundedPositionEvidence(text)) {
         return { handled: true, source: 'referent_resume', responseText: ORDERED_PRESENTATION_CONFUSION, commits: [] };
       }
+      recordContinuationRecoveryCandidate(
+        continuationRecoveryCandidates,
+        'grocery',
+        CONTINUATION_RECOVERY_SAFE_LABEL.grocery,
+      );
       orderedPresentation.clear();
     } else if (liveOrdered?.owner !== 'grocery') {
       orderedPresentation.clear();
@@ -563,6 +593,11 @@ export async function processUtterance(
           commits: [],
         };
       }
+      recordContinuationRecoveryCandidate(
+        continuationRecoveryCandidates,
+        'grocery',
+        CONTINUATION_RECOVERY_SAFE_LABEL.grocery,
+      );
       orderedPresentation.clear();
     }
   }
@@ -619,6 +654,14 @@ export async function processUtterance(
           return { handled: true, source: 'referent_resume', responseText, commits: [] };
         }
       }
+    }
+    const unused = subject.peek();
+    if (unused?.displayName) {
+      recordContinuationRecoveryCandidate(
+        continuationRecoveryCandidates,
+        'person',
+        unused.displayName,
+      );
     }
     subject.clear();
   }
@@ -707,5 +750,5 @@ export async function processUtterance(
     medicationPresentation,
     orderedPresentation,
   );
-  return { handled: false, routeDecision };
+  return { handled: false, routeDecision, continuationRecoveryCandidates };
 }

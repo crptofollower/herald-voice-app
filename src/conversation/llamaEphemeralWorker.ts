@@ -5,6 +5,7 @@
 import type { LlamaContext } from 'llama.rn';
 import { LOCAL_LLM_ENABLED } from '../constants/features';
 import { generateEphemeralConversation } from '../utils/ephemeralConversation';
+import { formatVerifiedConversationalPacket } from './verifiedConversationalPacket';
 import type {
   ConversationalWorker,
   ConversationRequest,
@@ -24,11 +25,15 @@ export function createLlamaEphemeralWorker(deps: {
       if (!LOCAL_LLM_ENABLED) {
         return { status: 'unavailable', reason: 'no-ctx' };
       }
+      const packetText = request.packet
+        ? formatVerifiedConversationalPacket(request.packet)
+        : undefined;
       const result = await generateEphemeralConversation(
         request.userText,
         deps.getCtx(),
         request.hotEntries,
         request.onPartial,
+        packetText,
       );
       if (result.status === 'ok') {
         return { status: 'ok', replyText: result.text };

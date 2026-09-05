@@ -152,9 +152,13 @@ export type EphemeralTurn = { user: string; assistant: string };
 export function buildEphemeralPromptMessages(
   userText: string,
   hotEntries: HotRingEntry[],
+  packetText?: string,
 ): { role: 'system' | 'user' | 'assistant'; content: string }[] {
+  const system = packetText
+    ? `${EPHEMERAL_SYSTEM_PROMPT}\n\n${packetText}`
+    : EPHEMERAL_SYSTEM_PROMPT;
   const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
-    { role: 'system', content: EPHEMERAL_SYSTEM_PROMPT },
+    { role: 'system', content: system },
   ];
   for (const e of hotEntries) {
     messages.push({ role: 'user', content: e.user });
@@ -203,6 +207,7 @@ export async function generateEphemeralConversation(
   ctx: LlamaContext | null,
   hotEntries: HotRingEntry[] = [],
   onPartial?: (accumulatedText: string) => void,
+  packetText?: string,
 ): Promise<EphemeralResult> {
   const turnId = getActiveTurnId();
   console.log('[ephemeralConversation] ENTER');
@@ -218,7 +223,7 @@ export async function generateEphemeralConversation(
     let completionSeq: number | null = null;
     let completionEnded = false;
     try {
-      const messages = buildEphemeralPromptMessages(userText, hotEntries);
+      const messages = buildEphemeralPromptMessages(userText, hotEntries, packetText);
 
       console.log('[ephemeralConversation] COMPLETION_START');
       const t0 = Date.now();
