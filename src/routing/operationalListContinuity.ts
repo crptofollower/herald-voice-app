@@ -53,8 +53,7 @@ export function isSimpleBareNounPhrase(segment: string): boolean {
   if (EMBEDDED_CLAUSE_RE.test(s)) return false;
   if (INFINITIVE_OR_AUX_RE.test(s)) return false;
   if (DATE_TIME_DOSE_RE.test(s)) return false;
-  if (/\d/.test(s)) return false;
-  if (!/^[A-Za-z][A-Za-z'\s-]*$/.test(s)) return false;
+  if (!/^[A-Za-z0-9%][A-Za-z0-9%'\s-]*$/.test(s)) return false;
   const tokens = s.split(/\s+/).filter(Boolean);
   if (tokens.length < 1 || tokens.length > 4) return false;
   const last = tokens[tokens.length - 1].toLowerCase();
@@ -86,14 +85,46 @@ export function formatOperationalListClarification(extracted: string): string {
   return `Did you want ${item} on your grocery list, or as a to-do?`;
 }
 
-/** Structural "add X too/also" continuation. Does not name a list or item ID. */
+/** Locative/wrapper-initial items are not actionable list bodies. */
+const LOCATIVE_WRAPPER_RE = /^(?:at|from|on|in|to|by|near)\b/i;
+
+export function isOperationalListItemShape(item: string): boolean {
+  const s = item.trim().replace(/[.!?]+$/g, '');
+  if (!s) return false;
+  if (LOCATIVE_WRAPPER_RE.test(s)) return false;
+  return isSimpleBareNounPhrase(s);
+}
+
+export function filterOperationalListItems(items: readonly string[]): string[] {
+  return items.map((i) => i.trim()).filter(isOperationalListItemShape);
+}
+
+/** Bounded grocery vs todo resolution. List-type words, not item vocabulary. */
+export function parseOperationalDomainResolution(text: string): 'grocery' | 'todo' | 'decline' | null {
+  const t = text.trim();
+  if (!t) return null;
+  const grocery = GROCERY_CONTEXT_MARKER.test(t);
+  const todo = /\b(?:to-?do|todos?|tasks?)\b/i.test(t);
+  if (grocery && !todo) return 'grocery';
+  if (todo && !grocery) return 'todo';
+  return null;
+}
+
+/** Structural trailing-addition: too / also / as well. Optional can-you / to-that. */
 export function parseOperationalListContinuationAdd(text: string): string | null {
   const t = text.trim();
   if (!t) return null;
   if (LIST_ADD_SIGNALS.some((p) => p.test(t))) return null;
+  const additive = '(?:too|also|as well)';
   const m =
-    t.match(/^\s*(?:please\s+)?add\s+(.+?)\s+(?:too|also)\s*[.!?]*\s*$/i)
-    ?? t.match(/^\s*(?:please\s+)?(?:also|too)\s+add\s+(.+?)\s*[.!?]*\s*$/i);
+    t.match(new RegExp(
+      `^\\s*(?:(?:can|could)\\s+you\\s+)?(?:please\\s+)?add\\s+(.+?)(?:\\s+to\\s+(?:that|it))?\\s+${additive}\\s*[.!?]*\\s*$`,
+      'i',
+    ))
+    ?? t.match(new RegExp(
+      `^\\s*(?:(?:can|could)\\s+you\\s+)?(?:please\\s+)?${additive}\\s+add\\s+(.+?)\\s*[.!?]*\\s*$`,
+      'i',
+    ));
   const item = boundCapturedTail((m?.[1] ?? '').trim());
   return item.length > 0 ? item : null;
 }

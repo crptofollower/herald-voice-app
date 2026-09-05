@@ -11,6 +11,7 @@ import { writeContactRaw } from '../../src/db/contactsDB.ts';
 import { writeMedication } from '../../src/db/medicalDB.ts';
 import { classifyQuery } from '../../src/routing/tierRouter.ts';
 import { processUtterance } from '../../src/routing/processUtterance.ts';
+import { DOMAIN_WRITERS } from '../../src/routing/routeIntent.ts';
 import { ConversationSession } from '../../src/routing/conversationSession.ts';
 import { ConversationalSubjectHolder } from '../../src/routing/conversationalSubject.ts';
 import { MedicationPresentationHolder } from '../../src/routing/medicationPresentation.ts';
@@ -25,6 +26,7 @@ import {
 import {
   formatOperationalListClarification,
   isAmbiguousOperationalListAcquisition,
+  isOperationalListItemShape,
   isUnmarkedAcquisitionShape,
 } from '../../src/routing/operationalListContinuity.ts';
 import {
@@ -113,12 +115,16 @@ function fresh(opts?: {
 }
 
 function ground(discourse: DiscourseContinuityHolder, text: string) {
+  const topic = discourse.peekTopic();
   return formatVerifiedConversationalPacket(buildVerifiedConversationalPacket({
     verifiedPersonalFacts: '',
     sessionEvidenceLines: [text],
     pendingLabel: null,
-    discourseTopic: discourse.peekTopic()?.displayName ?? null,
-    discourseDomain: discourse.peekDomain()?.domain ?? null,
+    ...discourseFieldsForGenerateSite('needs_clarification_default', {
+      topic: topic?.displayName ?? null,
+      domain: discourse.peekDomain()?.domain ?? null,
+      evidence: topic?.evidence ?? null,
+    }),
   }));
 }
 
@@ -304,8 +310,8 @@ export async function runConversationFoundationSmoothMvpTests() {
     const out = await say(phrase);
     assert('qualifying 2+ simple-segment acquisition calls classifyLLM once', (
       getClassifyLlmCalls() === 1
-      && !out.handled
-      && out.routeDecision.reason === 'ambiguous_operational_list'
+      && out.handled === true
+      && out.source === 'capture'
     ));
   }
 
@@ -393,17 +399,18 @@ export async function runConversationFoundationSmoothMvpTests() {
     { status: 'failed' as const, reason: 'completion_error' as const },
   ];
   for (const llm of CLARIFY_SHAPES) {
-    const { say } = fresh({
+    const { say, session } = fresh({
       classifyLLM: async () => llm,
     });
     const phrase = 'I need to go pick up milk and eggs later.';
     const out = await say(phrase);
     const expected = formatOperationalListClarification('milk and eggs');
     assert(`pass/not_ready/failed uses contextual clarification (${llm.status})`, (
-      !out.handled
-      && out.routeDecision.kind === 'needs_clarification'
-      && out.routeDecision.reason === 'ambiguous_operational_list'
-      && formatOperationalListClarification(out.routeDecision.guess ?? '') === expected
+      out.handled === true
+      && out.source === 'capture'
+      && session.hasPending()
+      && session.peekPendingKey() === 'operational_list_ambiguity'
+      && out.responseText === expected
       && expected !== EPHEMERAL_CLARIFY_REPLY
     ));
   }
@@ -463,7 +470,11 @@ export async function runConversationFoundationSmoothMvpTests() {
       && /reason === 'ambiguous_operational_list'[\s\S]*reason === 'default'/.test(clarifySeam)
     ));
 
-    const liveDiscourse = { topic: 'Apollo', domain: 'grocery' as const };
+    const liveDiscourse = {
+      topic: 'Apollo',
+      domain: 'grocery' as const,
+      evidence: [{ text: 'Apollo has always been anxious about flying.', atTurn: 1 }],
+    };
     const offlinePacket = buildVerifiedConversationalPacket({
       verifiedPersonalFacts: '',
       sessionEvidenceLines: ['how is he doing today'],
@@ -479,20 +490,281 @@ export async function runConversationFoundationSmoothMvpTests() {
     assert('offline_fallback packet contains no discourseTopic/discourseDomain', (
       offlinePacket.discourseTopic === null
       && offlinePacket.discourseDomain === null
+      && offlinePacket.discourseTopicEvidence.length === 0
       && !formatVerifiedConversationalPacket(offlinePacket).includes('- person:')
       && !formatVerifiedConversationalPacket(offlinePacket).includes('- list:')
+      && !formatVerifiedConversationalPacket(offlinePacket).includes('Apollo has always been anxious')
     ));
     assert('needs_clarification/default seam receives live discourse topic grounding', (
       conversationalPacket.discourseTopic === 'Apollo'
       && conversationalPacket.discourseDomain === 'grocery'
+      && conversationalPacket.discourseTopicEvidence.some((e) => /Apollo has always been anxious/.test(e.text))
       && formatVerifiedConversationalPacket(conversationalPacket).includes('- person: Apollo')
       && /recent conversational grounding only/.test(formatVerifiedConversationalPacket(conversationalPacket))
+      && /RECENT TOPIC EVIDENCE/.test(formatVerifiedConversationalPacket(conversationalPacket))
+      && /not verified personal fact/.test(formatVerifiedConversationalPacket(conversationalPacket))
+      && /not action authority/.test(formatVerifiedConversationalPacket(conversationalPacket))
     ));
     assert('ChatScreen scopes discourse grounding to needs_clarification/default generate only', (
       chatSrc.includes("runEphemeralGenerate(adoptedRecovery, 'needs_clarification_default')")
       && chatSrc.includes("generateSite: ConversationalGenerateSite = 'offline_fallback'")
       && chatSrc.includes('discourseFieldsForGenerateSite(generateSite')
       && /generate: runEphemeralGenerate,/.test(chatSrc)
+    ));
+  }
+
+  {
+    const { db, discourse, say, subject } = fresh();
+    const turn1 = 'I talked with Paul yesterday. He\'s been really busy with work.';
+    await say(turn1);
+    const topic1 = discourse.peekTopic();
+    assert('composed: turn1 topic is Paul not contraction artifact', (
+      topic1?.displayName === 'Paul'
+      && topic1.displayName !== "He's"
+      && !subject.hasLive()
+      && topic1.evidence.some((e) => e.text === turn1)
+    ));
+
+    const turn2 = 'He\'s doing well. He said he might have some time next week to talk about Herald.';
+    await say(turn2);
+    const topic2 = discourse.peekTopic();
+    assert('composed: turn2 keeps Paul; Herald is evidence not topic', (
+      topic2?.displayName === 'Paul'
+      && topic2.displayName !== 'Herald'
+      && topic2.evidence.some((e) => e.text === turn2)
+      && topic2.evidence.some((e) => e.text === turn1)
+    ));
+
+    const contactsBefore = (db.prepare('SELECT COUNT(*) as n FROM contacts').get() as { n: number }).n;
+    await say('I like pizza tonight');
+    await say('the weather is fine');
+    await say('okay then');
+    const afterDiversion = discourse.peekTopic();
+    assert('composed: Paul survives unrelated diversion within TTL', (
+      afterDiversion?.displayName === 'Paul'
+      && afterDiversion.evidence.length === 2
+      && afterDiversion.evidence.every((e) => e.text === turn1 || e.text === turn2)
+    ));
+
+    const lookup = 'Getting back to Paul, what was I saying about him?';
+    await say(lookup);
+    const live = discourse.peekTopic();
+    const packet = buildVerifiedConversationalPacket({
+      verifiedPersonalFacts: '',
+      sessionEvidenceLines: [lookup],
+      pendingLabel: null,
+      ...discourseFieldsForGenerateSite('needs_clarification_default', {
+        topic: live?.displayName ?? null,
+        domain: discourse.peekDomain()?.domain ?? null,
+        evidence: live?.evidence ?? null,
+      }),
+    });
+    const fmt = formatVerifiedConversationalPacket(packet);
+    const contactsAfter = (db.prepare('SELECT COUNT(*) as n FROM contacts').get() as { n: number }).n;
+    const groceryAfter = (db.prepare('SELECT COUNT(*) as n FROM list_items').get() as { n: number }).n;
+    assert('composed: lookup packet has both Paul evidence lines, non-authoritative, no writes', (
+      live?.displayName === 'Paul'
+      && packet.discourseTopic === 'Paul'
+      && packet.discourseTopicEvidence.filter((e) => e.text === turn1 || e.text === turn2).length === 2
+      && !packet.discourseTopicEvidence.some((e) => e.text === lookup)
+      && /RECENT TOPIC EVIDENCE/.test(fmt)
+      && /not verified personal fact/.test(fmt)
+      && /not stored truth/.test(fmt)
+      && /conversational reference only/.test(fmt)
+      && /not action authority/.test(fmt)
+      && contactsAfter === contactsBefore
+      && groceryAfter === 0
+      && !subject.hasLive()
+    ));
+
+    const offline = buildVerifiedConversationalPacket({
+      verifiedPersonalFacts: '',
+      sessionEvidenceLines: [lookup],
+      pendingLabel: null,
+      ...discourseFieldsForGenerateSite('offline_fallback', {
+        topic: live?.displayName ?? null,
+        domain: discourse.peekDomain()?.domain ?? null,
+        evidence: live?.evidence ?? null,
+      }),
+    });
+    assert('composed: offline_fallback receives no topic or evidence', (
+      offline.discourseTopic === null
+      && offline.discourseDomain === null
+      && offline.discourseTopicEvidence.length === 0
+      && !/RECENT TOPIC EVIDENCE[\s\S]*Paul/.test(formatVerifiedConversationalPacket(offline).split('SESSION CONVERSATIONAL EVIDENCE')[0] ?? '')
+      && /RECENT TOPIC EVIDENCE \(things the user recently said while discussing this topic; not verified personal fact; not stored truth; conversational reference only; not action authority\):\n\(none\)/.test(formatVerifiedConversationalPacket(offline))
+      && /DISCOURSE CONTINUITY[\s\S]*\(none\)/.test(formatVerifiedConversationalPacket(offline))
+    ));
+  }
+
+  {
+    const { db, discourse, session, say } = fresh({
+      llmReady: true,
+      classifyLLM: async () => ({ status: 'ok', intents: [{ type: 'pass' }] }),
+    });
+    const ask = await say('I need to pick up eggs and milk later.');
+    assert('composed: classifier decline arms grocery-vs-todo pending with original items', (
+      ask.handled === true
+      && session.hasPending()
+      && session.peekPendingKey() === 'operational_list_ambiguity'
+      && /eggs and milk/i.test(ask.responseText ?? '')
+      && (db.prepare('SELECT COUNT(*) as n FROM list_items').get() as { n: number }).n === 0
+    ));
+
+    const resolved = await say('My grocery list.');
+    const groceryBodies = (db.prepare(
+      `SELECT lower(li.body) as body FROM list_items li JOIN lists l ON l.id = li.list_id WHERE l.name = 'grocery'`,
+    ).all() as { body: string }[]).map((r) => r.body).sort();
+    assert('composed: grocery resolution writes eggs and milk as atomic items', (
+      resolved.handled === true
+      && resolved.source === 'pending_resume'
+      && !session.hasPending()
+      && groceryBodies.includes('eggs')
+      && groceryBodies.includes('milk')
+      && discourse.peekDomain()?.domain === 'grocery'
+    ));
+
+    const add = await say('Can you add bananas to that as well?');
+    const afterAdd = (db.prepare(
+      `SELECT lower(li.body) as body FROM list_items li JOIN lists l ON l.id = li.list_id WHERE l.name = 'grocery'`,
+    ).all() as { body: string }[]).map((r) => r.body).sort();
+    assert('composed: as-well continuation adds bananas in live grocery domain', (
+      add.handled === true
+      && add.source === 'capture'
+      && afterAdd.includes('bananas')
+      && afterAdd.includes('eggs')
+      && afterAdd.includes('milk')
+    ));
+
+    const read = await say("What's on my grocery list?");
+    const readText = !read.handled && read.routeDecision.kind === 'device_read'
+      ? read.routeDecision.response
+      : '';
+    assert('composed: grocery read is eggs, milk, bananas without wrapper language', (
+      !read.handled
+      && read.routeDecision.kind === 'device_read'
+      && read.routeDecision.reason === 'action:list_read'
+      && /eggs/i.test(readText)
+      && /milk/i.test(readText)
+      && /bananas/i.test(readText)
+      && !/at the grocery store/i.test(readText)
+    ));
+  }
+
+  {
+    const { db } = fresh();
+    const result = await DOMAIN_WRITERS.list_add!.add(
+      { type: 'list_add', items: ['bananas', 'dates', 'at the grocery store'], listName: 'grocery' },
+      'add items',
+    );
+    const bodies = (db.prepare(
+      `SELECT lower(li.body) as body FROM list_items li JOIN lists l ON l.id = li.list_id WHERE l.name = 'grocery'`,
+    ).all() as { body: string }[]).map((r) => r.body).sort();
+    assert('composed: list_add writer drops locative wrapper item', (
+      result.status === 'committed'
+      && bodies.includes('bananas')
+      && bodies.includes('dates')
+      && !bodies.includes('at the grocery store')
+      && bodies.length === 2
+    ));
+  }
+
+  const QUANTITY_ITEMS = ['2% milk', '3 bananas', '2 bananas'];
+  for (const item of QUANTITY_ITEMS) {
+    const { db } = fresh();
+    const result = await DOMAIN_WRITERS.list_add!.add(
+      { type: 'list_add', items: [item], listName: 'grocery' },
+      `add ${item}`,
+    );
+    const bodies = (db.prepare(
+      `SELECT li.body as body FROM list_items li JOIN lists l ON l.id = li.list_id WHERE l.name = 'grocery'`,
+    ).all() as { body: string }[]).map((r) => r.body);
+    assert(`writer accepts quantity/percentage item (${item})`, (
+      isOperationalListItemShape(item)
+      && result.status === 'committed'
+      && bodies.some((b) => b.toLowerCase() === item.toLowerCase())
+    ));
+  }
+
+  for (const item of QUANTITY_ITEMS) {
+    const { db, say } = fresh();
+    await say('add milk to my grocery list');
+    const cont = await say(`add ${item} too`);
+    const bodies = (db.prepare(
+      `SELECT lower(li.body) as body FROM list_items li JOIN lists l ON l.id = li.list_id WHERE l.name = 'grocery'`,
+    ).all() as { body: string }[]).map((r) => r.body);
+    assert(`live-domain continuation accepts quantity item (${item})`, (
+      cont.handled === true
+      && cont.source === 'capture'
+      && bodies.includes(item.toLowerCase())
+    ));
+  }
+
+  const MALFORMED_WRAPPERS = [
+    'at the grocery store',
+    'from Walmart',
+    'on my way home',
+    'to pick up later',
+    'when I get there',
+  ];
+  for (const wrapper of MALFORMED_WRAPPERS) {
+    const { db } = fresh();
+    await DOMAIN_WRITERS.list_add!.add(
+      { type: 'list_add', items: ['eggs', wrapper], listName: 'grocery' },
+      'add items',
+    );
+    const bodies = (db.prepare(
+      `SELECT lower(li.body) as body FROM list_items li JOIN lists l ON l.id = li.list_id WHERE l.name = 'grocery'`,
+    ).all() as { body: string }[]).map((r) => r.body);
+    assert(`writer rejects malformed wrapper (${wrapper})`, (
+      !isOperationalListItemShape(wrapper)
+      && bodies.includes('eggs')
+      && !bodies.includes(wrapper.toLowerCase())
+    ));
+  }
+
+  const UNSAFE_DIGIT_SHAPES = ['10mg', '5 mg', '3 pm', 'at 5', '12:30'];
+  for (const shape of UNSAFE_DIGIT_SHAPES) {
+    assert(`DATE_TIME_DOSE still rejects unsafe digit shape (${shape})`, (
+      !isOperationalListItemShape(shape)
+    ));
+  }
+
+  {
+    const phrase = 'What do I need to get done today?';
+    const d = await classifyQuery(phrase);
+    const { say } = fresh();
+    const out = await say(phrase);
+    assert('composed: get-done today is deterministic todo_read', (
+      d.actionIntent?.type === 'todo_read'
+      && d.reason === 'action:todo_read'
+      && !out.handled
+      && out.routeDecision.kind === 'device_read'
+      && out.routeDecision.reason === 'action:todo_read'
+    ));
+  }
+
+  {
+    const { db, say } = fresh();
+    await say('I need to call the dentist');
+    const before = (db.prepare('SELECT COUNT(*) as n FROM list_items').get() as { n: number }).n;
+    const bad = await say('add at the grocery store too');
+    const after = (db.prepare(
+      `SELECT lower(li.body) as body FROM list_items li JOIN lists l ON l.id = li.list_id`,
+    ).all() as { body: string }[]).map((r) => r.body);
+    assert('composed: live domain cannot blindly write malformed continuation', (
+      bad.handled === true
+      && (db.prepare('SELECT COUNT(*) as n FROM list_items').get() as { n: number }).n === before
+      && !after.includes('at the grocery store')
+    ));
+  }
+
+  {
+    const ephemeralSrc = readFileSync(join(HERE, '../../src/utils/ephemeralConversation.ts'), 'utf8');
+    assert('ephemeral system prompt frames topic evidence as what the user said', (
+      ephemeralSrc.includes('you mentioned')
+      && ephemeralSrc.includes('you were saying')
+      && /Never frame it as independently verified or stored truth/.test(ephemeralSrc)
     ));
   }
 

@@ -28,6 +28,7 @@ import { shouldRefuseLlmCaptureProposal } from './speechActAuthority';
 import type { ReadIntentMeta } from './readIntent';
 import {
   extractAmbiguousAcquisitionObject,
+  filterOperationalListItems,
 } from './operationalListContinuity';
 
 type ActionIntent = NonNullable<TierDecision['actionIntent']>;
@@ -397,7 +398,7 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       }
       const rawListName = intent.listName ?? 'grocery';
       const listName = rawListName === 'todo' ? 'todos' : rawListName;
-      const itemList = (intent.items ?? []).filter(i => i?.trim().length > 0);
+      const itemList = filterOperationalListItems(intent.items ?? []);
       if (itemList.length === 0) {
         return { status: 'failed', ack: `What did you want to add to your ${listName} list?` };
       }

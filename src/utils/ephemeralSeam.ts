@@ -42,6 +42,10 @@ const FIRST_PERSON_ANCHOR_RE = /\b(I|my|me|we|our)\b/i;
 const NAME_CLOSED_CLASS_RE =
   /^(I|I'm|The|A|An|My|Me|We|Our|You|Your|He|She|They|It|This|That|These|Those|If|When|What|Who|Why|How|Do|Did|Does|Can|Could|Would|Will|Should|And|But|Or|So|For|To|Of|In|On|At|By|With|From|About|Not|No|Yes|Ok|Okay|Herald|Tell|Please|Remind|Call|Text|Make|Set|Add|Let|Thanks|Thank|Yeah|Well|Anyway|Just|Maybe|Actually|Got|Have|Has|Had|Was|Were|Is|Are|Be|Been|Being|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|January|February|March|April|May|June|July|August|September|October|November|December)$/i;
 
+export function isClosedClassNameToken(token: string): boolean {
+  return NAME_CLOSED_CLASS_RE.test(token.trim());
+}
+
 /** Title-case tokens that can stand as third-party person names. STT lowercase is out of scope. */
 export function extractTitleCaseNameTokens(text: string): string[] {
   const names: string[] = [];

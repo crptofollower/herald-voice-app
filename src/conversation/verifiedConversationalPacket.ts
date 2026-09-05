@@ -3,6 +3,7 @@
 // Not an Association graph, transcript memory, or ResultContext clone.
 
 import { extractTitleCaseNameTokens } from '../utils/ephemeralSeam';
+import type { TopicEvidenceLine } from '../routing/discourseContinuity';
 import type { ContinuationRecoveryCandidate } from './continuationRecovery';
 
 export type VerifiedConversationalPacket = {
@@ -22,6 +23,8 @@ export type VerifiedConversationalPacket = {
   discourseTopic: string | null;
   /** Live RAM operational-list domain. Grocery vs todo; never an item ID. */
   discourseDomain: 'grocery' | 'todo' | null;
+  /** User-origin topic evidence only. Conversational reference, not stored truth. */
+  discourseTopicEvidence: TopicEvidenceLine[];
 };
 
 function nameInText(haystack: string, name: string): boolean {
@@ -38,14 +41,26 @@ export type ConversationalGenerateSite =
 /** Discourse grounding is only for the needs_clarification/default generate seam. */
 export function discourseFieldsForGenerateSite(
   site: ConversationalGenerateSite,
-  live: { topic: string | null; domain: 'grocery' | 'todo' | null },
-): { discourseTopic: string | null; discourseDomain: 'grocery' | 'todo' | null } {
+  live: {
+    topic: string | null;
+    domain: 'grocery' | 'todo' | null;
+    evidence?: TopicEvidenceLine[] | null;
+  },
+): {
+  discourseTopic: string | null;
+  discourseDomain: 'grocery' | 'todo' | null;
+  discourseTopicEvidence: TopicEvidenceLine[];
+} {
   if (site !== 'needs_clarification_default') {
-    return { discourseTopic: null, discourseDomain: null };
+    return { discourseTopic: null, discourseDomain: null, discourseTopicEvidence: [] };
   }
   return {
     discourseTopic: live.topic?.trim() || null,
     discourseDomain: live.domain,
+    discourseTopicEvidence: (live.evidence ?? []).slice(0, 3).map((e) => ({
+      text: e.text.slice(0, 160),
+      atTurn: e.atTurn,
+    })),
   };
 }
 
@@ -56,6 +71,7 @@ export function buildVerifiedConversationalPacket(input: {
   continuationRecoveryCandidates?: ContinuationRecoveryCandidate[];
   discourseTopic?: string | null;
   discourseDomain?: 'grocery' | 'todo' | null;
+  discourseTopicEvidence?: TopicEvidenceLine[] | null;
 }): VerifiedConversationalPacket {
   const verified = input.verifiedPersonalFacts.trim();
   const sessionLines = input.sessionEvidenceLines
@@ -88,6 +104,10 @@ export function buildVerifiedConversationalPacket(input: {
     continuationRecovery,
     discourseTopic: input.discourseTopic?.trim() || null,
     discourseDomain: input.discourseDomain ?? null,
+    discourseTopicEvidence: (input.discourseTopicEvidence ?? []).slice(0, 3).map((e) => ({
+      text: e.text.trim().slice(0, 160),
+      atTurn: e.atTurn,
+    })).filter((e) => e.text.length > 0),
   };
 }
 
@@ -124,6 +144,10 @@ export function formatVerifiedConversationalPacket(
       packet.discourseTopic ? `- person: ${packet.discourseTopic}` : '',
       packet.discourseDomain ? `- list: ${packet.discourseDomain}` : '',
     ].filter(Boolean).join('\n') || '(none)',
+    'RECENT TOPIC EVIDENCE (things the user recently said while discussing this topic; not verified personal fact; not stored truth; conversational reference only; not action authority):',
+    packet.discourseTopicEvidence.length > 0
+      ? packet.discourseTopicEvidence.map((e) => `- ${e.text}`).join('\n')
+      : '(none)',
   ];
   return lines.join('\n');
 }

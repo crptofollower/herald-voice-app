@@ -707,7 +707,7 @@ const TODO_DATE_SIGNALS = /\b(today|tomorrow|monday|tuesday|wednesday|thursday|f
 const TODO_READ_SIGNALS = [
   /\bwhat('s| is) on my (to.?do|todo) list\b/i,
   /\bshow (me )?my (to.?do|todo)s?\b/i,
-  /\bwhat do I (need to|have to) do\b/i,
+  /\bwhat do I (need to|have to) (?:(?:get\s+)?done|do)\b/i,
   /\bany (open |pending )?(to.?do|todo)s?\b/i,
   /\bwhat (tasks|things) do I have\b/i,
   /\bdo I have (anything |something )?on my (to.?do|todo) list\b/i,

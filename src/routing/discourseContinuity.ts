@@ -2,7 +2,7 @@
 // Two independent slots. Never persisted. Never action/write authority.
 // No entity IDs, phones, addresses, or mutation targets.
 
-import { extractTitleCaseNameTokens } from '../utils/ephemeralSeam';
+import { extractTitleCaseNameTokens, isClosedClassNameToken } from '../utils/ephemeralSeam';
 import {
   IMPERATIVE_ACTION_RE,
   LIST_ADD_SIGNALS,
@@ -13,10 +13,18 @@ import { OPERATIONAL_ACQUISITION_SHAPE } from './operationalListContinuity';
 
 export const DISCOURSE_TURN_TTL = 4;
 export const DISCOURSE_WALL_MS = 10 * 60 * 1000;
+export const TOPIC_EVIDENCE_MAX_LINES = 3;
+export const TOPIC_EVIDENCE_MAX_CHARS = 160;
+
+export type TopicEvidenceLine = {
+  text: string;
+  atTurn: number;
+};
 
 export type DiscourseTopicSlot = {
   kind: 'person_mention';
   displayName: string;
+  evidence: TopicEvidenceLine[];
   establishedAtTurn: number;
   refreshedAtTurn: number;
 };
@@ -28,7 +36,15 @@ export type DiscourseDomainSlot = {
   refreshedAtTurn: number;
 };
 
-const TOPIC_LOOKUP_RE = /\bwho\s+(?:was|am|are)\s+i\s+talking\s+about\b/i;
+const CONTRACTION_SUFFIX_RE = /'(?:s|re|d|ll|ve|m|t)$/i;
+
+/** who/what + be + I/we + talking about/saying — not a phrase catalog. */
+const TOPIC_LOOKUP_RE =
+  /\b(?:who|what)\s+(?:was|were|am|are)\s+(?:i|we)\s+(?:talking\s+about|saying)\b/i;
+
+export function stripGrammaticalContractionSuffix(token: string): string {
+  return token.replace(CONTRACTION_SUFFIX_RE, '');
+}
 
 export function qualifyingNarrativePersonNames(text: string): string[] {
   const t = text.trim();
@@ -37,7 +53,19 @@ export function qualifyingNarrativePersonNames(text: string): string[] {
   if (TODO_ADD_SIGNALS.some((p) => p.test(t))) return [];
   if (LIST_ADD_SIGNALS.some((p) => p.test(t))) return [];
   if (OPERATIONAL_ACQUISITION_SHAPE.test(t)) return [];
-  return extractTitleCaseNameTokens(t);
+  const names: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of extractTitleCaseNameTokens(t)) {
+    const normalized = stripGrammaticalContractionSuffix(raw).trim();
+    if (!normalized) continue;
+    if (isClosedClassNameToken(normalized)) continue;
+    if (isUnsafeTopicLabel(normalized)) continue;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    names.push(normalized);
+  }
+  return names;
 }
 
 function isUnsafeTopicLabel(name: string): boolean {
@@ -47,6 +75,40 @@ function isUnsafeTopicLabel(name: string): boolean {
   if (/[0-9a-f]{8}-[0-9a-f]{4}/i.test(n)) return true;
   if (/@/.test(n)) return true;
   return false;
+}
+
+function isUnsafeEvidenceLine(text: string): boolean {
+  if (/\d{5,}/.test(text)) return true;
+  if (/[0-9a-f]{8}-[0-9a-f]{4}/i.test(text)) return true;
+  if (/@/.test(text)) return true;
+  return false;
+}
+
+function boundEvidenceText(text: string): string {
+  return text.trim().slice(0, TOPIC_EVIDENCE_MAX_CHARS);
+}
+
+function isTopicLookup(text: string): boolean {
+  return TOPIC_LOOKUP_RE.test(text);
+}
+
+function isReferenceQuestion(text: string): boolean {
+  const t = text.trim();
+  if (!t) return false;
+  if (/\?\s*$/.test(t)) return true;
+  if (/^(?:what|who|when|where|why|how)\b/i.test(t)) return true;
+  return isTopicLookup(t);
+}
+
+function mentionsDisplayName(text: string, displayName: string): boolean {
+  const n = displayName.trim();
+  if (!n) return false;
+  const re = new RegExp(`\\b${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+  return re.test(text);
+}
+
+function hasLiveTopicContinuation(text: string, displayName: string): boolean {
+  return THIRD_PERSON_REFERENT_RE.test(text) || mentionsDisplayName(text, displayName);
 }
 
 export class DiscourseContinuityHolder {
@@ -74,7 +136,10 @@ export class DiscourseContinuityHolder {
     this.expireStale();
     if (!this.topic) return null;
     const { refreshedAtMs: _ms, ...slot } = this.topic;
-    return slot;
+    return {
+      ...slot,
+      evidence: slot.evidence.map((e) => ({ ...e })),
+    };
   }
 
   peekDomain(): DiscourseDomainSlot | null {
@@ -84,13 +149,19 @@ export class DiscourseContinuityHolder {
     return slot;
   }
 
-  establishTopic(displayName: string): void {
+  establishTopic(displayName: string, evidenceText?: string): void {
     const name = displayName.trim();
     if (isUnsafeTopicLabel(name)) return;
     const at = this.now();
+    const evidence: TopicEvidenceLine[] = [];
+    if (evidenceText && !isUnsafeEvidenceLine(evidenceText)) {
+      const bounded = boundEvidenceText(evidenceText);
+      if (bounded) evidence.push({ text: bounded, atTurn: this.turn });
+    }
     this.topic = {
       kind: 'person_mention',
       displayName: name,
+      evidence,
       establishedAtTurn: this.turn,
       refreshedAtTurn: this.turn,
       refreshedAtMs: at,
@@ -101,6 +172,27 @@ export class DiscourseContinuityHolder {
     if (!this.peekTopic() || !this.topic) return;
     this.topic = {
       ...this.topic,
+      refreshedAtTurn: this.turn,
+      refreshedAtMs: this.now(),
+    };
+  }
+
+  appendTopicEvidence(evidenceText: string): void {
+    if (!this.peekTopic() || !this.topic) return;
+    if (isUnsafeEvidenceLine(evidenceText)) {
+      this.refreshTopic();
+      return;
+    }
+    const bounded = boundEvidenceText(evidenceText);
+    if (!bounded) {
+      this.refreshTopic();
+      return;
+    }
+    const evidence = [...this.topic.evidence, { text: bounded, atTurn: this.turn }];
+    while (evidence.length > TOPIC_EVIDENCE_MAX_LINES) evidence.shift();
+    this.topic = {
+      ...this.topic,
+      evidence,
       refreshedAtTurn: this.turn,
       refreshedAtMs: this.now(),
     };
@@ -118,13 +210,18 @@ export class DiscourseContinuityHolder {
   }
 
   noteNarrativeUtterance(text: string): void {
-    const names = qualifyingNarrativePersonNames(text);
-    if (names.length > 0) {
-      this.establishTopic(names[names.length - 1]);
+    const live = this.peekTopic();
+    if (live && hasLiveTopicContinuation(text, live.displayName)) {
+      if (isReferenceQuestion(text)) {
+        this.refreshTopic();
+        return;
+      }
+      this.appendTopicEvidence(text);
       return;
     }
-    if (this.peekTopic() && (THIRD_PERSON_REFERENT_RE.test(text) || TOPIC_LOOKUP_RE.test(text))) {
-      this.refreshTopic();
+    const names = qualifyingNarrativePersonNames(text);
+    if (names.length > 0) {
+      this.establishTopic(names[names.length - 1], text);
     }
   }
 

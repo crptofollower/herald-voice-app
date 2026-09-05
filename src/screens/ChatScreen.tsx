@@ -1186,9 +1186,11 @@ export default function ChatScreen() {
         createLlamaEphemeralWorker({ getCtx }),
         createExperimentalQwenLlamaWorker({ getCtx: getExperimentalCtx }),
       ]);
+      const liveTopic = discourseRef.current.peekTopic();
       const discourseFields = discourseFieldsForGenerateSite(generateSite, {
-        topic: discourseRef.current.peekTopic()?.displayName ?? null,
+        topic: liveTopic?.displayName ?? null,
         domain: discourseRef.current.peekDomain()?.domain ?? null,
+        evidence: liveTopic?.evidence ?? null,
       });
       const packet = buildVerifiedConversationalPacket({
         verifiedPersonalFacts: getContextBlock() || '',
@@ -1202,6 +1204,7 @@ export default function ChatScreen() {
         continuationRecoveryCandidates: [...continuationRecoveryCandidates],
         discourseTopic: discourseFields.discourseTopic,
         discourseDomain: discourseFields.discourseDomain,
+        discourseTopicEvidence: discourseFields.discourseTopicEvidence,
       });
       return generateViaSelectedWorker(worker, {
         userText: text,

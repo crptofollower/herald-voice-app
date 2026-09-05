@@ -69,7 +69,10 @@ import { DiscourseContinuityHolder } from './discourseContinuity';
 import {
   extractAmbiguousAcquisitionObject,
   formatOperationalListClarification,
+  isOperationalListItemShape,
+  parseOperationalDomainResolution,
   parseOperationalListContinuationAdd,
+  splitCapturedTailSegments,
 } from './operationalListContinuity';
 
 // D0 commit 2 (S54 addendum): the headless pipeline seam. UI (ChatScreen) calls
@@ -676,12 +679,21 @@ export async function processUtterance(
     }
     subject.clear();
   }
-  // 1c) Live operational-list continuation — structurally "add X too" against
-  //     the RAM domain slot only. No classifier. No item IDs.
+  // 1c) Live operational-list continuation — structurally trailing-add against
+  //     the RAM domain slot only. Domain is evidence, not write permission.
   if (discourse) {
     const continuationItem = parseOperationalListContinuationAdd(text);
     const liveDomain = discourse.peekDomain();
     if (continuationItem && liveDomain) {
+      if (!isOperationalListItemShape(continuationItem)) {
+        const listLabel = liveDomain.domain === 'todo' ? 'to-do' : 'grocery';
+        return {
+          handled: true,
+          source: 'capture',
+          responseText: `What did you want to add to your ${listLabel} list?`,
+          commits: [],
+        };
+      }
       const intent: IntentRecord = liveDomain.domain === 'todo'
         ? { type: 'todo_add', body: continuationItem }
         : { type: 'list_add', items: [continuationItem], listName: 'grocery' };
@@ -759,6 +771,56 @@ export async function processUtterance(
       }
     }
     return { handled: true, source: 'capture', responseText, commits };
+  }
+  if (
+    routeDecision.kind === 'needs_clarification'
+    && routeDecision.reason === 'ambiguous_operational_list'
+  ) {
+    const object = extractAmbiguousAcquisitionObject(text) ?? routeDecision.guess ?? '';
+    const items = splitCapturedTailSegments(object).filter(isOperationalListItemShape);
+    const prompt = formatOperationalListClarification(object);
+    if (items.length >= 2) {
+      const resume = async (userText: string): Promise<CommitResult> => {
+        if (CONFIRM_NO_RE.test(userText.trim())) {
+          return { status: 'noop', ack: prompt };
+        }
+        const resolution = parseOperationalDomainResolution(userText);
+        if (resolution === 'grocery') {
+          const writer = DOMAIN_WRITERS.list_add;
+          if (!writer) return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
+          const result = await writer.add(
+            { type: 'list_add', items, listName: 'grocery' },
+            userText,
+          );
+          if (result.status === 'committed') discourse?.establishDomain('grocery');
+          return result;
+        }
+        if (resolution === 'todo') {
+          const writer = DOMAIN_WRITERS.todo_add;
+          if (!writer) return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
+          const result = await writer.add(
+            { type: 'todo_add', body: items.join(' and ') },
+            userText,
+          );
+          if (result.status === 'committed') discourse?.establishDomain('todo');
+          return result;
+        }
+        return { status: 'noop', ack: '' };
+      };
+      const pending: Extract<CommitResult, { status: 'pending' }> = {
+        status: 'pending',
+        prompt,
+        pendingKey: 'operational_list_ambiguity',
+        resume,
+        reaskPrompt: prompt,
+      };
+      session.setPending({
+        pendingKey: pending.pendingKey,
+        resume: pending.resume,
+        reaskPrompt: prompt,
+      });
+      return { handled: true, source: 'capture', responseText: prompt, commits: [pending] };
+    }
   }
   // Flow C establishment — single owner. Immediately after routeIntent,
   // before returning the route decision to ChatScreen. ChatScreen must
