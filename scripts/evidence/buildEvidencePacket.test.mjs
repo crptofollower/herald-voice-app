@@ -80,10 +80,11 @@ console.log(`\n${BOLD}-- Packet Builder V1 Contract Tests ----------------------
 // --- unit fences ---
 assert('unknown profile name → null', getEvidenceProfile('no-such-profile') === null);
 assert(
-  'V1 ships exactly three named profiles',
-  PROFILE_NAMES.length === 3 &&
+  'V1 ships exactly four named profiles',
+  PROFILE_NAMES.length === 4 &&
     PROFILE_NAMES.includes('calendar-diagnosis') &&
     PROFILE_NAMES.includes('routing-diagnosis') &&
+    PROFILE_NAMES.includes('conversational-recovery-authority') &&
     PROFILE_NAMES.includes('memory-diagnosis'),
 );
 
@@ -606,6 +607,84 @@ assert('allow calendarContinuation.ts', isDeniedSecretName('src/routing/calendar
     'calendar-diagnosis payload under 1 MiB',
     total > 0 && total <= 1024 * 1024,
     `total=${total}`,
+  );
+}
+
+{
+  const routing = getEvidenceProfile('routing-diagnosis');
+  assert(
+    'routing-diagnosis allow-list unchanged',
+    !!routing &&
+      routing.files.join('|') ===
+        [
+          'src/routing/tierRouter.ts',
+          'src/routing/routeIntent.ts',
+          'src/routing/processUtterance.ts',
+          'scripts/heraldTest/lawZero.test.ts',
+          'scripts/heraldTest/pipeline.test.ts',
+        ].join('|'),
+  );
+
+  const cra = getEvidenceProfile('conversational-recovery-authority');
+  const expectedCra = [
+    'src/routing/processUtterance.ts',
+    'src/routing/conversationSession.ts',
+    'src/routing/callTextReadiness.ts',
+    'src/routing/emergencySignals.ts',
+    'src/routing/conversationalSubject.ts',
+    'src/routing/medicationPresentation.ts',
+    'src/routing/orderedPresentation.ts',
+    'src/routing/calendarContinuation.ts',
+    'src/routing/calendarPresentation.ts',
+    'src/routing/routeIntent.ts',
+    'src/routing/tierRouter.ts',
+    'scripts/heraldTest/lawZero.test.ts',
+    'scripts/heraldTest/pipeline.test.ts',
+    'scripts/heraldTest/conversationalSubject.test.ts',
+    'scripts/heraldTest/conversationSessionVisitOutcome.test.ts',
+    'scripts/heraldTest/emergencySignalsGate.test.ts',
+    'scripts/heraldTest/orderedPresentation.test.ts',
+    'scripts/heraldTest/calendarContinuation.test.ts',
+    'scripts/heraldTest/calendarPresentation.test.ts',
+    'scripts/heraldTest/authorityReadinessRecovery.test.ts',
+    'scripts/heraldTest/medicationOrdinal.test.ts',
+  ];
+  assert(
+    'conversational-recovery-authority exact allow-list',
+    !!cra && cra.files.join('|') === expectedCra.join('|'),
+  );
+  const unexpected = (cra?.files ?? []).filter((f) => !expectedCra.includes(f));
+  assert(
+    'conversational-recovery-authority emits no unexpected source path',
+    unexpected.length === 0,
+    unexpected.join(', '),
+  );
+  const missingCra = expectedCra.filter(
+    (f) => !existsSync(path.join(REPO_ROOT, ...f.split('/'))),
+  );
+  assert(
+    'conversational-recovery-authority files all present in checkout',
+    missingCra.length === 0,
+    missingCra.join(', '),
+  );
+  let craTotal = 0;
+  let craMax = 0;
+  for (const f of expectedCra) {
+    const v = validateEvidenceFile(REPO_ROOT, f);
+    if (!v.ok) {
+      assert(`validate ${f}`, false, v.error);
+    } else {
+      craTotal += v.size;
+      if (v.size > craMax) craMax = v.size;
+    }
+  }
+  assert(
+    'conversational-recovery-authority under packet and Agent Loop size caps',
+    craTotal > 0 &&
+      craMax <= 256 * 1024 &&
+      craTotal <= 786432 &&
+      craTotal <= 1024 * 1024,
+    `total=${craTotal} maxFile=${craMax}`,
   );
 }
 

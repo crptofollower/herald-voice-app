@@ -57,6 +57,38 @@ export const EVIDENCE_PROFILES = {
     commands: [],
   },
 
+  'conversational-recovery-authority': {
+    name: 'conversational-recovery-authority',
+    description:
+      'Minimum source to audit whether a next utterance binds to existing conversational ' +
+      'authority (pending, subject, presentation/continuation holders) versus falling ' +
+      'through routeIntent to clarification, ConversationalWorker, or fallback.',
+    files: [
+      'src/routing/processUtterance.ts',
+      'src/routing/conversationSession.ts',
+      'src/routing/callTextReadiness.ts',
+      'src/routing/emergencySignals.ts',
+      'src/routing/conversationalSubject.ts',
+      'src/routing/medicationPresentation.ts',
+      'src/routing/orderedPresentation.ts',
+      'src/routing/calendarContinuation.ts',
+      'src/routing/calendarPresentation.ts',
+      'src/routing/routeIntent.ts',
+      'src/routing/tierRouter.ts',
+      'scripts/heraldTest/lawZero.test.ts',
+      'scripts/heraldTest/pipeline.test.ts',
+      'scripts/heraldTest/conversationalSubject.test.ts',
+      'scripts/heraldTest/conversationSessionVisitOutcome.test.ts',
+      'scripts/heraldTest/emergencySignalsGate.test.ts',
+      'scripts/heraldTest/orderedPresentation.test.ts',
+      'scripts/heraldTest/calendarContinuation.test.ts',
+      'scripts/heraldTest/calendarPresentation.test.ts',
+      'scripts/heraldTest/authorityReadinessRecovery.test.ts',
+      'scripts/heraldTest/medicationOrdinal.test.ts',
+    ],
+    commands: [],
+  },
+
   'memory-diagnosis': {
     name: 'memory-diagnosis',
     description:
