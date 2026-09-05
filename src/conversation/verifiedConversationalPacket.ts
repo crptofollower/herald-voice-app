@@ -64,6 +64,33 @@ export function discourseFieldsForGenerateSite(
   };
 }
 
+/** Bounded Gate A fields — counts and ids only, never evidence or reply text. */
+export function gateAWcsRecoveryFields(
+  generateSite: ConversationalGenerateSite,
+  live: {
+    topic: string | null;
+    evidence?: TopicEvidenceLine[] | null;
+  },
+  worker: string | null,
+): {
+  generateSite: ConversationalGenerateSite;
+  discourseTopic: string | null;
+  discourseEvidenceCount: number;
+  worker: string | null;
+} {
+  const fields = discourseFieldsForGenerateSite(generateSite, {
+    topic: live.topic,
+    domain: null,
+    evidence: live.evidence,
+  });
+  return {
+    generateSite,
+    discourseTopic: fields.discourseTopic,
+    discourseEvidenceCount: fields.discourseTopicEvidence.length,
+    worker,
+  };
+}
+
 export function buildVerifiedConversationalPacket(input: {
   verifiedPersonalFacts: string;
   sessionEvidenceLines: string[];

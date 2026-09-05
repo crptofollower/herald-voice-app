@@ -14,6 +14,7 @@ import {
 import { sanitizeConversationalPresentation } from '../../src/conversation/conversationalPresentation.ts';
 import { createExperimentalQwenLlamaWorker } from '../../src/conversation/experimentalQwenLlamaWorker.ts';
 import { createLlamaEphemeralWorker } from '../../src/conversation/llamaEphemeralWorker.ts';
+import { gateAWcsRecoveryFields } from '../../src/conversation/verifiedConversationalPacket.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -104,6 +105,31 @@ export async function runConversationalWorkerExperimentTests() {
   assert(
     'CWX-G Gate A diagnostic remains',
     CHAT.includes("console.warn('HERALD_GATE_A_DIAG ' + JSON.stringify({"),
+  );
+  {
+    const rec = gateAWcsRecoveryFields(
+      'needs_clarification_default',
+      {
+        topic: 'Paul',
+        evidence: [
+          { text: 'I talked with Paul yesterday.', atTurn: 1 },
+          { text: "He's doing well.", atTurn: 2 },
+        ],
+      },
+      'experimental-on-device-conversation',
+    );
+    assert(
+      'CWX-G2 Gate A WCS recovery record carries generateSite, topic, evidence count, worker',
+      rec.generateSite === 'needs_clarification_default'
+        && rec.discourseTopic === 'Paul'
+        && rec.discourseEvidenceCount === 2
+        && rec.worker === 'experimental-on-device-conversation'
+        && !JSON.stringify(rec).includes('I talked with Paul'),
+    );
+  }
+  assert(
+    'CWX-G3 Gate A log object includes WCS recovery fields',
+    /generateSite,\s*discourseTopic,\s*discourseEvidenceCount,\s*worker: getGenerateWorker\(\)/.test(CHAT),
   );
   assert(
     'CWX-H ChatScreen wires independent engine into seam status',

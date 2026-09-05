@@ -83,6 +83,7 @@ import { useExperimentalConversationalEngine } from '../conversation/useExperime
 import {
   buildVerifiedConversationalPacket,
   discourseFieldsForGenerateSite,
+  gateAWcsRecoveryFields,
   type ConversationalGenerateSite,
 } from '../conversation/verifiedConversationalPacket';
 import { adoptContinuationRecoveryCandidates } from '../conversation/continuationRecovery';
@@ -268,42 +269,56 @@ function extractFact(userMsg: string, aiReply: string, category: string): string
   return null;
 }
 
+type GateAWcsRecoveryDiag = {
+  generateSite: ConversationalGenerateSite;
+  discourseTopic: string | null;
+  discourseEvidenceCount: number;
+  getGenerateWorker: () => string | null;
+};
+
 /** TEMP Gate A device diagnostic — prove canned-clarify vs generate. Remove after proof. */
 async function resolveEphemeralSeamGateADiag(
   site: 'needs_clarification' | 'offline_fallback',
-  input: Parameters<typeof resolveEphemeralSeam>[0],
+  input: Parameters<typeof resolveEphemeralSeam>[0] & GateAWcsRecoveryDiag,
 ): ReturnType<typeof resolveEphemeralSeam> {
+  const {
+    generateSite,
+    discourseTopic,
+    discourseEvidenceCount,
+    getGenerateWorker,
+    ...seamInput
+  } = input;
   const eligible = isEligibleForEphemeralConversation(
-    input.text,
-    input.hasAuthorizedContinuation,
+    seamInput.text,
+    seamInput.hasAuthorizedContinuation,
   );
   const mayGenerate = mayRunGenerativeEphemeralPersonalProse({
-    reason: input.reason,
-    text: input.text,
-    hasAuthorizedContinuation: input.hasAuthorizedContinuation,
-    hasPendingSession: input.hasPendingSession,
-    hasContactCollectPending: input.hasContactCollectPending,
+    reason: seamInput.reason,
+    text: seamInput.text,
+    hasAuthorizedContinuation: seamInput.hasAuthorizedContinuation,
+    hasPendingSession: seamInput.hasPendingSession,
+    hasContactCollectPending: seamInput.hasContactCollectPending,
     isEligible: eligible,
-    threadEvidence: input.threadEvidence,
+    threadEvidence: seamInput.threadEvidence,
   });
   const canConverse = canRunEphemeralConversation({
-    rdTier: input.rdTier,
-    hasStructuredCaptures: input.hasStructuredCaptures,
-    isPersonalCaptureRisk: input.isPersonalCaptureRisk,
-    hasPending: input.hasPendingSession,
-    llmStatus: input.llmStatus,
-    classifierBusy: input.classifierBusy,
-    ephemeralBusy: input.ephemeralBusy,
+    rdTier: seamInput.rdTier,
+    hasStructuredCaptures: seamInput.hasStructuredCaptures,
+    isPersonalCaptureRisk: seamInput.isPersonalCaptureRisk,
+    hasPending: seamInput.hasPendingSession,
+    llmStatus: seamInput.llmStatus,
+    classifierBusy: seamInput.classifierBusy,
+    ephemeralBusy: seamInput.ephemeralBusy,
   });
   let generateInvoked = false;
   let generateStatus: string | null = null;
   let generateReason: string | null = null;
   let generateTextNonempty: boolean | null = null;
   const outcome = await resolveEphemeralSeam({
-    ...input,
+    ...seamInput,
     generate: async () => {
       generateInvoked = true;
-      const result = await input.generate();
+      const result = await seamInput.generate();
       generateStatus = result.status;
       generateReason = result.status === 'ok' ? null : result.reason;
       generateTextNonempty = result.status === 'ok' ? result.text.trim().length > 0 : false;
@@ -312,26 +327,30 @@ async function resolveEphemeralSeamGateADiag(
   });
   console.warn('HERALD_GATE_A_DIAG ' + JSON.stringify({
     site,
-    text: input.text,
-    routeReason: input.reason,
+    text: seamInput.text,
+    routeReason: seamInput.reason,
     eligible,
     mayGenerate,
     canConverse,
-    llmStatus: input.llmStatus,
-    hasPendingSession: input.hasPendingSession,
-    hasContactCollectPending: input.hasContactCollectPending,
-    isPersonalCaptureRisk: input.isPersonalCaptureRisk,
-    hasStructuredCaptures: input.hasStructuredCaptures,
-    classifierBusy: input.classifierBusy,
-    ephemeralBusy: input.ephemeralBusy,
-    rdTier: input.rdTier,
-    hasAuthorizedContinuation: input.hasAuthorizedContinuation,
+    llmStatus: seamInput.llmStatus,
+    hasPendingSession: seamInput.hasPendingSession,
+    hasContactCollectPending: seamInput.hasContactCollectPending,
+    isPersonalCaptureRisk: seamInput.isPersonalCaptureRisk,
+    hasStructuredCaptures: seamInput.hasStructuredCaptures,
+    classifierBusy: seamInput.classifierBusy,
+    ephemeralBusy: seamInput.ephemeralBusy,
+    rdTier: seamInput.rdTier,
+    hasAuthorizedContinuation: seamInput.hasAuthorizedContinuation,
     generateInvoked,
     generateStatus,
     generateReason,
     generateTextNonempty,
     seamKind: outcome.kind,
     replyNonempty: outcome.reply.trim().length > 0,
+    generateSite,
+    discourseTopic,
+    discourseEvidenceCount,
+    worker: getGenerateWorker(),
   }));
   return outcome;
 }
@@ -1177,6 +1196,7 @@ export default function ChatScreen() {
     latLog('sendMessage entry', { turnId, inputSource: 'app' });
     setWeatherSurface(null);
 
+    let ephemeralGenerateWorkerId: string | null = null;
     const runEphemeralGenerate = (
       continuationRecoveryCandidates: readonly ContinuationRecoveryCandidate[] = [],
       generateSite: ConversationalGenerateSite = 'offline_fallback',
@@ -1186,6 +1206,7 @@ export default function ChatScreen() {
         createLlamaEphemeralWorker({ getCtx }),
         createExperimentalQwenLlamaWorker({ getCtx: getExperimentalCtx }),
       ]);
+      ephemeralGenerateWorkerId = worker?.id ?? null;
       const liveTopic = discourseRef.current.peekTopic();
       const discourseFields = discourseFieldsForGenerateSite(generateSite, {
         topic: liveTopic?.displayName ?? null,
@@ -1620,6 +1641,12 @@ export default function ChatScreen() {
           text,
           outcome.continuationRecoveryCandidates,
         );
+        const liveTopic = discourseRef.current.peekTopic();
+        const wcsRecovery = gateAWcsRecoveryFields(
+          'needs_clarification_default',
+          { topic: liveTopic?.displayName ?? null, evidence: liveTopic?.evidence ?? null },
+          null,
+        );
         const seamOutcome = await resolveEphemeralSeamGateADiag('needs_clarification', {
           text,
           reason: outcome.routeDecision.reason,
@@ -1633,6 +1660,10 @@ export default function ChatScreen() {
           llmStatus: conversationalSeamLlmStatus,
           classifierBusy: false,
           ephemeralBusy: false,
+          generateSite: wcsRecovery.generateSite,
+          discourseTopic: wcsRecovery.discourseTopic,
+          discourseEvidenceCount: wcsRecovery.discourseEvidenceCount,
+          getGenerateWorker: () => ephemeralGenerateWorkerId,
           generate: () => runEphemeralGenerate(adoptedRecovery, 'needs_clarification_default'),
           threadEvidence: hotContextForGeneration
             .map((e) => (e.assistantHotPolicy === 'include' ? `${e.user}\n${e.assistant}` : e.user))
@@ -2045,6 +2076,12 @@ export default function ChatScreen() {
           offlineReply = offlineReplies[Math.floor(Math.random() * offlineReplies.length)];
         } else {
           // EPHEMERAL CONVERSATION SEAM (Constitution §2) — shared resolveEphemeralSeam.
+          const liveTopic = discourseRef.current.peekTopic();
+          const wcsRecovery = gateAWcsRecoveryFields(
+            'offline_fallback',
+            { topic: liveTopic?.displayName ?? null, evidence: liveTopic?.evidence ?? null },
+            null,
+          );
           const seamOutcome = await resolveEphemeralSeamGateADiag('offline_fallback', {
             text,
             reason: 'default',
@@ -2059,6 +2096,10 @@ export default function ChatScreen() {
             classifierBusy: false,
             ephemeralBusy: false,
             skipAuthoritativeOwners: true,
+            generateSite: wcsRecovery.generateSite,
+            discourseTopic: wcsRecovery.discourseTopic,
+            discourseEvidenceCount: wcsRecovery.discourseEvidenceCount,
+            getGenerateWorker: () => ephemeralGenerateWorkerId,
             generate: runEphemeralGenerate,
             threadEvidence: hotContextForGeneration
               .map((e) => (e.assistantHotPolicy === 'include' ? `${e.user}\n${e.assistant}` : e.user))
