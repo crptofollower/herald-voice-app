@@ -22,6 +22,7 @@ import {
   DISCOURSE_TURN_TTL,
   DISCOURSE_WALL_MS,
   DiscourseContinuityHolder,
+  WorkingConversationState,
 } from '../../src/routing/discourseContinuity.ts';
 import {
   formatOperationalListClarification,
@@ -765,6 +766,157 @@ export async function runConversationFoundationSmoothMvpTests() {
       ephemeralSrc.includes('you mentioned')
       && ephemeralSrc.includes('you were saying')
       && /Never frame it as independently verified or stored truth/.test(ephemeralSrc)
+    ));
+  }
+
+  const WCS_CANDIDATE_ACQUISITION =
+    'You know, I think we need eggs and chocolate milk.';
+  {
+    const d = await classifyQuery(WCS_CANDIDATE_ACQUISITION);
+    assert('WCS B0: candidate-acquisition phrase is not immediate list_add', (
+      d.actionIntent == null
+      && !/list_add/.test(d.reason ?? '')
+    ));
+  }
+
+  {
+    const { db, discourse, say, subject } = fresh({
+      llmReady: true,
+      classifyLLM: async () => ({ status: 'ok', intents: [{ type: 'pass' }] }),
+    });
+    const wcsLogs: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: unknown[]) => {
+      const line = args.map(String).join(' ');
+      if (line.startsWith('[WCS]')) wcsLogs.push(line);
+      origLog(...args);
+    };
+    const snap = () => discourse.snapshot();
+    try {
+    await say('I talked with Paul yesterday. He\'s been really busy with work.');
+    const a1 = snap();
+    assert('WCS A1: Paul is active focus at turn 1', (
+      a1.focus?.displayName === 'Paul'
+      && a1.focus.establishedAtTurn === 1
+      && a1.turnIndex === 1
+      && !subject.hasLive()
+    ));
+
+    await say('He said he might have some time next week to talk about Herald.');
+    const a2 = snap();
+    assert('WCS A2: he/him continues Paul; Herald is not focus', (
+      a2.focus?.displayName === 'Paul'
+      && a2.focus.displayName !== 'Herald'
+      && a2.focus.evidenceCount === 2
+      && a2.focus.refreshedAtTurn === 2
+    ));
+
+    await say(WCS_CANDIDATE_ACQUISITION);
+    const b1 = snap();
+    const writesAfterB1 = (db.prepare('SELECT COUNT(*) as n FROM list_items').get() as { n: number }).n;
+    assert('WCS B1: grounded candidateSet holds eggs and chocolate milk with no write', (
+      b1.focus?.displayName === 'Paul'
+      && b1.candidateSet?.items.length === 2
+      && b1.candidateSet.items.map((i) => i.toLowerCase()).includes('eggs')
+      && b1.candidateSet.items.map((i) => i.toLowerCase()).includes('chocolate milk')
+      && b1.candidateSet.sourceTurn === 3
+      && writesAfterB1 === 0
+    ));
+
+    await say(WCS_CANDIDATE_ACQUISITION);
+    const b2 = snap();
+    const writesAfterB2 = (db.prepare('SELECT COUNT(*) as n FROM list_items').get() as { n: number }).n;
+    assert('WCS B2: candidateSet unchanged and refreshed; focus untouched; still no write', (
+      b2.focus?.displayName === 'Paul'
+      && b2.candidateSet?.items.length === 2
+      && b2.candidateSet.items.join('|').toLowerCase() === b1.candidateSet!.items.join('|').toLowerCase()
+      && b2.candidateSet.refreshedAtTurn === 4
+      && b2.candidateSet.sourceTurn === 3
+      && writesAfterB2 === 0
+    ));
+
+    await say('Who were we talking about?');
+    const a3 = snap();
+    const fmt = ground(discourse, 'Who were we talking about?');
+    assert('WCS A3: lookup touches Paul without a third evidence line or mutating candidateSet', (
+      a3.focus?.displayName === 'Paul'
+      && a3.focus.evidenceCount === 2
+      && fmt.includes('- person: Paul')
+      && a3.candidateSet?.items.length === 2
+      && a3.candidateSet.sourceTurn === 3
+    ));
+
+    const those = await say('Add those two.');
+    const b3 = snap();
+    const afterThose = (db.prepare(
+      `SELECT lower(li.body) as body FROM list_items li JOIN lists l ON l.id = li.list_id WHERE l.name = 'grocery'`,
+    ).all() as { body: string }[]).map((r) => r.body).sort();
+    assert('WCS B3: those-two commits candidateSet through DOMAIN_WRITERS and clears it', (
+      those.handled === true
+      && those.source === 'capture'
+      && afterThose.length === 2
+      && afterThose.includes('eggs')
+      && afterThose.includes('chocolate milk')
+      && b3.candidateSet === null
+      && b3.focus?.displayName === 'Paul'
+    ));
+
+    const read = await say("What's on my grocery list?");
+    const readText = !read.handled && read.routeDecision.kind === 'device_read'
+      ? read.routeDecision.response
+      : '';
+    assert('WCS B4: grocery read-back is exactly eggs and chocolate milk', (
+      !read.handled
+      && read.routeDecision.kind === 'device_read'
+      && /eggs/i.test(readText)
+      && /chocolate milk/i.test(readText)
+      && discourse.snapshot().focus?.displayName === 'Paul'
+      && discourse.snapshot().candidateSet === null
+    ));
+
+    assert('WCS C1: focus and candidateSet coexisted then commit did not replace Paul', (
+      wcsLogs.some((t) => /"displayName":"Paul"/.test(t) && /"eggs"/.test(t) && /chocolate milk/i.test(t))
+      && discourse.snapshot().focus?.displayName === 'Paul'
+      && discourse.snapshot().candidateSet === null
+    ));
+    } finally {
+      console.log = origLog;
+    }
+  }
+
+  {
+    const { discourse, say } = fresh({
+      llmReady: true,
+      classifyLLM: async () => ({ status: 'ok', intents: [{ type: 'pass' }] }),
+    });
+    await say(WCS_CANDIDATE_ACQUISITION);
+    assert('WCS C2 setup: candidateSet live', discourse.peekCandidateSet()?.items.length === 2);
+    for (let i = 0; i < DISCOURSE_TURN_TTL; i++) await say('okay then');
+    assert('WCS C2: candidateSet still live at turn TTL boundary', discourse.peekCandidateSet() != null);
+    await say('okay then');
+    assert('WCS C2: candidateSet expires after turn TTL', discourse.peekCandidateSet() === null);
+  }
+
+  {
+    let nowMs = 1_000_000;
+    const { discourse, say } = fresh({
+      now: () => nowMs,
+      llmReady: true,
+      classifyLLM: async () => ({ status: 'ok', intents: [{ type: 'pass' }] }),
+    });
+    await say(WCS_CANDIDATE_ACQUISITION);
+    nowMs += DISCOURSE_WALL_MS + 1;
+    await say('okay then');
+    assert('WCS C2: candidateSet expires after wall TTL', discourse.peekCandidateSet() === null);
+  }
+
+  {
+    const wcs = new WorkingConversationState();
+    assert('WCS C3: fresh instance has null focus and candidateSet', (
+      wcs.peekTopic() === null
+      && wcs.peekCandidateSet() === null
+      && wcs.snapshot().focus === null
+      && wcs.snapshot().candidateSet === null
     ));
   }
 

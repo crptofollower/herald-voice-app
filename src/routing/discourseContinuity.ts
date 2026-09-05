@@ -9,7 +9,7 @@ import {
   THIRD_PERSON_REFERENT_RE,
   TODO_ADD_SIGNALS,
 } from '../utils/instructionSignals';
-import { OPERATIONAL_ACQUISITION_SHAPE } from './operationalListContinuity';
+import { OPERATIONAL_ACQUISITION_SHAPE, extractNarrativeOperationalCandidates } from './operationalListContinuity';
 
 export const DISCOURSE_TURN_TTL = 4;
 export const DISCOURSE_WALL_MS = 10 * 60 * 1000;
@@ -34,6 +34,29 @@ export type DiscourseDomainSlot = {
   domain: 'grocery' | 'todo';
   establishedAtTurn: number;
   refreshedAtTurn: number;
+};
+
+export type CandidateSetSlot = {
+  domain: 'grocery' | 'todo' | null;
+  items: string[];
+  sourceTurn: number;
+  refreshedAtTurn: number;
+};
+
+export type WcsSnapshot = {
+  turnIndex: number;
+  focus: {
+    displayName: string;
+    establishedAtTurn: number;
+    refreshedAtTurn: number;
+    evidenceCount: number;
+  } | null;
+  candidateSet: {
+    domain: 'grocery' | 'todo' | null;
+    items: string[];
+    sourceTurn: number;
+    refreshedAtTurn: number;
+  } | null;
 };
 
 const CONTRACTION_SUFFIX_RE = /'(?:s|re|d|ll|ve|m|t)$/i;
@@ -108,12 +131,20 @@ function mentionsDisplayName(text: string, displayName: string): boolean {
 }
 
 function hasLiveTopicContinuation(text: string, displayName: string): boolean {
-  return THIRD_PERSON_REFERENT_RE.test(text) || mentionsDisplayName(text, displayName);
+  return THIRD_PERSON_REFERENT_RE.test(text)
+    || mentionsDisplayName(text, displayName)
+    || isTopicLookup(text);
 }
 
-export class DiscourseContinuityHolder {
+function sameItemLists(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((x, i) => x.toLowerCase() === (b[i] ?? '').toLowerCase());
+}
+
+export class WorkingConversationState {
   private topic: (DiscourseTopicSlot & { refreshedAtMs: number }) | null = null;
   private domain: (DiscourseDomainSlot & { refreshedAtMs: number }) | null = null;
+  private candidateSet: (CandidateSetSlot & { refreshedAtMs: number }) | null = null;
   private turn = 0;
 
   constructor(private readonly now: () => number = () => Date.now()) {}
@@ -130,6 +161,7 @@ export class DiscourseContinuityHolder {
   clear(): void {
     this.topic = null;
     this.domain = null;
+    this.candidateSet = null;
   }
 
   peekTopic(): DiscourseTopicSlot | null {
@@ -207,6 +239,66 @@ export class DiscourseContinuityHolder {
       refreshedAtTurn: this.turn,
       refreshedAtMs: at,
     };
+    this.candidateSet = null;
+  }
+
+  peekCandidateSet(): CandidateSetSlot | null {
+    this.expireStale();
+    if (!this.candidateSet) return null;
+    const { refreshedAtMs: _ms, ...slot } = this.candidateSet;
+    return { ...slot, items: [...slot.items] };
+  }
+
+  establishCandidateSet(
+    domain: 'grocery' | 'todo' | null,
+    items: readonly string[],
+    sourceTurn?: number,
+  ): void {
+    const bounded = items.map((i) => i.trim()).filter(Boolean).slice(0, 5);
+    if (bounded.length === 0) return;
+    const at = this.now();
+    const src = sourceTurn ?? this.turn;
+    this.candidateSet = {
+      domain,
+      items: bounded,
+      sourceTurn: src,
+      refreshedAtTurn: this.turn,
+      refreshedAtMs: at,
+    };
+  }
+
+  refreshCandidateSet(): void {
+    if (!this.peekCandidateSet() || !this.candidateSet) return;
+    this.candidateSet = {
+      ...this.candidateSet,
+      refreshedAtTurn: this.turn,
+      refreshedAtMs: this.now(),
+    };
+  }
+
+  clearCandidateSet(): void {
+    this.candidateSet = null;
+  }
+
+  snapshot(): WcsSnapshot {
+    this.expireStale();
+    const focus = this.topic
+      ? {
+          displayName: this.topic.displayName,
+          establishedAtTurn: this.topic.establishedAtTurn,
+          refreshedAtTurn: this.topic.refreshedAtTurn,
+          evidenceCount: this.topic.evidence.length,
+        }
+      : null;
+    const candidateSet = this.candidateSet
+      ? {
+          domain: this.candidateSet.domain,
+          items: [...this.candidateSet.items],
+          sourceTurn: this.candidateSet.sourceTurn,
+          refreshedAtTurn: this.candidateSet.refreshedAtTurn,
+        }
+      : null;
+    return { turnIndex: this.turn, focus, candidateSet };
   }
 
   noteNarrativeUtterance(text: string): void {
@@ -218,6 +310,12 @@ export class DiscourseContinuityHolder {
       }
       this.appendTopicEvidence(text);
       return;
+    }
+    const items = extractNarrativeOperationalCandidates(text);
+    if (items) {
+      const liveSet = this.peekCandidateSet();
+      if (liveSet && sameItemLists(liveSet.items, items)) this.refreshCandidateSet();
+      else this.establishCandidateSet(null, items);
     }
     const names = qualifyingNarrativePersonNames(text);
     if (names.length > 0) {
@@ -233,6 +331,9 @@ export class DiscourseContinuityHolder {
     if (this.domain && this.isExpired(this.domain.refreshedAtTurn, this.domain.refreshedAtMs, now)) {
       this.domain = null;
     }
+    if (this.candidateSet && this.isExpired(this.candidateSet.refreshedAtTurn, this.candidateSet.refreshedAtMs, now)) {
+      this.candidateSet = null;
+    }
   }
 
   private isExpired(refreshedAtTurn: number, refreshedAtMs: number, now: number): boolean {
@@ -240,3 +341,5 @@ export class DiscourseContinuityHolder {
       || (now - refreshedAtMs) > DISCOURSE_WALL_MS;
   }
 }
+
+export { WorkingConversationState as DiscourseContinuityHolder };

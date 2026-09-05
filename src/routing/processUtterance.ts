@@ -69,6 +69,8 @@ import { DiscourseContinuityHolder } from './discourseContinuity';
 import {
   extractAmbiguousAcquisitionObject,
   formatOperationalListClarification,
+  interpretCandidateSetDemonstrative,
+  isAddShapedOperationalDemonstrative,
   isOperationalListItemShape,
   parseOperationalDomainResolution,
   parseOperationalListContinuationAdd,
@@ -331,6 +333,9 @@ export async function processUtterance(
     return { handled: true, source: 'pending_resume', responseText: composeAck([result]), commits: [result] };
   }
   discourse?.noteNarrativeUtterance(text);
+  if (discourse) {
+    console.log('[WCS]', JSON.stringify(discourse.snapshot()));
+  }
   // 1a-cal) Calendar temporal continuation — one-turn follow-up after an
   //     authoritative calendar read. Fresh tier-1 read only; no answer replay.
   if (calendarContinuation?.canContinue()) {
@@ -709,6 +714,25 @@ export async function processUtterance(
       }
       return { handled: true, source: 'capture', responseText, commits };
     }
+    const liveSet = discourse.peekCandidateSet();
+    const demo = interpretCandidateSetDemonstrative(text, liveSet);
+    if (demo.kind === 'resolved' && isAddShapedOperationalDemonstrative(text)) {
+      const domain = liveDomain?.domain ?? liveSet?.domain ?? 'grocery';
+      const intent: IntentRecord = domain === 'todo'
+        ? { type: 'todo_add', body: demo.items.join(' and ') }
+        : { type: 'list_add', items: demo.items, listName: 'grocery' };
+      const { responseText, commits } = await applyIntents(
+        [intent],
+        text,
+        session,
+        { resolveContact: deps.resolveContact },
+        'deterministic',
+      );
+      if (commits.some((c) => c.status === 'committed')) {
+        discourse.establishDomain(domain === 'todo' ? 'todo' : 'grocery');
+      }
+      return { handled: true, source: 'capture', responseText, commits };
+    }
   }
   // 2) The single routing authority — called exactly once per utterance.
   const routeDecision = await routeIntent(text, deps);
@@ -777,7 +801,11 @@ export async function processUtterance(
     && routeDecision.reason === 'ambiguous_operational_list'
   ) {
     const object = extractAmbiguousAcquisitionObject(text) ?? routeDecision.guess ?? '';
-    const items = splitCapturedTailSegments(object).filter(isOperationalListItemShape);
+    const liveCandidates = discourse?.peekCandidateSet()?.items;
+    const items = liveCandidates && liveCandidates.length >= 2
+      ? [...liveCandidates]
+      : splitCapturedTailSegments(object).filter(isOperationalListItemShape);
+    if (liveCandidates && liveCandidates.length >= 2) discourse?.refreshCandidateSet();
     const prompt = formatOperationalListClarification(object);
     if (items.length >= 2) {
       const resume = async (userText: string): Promise<CommitResult> => {
