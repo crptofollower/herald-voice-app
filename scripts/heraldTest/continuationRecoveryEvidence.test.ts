@@ -329,7 +329,7 @@ export async function runContinuationRecoveryEvidenceTests() {
     /if \(outcome\.routeDecision\.kind === 'needs_clarification'\) \{[\s\S]*?speak\(reply\);/,
   )?.[0] ?? '';
   const defaultClarifySeam = clarifySeam.match(
-    /if \(outcome\.routeDecision\.reason === 'default'\) \{[\s\S]*?generate: \(\) => runEphemeralGenerate\(adoptedRecovery\),/,
+    /if \(outcome\.routeDecision\.reason === 'default'\) \{[\s\S]*?generate: \(\) => runEphemeralGenerate\(adoptedRecovery,\s*'needs_clarification_default'\),/,
   )?.[0] ?? '';
   const offlineSeam = chatSrc.match(
     /resolveEphemeralSeamGateADiag\('offline_fallback', \{[\s\S]*?generate: runEphemeralGenerate,/,
@@ -337,7 +337,7 @@ export async function runContinuationRecoveryEvidenceTests() {
   assert('ChatScreen default clarification adopts before generate', (
     defaultClarifySeam.includes('adoptContinuationRecoveryCandidates(')
     && /adoptContinuationRecoveryCandidates\(\s*text,\s*outcome\.continuationRecoveryCandidates,/.test(defaultClarifySeam)
-    && defaultClarifySeam.includes('generate: () => runEphemeralGenerate(adoptedRecovery)')
+    && defaultClarifySeam.includes("generate: () => runEphemeralGenerate(adoptedRecovery, 'needs_clarification_default')")
     && !defaultClarifySeam.includes('runEphemeralGenerate(outcome.continuationRecoveryCandidates)')
   ));
   assert('ChatScreen packet helper never receives raw outcome recovery candidates', (
@@ -351,7 +351,7 @@ export async function runContinuationRecoveryEvidenceTests() {
     && !beforeDefaultClarify.includes('adoptContinuationRecoveryCandidates')
     && !beforeDefaultClarify.includes('runEphemeralGenerate')
     && (clarifySeam.match(/runEphemeralGenerate\(/g) ?? []).length === 1
-    && clarifySeam.includes('runEphemeralGenerate(adoptedRecovery)')
+    && clarifySeam.includes("runEphemeralGenerate(adoptedRecovery, 'needs_clarification_default')")
   ));
   assert('offline fallback generate carries no recovery', (
     offlineSeam.includes("resolveEphemeralSeamGateADiag('offline_fallback'")

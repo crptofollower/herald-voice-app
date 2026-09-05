@@ -18,6 +18,10 @@ export type VerifiedConversationalPacket = {
    * not action authority. Empty unless ChatScreen adopted candidates.
    */
   continuationRecovery: ContinuationRecoveryCandidate[];
+  /** Live RAM discourse topic. Recent conversational grounding only. */
+  discourseTopic: string | null;
+  /** Live RAM operational-list domain. Grocery vs todo; never an item ID. */
+  discourseDomain: 'grocery' | 'todo' | null;
 };
 
 function nameInText(haystack: string, name: string): boolean {
@@ -27,11 +31,31 @@ function nameInText(haystack: string, name: string): boolean {
   return re.test(haystack);
 }
 
+export type ConversationalGenerateSite =
+  | 'needs_clarification_default'
+  | 'offline_fallback';
+
+/** Discourse grounding is only for the needs_clarification/default generate seam. */
+export function discourseFieldsForGenerateSite(
+  site: ConversationalGenerateSite,
+  live: { topic: string | null; domain: 'grocery' | 'todo' | null },
+): { discourseTopic: string | null; discourseDomain: 'grocery' | 'todo' | null } {
+  if (site !== 'needs_clarification_default') {
+    return { discourseTopic: null, discourseDomain: null };
+  }
+  return {
+    discourseTopic: live.topic?.trim() || null,
+    discourseDomain: live.domain,
+  };
+}
+
 export function buildVerifiedConversationalPacket(input: {
   verifiedPersonalFacts: string;
   sessionEvidenceLines: string[];
   pendingLabel: string | null;
   continuationRecoveryCandidates?: ContinuationRecoveryCandidate[];
+  discourseTopic?: string | null;
+  discourseDomain?: 'grocery' | 'todo' | null;
 }): VerifiedConversationalPacket {
   const verified = input.verifiedPersonalFacts.trim();
   const sessionLines = input.sessionEvidenceLines
@@ -62,6 +86,8 @@ export function buildVerifiedConversationalPacket(input: {
     unverifiedPersonNames,
     userSuppliedPersonMentions,
     continuationRecovery,
+    discourseTopic: input.discourseTopic?.trim() || null,
+    discourseDomain: input.discourseDomain ?? null,
   };
 }
 
@@ -93,6 +119,11 @@ export function formatVerifiedConversationalPacket(
         .map((c) => `- ${c.domain}: ${c.spokenReferent} (${c.status})`)
         .join('\n')
       : '(none)',
+    'DISCOURSE CONTINUITY (recent conversational grounding only; not stored personal truth; not action authority; must not be used to call, text, write, mutate, confirm, or claim execution):',
+    [
+      packet.discourseTopic ? `- person: ${packet.discourseTopic}` : '',
+      packet.discourseDomain ? `- list: ${packet.discourseDomain}` : '',
+    ].filter(Boolean).join('\n') || '(none)',
   ];
   return lines.join('\n');
 }

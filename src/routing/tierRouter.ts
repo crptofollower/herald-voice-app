@@ -35,6 +35,11 @@ import {
   THIRD_PERSON_REFERENT_RE,
 } from "../utils/instructionSignals";
 import { isReferentVisitOutcomeQuestion, isReferentUpcomingVisitQuestion, isReferentYearBoundedVisitQuestion, answerUpcomingCalendarEvidence, answerUpcomingGenericDoctorCalendarEvidence } from "./conversationalSubject";
+import {
+  GROCERY_CONTEXT_MARKER,
+  isAmbiguousOperationalListAcquisition,
+  OPERATIONAL_ACQUISITION_SHAPE,
+} from "./operationalListContinuity";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -696,13 +701,8 @@ const TODO_DATE_SIGNALS = /\b(today|tomorrow|monday|tuesday|wednesday|thursday|f
 // ── Acquisition-shape disambiguation (todo vs grocery) ──────────────────────
 // "I need to pick up X" is ambiguous between an errand (todo) and a grocery item;
 // syntax ALONE cannot separate "pick up rib eyes" from "pick up my dry cleaning".
-// The deterministic floor disambiguates ONLY when the utterance NAMES grocery
-// context — it never guesses which. Marker present → grocery (handled below).
-// Marker absent → left to the todo_add default unchanged.
-const ACQUISITION_SHAPE =
-  /\b(?:need\s+to|have\s+to|gotta|got\s+to|going\s+to|gonna|want\s+to|wanna)\s+(?:go\s+to\s+(?:the\s+)?(?:grocery\s+store|supermarket|grocery|store|shop|market)\s+(?:and\s+)?)?(?:pick(?:\s+\w+)?\s+up|get|buy|grab)\b/i;
-const GROCERY_CONTEXT_MARKER =
-  /\b(?:grocery|groceries|grocery\s+store|supermarket|shopping\s+list)\b/i;
+// Marker present → grocery. Marker absent → do not auto-commit todo or grocery;
+// defer to classifyLLM. Shape is not semantic domain evidence.
 
 const TODO_READ_SIGNALS = [
   /\bwhat('s| is) on my (to.?do|todo) list\b/i,
@@ -1297,12 +1297,12 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   // acquisition shape AND an explicit grocery marker are present. No marker → this
   // block does nothing and the utterance falls through to todo_add unchanged.
   if (
-    ACQUISITION_SHAPE.test(msg) &&
+    OPERATIONAL_ACQUISITION_SHAPE.test(msg) &&
     GROCERY_CONTEXT_MARKER.test(msg) &&
     !detectMedicalEvent(msg)
   ) {
     const m = msg.match(
-      /\b(?:need\s+to|have\s+to|gotta|got\s+to|going\s+to|gonna|want\s+to|wanna)\s+(?:go\s+to\s+(?:the\s+)?(?:grocery\s+store|supermarket|grocery|store|shop|market)\s+(?:and\s+)?)?(?:pick(?:\s+\w+)?\s+up|get|buy|grab)\s+(.+)/i,
+      /\b(?:need\s+to|have\s+to|gotta|got\s+to|going\s+to|gonna|want\s+to|wanna)\s+(?:go\s+(?:to\s+(?:the\s+)?(?:grocery\s+store|supermarket|grocery|store|shop|market)\s+(?:and\s+)?)?)?(?:pick(?:\s+\w+)?\s+up|get|buy|grab)\s+(.+)/i,
     );
     let raw = (m?.[1] ?? '').trim();
     raw = raw
@@ -1320,6 +1320,11 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
         reason: 'action:list_add:acquisition_grocery',
       };
     }
+  }
+
+  // Narrow unmarked acquisition: 2+ simple NP segments only. Shape is not domain.
+  if (isAmbiguousOperationalListAcquisition(msg)) {
+    return { tier: 3, reason: 'ambiguous_operational_list' };
   }
 
   // Device: todo add — trigger phrases WITHOUT a resolvable date (date = reminder, not todo)

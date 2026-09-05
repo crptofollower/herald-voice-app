@@ -65,6 +65,12 @@ import {
   answerCalendarTimeInquiry,
 } from './calendarPresentation';
 import { hasCalendarReadEvidence, readCalendarScope } from './tierRouter';
+import { DiscourseContinuityHolder } from './discourseContinuity';
+import {
+  extractAmbiguousAcquisitionObject,
+  formatOperationalListClarification,
+  parseOperationalListContinuationAdd,
+} from './operationalListContinuity';
 
 // D0 commit 2 (S54 addendum): the headless pipeline seam. UI (ChatScreen) calls
 // this and renders the result; P-tests call it directly. No React, no UI, no TTS.
@@ -214,6 +220,7 @@ export async function applyIntents(
   session: ConversationSession,
   ctx: { resolveContact?: ResolveContactFn } | undefined,
   source: 'deterministic' | 'llm',
+  llmGate?: { declineAck?: string },
 ): Promise<{ responseText: string; commits: CommitResult[] }> {
   const results: CommitResult[] = [];
   for (const intent of intents) {
@@ -228,7 +235,7 @@ export async function applyIntents(
         resume: async (userText: string): Promise<CommitResult> => {
           const trimmed = userText.trim();
           if (CONFIRM_NO_RE.test(trimmed)) {
-            return { status: 'noop', ack: "No problem — I won't remember that." };
+            return { status: 'noop', ack: llmGate?.declineAck ?? "No problem — I won't remember that." };
           }
           if (CONFIRM_YES_RE.test(trimmed)) {
             return writer.add(intent, rawText, ctx);
@@ -265,6 +272,7 @@ export async function processUtterance(
   orderedPresentation?: OrderedPresentationHolder | null,
   calendarPresentation?: CalendarPresentationHolder | null,
   calendarContinuation?: CalendarContinuationHolder | null,
+  discourse?: DiscourseContinuityHolder | null,
 ): Promise<UtteranceOutcome> {
   const turnId = getActiveTurnId();
   latLog('processUtterance START', { turnId });
@@ -273,6 +281,7 @@ export async function processUtterance(
   orderedPresentation?.beginUserTurn();
   calendarPresentation?.beginUserTurn();
   calendarContinuation?.beginUserTurn();
+  discourse?.beginUserTurn();
   const continuationRecoveryCandidates: ContinuationRecoveryCandidate[] = [];
   // 0) Law 0 — emergency preempts everything (Spine §3a). Checked before pending
   //    resolution, before routing, before any classifier. A held pending is
@@ -286,6 +295,7 @@ export async function processUtterance(
     orderedPresentation?.clear();
     calendarPresentation?.clear();
     calendarContinuation?.clear();
+    discourse?.clear();
     return { handled: true, source: 'emergency' };
   }
   // 1) Pending continuation — the confirm-primitive (Law 2: a pending state
@@ -317,6 +327,7 @@ export async function processUtterance(
     const result = await session.resolvePending(text);
     return { handled: true, source: 'pending_resume', responseText: composeAck([result]), commits: [result] };
   }
+  discourse?.noteNarrativeUtterance(text);
   // 1a-cal) Calendar temporal continuation — one-turn follow-up after an
   //     authoritative calendar read. Fresh tier-1 read only; no answer replay.
   if (calendarContinuation?.canContinue()) {
@@ -665,6 +676,28 @@ export async function processUtterance(
     }
     subject.clear();
   }
+  // 1c) Live operational-list continuation — structurally "add X too" against
+  //     the RAM domain slot only. No classifier. No item IDs.
+  if (discourse) {
+    const continuationItem = parseOperationalListContinuationAdd(text);
+    const liveDomain = discourse.peekDomain();
+    if (continuationItem && liveDomain) {
+      const intent: IntentRecord = liveDomain.domain === 'todo'
+        ? { type: 'todo_add', body: continuationItem }
+        : { type: 'list_add', items: [continuationItem], listName: 'grocery' };
+      const { responseText, commits } = await applyIntents(
+        [intent],
+        text,
+        session,
+        { resolveContact: deps.resolveContact },
+        'deterministic',
+      );
+      if (commits.some((c) => c.status === 'committed')) {
+        discourse.establishDomain(liveDomain.domain);
+      }
+      return { handled: true, source: 'capture', responseText, commits };
+    }
+  }
   // 2) The single routing authority — called exactly once per utterance.
   const routeDecision = await routeIntent(text, deps);
   // D-phone-repair, 2026-08-13: processUtterance is the sole boundary that
@@ -704,13 +737,27 @@ export async function processUtterance(
   }
   // 3) Converted-domain capture → commit loop.
   if (routeDecision.kind === 'capture' && allConverted(routeDecision.intents)) {
+    const declineAck = routeDecision.reason === 'llm:capture:ambiguous_operational_list'
+      ? formatOperationalListClarification(extractAmbiguousAcquisitionObject(text) ?? '')
+      : undefined;
     const { responseText, commits } = await applyIntents(
       routeDecision.intents,
       text,
       session,
       { resolveContact: deps.resolveContact },
       routeDecision.source,
+      declineAck ? { declineAck } : undefined,
     );
+    if (discourse && commits.some((c) => c.status === 'committed')) {
+      for (const intent of routeDecision.intents) {
+        if (intent.type === 'todo_add') discourse.establishDomain('todo');
+        if (intent.type === 'list_add') {
+          const listName = (intent.listName ?? 'grocery').toLowerCase();
+          if (listName === 'todo' || listName === 'todos') discourse.establishDomain('todo');
+          else if (listName === 'grocery') discourse.establishDomain('grocery');
+        }
+      }
+    }
     return { handled: true, source: 'capture', responseText, commits };
   }
   // Flow C establishment — single owner. Immediately after routeIntent,

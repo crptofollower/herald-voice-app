@@ -80,7 +80,11 @@ import {
 import { createLlamaEphemeralWorker } from '../conversation/llamaEphemeralWorker';
 import { createExperimentalQwenLlamaWorker } from '../conversation/experimentalQwenLlamaWorker';
 import { useExperimentalConversationalEngine } from '../conversation/useExperimentalConversationalEngine';
-import { buildVerifiedConversationalPacket } from '../conversation/verifiedConversationalPacket';
+import {
+  buildVerifiedConversationalPacket,
+  discourseFieldsForGenerateSite,
+  type ConversationalGenerateSite,
+} from '../conversation/verifiedConversationalPacket';
 import { adoptContinuationRecoveryCandidates } from '../conversation/continuationRecovery';
 import type { ContinuationRecoveryCandidate } from '../conversation/continuationRecovery';
 import { useListRemoveInterpretationShadowEngine } from '../dev/useListRemoveInterpretationShadowEngine';
@@ -117,6 +121,8 @@ import { ConversationalSubjectHolder } from '../routing/conversationalSubject';
 import { MedicationPresentationHolder } from '../routing/medicationPresentation';
 import { OrderedPresentationHolder } from '../routing/orderedPresentation';
 import { CalendarContinuationHolder } from '../routing/calendarContinuation';
+import { DiscourseContinuityHolder } from '../routing/discourseContinuity';
+import { formatOperationalListClarification } from '../routing/operationalListContinuity';
 import { CalendarPresentationHolder } from '../routing/calendarPresentation';
 import { processUtterance, applyIntents } from '../routing/processUtterance';
 import { alreadyClassifiedByRouteIntent, mayInvokeBackendStream } from '../utils/llmClassificationOwnership';
@@ -485,6 +491,7 @@ export default function ChatScreen() {
   const orderedPresentationRef = useRef<OrderedPresentationHolder>(new OrderedPresentationHolder());
   const calendarPresentationRef = useRef<CalendarPresentationHolder>(new CalendarPresentationHolder());
   const calendarContinuationRef = useRef<CalendarContinuationHolder>(new CalendarContinuationHolder());
+  const discourseRef = useRef<DiscourseContinuityHolder>(new DiscourseContinuityHolder());
 
   // Step 5a: bounded HOT narrative ring — RAM-only, peek semantics, written ONLY
   // from the three authorized Step 4 sites (ephemeral success ×2, chit_chat read).
@@ -1172,12 +1179,17 @@ export default function ChatScreen() {
 
     const runEphemeralGenerate = (
       continuationRecoveryCandidates: readonly ContinuationRecoveryCandidate[] = [],
+      generateSite: ConversationalGenerateSite = 'offline_fallback',
     ) => {
       const onPartial = beginEphemeralUiStream(turnId);
       const worker = selectConversationalWorker([
         createLlamaEphemeralWorker({ getCtx }),
         createExperimentalQwenLlamaWorker({ getCtx: getExperimentalCtx }),
       ]);
+      const discourseFields = discourseFieldsForGenerateSite(generateSite, {
+        topic: discourseRef.current.peekTopic()?.displayName ?? null,
+        domain: discourseRef.current.peekDomain()?.domain ?? null,
+      });
       const packet = buildVerifiedConversationalPacket({
         verifiedPersonalFacts: getContextBlock() || '',
         sessionEvidenceLines: [
@@ -1188,6 +1200,8 @@ export default function ChatScreen() {
           ? 'A confirmation is pending for a previously authorized action. It is not committed truth.'
           : null,
         continuationRecoveryCandidates: [...continuationRecoveryCandidates],
+        discourseTopic: discourseFields.discourseTopic,
+        discourseDomain: discourseFields.discourseDomain,
       });
       return generateViaSelectedWorker(worker, {
         userText: text,
@@ -1215,6 +1229,7 @@ export default function ChatScreen() {
       orderedPresentationRef.current.clear();
       calendarPresentationRef.current.clear();
       calendarContinuationRef.current.clear();
+      discourseRef.current.clear();
       hotRingRef.current.clear();
       await dispatchEmergency(text);
       setInputText('');
@@ -1533,7 +1548,7 @@ export default function ChatScreen() {
         lists: getKnownListNames(),
       },
       resolveContact: resolveContactPhoneRef.current ?? undefined,
-    }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current, calendarPresentationRef.current, calendarContinuationRef.current);
+    }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current, calendarPresentationRef.current, calendarContinuationRef.current, discourseRef.current);
     if (shadowSnapshot) {
       const rd = outcome.handled ? undefined : outcome.routeDecision;
       const action = rd && rd.kind === 'device_action' ? rd.actionIntent : undefined;
@@ -1595,7 +1610,9 @@ export default function ChatScreen() {
     if (outcome.routeDecision.kind === 'needs_clarification') {
       const canned = EPHEMERAL_CLARIFY_REPLY;
       let reply = canned;
-      if (outcome.routeDecision.reason === 'default') {
+      if (outcome.routeDecision.reason === 'ambiguous_operational_list') {
+        reply = formatOperationalListClarification(outcome.routeDecision.guess ?? '');
+      } else if (outcome.routeDecision.reason === 'default') {
         const adoptedRecovery = adoptContinuationRecoveryCandidates(
           text,
           outcome.continuationRecoveryCandidates,
@@ -1613,7 +1630,7 @@ export default function ChatScreen() {
           llmStatus: conversationalSeamLlmStatus,
           classifierBusy: false,
           ephemeralBusy: false,
-          generate: () => runEphemeralGenerate(adoptedRecovery),
+          generate: () => runEphemeralGenerate(adoptedRecovery, 'needs_clarification_default'),
           threadEvidence: hotContextForGeneration
             .map((e) => (e.assistantHotPolicy === 'include' ? `${e.user}\n${e.assistant}` : e.user))
             .join('\n'),

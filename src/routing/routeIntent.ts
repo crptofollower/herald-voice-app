@@ -26,6 +26,9 @@ import { isPersonalMemoryRecallQuestion } from './personalMemoryRecall';
 import { isHeraldSelfReferentConversationalShape } from '../utils/ephemeralSelfReferent';
 import { shouldRefuseLlmCaptureProposal } from './speechActAuthority';
 import type { ReadIntentMeta } from './readIntent';
+import {
+  extractAmbiguousAcquisitionObject,
+} from './operationalListContinuity';
 
 type ActionIntent = NonNullable<TierDecision['actionIntent']>;
 
@@ -2244,9 +2247,23 @@ export async function routeIntent(
     // Railway because of a concurrency state, not because the utterance needed the
     // network. not_ready is a distinct route: honest tail, no network.
     if (out.status === 'not_ready') {
+      if (decision.reason === 'ambiguous_operational_list') {
+        return {
+          kind: 'needs_clarification',
+          reason: 'ambiguous_operational_list',
+          guess: extractAmbiguousAcquisitionObject(text) ?? undefined,
+        };
+      }
       return { kind: 'not_ready', reason: `llm:not_ready:${out.reason}` };
     }
     if (out.status === 'failed') {
+      if (decision.reason === 'ambiguous_operational_list') {
+        return {
+          kind: 'needs_clarification',
+          reason: 'ambiguous_operational_list',
+          guess: extractAmbiguousAcquisitionObject(text) ?? undefined,
+        };
+      }
       // Warmup uses failed; real classify degrades to ok/[]. Defensive.
       return { kind: 'needs_clarification', reason: 'llm:failed' };
     }
@@ -2265,7 +2282,14 @@ export async function routeIntent(
     ).filter(i => i.type !== 'pass');
     // CONV-C1: narration must not acquire capture authority from structural validity alone.
     if (llmResult.length > 0 && !shouldRefuseLlmCaptureProposal(text, llmResult)) {
-      return { kind: 'capture', intents: llmResult, source: 'llm', reason: 'llm:capture' };
+      return {
+        kind: 'capture',
+        intents: llmResult,
+        source: 'llm',
+        reason: decision.reason === 'ambiguous_operational_list'
+          ? 'llm:capture:ambiguous_operational_list'
+          : 'llm:capture',
+      };
     }
   }
 
@@ -2275,10 +2299,17 @@ export async function routeIntent(
   // Deferred-ready window: local LLM is loading/warming. Do not misattribute
   // as needs_clarification ("I'm not sure I'm following you"). live:data above
   // still reaches the network without the on-device classifier.
-  if (!deps.llmReady && deps.llmStatus === 'loading') {
+  if (!deps.llmReady && deps.llmStatus === 'loading' && decision.reason !== 'ambiguous_operational_list') {
     return { kind: 'not_ready', reason: 'llm:not_ready:loading' };
   }
-  return { kind: 'needs_clarification', reason: decision.reason, readMeta };
+  return {
+    kind: 'needs_clarification',
+    reason: decision.reason,
+    guess: decision.reason === 'ambiguous_operational_list'
+      ? extractAmbiguousAcquisitionObject(text) ?? undefined
+      : undefined,
+    readMeta,
+  };
   } finally {
     latLog('routeIntent END', {
       turnId,
