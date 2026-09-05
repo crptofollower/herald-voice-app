@@ -68,6 +68,17 @@ export async function runSpeechActAuthorityTests() {
   check('C1-D3d forgot to call Josh + todo_add → not D3 (deferred; D4 out of scope)',
     !isD3CompletedPastActionRefusal('I forgot to call Josh.', [{ type: 'todo_add', body: 'call Josh' }]));
 
+  check('C1-D5a third-party needs-to proposal is refused',
+    shouldRefuseLlmCaptureProposal('My son needs to avoid dairy this week.', [{ type: 'todo_add', body: 'avoid dairy' }]));
+  check('C1-D5b attitude-hedged third-party needs-help proposal is refused',
+    shouldRefuseLlmCaptureProposal('I think Paul needs help with his move.', [{ type: 'todo_add', body: 'help with move' }]));
+  check('C1-D5c life-story he-wants proposal is refused',
+    shouldRefuseLlmCaptureProposal('We had a nice walk and he wants ice cream.', [{ type: 'todo_add', body: 'get ice cream' }]));
+  check('C1-D5d genuine first-person I need to remains admitted',
+    !shouldRefuseLlmCaptureProposal('I need to call the pharmacy.', [{ type: 'todo_add', body: 'call the pharmacy' }]));
+  check('C1-D5e explicit add-to-list still admitted',
+    !shouldRefuseLlmCaptureProposal('Add milk to my grocery list.', [{ type: 'list_add', items: ['milk'], listName: 'grocery' }]));
+
   const total = passed + failures.length;
   if (failures.length) {
     console.log(`\x1b[31m❌ speechActAuthority: ${failures.length} failed\x1b[0m`);

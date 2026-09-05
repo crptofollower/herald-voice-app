@@ -108,6 +108,13 @@ export async function runEmergencySignalsGateTests() {
   assert('K1-23 Can you help me call an ambulance? remains emergency', 'Can you help me call an ambulance?', true);
   assert('K1-24 Can you help me call 911? remains emergency', 'Can you help me call 911?', true);
 
+  // Shared direct-address gate on EMERGENCY_SIGNALS[0] (2026-09-05)
+  assert('N1: third-party needs help is not emergency', 'I think Paul needs help with his move', false);
+  assert('N2: first-person non-distress need-help remainder is not emergency', 'I need help remembering what he said', false);
+  assert('N3: reported speech I might need help is not emergency', 'he said I might need help', false);
+  assert('N4: genuine direct I need help still preempts', 'I need help', true);
+  assert('N5: compound genuine distress still preempts', 'My son was supposed to help me, but I fell and now I need help.', true);
+
   const total = passed + failures.length;
   console.log(
     `\n${BOLD}EmergencySignalsGate: ${passed}/${total} passed` +

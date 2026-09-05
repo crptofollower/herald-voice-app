@@ -7,6 +7,7 @@
 import type { IntentRecord } from '../hooks/llmLayers';
 import { FAMILY_SYNONYMS } from '../utils/familyRead';
 import { utteranceRequiresBoundedPastEventAck } from '../utils/predicateExtensionContainment';
+import { isDirectAddressToHerald, utteranceHasThirdPartyFiniteAction } from './directAddress';
 import {
   IMPERATIVE_ACTION_RE,
   REMINDER_SIGNALS,
@@ -157,9 +158,19 @@ export function isD4BoundedPersonalEventRefusal(
   return utteranceRequiresBoundedPastEventAck(utterance);
 }
 
+/** D5 — action/task proposal sourced from third-party/narrative speech. */
+export function isD5NarrativeActionRefusal(
+  utterance: string,
+  intents: IntentRecord[],
+): boolean {
+  if (!intents.some((i) => ACTION_TASK_TYPES.has(i.type))) return false;
+  if (!utteranceHasThirdPartyFiniteAction(utterance)) return false;
+  return !isDirectAddressToHerald(utterance);
+}
+
 /**
  * True when LLM proposals must be refused (same effect as pass-filter empty).
- * Evaluation order: explicit instruction → D1 → D3 → D4 → otherwise survive.
+ * Evaluation order: explicit instruction → D1 → D3 → D4 → D5 → otherwise survive.
  */
 export function shouldRefuseLlmCaptureProposal(
   utterance: string,
@@ -170,5 +181,6 @@ export function shouldRefuseLlmCaptureProposal(
   if (isD1InteractionReportRefusal(utterance, intents)) return true;
   if (isD3CompletedPastActionRefusal(utterance, intents)) return true;
   if (isD4BoundedPersonalEventRefusal(utterance, intents)) return true;
+  if (isD5NarrativeActionRefusal(utterance, intents)) return true;
   return false;
 }
