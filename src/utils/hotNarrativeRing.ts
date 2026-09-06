@@ -10,7 +10,12 @@ export const HOT_RING_MAX_INCLUDED_CHARS = 2400;
 export type HotAssistantPolicy = 'include' | 'omit';
 
 export type HotRingEntry = {
-  /** Monotonic per sendMessage turn — proves adjacency; gaps break contiguity. */
+  /**
+   * Monotonic per sendMessage turn. Used for ordering and for
+   * hasImmediatelyAdjacentHotAuthorization's own strict single-step check.
+   * A gap here (from a legitimate non-HOT-producing turn) does NOT invalidate
+   * earlier bounded-recent entries at peek — see selectBoundedRecentHotSuffix.
+   */
   turnIndex: number;
   user: string;
   assistant: string;
@@ -45,22 +50,33 @@ export function hasImmediatelyAdjacentHotAuthorization(
   return peekedEntries.some((e) => e.turnIndex === currentTurnIndex - 1);
 }
 
-/** Contiguous suffix from the highest turnIndex — stops at first missing turnIndex. */
-export function selectContiguousHotSuffix(entries: HotRingEntry[]): HotRingEntry[] {
-  if (entries.length === 0) return [];
-  const sorted = [...entries].sort((a, b) => a.turnIndex - b.turnIndex);
-  const suffix: HotRingEntry[] = [];
-  let expected = sorted[sorted.length - 1]!.turnIndex;
-  for (let i = sorted.length - 1; i >= 0; i--) {
-    const e = sorted[i]!;
-    if (e.turnIndex === expected) {
-      suffix.unshift(e);
-      expected--;
-    } else if (e.turnIndex < expected) {
-      break;
-    }
-  }
-  return suffix;
+/**
+ * Bounded-recent HOT suffix. Invariant: eligible HOT history is bounded by the
+ * ring's own TTL (HOT_RING_TTL_MS) and count cap (HOT_RING_MAX_PAIRS) — both
+ * already enforced upstream by evictStorage before this runs — NOT by whether
+ * every intervening global conversation turn happened to also write a HOT
+ * entry.
+ *
+ * A prior version required stored entries to be perfectly sequential by
+ * turnIndex, stopping at the first missing index. That conflated two
+ * different things: global turn adjacency (every turn in the whole
+ * conversation, including ones that intentionally never write HOT — clarify,
+ * capability/action turns) versus valid bounded HOT conversational-history
+ * continuity (are these entries recent and few enough to still represent
+ * "the recent conversation"). Since ordinary turns routinely do not push a
+ * HOT entry by design, that rule silently discarded still-fresh, still
+ * in-bounds history the instant one such turn occurred — proven in
+ * HERALD_HOT_LIFECYCLE_REACHABILITY_DIAGNOSTIC_2026-09-05.md.
+ *
+ * Entries arrive here already TTL/count-bounded and turnIndex-ascending from
+ * evictStorage, so returning them unchanged is already correct and bounded —
+ * no additional index-adjacency requirement is needed or applied. This does
+ * not make HOT unbounded or authoritative: it remains bounded by TTL and
+ * count exactly as before, and admission (what gets pushed at all) is
+ * completely untouched by this function.
+ */
+export function selectBoundedRecentHotSuffix(entries: HotRingEntry[]): HotRingEntry[] {
+  return [...entries];
 }
 
 function applyCharBound(entries: HotRingEntry[]): HotRingEntry[] {
@@ -76,7 +92,10 @@ function applyCharBound(entries: HotRingEntry[]): HotRingEntry[] {
 
 export type HotNarrativeRing = {
   push: (entry: HotRingEntry) => void;
-  /** Peek — does not clear. Applies TTL, contiguity, count, and char bounds. */
+  /**
+   * Peek — does not clear. Applies TTL, count, and char bounds. Does NOT
+   * require global-turn-index adjacency — see selectBoundedRecentHotSuffix.
+   */
   peek: (nowMs: number) => HotRingEntry[];
   clear: () => void;
   /** Test-only visibility into raw buffer after TTL/count storage eviction. */
@@ -101,8 +120,7 @@ export function createHotNarrativeRing(): HotNarrativeRing {
     },
     peek(nowMs: number) {
       evictStorage(nowMs);
-      const contiguous = selectContiguousHotSuffix(entries);
-      const bounded = contiguous.slice(-HOT_RING_MAX_PAIRS);
+      const bounded = selectBoundedRecentHotSuffix(entries).slice(-HOT_RING_MAX_PAIRS);
       return applyCharBound(bounded);
     },
     clear() {

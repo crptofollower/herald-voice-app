@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   createHotNarrativeRing,
-  selectContiguousHotSuffix,
+  selectBoundedRecentHotSuffix,
   hotAssistantPolicyForDeviceRead,
   hasImmediatelyAdjacentHotAuthorization,
   HOT_RING_TTL_MS,
@@ -119,22 +119,148 @@ export async function runHotNarrativeRingTests() {
   // ── Boundary D: RAM-only — no import of storage modules ───────────────────
   assertTrue('D: ring module has no durable storage API', !('AsyncStorage' in globalThis));
 
-  // ── Contiguity: never bridge across missing turnIndex ─────────────────────
+  // ── Bounded-recent selection: a non-HOT-producing turn's index gap must ────
+  // NOT invalidate otherwise-eligible recent HOT history (HOT Peek Contiguity
+  // Repair, 2026-09-05 — HERALD_HOT_LIFECYCLE_REACHABILITY_DIAGNOSTIC).
   {
     const ring = createHotNarrativeRing();
     const t0 = Date.now();
     ring.push(entry(1, 'a', 'A', { establishedAt: t0 }));
+    // turn 2: legitimate non-HOT-producing turn (clarify / capability) — no push
     ring.push(entry(3, 'c', 'C', { establishedAt: t0 }));
-    assert('contiguity: gap at 2 drops turn 1', ring.peek(t0).map((e) => e.turnIndex), [3]);
+    assert(
+      'GENERATIVE->NON-HOT->GENERATIVE: gap at 2 does not drop turn 1',
+      ring.peek(t0).map((e) => e.turnIndex),
+      [1, 3],
+    );
   }
 
   {
-    const suffix = selectContiguousHotSuffix([
+    const suffix = selectBoundedRecentHotSuffix([
       entry(1, 'u1', 'a1'),
       entry(2, 'u2', 'a2'),
       entry(3, 'u3', 'a3'),
     ]);
-    assert('contiguity: consecutive 1-2-3 suffix', suffix.map((e) => e.turnIndex), [1, 2, 3]);
+    assert('bounded-recent: consecutive 1-2-3 suffix unchanged', suffix.map((e) => e.turnIndex), [1, 2, 3]);
+  }
+
+  {
+    const suffix = selectBoundedRecentHotSuffix([
+      entry(1, 'u1', 'a1'),
+      entry(3, 'u3', 'a3'),
+    ]);
+    assert(
+      'bounded-recent: index gap alone does not drop earlier entry',
+      suffix.map((e) => e.turnIndex),
+      [1, 3],
+    );
+  }
+
+  // ── Multiple mixed turns: several legitimate non-HOT turns interleaved with
+  // generative turns all remain eligible up to the existing count cap ────────
+  {
+    const ring = createHotNarrativeRing();
+    const t0 = Date.now();
+    ring.push(entry(1, 'work', 'ack-work', { establishedAt: t0 }));
+    // turn 2: non-HOT (e.g. capability/read) — no push
+    ring.push(entry(3, 'wife', 'ack-wife', { establishedAt: t0 }));
+    // turn 4: non-HOT — no push
+    ring.push(entry(5, 'son', 'ack-son', { establishedAt: t0 }));
+    assert(
+      'mixed turns: three generative turns across two gaps all peek eligible (within cap)',
+      ring.peek(t0).map((e) => e.turnIndex),
+      [1, 3, 5],
+    );
+  }
+
+  // ── TTL still independently bounds gapped history — repair must not make
+  // history unbounded ─────────────────────────────────────────────────────
+  {
+    const ring = createHotNarrativeRing();
+    const now = Date.now();
+    ring.push(entry(1, 'old', 'stale', { establishedAt: now - HOT_RING_TTL_MS - 1 }));
+    // turn 2: non-HOT — no push
+    ring.push(entry(3, 'fresh', 'ok', { establishedAt: now }));
+    assert(
+      'TTL+gap: expired entry stays unavailable even though only a gap separates it',
+      ring.peek(now).map((e) => e.turnIndex),
+      [3],
+    );
+  }
+
+  // ── Capacity still independently bounds gapped history ─────────────────────
+  {
+    const ring = createHotNarrativeRing();
+    const t0 = Date.now();
+    ring.push(entry(1, 'u1', 'a1', { establishedAt: t0 }));
+    // turn 2: non-HOT
+    ring.push(entry(3, 'u3', 'a3', { establishedAt: t0 }));
+    // turn 4: non-HOT
+    ring.push(entry(5, 'u5', 'a5', { establishedAt: t0 }));
+    // turn 6: non-HOT
+    ring.push(entry(7, 'u7', 'a7', { establishedAt: t0 }));
+    assert(
+      'capacity+gaps: still capped at 3 most-recent pairs',
+      ring.peek(t0).map((e) => e.turnIndex),
+      [3, 5, 7],
+    );
+  }
+
+  // ── Clarify anti-laundering: a legitimate non-HOT turn's content is never
+  // itself present in the ring; only the real turns around it survive ───────
+  {
+    const ring = createHotNarrativeRing();
+    const t0 = Date.now();
+    ring.push(entry(1, 'I had a bad day at work.', 'That sounds tough.', { establishedAt: t0 }));
+    // turn 2 is a clarify exchange — by construction (existing, unchanged push
+    // gating in ChatScreen.tsx) it is never pushed here at all.
+    ring.push(entry(3, 'Anyway, back to work.', "Let's talk more about it.", { establishedAt: t0 }));
+    const raw = ring._rawEntries();
+    assertTrue(
+      'clarify anti-laundering: only the two real turns are stored, never a clarify turn',
+      raw.length === 2 && raw.every((e) => e.turnIndex === 1 || e.turnIndex === 3),
+    );
+    assert(
+      'clarify anti-laundering: peek still recovers both real turns around the gap',
+      ring.peek(t0).map((e) => e.turnIndex),
+      [1, 3],
+    );
+  }
+
+  // ── Action/capability authority: an intervening capability turn gains no
+  // HOT evidence or adjacency authorization from this repair ────────────────
+  {
+    const ring = createHotNarrativeRing();
+    const turnIndexRef = { current: 0 };
+    const t0 = Date.now();
+    turnIndexRef.current += 1;
+    ring.push(entry(turnIndexRef.current, 'I need eggs and milk.', 'Got it noted.', { establishedAt: t0 }));
+    turnIndexRef.current += 1; // capability/action turn — deterministic write, no HOT push
+    turnIndexRef.current += 1;
+    ring.push(entry(turnIndexRef.current, 'Anyway, back to the list.', 'Sure — go ahead.', { establishedAt: t0 }));
+    const peeked = ring.peek(t0);
+    assertTrue(
+      'action turn: skipped index still correctly denies strict single-step adjacency (separate from bounded-recent peek)',
+      !hasImmediatelyAdjacentHotAuthorization(peeked, turnIndexRef.current),
+    );
+    assert('action turn: only the two real generative turns are eligible', peeked.map((e) => e.turnIndex), [1, 3]);
+  }
+
+  // ── Representative regression: the exact proven failure shape ──────────────
+  // narrative -> legitimate non-HOT turn -> later generative topic return
+  {
+    const ring = createHotNarrativeRing();
+    const t0 = Date.now();
+    ring.push(entry(1, 'I had a bad day at work and then my wife and I got into an argument.', 'That sounds like a hard evening.', { establishedAt: t0 }));
+    ring.push(entry(2, "She's doing well, we talked it through.", 'Glad to hear that.', { establishedAt: t0 }));
+    // turn 3: car trouble — legitimate capability/read turn, no HOT push
+    ring.push(entry(4, 'Anyway, back to what I was saying about my wife.', "You were saying she's doing well after you talked it through.", { establishedAt: t0 }));
+    const peeked = ring.peek(t0);
+    assertTrue(
+      'representative regression: wife-relevant history survives the intervening non-HOT turn',
+      peeked.some((e) => e.turnIndex === 1) && peeked.some((e) => e.turnIndex === 2) && peeked.some((e) => e.turnIndex === 4),
+    );
+    assert('representative regression: exact eligible turn set', peeked.map((e) => e.turnIndex), [1, 2, 4]);
   }
 
   // ── Char bound ────────────────────────────────────────────────────────────
@@ -242,8 +368,8 @@ export async function runHotNarrativeRingTests() {
       !isEligibleForEphemeralConversation('Tell me more.', false),
     );
     assertTrue(
-      'Family B: contiguity breaks at missing turn 2 — latest suffix only',
-      ring.peek(t0).map((e) => e.turnIndex).length === 1 && ring.peek(t0)[0]!.turnIndex === 3,
+      'Family B: gap at missing turn 2 no longer drops turn 1 — both eligible',
+      ring.peek(t0).map((e) => e.turnIndex).length === 2 && ring.peek(t0)[0]!.turnIndex === 1 && ring.peek(t0)[1]!.turnIndex === 3,
     );
   }
 
