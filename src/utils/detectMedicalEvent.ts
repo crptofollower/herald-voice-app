@@ -81,7 +81,7 @@ function afterLeadingReadVocative(text: string): string {
 const READ_REQUEST_WRAPPER_RE =
   /^(?:no,?\s+)?(?:(?:can|could|would)\s+you\s+tell\s+me|do\s+you\s+know|i\s+was\s+asking(?:\s+you)?(?:\s+if\s+you\s+(?:can|could|would)\s+tell\s+me)?|i\s+wanted\s+to\s+know|i\s+was\s+wondering)\b[,:]?\s*/i;
 
-function afterLeadingReadRequestWrapper(text: string): string {
+export function afterLeadingReadRequestWrapper(text: string): string {
   const s = text.trim();
   const m = s.match(READ_REQUEST_WRAPPER_RE);
   if (!m) return s;

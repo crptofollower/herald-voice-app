@@ -11,7 +11,7 @@ import { normalizeInput } from "../utils/normalizeInput";
 import { getProfileSummary, getProfileField } from "../db/profileDB";
 import { getMedicalSummary, composeMedicalSummary, getMedicalRecords, getDiagnosisSummary, getDoctorsSummary } from "../db/medicalDB";
 import { getRecentMentions, formatRecentMentions } from "../db/recallDB";
-import { detectMedicalEvent, extractDoctorName } from "../utils/detectMedicalEvent";
+import { detectMedicalEvent, extractDoctorName, afterLeadingReadRequestWrapper } from "../utils/detectMedicalEvent";
 import { answerNamedMedicationInquiry } from "../utils/medicationInquiry";
 import type { MedicalEvent } from "../utils/detectMedicalEvent";
 import { MONTHS, CALENDAR_WRITE_TRIGGER, CALENDAR_WRITE_NAMED_APPOINTMENT, parseDatePhrase } from "../utils/parseTime";
@@ -416,14 +416,35 @@ const DOCTOR_SUMMARY_READ: RegExp[] = [
 
 const VISIT_HISTORY_READ = [
   /\bwhen did i (?:last )?see\b/i,
+  // 2026-09-06 (last-doctor authoritative-reader coverage repair): past-tense
+  // "when I last saw" without "did" — a common direct-statement question
+  // form distinct from the "when did I (last) see" form above.
+  /\bwhen i last saw\b/i,
   /\b(?:when|what) was the last time i (?:saw|see)\b/i,
-  /\bwhen was my (?:last )?(?:appointment|visit)\b/i,
+  // "doctor'?s? " tolerates an inserted noun between "last" and the object
+  // ("what was my last DOCTOR visit") without loosening the rest of the
+  // phrase; "what" added alongside "when" for the same reason.
+  /\b(?:when|what) was my (?:last )?(?:doctor'?s? )?(?:appointment|visit)\b/i,
   /\bwhat was (?:it|that) for\b/i,
+  // "most recent ... visit/appointment" is specific, unambiguous vocabulary
+  // that never collides with enumeration ("who have I seen") or statement
+  // ("I saw Dr. Smith last week") phrasing, so it needs no wh-word anchor.
+  /\bmost recent (?:doctor )?(?:appointment|visit)\b/i,
+  // "did I see last/most recently" — the recency-qualified sibling of
+  // visit_read's own bare "did I see" patterns; requires the trailing
+  // qualifier, so it does not also fire for genuine enumeration questions
+  // ("who did I see?", with no "last"/"most recently").
+  /\b(?:who|what doctor) did i see (?:last|most recently)\b/i,
   // 2026-08-20 (Continuity audit v2 §3.1): subject-complement "who was the
   // last doctor" forms. Answered here rather than by visit_read because
   // getVisitSummary enumerates every doctor ever seen, which does not answer
   // "the last one." getLastVisit names the doctor AND the date.
   /\bwho was (?:the|my) last (?:doctor|physician)\b/i,
+  // 2026-09-06: embedded-question / wh-cleft sibling of the pattern above —
+  // "who/what [the/my] last doctor WAS" (copula last), the word order
+  // natural embedded requests ("Can you tell me...", "I was asking...")
+  // commonly produce, not just "who WAS [the/my] last doctor" (copula first).
+  /\b(?:who|what) (?:the|my) last (?:doctor|physician) was\b/i,
 ];
 
 // Upcoming medical appointment recall — explicit medical/doctor FUTURE
@@ -1870,14 +1891,20 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     };
   }
 
-  // Tier 1: visit read — MUST precede calendar-week so "who did I see this week"
-  // resolves to visits, not an incidental "this week" calendar match (§4a one-reader).
-  if (TIER1_SIGNALS.visit_read.some((p) => p.test(msg))) {
-    const response = getVisitSummary();
-    return { tier: 1, tier1Response: response, isMedical: true, reason: "medical:visit_read" };
-  }
-
-  if (VISIT_HISTORY_READ.some((p) => p.test(msg))) {
+  // Tier 1: visit history (most-recent single visit) — checked BEFORE the
+  // sibling enumeration reader below (2026-09-06 last-doctor authoritative-
+  // reader coverage repair) so recency-qualified phrasing ("what doctor did
+  // I see LAST", "who did I see MOST RECENTLY") resolves to the single
+  // most-recent visit rather than being shadowed by visit_read's own broader
+  // bare "did I see" patterns. Reuses the same bounded read-request-wrapper
+  // stripper isReadShapedUtterance already uses (detectMedicalEvent.ts), so a
+  // wrapped question ("Can you tell me...", "Do you know...", "I was
+  // asking...") reaches these patterns without a second, divergent wrapper
+  // vocabulary. Wrapper stripping only ever removes a closed, domain-general
+  // leading phrase — it cannot itself manufacture a match; the remainder must
+  // still independently satisfy one of the patterns below.
+  const msgForVisitReaders = afterLeadingReadRequestWrapper(msg);
+  if (VISIT_HISTORY_READ.some((p) => p.test(msg) || p.test(msgForVisitReaders))) {
     const { getLastVisit } = await import('../db/medicalDB');
     const { formatSpokenDate } = await import('../utils/parseTime');
     const { extractDoctorName } = await import('../utils/detectMedicalEvent');
@@ -1929,6 +1956,16 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
       response = `You last saw ${who} on ${spoken}${reasonPart}.`;
     }
     return { tier: 1, tier1Response: response, isMedical: true, reason: "medical:visit_history_read" };
+  }
+
+  // Tier 1: visit read (enumeration) — MUST precede calendar-week so "who did
+  // I see this week" resolves to visits, not an incidental "this week"
+  // calendar match (§4a one-reader). Runs after VISIT_HISTORY_READ above so
+  // recency-qualified phrasing is never shadowed by this reader's broader
+  // bare "did I see" patterns.
+  if (TIER1_SIGNALS.visit_read.some((p) => p.test(msg) || p.test(msgForVisitReaders))) {
+    const response = getVisitSummary();
+    return { tier: 1, tier1Response: response, isMedical: true, reason: "medical:visit_read" };
   }
 
   // Tier 1: calendar this week — read evidence + this-week scope, or travel probe.
