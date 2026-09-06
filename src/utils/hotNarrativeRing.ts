@@ -98,7 +98,12 @@ export type HotNarrativeRing = {
    */
   peek: (nowMs: number) => HotRingEntry[];
   clear: () => void;
-  /** Test-only visibility into raw buffer after TTL/count storage eviction. */
+  /**
+   * Visibility into raw buffer after TTL/count storage eviction. Originally
+   * test-only; also read by the bounded Gate A runtime diagnostic (ChatScreen)
+   * to report a count-only rawEntryCount alongside peek's own count — never
+   * entry content. Still no durable storage, no new write path.
+   */
   _rawEntries: () => HotRingEntry[];
 };
 

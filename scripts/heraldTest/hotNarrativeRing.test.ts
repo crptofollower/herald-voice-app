@@ -527,6 +527,86 @@ export async function runHotNarrativeRingTests() {
     );
   }
 
+  // ── Gate A HOT runtime evidence instrumentation (2026-09-06) ───────────────
+  // Locks the exact count-only fields (hotRawEntryCount, hotPeekedEntryCount,
+  // turnIndex) added to the existing HERALD_GATE_A_DIAG emission so the next
+  // device run can distinguish H1 (effectively-cold generation — no eligible
+  // HOT entries reached peek) from H2 (valid HOT present, model still closed
+  // the turn). See HERALD_HOT_RUNTIME_EVIDENCE_INSTRUMENTATION_2026-09-06.md.
+  console.log(`\n${BOLD}-- Gate A HOT runtime evidence (raw/peeked counts) ----------${RESET}`);
+
+  // EVIDENCE-1: zero-entry HOT reports zero raw/peek counts
+  {
+    const ring = createHotNarrativeRing();
+    const t0 = Date.now();
+    assert('EVIDENCE-1 zero-entry ring reports zero raw count', ring._rawEntries().length, 0);
+    assert('EVIDENCE-1 zero-entry ring reports zero peeked count', ring.peek(t0).length, 0);
+  }
+
+  // EVIDENCE-2: populated valid HOT reports correct bounded counts
+  {
+    const ring = createHotNarrativeRing();
+    const t0 = Date.now();
+    ring.push(entry(1, 'a', 'A', { establishedAt: t0 }));
+    ring.push(entry(2, 'b', 'B', { establishedAt: t0 }));
+    assert('EVIDENCE-2 populated ring reports correct raw count', ring._rawEntries().length, 2);
+    assert('EVIDENCE-2 populated ring reports correct peeked count', ring.peek(t0).length, 2);
+  }
+
+  // EVIDENCE-3: a global turn-index gap (legitimate non-HOT-producing turn)
+  // must NOT falsely zero the peeked count after the committed peek-contiguity
+  // repair (HERALD_HOT_PEEK_CONTIGUITY_REPAIR_2026-09-05.md).
+  {
+    const ring = createHotNarrativeRing();
+    const t0 = Date.now();
+    ring.push(entry(1, 'a', 'A', { establishedAt: t0 }));
+    // turn 2: legitimate non-HOT-producing turn (clarify/capability) — no push
+    ring.push(entry(3, 'c', 'C', { establishedAt: t0 }));
+    assert('EVIDENCE-3 raw count reflects physically stored entries across the gap', ring._rawEntries().length, 2);
+    assert(
+      'EVIDENCE-3 peeked count NOT falsely zeroed by a turn-index gap (post peek-contiguity repair)',
+      ring.peek(t0).length,
+      2,
+    );
+  }
+
+  // ── Gate A HOT evidence source-lock (ChatScreen.tsx) — proves the emitted
+  // fields are bounded counts only (never entry/user/assistant content), that
+  // both generate call sites (needs_clarification_default, offline_fallback)
+  // emit identically, and that no second logging system was introduced ───────
+  console.log(`\n${BOLD}-- Gate A HOT evidence source-lock (ChatScreen.tsx) ---------${RESET}`);
+  {
+    const chatPath = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      '../../src/screens/ChatScreen.tsx',
+    );
+    const chatSrc = fs.readFileSync(chatPath, 'utf8');
+
+    assertTrue(
+      'EVIDENCE-4a raw HOT count reported as a bounded .length only',
+      (chatSrc.match(/hotRawEntryCount: hotRingRef\.current\._rawEntries\(\)\.length,/g) || []).length === 2,
+    );
+    assertTrue(
+      'EVIDENCE-4b peeked HOT count reported as a bounded .length only',
+      (chatSrc.match(/hotPeekedEntryCount: hotContextForGeneration\.length,/g) || []).length === 2,
+    );
+    assertTrue(
+      'EVIDENCE-4c bounded turn identifier only (no content) supplied at both diagnostic-input sites',
+      (chatSrc.match(
+        /getGenerateWorker: \(\) => ephemeralGenerateWorkerId,\s*\n\s*turnIndex: turnIndexRef\.current,/g,
+      ) || []).length === 2,
+    );
+    assertTrue(
+      'EVIDENCE-5 no new content-bearing field introduced alongside the evidence fields',
+      !/hotRawEntryCount:[^,]*\.(user|assistant|map|join)\(/.test(chatSrc)
+        && !/hotPeekedEntryCount:[^,]*\.(user|assistant|map|join)\(/.test(chatSrc),
+    );
+    assertTrue(
+      'EVIDENCE-5b single diagnostic emission site — no second logging system introduced',
+      (chatSrc.match(/HERALD_GATE_A_DIAG/g) || []).length === 1,
+    );
+  }
+
   const total = passed + failures.length;
   console.log(
     `\n${BOLD}HotNarrativeRing: ${passed}/${total} passed` +

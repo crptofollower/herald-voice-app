@@ -274,6 +274,12 @@ type GateAWcsRecoveryDiag = {
   discourseTopic: string | null;
   discourseEvidenceCount: number;
   getGenerateWorker: () => string | null;
+  /** Bounded turn identifier — count only, never utterance content. */
+  turnIndex: number;
+  /** HOT entries physically present (post-TTL/count-evict) before this turn's own peek. */
+  hotRawEntryCount: number;
+  /** HOT entries surviving bounded peek selection — what generation actually received. */
+  hotPeekedEntryCount: number;
 };
 
 /** TEMP Gate A device diagnostic — prove canned-clarify vs generate. Remove after proof. */
@@ -286,6 +292,9 @@ async function resolveEphemeralSeamGateADiag(
     discourseTopic,
     discourseEvidenceCount,
     getGenerateWorker,
+    turnIndex,
+    hotRawEntryCount,
+    hotPeekedEntryCount,
     ...seamInput
   } = input;
   const eligible = isEligibleForEphemeralConversation(
@@ -351,6 +360,9 @@ async function resolveEphemeralSeamGateADiag(
     discourseTopic,
     discourseEvidenceCount,
     worker: getGenerateWorker(),
+    turnIndex,
+    hotRawEntryCount,
+    hotPeekedEntryCount,
   }));
   return outcome;
 }
@@ -1664,6 +1676,9 @@ export default function ChatScreen() {
           discourseTopic: wcsRecovery.discourseTopic,
           discourseEvidenceCount: wcsRecovery.discourseEvidenceCount,
           getGenerateWorker: () => ephemeralGenerateWorkerId,
+          turnIndex: turnIndexRef.current,
+          hotRawEntryCount: hotRingRef.current._rawEntries().length,
+          hotPeekedEntryCount: hotContextForGeneration.length,
           generate: () => runEphemeralGenerate(adoptedRecovery, 'needs_clarification_default'),
           threadEvidence: hotContextForGeneration
             .map((e) => (e.assistantHotPolicy === 'include' ? `${e.user}\n${e.assistant}` : e.user))
@@ -2100,6 +2115,9 @@ export default function ChatScreen() {
             discourseTopic: wcsRecovery.discourseTopic,
             discourseEvidenceCount: wcsRecovery.discourseEvidenceCount,
             getGenerateWorker: () => ephemeralGenerateWorkerId,
+            turnIndex: turnIndexRef.current,
+            hotRawEntryCount: hotRingRef.current._rawEntries().length,
+            hotPeekedEntryCount: hotContextForGeneration.length,
             generate: runEphemeralGenerate,
             threadEvidence: hotContextForGeneration
               .map((e) => (e.assistantHotPolicy === 'include' ? `${e.user}\n${e.assistant}` : e.user))
