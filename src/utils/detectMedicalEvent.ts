@@ -306,13 +306,24 @@ export function detectMedicalEvent(text: string): MedicalEvent | null {
   if (isListRemovalOperatorShape(raw)) return null;
 
   let hasPastVisit = PAST_VISIT.test(raw);
-  const hasFutureVisit =
+  let hasFutureVisit =
     FUTURE_VISIT.test(raw) || (FUTURE_SEE_DR.test(raw) && FORWARD_VISIT_EVIDENCE.test(raw));
   const hasMedication = MEDICATION.test(raw);
   const hasAdvice = ADVICE.test(raw);
 
   if (hasPastVisit && !hasMedicalVisitDomainEvidence(raw)) {
     hasPastVisit = false;
+  }
+  // Symmetric with hasPastVisit above: bare future "see/seeing" alternatives
+  // (going to see / gonna see / will see / seeing my / scheduled with) carry
+  // no doctor/medical token of their own and collide with ordinary future-
+  // tense social/family/travel narrative ("going to see Sarah"). Require the
+  // same domain evidence the past-tense path already requires. Alternatives
+  // that already contain their own medical token ("appointment", "Dr. X",
+  // "seeing the doctor") are unaffected, since that token itself satisfies
+  // hasMedicalVisitDomainEvidence.
+  if (hasFutureVisit && !hasMedicalVisitDomainEvidence(raw)) {
+    hasFutureVisit = false;
   }
 
   if (!hasPastVisit && !hasFutureVisit && !hasMedication && !hasAdvice) return null;
