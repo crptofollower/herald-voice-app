@@ -62,6 +62,32 @@ function afterLeadingReadVocative(text: string): string {
   return text.trim();
 }
 
+// Closed, domain-general set of conversational request/report wrappers that
+// relay or reference a question rather than answering one -- "can/could/
+// would you tell me", "do you know", "I was asking (you) (if you can tell
+// me)", "I wanted to know", "I was wondering" -- optionally preceded by a
+// bare "no" discourse correction (2026-09-06, Samsung last-doctor device
+// evidence: "No I was asking you if you can tell me who my last doctor
+// was..."). Recognizing the wrapper never by itself makes an utterance
+// read-shaped -- exactly like afterLeadingReadVocative above, the clause
+// immediately after it must still independently satisfy
+// CALENDAR_READ_START/READ_INTERROGATIVE (checked by the caller). This is
+// why "I was telling you I saw Dr. Smith" and "I wanted to tell you I saw
+// Dr. Smith" stay unaffected: neither "telling" nor "wanted to tell" is in
+// this closed verb set, and even if a wrapper here matched, their remainder
+// ("I saw Dr. Smith") does not itself start with what/when/who/etc. Not
+// medical/doctor-specific -- the same closed verb set applies regardless of
+// domain, per the read-shape guard's own existing discipline.
+const READ_REQUEST_WRAPPER_RE =
+  /^(?:no,?\s+)?(?:(?:can|could|would)\s+you\s+tell\s+me|do\s+you\s+know|i\s+was\s+asking(?:\s+you)?(?:\s+if\s+you\s+(?:can|could|would)\s+tell\s+me)?|i\s+wanted\s+to\s+know|i\s+was\s+wondering)\b[,:]?\s*/i;
+
+function afterLeadingReadRequestWrapper(text: string): string {
+  const s = text.trim();
+  const m = s.match(READ_REQUEST_WRAPPER_RE);
+  if (!m) return s;
+  return s.slice(m[0].length).trim();
+}
+
 // ─── List-context guard (Build A) ─────────────────────────────────────────────
 // List edits collide with medical triggers because "take ... off my list" and
 // "I'm on ..." share verbs with medication phrasing. Any sentence that refers to
@@ -127,7 +153,9 @@ const DOSAGE = /(\d+(?:\.\d+)?\s*(?:mg|mcg|ml|milligrams?|micrograms?)|\b(?:one|
 // decline and the provenance suppression can never drift apart.
 export function isReadShapedUtterance(text: string): boolean {
   const raw = text.trim();
-  return CALENDAR_READ_START.test(raw) || CALENDAR_READ_START.test(afterLeadingReadVocative(raw));
+  return CALENDAR_READ_START.test(raw)
+    || CALENDAR_READ_START.test(afterLeadingReadVocative(raw))
+    || CALENDAR_READ_START.test(afterLeadingReadRequestWrapper(raw));
 }
 
 export function extractDoctorName(text: string): string | undefined {
