@@ -7,8 +7,26 @@
 // Build 20 fix: requestCalendarPermissionsAsync (prompt) on first cache
 //   refresh so users who were never prompted get the dialog.
 
-import * as Calendar from "expo-calendar";
+// Type-only: erased at compile time, never resolves the real expo-calendar
+// module. The runtime value is loaded lazily inside each function that
+// actually needs it (harness compatibility fix, 2026-09-07, same pattern as
+// src/db/schema.ts's expo-sqlite fix and src/utils/canonicalClassifierSession.ts's
+// expo-file-system fix: expo-calendar imports 'react-native' for real, and
+// react-native's entry uses Flow's `import typeof` syntax, which raw
+// esbuild/tsx cannot parse outside Metro — a static top-level import here
+// made the headless heraldTest harness un-loadable via run.mjs -> tierRouter.ts
+// -> calendarCacheDB.ts, independent of whether any calendar function is
+// ever actually called (tests never reach real device calendar access).
+// await import(), not require(), because both consumers below are already
+// async — matches canonicalClassifierSession.ts's own dynamic-import style
+// exactly, rather than schema.ts's require() (which was needed there only
+// because getDB() had to stay synchronous).
+import type * as Calendar from "expo-calendar";
 import { getDB } from "./schema";
+
+async function getCalendarRuntime(): Promise<typeof Calendar> {
+  return import("expo-calendar");
+}
 
 export interface CachedEvent {
   id: string;
@@ -30,6 +48,7 @@ export interface CachedEvent {
 
 export async function refreshCalendarCache(): Promise<void> {
   try {
+    const Calendar = await getCalendarRuntime();
     // Request permission on first call — this is what shows the dialog.
     // getCalendarPermissionsAsync only checks; it never prompts.
     let { status } = await Calendar.getCalendarPermissionsAsync();
@@ -664,6 +683,7 @@ export type RawCalendarFetchResult =
 
 async function fetchRawDeviceEvents(startDate: Date, endDate: Date): Promise<RawCalendarFetchResult> {
   try {
+    const Calendar = await getCalendarRuntime();
     let { status } = await Calendar.getCalendarPermissionsAsync();
     if (status !== 'granted') {
       const result = await Calendar.requestCalendarPermissionsAsync();

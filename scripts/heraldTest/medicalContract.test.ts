@@ -249,13 +249,19 @@ export async function runMedicalContractTests() {
     );
   }
 
-  // ── M16: detectMedicalEvent still catches the contracted form upstream
+  // ── M16 (Tier-2 closure, 2026-09-07): "I'm on Eliquis" previously relied
+  //    solely on candidate capitalization for floor admission — that proxy
+  //    is removed (see src/utils/detectMedicalEvent.ts hasMedicationDomainEvidence,
+  //    HERALD medication semantic interpretation follow-up docs). The floor
+  //    now correctly abstains; this utterance is eligible for the Semantic
+  //    Interpretation V1 seam instead. Updated, not preserved — this
+  //    contracted form was never actually evidenced, only capitalized.
   {
     const { detectMedicalEvent } = await import('../../src/utils/detectMedicalEvent.ts');
     const ev16 = detectMedicalEvent("I'm on Eliquis");
     assert(
-      "M16 detectMedicalEvent: \"I'm on Eliquis\" returns medication event",
-      ev16?.type, (v) => v === 'medication', 'medication'
+      "M16 detectMedicalEvent: \"I'm on Eliquis\" now abstains (Tier-2 closure — no Tier-H evidence)",
+      ev16, (v) => v === null, 'null'
     );
   }
 
@@ -275,19 +281,25 @@ export async function runMedicalContractTests() {
   }
 
   // ── M16c–e: MEDICATION using/use gap (Known Issue #18) + LIST_CONTEXT guard ─
+  // M16c/M16d (Tier-2 closure, 2026-09-07): "I'm using metformin" / "I use
+  // metformin" are bare, Tier-M-only cases (lenient trigger, no dosage/
+  // terminology/doctor/specialty/discontinuation) — the same already-
+  // authorized closure that removed capitalization/lenient-trigger as
+  // sufficient medication evidence. The floor now correctly abstains;
+  // updated, not preserved.
   {
     const { detectMedicalEvent } = await import('../../src/utils/detectMedicalEvent.ts');
     assert(
-      "M16c detectMedicalEvent: \"I'm using metformin\" returns medication event",
-      detectMedicalEvent("I'm using metformin")?.type,
-      (v) => v === 'medication',
-      'medication',
+      "M16c detectMedicalEvent: \"I'm using metformin\" now abstains (Tier-2 closure)",
+      detectMedicalEvent("I'm using metformin"),
+      (v) => v === null,
+      'null',
     );
     assert(
-      'M16d detectMedicalEvent: "I use metformin" returns medication event',
-      detectMedicalEvent('I use metformin')?.type,
-      (v) => v === 'medication',
-      'medication',
+      'M16d detectMedicalEvent: "I use metformin" now abstains (Tier-2 closure)',
+      detectMedicalEvent('I use metformin'),
+      (v) => v === null,
+      'null',
     );
     assert(
       'M16e detectMedicalEvent: list phrasing still returns null (LIST_CONTEXT)',

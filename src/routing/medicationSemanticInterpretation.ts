@@ -14,7 +14,30 @@
 // converts into the pre-existing 'medical_capture' IntentRecord shape.
 //
 // SemanticProposal remains provider-neutral and storage-blind:
-//   { act, mentions[], predicate, focus, confidence }
+//   { mentions[], predicate, focus, confidence }
+//
+// CONTRACT CORRECTION (2026-09-07, Semantic Interpretation V1 contract
+// closure): `act` was removed from this contract. It required a model to
+// self-report a closed 7-value illocutionary-force taxonomy; a bounded
+// 84-generation discrimination experiment against the real production
+// model/prompt/parser found the model never once emitted the required
+// 'assert' value (0/84) — it substituted an aspectual distinction (state vs.
+// change-of-state: 'read' for "I'm on X"/"I'm taking X", the out-of-schema
+// 'start' for "I started X") that answers a different question than the one
+// asked. That is a CONTRACT defect, not a per-model quirk: no vocabulary
+// widening ("just also accept read/start") can fix it, because 'read' is
+// also the value a model should legitimately emit for a genuine QUESTION —
+// widening the allowlist would have deleted the one protection `act`
+// existed to provide. The safety property `act` protected (never treat a
+// question/correction/cancel/confirm as a fresh assertion) is preserved
+// below by a deterministic, provider-neutral pre-check on the raw utterance
+// (isReadShapedUtterance / isMedicationInquirySpeechAct, already shipped and
+// used by the deterministic floor) instead of a model self-report.
+//
+// `mentions` was simplified from `{text}[]` to `string[]`: the object
+// wrapper carried no information beyond `.text`, and the SAME 84-generation
+// dataset showed the model produced flat strings 84/84 times, never once the
+// object shape — an independent, equally systematic CONTRACT mismatch.
 
 import type { LlamaContext } from 'llama.rn';
 import {
@@ -22,24 +45,14 @@ import {
   extractDosage,
   extractFrequency,
   hasIndependentMedicationEvidence,
+  isReadShapedUtterance,
+  isMedicationQuestionShape,
 } from '../utils/detectMedicalEvent';
 
-// ─── SemanticProposal (ratified shape, unmodified) ────────────────────────
-
-/** Closed act vocabulary for the medication capability only — not a
- *  redefinition of the shared SemanticProposal contract's field names. Only
- *  'assert' can ever be admitted; every other value rejects deterministically. */
-export type SemanticAct = 'assert' | 'read' | 'correct' | 'cancel' | 'confirm' | 'fragment' | 'unclear';
-
-const SEMANTIC_ACTS = new Set<SemanticAct>(['assert', 'read', 'correct', 'cancel', 'confirm', 'fragment', 'unclear']);
-
-export type SemanticMention = {
-  text: string;
-};
+// ─── SemanticProposal (corrected shape) ────────────────────────────────────
 
 export type SemanticProposal = {
-  act: SemanticAct;
-  mentions: SemanticMention[];
+  mentions: string[];
   predicate: string;
   focus: string;
   confidence: number;
@@ -63,23 +76,19 @@ export function parseSemanticProposal(rawModelOutput: string): SemanticProposal 
   if (!parsed || typeof parsed !== 'object') return null;
   const o = parsed as Record<string, unknown>;
 
-  if (!SEMANTIC_ACTS.has(o.act as SemanticAct)) return null;
   if (typeof o.predicate !== 'string') return null;
   if (typeof o.focus !== 'string') return null;
   if (typeof o.confidence !== 'number' || Number.isNaN(o.confidence) || !Number.isFinite(o.confidence)) return null;
   if (o.confidence < 0 || o.confidence > 1) return null;
   if (!Array.isArray(o.mentions)) return null;
 
-  const mentions: SemanticMention[] = [];
+  const mentions: string[] = [];
   for (const m of o.mentions) {
-    if (!m || typeof m !== 'object') return null;
-    const text = (m as Record<string, unknown>).text;
-    if (typeof text !== 'string') return null;
-    mentions.push({ text });
+    if (typeof m !== 'string') return null;
+    mentions.push(m);
   }
 
   return {
-    act: o.act as SemanticAct,
     mentions,
     predicate: o.predicate,
     focus: o.focus,
@@ -154,8 +163,23 @@ export function admitMedicationSemanticProposal(
   // guarantees this by construction/ordering).
   if (detectMedicalEvent(raw)) return { decision: 'DEFER', reason: 'deterministic_floor_already_claims' };
 
-  if (proposal.act !== 'assert') {
-    return { decision: 'REJECT', reason: `non_assertive_act:${proposal.act}` };
+  // Speech-act gate (contract correction, 2026-09-07) — replaces the former
+  // model-self-reported `act === 'assert'` check. The safety property is
+  // identical (never treat a question/read as a fresh assertion); the
+  // mechanism is now deterministic and provider-neutral: reuse of
+  // already-shipped guards from detectMedicalEvent.ts — general
+  // sentence-initial subject-auxiliary-inversion shape ("Am I...", "Should
+  // I...", "Do I...") plus genuinely interrogative medication-inquiry
+  // frames (frequency/timing/"do I take"). Uses isMedicationQuestionShape,
+  // not the floor's own isMedicationInquirySpeechAct: verified by direct
+  // execution that reusing the floor function verbatim here misclassifies
+  // real assertions ("I'm switching to a new dose of Synthroid, 75
+  // micrograms." is not a question) via its DOSE_INQUIRY co-occurrence
+  // branch, which requires no interrogative marker at all — safe for the
+  // floor's narrower callers, unsafe at the seam's wider evaluation surface.
+  // Not medication-name knowledge, not a drug list — pure sentence shape.
+  if (isReadShapedUtterance(raw) || isMedicationQuestionShape(raw)) {
+    return { decision: 'REJECT', reason: 'read_shaped_utterance' };
   }
 
   const focus = proposal.focus.trim();
@@ -165,7 +189,7 @@ export function admitMedicationSemanticProposal(
   // A single unverified mention rejects the whole proposal — a hallucinated
   // span is never merely dropped and silently proceeded with.
   for (const mention of proposal.mentions) {
-    if (!isProvenanceVerified(mention.text, raw)) {
+    if (!isProvenanceVerified(mention, raw)) {
       return { decision: 'REJECT', reason: 'unverified_mention' };
     }
   }
@@ -213,8 +237,7 @@ export type ProposalGenerationResult =
 export const MEDICATION_SEMANTIC_PROPOSAL_SYSTEM_PROMPT = `You extract JSON describing what a sentence expresses, for medication interpretation only.
 Do not claim any action occurred. Do not invent medication names, doctors, or dosages not present in the sentence.
 Return ONLY a JSON object with these keys:
-act: one of assert,read,correct,cancel,confirm,fragment,unclear
-mentions: array of {text} — each text MUST be copied verbatim from the sentence
+mentions: array of strings — each string MUST be copied verbatim from the sentence
 predicate: the verb/relation expressed (e.g. "take", "prescribed", "put on"), copied or closely derived from the sentence
 focus: the single span that names the medication being discussed, copied verbatim from the sentence; empty string if none
 confidence: number 0 to 1

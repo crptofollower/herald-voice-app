@@ -273,9 +273,13 @@ export async function runMedicationInquiryTests() {
     check('N3 CALL ownership unchanged', d.actionIntent?.type === 'call');
   }
   {
+    // N4 CF-23 (Tier-2 closure, 2026-09-07): bare "I'm on Eliquis" relied
+    // solely on candidate capitalization — that proxy is removed (same
+    // closure already applied to the duplicate CF-23 assertion in
+    // conversationFoundationV1.test.ts). Updated, not preserved.
     const d = await classifyQuery("I'm on Eliquis");
-    check('N4 CF-23 assertion still medical_capture',
-      d.actionIntent?.type === 'medical_capture');
+    check('N4 CF-23 bare assertion no longer reaches medical_capture (Tier-2 closure)',
+      d.actionIntent?.type !== 'medical_capture');
   }
   {
     const d = await classifyQuery('I finished that thing from yesterday');
@@ -316,6 +320,39 @@ export async function runMedicationInquiryTests() {
     check('CASE-E detectMedicationInquiry does not invent a last-mentioned name',
       detectMedicationInquiry('What was the medication we were talking about?') == null);
   }
+
+  // Path G — Semantic Interpretation V1 contract correction (2026-09-07):
+  // first-person yes/no question shapes ("Am I...", "Should I...") must be
+  // read-shaped at the deterministic floor too, since isMedicationInquirySpeechAct
+  // is shared by both the floor (via detectMedicalEvent) and the semantic
+  // seam's admission gate. General sentence-shape guard, not an Eliquis
+  // special case — verified against a second drug name as well.
+  check('G1 "Am I still supposed to take Eliquis?" is not capture',
+    detectMedicalEvent('Am I still supposed to take Eliquis?') == null);
+  check('G2 "Should I take Eliquis?" is not capture',
+    detectMedicalEvent('Should I take Eliquis?') == null);
+  check('G3 "Am I taking Eliquis?" is not capture',
+    detectMedicalEvent('Am I taking Eliquis?') == null);
+  check('G4 generalization: "Should I take Lipitor?" is not capture',
+    detectMedicalEvent('Should I take Lipitor?') == null);
+  check('G5 generalization: "Am I on the right dose of metformin?" is not capture',
+    detectMedicalEvent('Am I on the right dose of metformin?') == null);
+  {
+    const d = await classifyQuery('Am I still supposed to take Eliquis?');
+    check('G6 classifyQuery: question shape never becomes medical_capture',
+      d.actionIntent?.type !== 'medical_capture');
+  }
+  // Negative control — Tier-H-evidenced first-person assertions must still
+  // capture; the new question-shape guard must never misfire on a
+  // declarative "I..." opener. (Bare "I take Eliquis" / "I'm taking
+  // Lipitor." are no longer floor-claim cases at all post Tier-2 closure —
+  // see medicationDomainAdmission.test.ts P1/P2 — so this check now uses
+  // genuinely evidenced examples to isolate "does the question-shape guard
+  // misfire" from "does Tier-2 evidence hold".)
+  check('G7 "I take Eliquis 5 mg" still captures (guard does not misfire on assertions)',
+    detectMedicalEvent('I take Eliquis 5 mg')?.type === 'medication');
+  check('G8 "I\'m taking Lipitor, my doctor prescribed it." still captures',
+    detectMedicalEvent("I'm taking Lipitor, my doctor prescribed it.")?.type === 'medication');
 
   const total = passed + failures.length;
   if (failures.length) {

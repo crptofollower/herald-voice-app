@@ -129,17 +129,61 @@ const DOSE_INQUIRY = /\b(?:dose|dosage)\b/i;
 const CATALOG_MED_READ =
   /\bdo i take (any )?(medication|meds|pills)\b|\bwhat (medication|medications|meds|pills) am i (on|taking)\b|\bwhat do i take\b|\bwhat am i (taking|on)\b/i;
 
+// General, domain-agnostic yes/no question shape: an utterance opening with
+// subject-auxiliary inversion for first-person "I" ("Am I", "Should I", "Do
+// I", "Have I", "Was I", ...). Sentence-initial inversion is the grammatical
+// marker of English interrogative mood -- there is no natural first-person
+// declarative sentence shaped this way. Pure sentence-initial word order,
+// independent of any medication vocabulary, drug name, or brand. Closes the
+// "Am I still supposed to take X?" / "Should I take X?" / "Am I taking X?"
+// class generally (Semantic Interpretation V1 contract correction,
+// 2026-09-07) -- not a per-utterance or per-drug-name patch.
+const FIRST_PERSON_AUX_QUESTION_RE =
+  /^(?:am|is|are|was|were|do|does|did|have|has|had|should|would|could|can|will|shall|may|might|must)\s+i\b/i;
+
+export function isFirstPersonAuxiliaryQuestionShape(text: string): boolean {
+  return FIRST_PERSON_AUX_QUESTION_RE.test(text.trim());
+}
+
 /** Medication taking/dose/frequency questions are reads, never capture. */
 export function isMedicationInquirySpeechAct(text: string): boolean {
   const raw = text.trim();
   if (!raw || LIST_CONTEXT.test(raw)) return false;
   if (CATALOG_MED_READ.test(raw)) return false;
+  if (isFirstPersonAuxiliaryQuestionShape(raw)) return true;
   if (FREQUENCY_INQUIRY.test(raw) && /\btake\b/i.test(raw)) return true;
   if (TIMING_INQUIRY.test(raw)) return true;
   if (DO_I_TAKE_INQUIRY.test(raw)) return true;
   if (DOSE_INQUIRY.test(raw) && (/\bmy\b/i.test(raw) || /\btake\b/i.test(raw) || /\b(?:of|for)\b/i.test(raw))) {
     return true;
   }
+  return false;
+}
+
+// Narrower sibling of isMedicationInquirySpeechAct, for the Semantic
+// Interpretation V1 seam's admission gate specifically (contract correction,
+// 2026-09-07). Composed only of checks that require a genuine interrogative
+// marker (a WH-word via isReadShapedUtterance at the call site, an inverted
+// auxiliary, or an explicit "how often"/"when do I take"/"do I take" frame).
+// Deliberately excludes isMedicationInquirySpeechAct's own DOSE_INQUIRY
+// branch, which requires no question marker at all -- just "dose"/"dosage"
+// co-occurring anywhere with "my"/"take"/"of"/"for". That looser rule is
+// correct and load-bearing for the floor's own narrower callers (verified:
+// every existing floor-level DOSE_INQUIRY test case already opens with a
+// WH-word caught by isReadShapedUtterance first, so nothing here changes
+// floor behavior) but is unsafe to reuse verbatim at the seam, which
+// evaluates a materially wider range of genuine assertions than the floor
+// ever does -- confirmed by direct execution: "I'm switching to a new dose
+// of Synthroid, 75 micrograms." is a plain first-person assertion, not a
+// question, yet satisfies DOSE_INQUIRY's co-occurrence check purely by
+// mentioning "dose" and "of" together.
+export function isMedicationQuestionShape(text: string): boolean {
+  const raw = text.trim();
+  if (!raw || LIST_CONTEXT.test(raw)) return false;
+  if (isFirstPersonAuxiliaryQuestionShape(raw)) return true;
+  if (FREQUENCY_INQUIRY.test(raw) && /\btake\b/i.test(raw)) return true;
+  if (TIMING_INQUIRY.test(raw)) return true;
+  if (DO_I_TAKE_INQUIRY.test(raw)) return true;
   return false;
 }
 
@@ -339,148 +383,90 @@ export function hasMedicalVisitDomainEvidence(text: string): boolean {
   return MEDICAL_VISIT_DOMAIN_EVIDENCE.test(text);
 }
 
-// ─── Medication domain evidence (2026-09-06 medication admission repair) ──
-// Generic trigger verbs alone ("taking", "using", "on", "started") are not
-// sufficient to promote an arbitrary following noun into medication capture
-// -- proven by device evidence: "We're taking a vacation next month" / "a
-// trip to the mountains" / "a class this semester", "I'm using a new
-// router", "I'm on vacation next week", "I'm taking my car to the shop",
-// "I started a new job", "I take the train to work" all satisfied the bare
-// MEDICATION trigger with zero medication-specific evidence
-// (HERALD_SEP6_DEVICE_ROUTE_DIAGNOSTIC_2026-09-06.md). Mirrors
-// hasMedicalVisitDomainEvidence's architectural role but with vocabulary
-// specific to genuine medication-taking -- doctor/appointment vocabulary is
-// semantically wrong here.
+// ─── Medication domain evidence (Tier-H only — 2026-09-07 mechanism-tier
+//     closure, superseding the 2026-09-06 repair and its 2026-09-06 residual
+//     follow-up below) ───────────────────────────────────────────────────
+// The 2026-09-06 repairs (see git history / superseded comment previously
+// here) closed the "bare trigger + arbitrary noun" false-positive class
+// (vacation/trip/class/router/camera/walks/...) but retained two remaining
+// admission paths that were never actually evidence about MEDICATION: (a)
+// candidate capitalization ("the shape a recognized brand name typically
+// takes"), and (b) unconditional trust of five "historically lenient"
+// trigger verbs for any bare candidate that survived the walk. Both are
+// SYNTACTIC-SHAPE proxies, not domain evidence — a bounded 3B
+// semantic-discrimination experiment (28 cases, 84 generations) proved
+// neither proxy discriminates medication from ordinary proper nouns or
+// activities: "I started CrossFit." / "I started Toastmasters." (lenient
+// trigger, capitalized) and "I'm on LinkedIn." (capitalization alone) all
+// satisfied the old rule with zero medication-specific evidence, while
+// "I started skydiving." (lowercase, unambiguously non-medical) proved the
+// lenient-trigger fallback was never actually about capitalization at all —
+// it admitted any bare candidate of a trusted verb, case-blind.
 //
-// Composed entirely from already-existing signals, no exhaustive drug-name
-// dictionary: dosage evidence (extractDosage), explicit medication/
-// pharmacological terminology (the same words DRUG_FILLER_WORDS already
-// treats as "about medication in general, never itself a drug name" --
-// reused here for their complementary positive-evidence role, plus
-// "prescribed", already one of MEDICATION's own trigger verbs and
-// inherently medical), doctor/specialty attribution (extractDoctorName/
-// extractSpecialty, already used by hasMedicalVisitDomainEvidence), and the
-// existing discontinuation shape ("take me off X" -- already a narrow,
-// specific, separately-gated pattern, distinct from ordinary noun objects).
+// This function now recognizes ONLY genuine, non-positional domain evidence
+// (Tier H): dosage, explicit medication/pharmacological terminology, doctor
+// attribution, specialty attribution, and the existing discontinuation
+// shape. A candidate with none of these no longer receives deterministic
+// authority — the floor ABSTAINS (returns false) rather than guessing from
+// grammar or capitalization; an abstained utterance is eligible for the
+// Semantic Interpretation V1 seam (deterministic first refusal is
+// preserved: this function still runs first, and Tier-H evidence still
+// grants full, unchanged deterministic authority). No drug-name dictionary,
+// no brand allowlist/blacklist, no replacement capitalization heuristic, no
+// model-derived authority — only the removal of the two proxies that were
+// never evidence in the first place.
 //
-// A candidate with none of the above is still admitted if (a) it is
-// capitalized -- the shape a recognized brand name typically takes in
-// transcribed speech -- or (b) the admitting trigger is one of the
-// historically-sufficient-alone bare verbs: every existing Herald regression
-// test for a bare, lowercase, otherwise-unevidenced medication name uses
-// "taking"/"take"/"started"/"using" (e.g. "I'm taking metformin", "I take
-// Eliquis"); none uses bare "on". A determiner (a/an/the/my/your/his/her/
-// our/their/some/this/that/one) immediately following the trigger overrides
-// all of the above and always requires real evidence -- every device-
-// observed false positive had exactly this shape ("taking A vacation",
-// "using A new router", "on A plane") and no genuine medication statement in
-// Herald's existing test suite is phrased this way.
+// Known, disclosed, accepted consequence: bare medication statements that
+// previously relied SOLELY on capitalization or lenient-trigger membership
+// (e.g. "I take Eliquis", "I'm taking Lipitor.", "I'm taking metformin")
+// no longer receive deterministic authority either — they are
+// structurally indistinguishable from "I started CrossFit." to any
+// grammar-only rule, proven by the same experiment. This is not a partial
+// fix that happens to spare "real" drug names; it is the honest
+// consequence of the floor no longer pretending grammar can tell them
+// apart. See HERALD_MEDICATION_SEMANTIC_INTERPRETATION_V1 follow-up docs.
 const MEDICATION_TERMINOLOGY_RE =
   /\b(?:medication|medications|meds|med|pill|pills|tablet|tablets|capsule|capsules|prescription|prescriptions|prescribed|medicine|medicines|dose|dosage)\b/i;
 
-const DRUG_CANDIDATE_DETERMINER_RE =
-  /^(?:a|an|the|my|your|his|her|our|their|some|this|that|one)\b/i;
-
 const DISCONTINUATION_SHAPE_RE = /\btake\s+(?:me|us|him|her|them)\s+off(?:\s+of)?\s+/i;
 
-// Historically-sufficient-alone bare trigger verbs -- see comment above.
-// Deliberately excludes "on"/"i'm on"/"prescribed" (the latter is already
-// covered by MEDICATION_TERMINOLOGY_RE above, so omitting it here changes
-// nothing observable).
-const LENIENT_BARE_MEDICATION_TRIGGER = /\b(?:take|taking|started|using|use)\b/i;
-
-// ─── Residual floor repair (2026-09-06, follow-up) ─────────────────────────
-// HERALD_MEDICATION_FLOOR_ACCEPTANCE_CONTRADICTION_DIAGNOSTIC_2026-09-06.md.
-// The determiner override above only ever inspected the literal token
-// immediately after the FIRST trigger match in raw text. Two device/device-
-// adjacent-proven gaps in that scope, both closed here without any new
-// drug-name dictionary, both reusing vocabulary already in this file:
-//
-// 1) Repeated/stacked trigger verbs hide a later determiner ("started USING
-//    my new camera" — "using" itself was never filtered as filler, so the
-//    walk stopped on "using" before ever reaching "my"). Fix: "using"/"use"
-//    now join the other three lenient trigger-verb forms already in
-//    DRUG_FILLER_WORDS, and the override now scans every token
-//    walkDrugCandidate actually skipped en route to the candidate — not just
-//    the literal first one — for a determiner.
-// 2) Determiner-less narrative continuations ("take LONG walks" — no
-//    determiner anywhere, so the override never engaged at all). Fix: the
-//    lenient bare-trigger fallback now additionally requires the candidate
-//    to terminate its clause — trailing content is allowed only when it is
-//    itself already-recognized medication modifier material (a dosage span
-//    via extractDosage, a frequency span via extractFrequency, or a bare
-//    temporal token via the existing NON_VOCATIVE_READ_TOKEN set already
-//    used elsewhere in this file for an unrelated read-shape purpose) —
-//    exactly the shape every genuine bare-lowercase positive in the locked
-//    suite already has (e.g. "started metformin YESTERDAY").
-export function hasMedicationDomainEvidence(text: string, drugName?: string): boolean {
+export function hasMedicationDomainEvidence(text: string, _drugName?: string): boolean {
   if (extractDosage(text)) return true;
   if (MEDICATION_TERMINOLOGY_RE.test(text)) return true;
   if (extractDoctorName(text)) return true;
   if (extractSpecialty(text)) return true;
   if (DISCONTINUATION_SHAPE_RE.test(text)) return true;
-
-  const triggerMatch = text.match(DRUG_TRIGGER);
-  const walk = triggerMatch
-    ? walkDrugCandidate(text.slice(triggerMatch.index! + triggerMatch[0].length))
-    : { candidate: undefined, skipped: [] as string[], trailing: [] as string[] };
-
-  if (walk.skipped.some((tok) => DRUG_CANDIDATE_DETERMINER_RE.test(tok))) return false;
-  if (!isAllowedTrailingMedicationContent(walk.trailing)) return false;
-
-  if (drugName && /^[A-Z]/.test(drugName)) return true;
-  return LENIENT_BARE_MEDICATION_TRIGGER.test(text);
-}
-
-/** Trailing tokens after a bare lenient-trigger candidate are permitted only
- *  when they are themselves already-recognized medication modifier material
- *  — never an arbitrary continuation of the object noun phrase. Reuses
- *  extractDosage/extractFrequency (dosage/frequency spans anywhere in the
- *  trailing text) and NON_VOCATIVE_READ_TOKEN (a closed temporal-token set
- *  already defined above for afterLeadingReadVocative's unrelated purpose)
- *  — no new vocabulary. */
-function isAllowedTrailingMedicationContent(trailing: string[]): boolean {
-  if (trailing.length === 0) return true;
-  const trailingText = trailing.join(' ');
-  if (extractDosage(trailingText)) return true;
-  if (extractFrequency(trailingText)) return true;
-  return trailing.every((rawTok) => NON_VOCATIVE_READ_TOKEN.test(rawTok.replace(/[.,;:!?]+$/, '')));
+  return false;
 }
 
 // ─── Independent medication evidence (Semantic Interpretation V1 seam) ────
 // Additive sibling to hasMedicationDomainEvidence. Does not replace that
-// function or change detectMedicalEvent's extraction role. The residual
-// floor repair above does modify hasMedicationDomainEvidence (shared walk,
-// skipped-token determiner scan, trailing-clause terminator); those
-// positional floor heuristics stay on the regex/token-walk path. This
-// function is only consulted after a SemanticProposal focus has already
-// been identified and provenance-verified.
+// function or change detectMedicalEvent's extraction role. This function is
+// only consulted after a SemanticProposal focus has already been
+// independently identified and provenance-verified (checked to be a literal
+// substring of raw_phrase) by a different, non-positional mechanism —
+// deliberately reuses only genuinely reusable, position-independent Tier-H
+// evidence signals (dosage, terminology, doctor/specialty attribution,
+// discontinuation shape); the floor's OWN positional walk/determiner
+// machinery was never applicable here and was never copied into this
+// function.
 //
-// hasMedicationDomainEvidence's determiner / trailing-clause guards
-// (DRUG_CANDIDATE_DETERMINER_RE and isAllowedTrailingMedicationContent
-// above) are not themselves domain evidence — they compensate for
-// extractDrugName's blind, position-based token walk being unable to tell
-// "taking A vacation" from "taking AN Advil." That precondition (an
-// unverified, positionally-blind candidate) does not hold for a
-// SemanticProposal's `focus`: a focus span has already been independently
-// identified and provenance-verified (checked to be a literal substring of
-// raw_phrase) by a different, non-positional mechanism before this function
-// is ever consulted. Reapplying a position-in-raw-text heuristic to that
-// already-verified span would test the wrong thing (regex-extraction
-// confidence) rather than the right thing (does domain evidence for THIS
-// candidate exist anywhere in the utterance). This function therefore
-// reuses every genuinely reusable, position-independent evidence signal
-// already in this file, and deliberately omits the floor's positional
-// guards, which belong solely to the regex/token-extraction mechanism
-// above and must never be copied here.
-//
-// One check is new here (not present in hasMedicationDomainEvidence at all):
-// a candidate that is itself a filler/category word (DRUG_FILLER_WORDS) or
-// bare medication terminology (MEDICATION_TERMINOLOGY_RE) — e.g. "medicine,"
-// "pill," "prescription" — is never an admissible medication NAME, regardless
-// of how much domain evidence surrounds it. This mirrors extractDrugName's
-// own DRUG_FILLER_WORDS exclusion for its token walk, applied here to a
-// model-identified focus instead of a regex-walked token.
+// CAPITALIZATION REMOVED (2026-09-07, same failure-class closure as
+// hasMedicationDomainEvidence above, not a separate feature). This function
+// previously admitted a capitalized focus with zero other evidence — the
+// identical syntactic-shape proxy the floor closure above removes, living
+// in this sibling function instead. Direct execution proved it was equally
+// non-discriminating here: hasIndependentMedicationEvidence(raw, focus)
+// returned true for a hypothetical capitalized "CrossFit" focus exactly as
+// readily as for "Lipitor" — a capitalized model focus is not, by itself,
+// evidence the model got the domain right. A SemanticProposal's own
+// confidence and the model's `focus`-emptiness judgment remain the seam's
+// actual domain signal (validated separately, non-dictionary, non-model-
+// authoritative — confidence still never grants ADMIT by itself); this
+// function no longer adds a redundant, unsafe capitalization shortcut on
+// top of them. Every other independent evidence mechanism — dosage,
+// terminology, doctor/specialty attribution, discontinuation shape, and the
+// filler/category-word focus exclusion below — is unchanged.
 export function hasIndependentMedicationEvidence(raw: string, focus?: string): boolean {
   if (focus) {
     const normalizedFocus = focus.trim().toLowerCase();
@@ -493,7 +479,6 @@ export function hasIndependentMedicationEvidence(raw: string, focus?: string): b
   if (extractDoctorName(raw)) return true;
   if (extractSpecialty(raw)) return true;
   if (DISCONTINUATION_SHAPE_RE.test(raw)) return true;
-  if (focus && /^[A-Z]/.test(focus)) return true;
   return false;
 }
 

@@ -45,7 +45,20 @@
 // The product promise "your data never leaves your phone" is only half-true
 // without encryption — technically correct but misleading on a rooted/lost device.
 
-import * as SQLite from "expo-sqlite";
+// Type-only: erased at compile time, never resolves the real expo-sqlite
+// module. The runtime value is loaded lazily inside getDB() below (harness
+// compatibility fix, 2026-09-07, mirrors src/utils/canonicalClassifierSession.ts's
+// dynamic expo-file-system import for the identical reason: expo-sqlite's
+// own SQLiteDatabase.js imports 'react-native' for real, and react-native's
+// entry uses Flow's `import typeof` syntax, which raw esbuild/tsx cannot
+// parse outside Metro — a static top-level import here made the headless
+// heraldTest harness un-loadable the moment anything imports schema.ts
+// (e.g. routeIntent.ts), independent of whether getDB() is ever actually
+// called (tests inject a shim via setDB() and never reach the real driver).
+// require(), not import(), because getDB() must stay synchronous — this
+// exact lazy-require pattern is already used elsewhere in this codebase
+// (src/screens/ChatScreen.tsx) for the same class of eager-import avoidance.
+import type * as SQLite from "expo-sqlite";
 
 export const SCHEMA_VERSION = 21;
 export const DB_NAME = "herald_device.db";
@@ -65,7 +78,10 @@ export function setDB(db: SQLite.SQLiteDatabase): void {
 
 export function getDB(): SQLite.SQLiteDatabase {
   if (!_db) {
-    _db = SQLite.openDatabaseSync(DB_NAME);
+    // Lazy require — only reached when no setDB() shim was injected, i.e.
+    // only in the real app. Never executes in the headless test harness.
+    const SQLiteRuntime: typeof import("expo-sqlite") = require("expo-sqlite");
+    _db = SQLiteRuntime.openDatabaseSync(DB_NAME);
     // WAL mode — one-time pragma, persists across connections
     _db.execSync("PRAGMA journal_mode=WAL;");
     _db.execSync("PRAGMA foreign_keys=ON;");

@@ -316,9 +316,15 @@ export async function runConversationFoundationV1Tests() {
     'not medical_capture',
   );
 
+  // CF-23 (Tier-2 closure, 2026-09-07): "I'm on Eliquis" previously relied
+  // solely on candidate capitalization for deterministic admission — that
+  // proxy is removed. The floor now abstains; this utterance no longer
+  // reaches medical_capture at tier-1 (it becomes eligible for the Semantic
+  // Interpretation V1 seam instead, flag currently OFF). Updated, not
+  // preserved.
   freshDB();
   const med = await classifyQuery("I'm on Eliquis");
-  assert('CF-23 explicit medical capture remains medical', med.actionIntent?.type, (v) => v === 'medical_capture', 'medical_capture');
+  assert('CF-23 bare "I\'m on Eliquis" no longer reaches medical_capture (Tier-2 closure)', med.actionIntent?.type, (v) => v !== 'medical_capture', 'not medical_capture');
 
   freshDB();
   const finished = await classifyQuery('I finished that thing from yesterday');

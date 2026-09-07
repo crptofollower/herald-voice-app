@@ -16,7 +16,21 @@ import type { ConversationSession } from '../../routing/conversationSession';
 import type { ConversationalSubjectHolder } from '../../routing/conversationalSubject';
 import type { MedicationPresentationHolder } from '../../routing/medicationPresentation';
 import type { OrderedPresentationHolder } from '../../routing/orderedPresentation';
-import * as IntentLauncher from 'expo-intent-launcher';
+// Type-only: erased at compile time, never resolves the real
+// expo-intent-launcher module. The runtime value is loaded lazily at each
+// call site below (harness compatibility fix, 2026-09-07, same pattern as
+// src/db/schema.ts's expo-sqlite fix and src/db/calendarCacheDB.ts's
+// expo-calendar fix: expo-intent-launcher imports 'react-native' for real,
+// and react-native's entry uses Flow's `import typeof` syntax, which raw
+// esbuild/tsx cannot parse outside Metro — a static top-level import here
+// made the headless heraldTest harness un-loadable via run.mjs -> ... ->
+// dispatch.ts, independent of whether an intent launch ever actually
+// happens (tests never reach real device intent launches).
+import type * as IntentLauncher from 'expo-intent-launcher';
+
+async function getIntentLauncherRuntime(): Promise<typeof IntentLauncher> {
+  return import('expo-intent-launcher');
+}
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getDB } from '../../db/schema';
 import { isPersonalDestination, isRelationshipTerm, RELATIONSHIP_WORDS, resolvePersonIdentity, contactHasCapability, resolvePersonCapability } from '../../db/contactsDB';
@@ -159,6 +173,7 @@ export async function dispatchAction(
           let alarmOpened = false;
           if (platformOS === 'android') {
             try {
+              const IntentLauncher = await getIntentLauncherRuntime();
               await IntentLauncher.startActivityAsync('android.intent.action.SET_ALARM', {
                 extra: {
                   'android.intent.extra.alarm.HOUR': parseInt(h, 10),
@@ -170,6 +185,7 @@ export async function dispatchAction(
               alarmOpened = true;
             } catch {
               try {
+                const IntentLauncher = await getIntentLauncherRuntime();
                 await IntentLauncher.startActivityAsync('android.intent.action.SET_ALARM', {
                   extra: {
                     'android.intent.extra.alarm.HOUR': parseInt(h, 10),
@@ -576,6 +592,7 @@ export async function dispatchAction(
           const appName = isCameraPhrase ? 'camera' : rawAppName;
           const { ack } = await launchAppAndCompose(appName, async (name) => {
             if (isCameraPhrase) {
+              const IntentLauncher = await getIntentLauncherRuntime();
               await IntentLauncher.startActivityAsync('android.media.action.IMAGE_CAPTURE', {});
               return true;
             }

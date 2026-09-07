@@ -2,7 +2,15 @@
 // builder, extracted from ChatScreen so the D-2 fence (cancel during collect
 // never writes) is contract-testable headless. Write function is injectable
 // for tests. UI (ChatScreen) adapts: speaks prompts, arms the session.
-import * as Calendar from 'expo-calendar';
+// Type-only: erased at compile time, never resolves the real expo-calendar
+// module. The runtime value is loaded lazily inside writeCalendarCore below
+// (harness compatibility fix, 2026-09-07, same pattern as
+// src/db/calendarCacheDB.ts's identical fix — see that file for the full
+// rationale). This is the third file in the codebase carrying an
+// unconditional top-level expo-calendar import; only fixed because the
+// canonical harness (run.mjs -> ... -> calendarCollect.test.ts ->
+// calendarWrite.ts) demonstrably requires it to start.
+import type * as Calendar from 'expo-calendar';
 import type { CommitResult } from './routeIntent';
 import type { ConversationSession } from './conversationSession';
 import { parseTimeFromText, parseDatePhrase } from '../utils/parseTime';
@@ -24,6 +32,7 @@ const COLLECT_CANCEL_ACK = "No problem — I won't put anything on your calendar
 // Never throws through the conversation pipeline — permission/no-calendar/
 // bad-date all return {status:'failed'} for the caller to speak.
 export async function writeCalendarCore(title: string, dateStr: string, timeStr: string): Promise<CommitResult> {
+  const Calendar = await import('expo-calendar');
   const { status } = await Calendar.requestCalendarPermissionsAsync();
   if (status !== 'granted') {
     return {

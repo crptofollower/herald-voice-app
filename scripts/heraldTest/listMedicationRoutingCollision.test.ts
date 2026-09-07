@@ -106,18 +106,32 @@ export async function runListMedicationRoutingCollisionTests() {
       'not structural off');
   }
 
-  // D — legitimate medication capture unchanged
+  // D — legitimate medication capture unchanged (Tier-H evidenced only —
+  // Tier-2 closure, 2026-09-07). LMRC-D1/D2 previously relied solely on
+  // candidate capitalization/lenient-trigger membership — those proxies are
+  // removed; bare "I take Eliquis"/"I'm taking metformin" now abstain and
+  // are eligible for the Semantic Interpretation V1 seam instead. Updated
+  // to a Tier-H-evidenced pair so this file keeps proving a real, currently
+  // capturable case, not a preserved-but-now-unsafe one.
   {
-    assert('LMRC-D1 I take Eliquis',
-      detectMedicalEvent('I take Eliquis'),
+    assert('LMRC-D1 I take Eliquis 5 mg (dosage evidence, Tier-H)',
+      detectMedicalEvent('I take Eliquis 5 mg'),
       v => (v as { type?: string; drug_name?: string } | null)?.type === 'medication'
         && (v as { drug_name?: string }).drug_name === 'Eliquis',
       'medication Eliquis');
-    assert('LMRC-D2 I\'m taking metformin',
-      detectMedicalEvent("I'm taking metformin"),
+    assert('LMRC-D1b bare "I take Eliquis" now abstains (Tier-2 closure)',
+      detectMedicalEvent('I take Eliquis'),
+      v => v === null,
+      'null');
+    assert('LMRC-D2 my doctor prescribed metformin (specialty+terminology evidence, Tier-H)',
+      detectMedicalEvent('My doctor prescribed metformin'),
       v => (v as { type?: string; drug_name?: string } | null)?.type === 'medication'
         && (v as { drug_name?: string }).drug_name === 'metformin',
       'medication metformin');
+    assert('LMRC-D2b bare "I\'m taking metformin" now abstains (Tier-2 closure)',
+      detectMedicalEvent("I'm taking metformin"),
+      v => v === null,
+      'null');
     assert('LMRC-D3 doctor start taking Eliquis',
       detectMedicalEvent('My doctor told me to start taking Eliquis'),
       v => (v as { type?: string; drug_name?: string } | null)?.type === 'medication'
@@ -132,11 +146,15 @@ export async function runListMedicationRoutingCollisionTests() {
       v => (v as { type?: string; drug_name?: string } | null)?.type === 'medication'
         && (v as { drug_name?: string }).drug_name === 'Eliquis',
       'medication Eliquis not off');
-    assert('LMRC-E2 stopped taking Eliquis',
+    // LMRC-E2 (Tier-2 closure): bare "I stopped taking Eliquis" carries no
+    // Tier-H evidence either — now abstains, same disclosed consequence as
+    // LMRC-D1/D2 above. The narrow discontinuation SHAPE ("take me off X",
+    // LMRC-E1 above) is a distinct, unaffected Tier-H path; "stopped
+    // taking X" is not that shape.
+    assert('LMRC-E2 bare "I stopped taking Eliquis" now abstains (Tier-2 closure)',
       detectMedicalEvent('I stopped taking Eliquis'),
-      v => (v as { type?: string; drug_name?: string } | null)?.type === 'medication'
-        && (v as { drug_name?: string }).drug_name === 'Eliquis',
-      'medication Eliquis');
+      v => v === null,
+      'null');
     assert('LMRC-E3 I\'m off Eliquis now',
       detectMedicalEvent("I'm off Eliquis now"),
       v => v == null,
