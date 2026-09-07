@@ -55,4 +55,4 @@ export const CORRECTION_REPAIR_ENABLED = true;
 //   is unconditional production code (medication-only, additive, and
 //   strictly narrows an existing gap — not new capability requiring a flag).
 //   Default OFF — do not flip without CTO review of device evidence.
-export const MEDICATION_SEMANTIC_INTERPRETATION_ENABLED = false;
+export const MEDICATION_SEMANTIC_INTERPRETATION_ENABLED = true;
