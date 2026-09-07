@@ -41,3 +41,18 @@ export const PROACTIVE_SURFACING_ENABLED = true;
 // S_CONVERSATIONAL_REPAIR_DESIGN_SPEC.md v2. Does not alter existing
 // Yes/No matching or any domain's committed-write path.
 export const CORRECTION_REPAIR_ENABLED = true;
+
+// MEDICATION_SEMANTIC_INTERPRETATION_ENABLED:
+//   Governing docs: HERALD_MEDICATION_SEMANTIC_INTERPRETATION_V1_IMPLEMENTATION_DESIGN.md,
+//   HERALD_MEDICATION_SEMANTIC_INTERPRETATION_V1_CTO_REVIEW_RESOLUTION.md.
+//   Gates the SemanticProposal -> deterministic admission seam in
+//   routeIntent.ts (medicationSemanticInterpretation.ts). Runs only after
+//   every deterministic capturer/floor mechanism has had first refusal and
+//   only before the generic classifyLLM tier-3 capture path. OFF ⇒ the seam
+//   never generates a proposal, never calls admission, and routing is
+//   byte-for-byte identical to before this flag existed. Does not gate the
+//   classifyLLM medication-evidence bypass closure in routeIntent.ts, which
+//   is unconditional production code (medication-only, additive, and
+//   strictly narrows an existing gap — not new capability requiring a flag).
+//   Default OFF — do not flip without CTO review of device evidence.
+export const MEDICATION_SEMANTIC_INTERPRETATION_ENABLED = false;

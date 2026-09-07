@@ -187,7 +187,7 @@ const DRUG_FILLER_WORDS = new Set([
   'a', 'an', 'the', 'my', 'your', 'some', 'it', 'that', 'this', 'one', 'of', 'with', 'for',
   'daily', 'twice', 'once', 'new', 'old', 'low', 'high', 'small', 'big',
   'morning', 'evening', 'night', 'nightly',
-  'take', 'taking', 'on', 'prescribed', 'started', 'me', 'called', 'named',
+  'take', 'taking', 'on', 'prescribed', 'started', 'using', 'use', 'me', 'called', 'named',
   'something', 'anything', 'stuff',
   'medication', 'medications', 'meds', 'med', 'pill', 'pills',
   'tablet', 'tablets', 'capsule', 'capsules', 'prescription', 'prescriptions',
@@ -195,6 +195,36 @@ const DRUG_FILLER_WORDS = new Set([
   'blood', 'pressure', 'sugar', 'heart', 'thyroid', 'cholesterol', 'pain',
   'off', 'out', 'from',
 ]);
+
+/**
+ * Bounded lookahead — walk up to 6 tokens past the trigger, skip fillers,
+ * stop at the first real candidate. Returns not just the candidate but the
+ * fillers skipped en route and whatever remains after it (both within the
+ * same 6-token window) — shared by extractDrugName (candidate only) and
+ * hasMedicationDomainEvidence's residual-floor guard below (2026-09-06
+ * floor repair: the skipped/trailing shape is exactly what that guard needs
+ * to see; duplicating this walk a second time would let the two drift).
+ */
+function walkDrugCandidate(afterTrigger: string): { candidate: string | undefined; skipped: string[]; trailing: string[] } {
+  const tokens = afterTrigger.split(/\s+/).filter(Boolean).slice(0, 6);
+  const skipped: string[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i].replace(/[.,;:!?]+$/, "");
+    if (!token) continue;
+    const lower = token.toLowerCase();
+    if (
+      DRUG_FILLER_WORDS.has(lower) ||
+      STRUCTURAL_LIST_OPERATORS.has(lower) ||
+      /^\d+$/.test(token) ||
+      (token.length < 3 && !/^[A-Z]/.test(token))
+    ) {
+      skipped.push(token);
+      continue;
+    }
+    return { candidate: token, skipped, trailing: tokens.slice(i + 1) };
+  }
+  return { candidate: undefined, skipped, trailing: [] };
+}
 
 export function extractDrugName(text: string): string | undefined {
   const discontinuation = text.match(
@@ -210,22 +240,8 @@ export function extractDrugName(text: string): string | undefined {
   const triggerMatch = text.match(DRUG_TRIGGER);
   if (!triggerMatch) return undefined;
 
-  // Bounded lookahead — walk up to 6 tokens past the trigger, skip fillers,
-  // stop at the first real candidate. Nothing real in that span → undefined.
   const afterTrigger = text.slice(triggerMatch.index! + triggerMatch[0].length);
-  const tokens = afterTrigger.split(/\s+/).filter(Boolean).slice(0, 6);
-
-  for (const rawToken of tokens) {
-    const token = rawToken.replace(/[.,;:!?]+$/, "");
-    if (!token) continue;
-    const lower = token.toLowerCase();
-    if (DRUG_FILLER_WORDS.has(lower)) continue;
-    if (STRUCTURAL_LIST_OPERATORS.has(lower)) continue;
-    if (/^\d+$/.test(token)) continue; // bare number — dosage handled separately
-    if (token.length < 3 && !/^[A-Z]/.test(token)) continue; // short lowercase noise
-    return token;
-  }
-  return undefined;
+  return walkDrugCandidate(afterTrigger).candidate;
 }
 
 // Matches a dosage mention anywhere in the sentence: "500mg", "10 mg",
@@ -323,6 +339,164 @@ export function hasMedicalVisitDomainEvidence(text: string): boolean {
   return MEDICAL_VISIT_DOMAIN_EVIDENCE.test(text);
 }
 
+// ─── Medication domain evidence (2026-09-06 medication admission repair) ──
+// Generic trigger verbs alone ("taking", "using", "on", "started") are not
+// sufficient to promote an arbitrary following noun into medication capture
+// -- proven by device evidence: "We're taking a vacation next month" / "a
+// trip to the mountains" / "a class this semester", "I'm using a new
+// router", "I'm on vacation next week", "I'm taking my car to the shop",
+// "I started a new job", "I take the train to work" all satisfied the bare
+// MEDICATION trigger with zero medication-specific evidence
+// (HERALD_SEP6_DEVICE_ROUTE_DIAGNOSTIC_2026-09-06.md). Mirrors
+// hasMedicalVisitDomainEvidence's architectural role but with vocabulary
+// specific to genuine medication-taking -- doctor/appointment vocabulary is
+// semantically wrong here.
+//
+// Composed entirely from already-existing signals, no exhaustive drug-name
+// dictionary: dosage evidence (extractDosage), explicit medication/
+// pharmacological terminology (the same words DRUG_FILLER_WORDS already
+// treats as "about medication in general, never itself a drug name" --
+// reused here for their complementary positive-evidence role, plus
+// "prescribed", already one of MEDICATION's own trigger verbs and
+// inherently medical), doctor/specialty attribution (extractDoctorName/
+// extractSpecialty, already used by hasMedicalVisitDomainEvidence), and the
+// existing discontinuation shape ("take me off X" -- already a narrow,
+// specific, separately-gated pattern, distinct from ordinary noun objects).
+//
+// A candidate with none of the above is still admitted if (a) it is
+// capitalized -- the shape a recognized brand name typically takes in
+// transcribed speech -- or (b) the admitting trigger is one of the
+// historically-sufficient-alone bare verbs: every existing Herald regression
+// test for a bare, lowercase, otherwise-unevidenced medication name uses
+// "taking"/"take"/"started"/"using" (e.g. "I'm taking metformin", "I take
+// Eliquis"); none uses bare "on". A determiner (a/an/the/my/your/his/her/
+// our/their/some/this/that/one) immediately following the trigger overrides
+// all of the above and always requires real evidence -- every device-
+// observed false positive had exactly this shape ("taking A vacation",
+// "using A new router", "on A plane") and no genuine medication statement in
+// Herald's existing test suite is phrased this way.
+const MEDICATION_TERMINOLOGY_RE =
+  /\b(?:medication|medications|meds|med|pill|pills|tablet|tablets|capsule|capsules|prescription|prescriptions|prescribed|medicine|medicines|dose|dosage)\b/i;
+
+const DRUG_CANDIDATE_DETERMINER_RE =
+  /^(?:a|an|the|my|your|his|her|our|their|some|this|that|one)\b/i;
+
+const DISCONTINUATION_SHAPE_RE = /\btake\s+(?:me|us|him|her|them)\s+off(?:\s+of)?\s+/i;
+
+// Historically-sufficient-alone bare trigger verbs -- see comment above.
+// Deliberately excludes "on"/"i'm on"/"prescribed" (the latter is already
+// covered by MEDICATION_TERMINOLOGY_RE above, so omitting it here changes
+// nothing observable).
+const LENIENT_BARE_MEDICATION_TRIGGER = /\b(?:take|taking|started|using|use)\b/i;
+
+// ─── Residual floor repair (2026-09-06, follow-up) ─────────────────────────
+// HERALD_MEDICATION_FLOOR_ACCEPTANCE_CONTRADICTION_DIAGNOSTIC_2026-09-06.md.
+// The determiner override above only ever inspected the literal token
+// immediately after the FIRST trigger match in raw text. Two device/device-
+// adjacent-proven gaps in that scope, both closed here without any new
+// drug-name dictionary, both reusing vocabulary already in this file:
+//
+// 1) Repeated/stacked trigger verbs hide a later determiner ("started USING
+//    my new camera" — "using" itself was never filtered as filler, so the
+//    walk stopped on "using" before ever reaching "my"). Fix: "using"/"use"
+//    now join the other three lenient trigger-verb forms already in
+//    DRUG_FILLER_WORDS, and the override now scans every token
+//    walkDrugCandidate actually skipped en route to the candidate — not just
+//    the literal first one — for a determiner.
+// 2) Determiner-less narrative continuations ("take LONG walks" — no
+//    determiner anywhere, so the override never engaged at all). Fix: the
+//    lenient bare-trigger fallback now additionally requires the candidate
+//    to terminate its clause — trailing content is allowed only when it is
+//    itself already-recognized medication modifier material (a dosage span
+//    via extractDosage, a frequency span via extractFrequency, or a bare
+//    temporal token via the existing NON_VOCATIVE_READ_TOKEN set already
+//    used elsewhere in this file for an unrelated read-shape purpose) —
+//    exactly the shape every genuine bare-lowercase positive in the locked
+//    suite already has (e.g. "started metformin YESTERDAY").
+export function hasMedicationDomainEvidence(text: string, drugName?: string): boolean {
+  if (extractDosage(text)) return true;
+  if (MEDICATION_TERMINOLOGY_RE.test(text)) return true;
+  if (extractDoctorName(text)) return true;
+  if (extractSpecialty(text)) return true;
+  if (DISCONTINUATION_SHAPE_RE.test(text)) return true;
+
+  const triggerMatch = text.match(DRUG_TRIGGER);
+  const walk = triggerMatch
+    ? walkDrugCandidate(text.slice(triggerMatch.index! + triggerMatch[0].length))
+    : { candidate: undefined, skipped: [] as string[], trailing: [] as string[] };
+
+  if (walk.skipped.some((tok) => DRUG_CANDIDATE_DETERMINER_RE.test(tok))) return false;
+  if (!isAllowedTrailingMedicationContent(walk.trailing)) return false;
+
+  if (drugName && /^[A-Z]/.test(drugName)) return true;
+  return LENIENT_BARE_MEDICATION_TRIGGER.test(text);
+}
+
+/** Trailing tokens after a bare lenient-trigger candidate are permitted only
+ *  when they are themselves already-recognized medication modifier material
+ *  — never an arbitrary continuation of the object noun phrase. Reuses
+ *  extractDosage/extractFrequency (dosage/frequency spans anywhere in the
+ *  trailing text) and NON_VOCATIVE_READ_TOKEN (a closed temporal-token set
+ *  already defined above for afterLeadingReadVocative's unrelated purpose)
+ *  — no new vocabulary. */
+function isAllowedTrailingMedicationContent(trailing: string[]): boolean {
+  if (trailing.length === 0) return true;
+  const trailingText = trailing.join(' ');
+  if (extractDosage(trailingText)) return true;
+  if (extractFrequency(trailingText)) return true;
+  return trailing.every((rawTok) => NON_VOCATIVE_READ_TOKEN.test(rawTok.replace(/[.,;:!?]+$/, '')));
+}
+
+// ─── Independent medication evidence (Semantic Interpretation V1 seam) ────
+// Additive sibling to hasMedicationDomainEvidence. Does not replace that
+// function or change detectMedicalEvent's extraction role. The residual
+// floor repair above does modify hasMedicationDomainEvidence (shared walk,
+// skipped-token determiner scan, trailing-clause terminator); those
+// positional floor heuristics stay on the regex/token-walk path. This
+// function is only consulted after a SemanticProposal focus has already
+// been identified and provenance-verified.
+//
+// hasMedicationDomainEvidence's determiner / trailing-clause guards
+// (DRUG_CANDIDATE_DETERMINER_RE and isAllowedTrailingMedicationContent
+// above) are not themselves domain evidence — they compensate for
+// extractDrugName's blind, position-based token walk being unable to tell
+// "taking A vacation" from "taking AN Advil." That precondition (an
+// unverified, positionally-blind candidate) does not hold for a
+// SemanticProposal's `focus`: a focus span has already been independently
+// identified and provenance-verified (checked to be a literal substring of
+// raw_phrase) by a different, non-positional mechanism before this function
+// is ever consulted. Reapplying a position-in-raw-text heuristic to that
+// already-verified span would test the wrong thing (regex-extraction
+// confidence) rather than the right thing (does domain evidence for THIS
+// candidate exist anywhere in the utterance). This function therefore
+// reuses every genuinely reusable, position-independent evidence signal
+// already in this file, and deliberately omits the floor's positional
+// guards, which belong solely to the regex/token-extraction mechanism
+// above and must never be copied here.
+//
+// One check is new here (not present in hasMedicationDomainEvidence at all):
+// a candidate that is itself a filler/category word (DRUG_FILLER_WORDS) or
+// bare medication terminology (MEDICATION_TERMINOLOGY_RE) — e.g. "medicine,"
+// "pill," "prescription" — is never an admissible medication NAME, regardless
+// of how much domain evidence surrounds it. This mirrors extractDrugName's
+// own DRUG_FILLER_WORDS exclusion for its token walk, applied here to a
+// model-identified focus instead of a regex-walked token.
+export function hasIndependentMedicationEvidence(raw: string, focus?: string): boolean {
+  if (focus) {
+    const normalizedFocus = focus.trim().toLowerCase();
+    if (!normalizedFocus) return false;
+    if (DRUG_FILLER_WORDS.has(normalizedFocus)) return false;
+    if (MEDICATION_TERMINOLOGY_RE.test(focus)) return false;
+  }
+  if (extractDosage(raw)) return true;
+  if (MEDICATION_TERMINOLOGY_RE.test(raw)) return true;
+  if (extractDoctorName(raw)) return true;
+  if (extractSpecialty(raw)) return true;
+  if (DISCONTINUATION_SHAPE_RE.test(raw)) return true;
+  if (focus && /^[A-Z]/.test(focus)) return true;
+  return false;
+}
+
 export function detectMedicalEvent(text: string): MedicalEvent | null {
   const raw = text.trim();
   if (!raw) return null;
@@ -336,7 +510,7 @@ export function detectMedicalEvent(text: string): MedicalEvent | null {
   let hasPastVisit = PAST_VISIT.test(raw);
   let hasFutureVisit =
     FUTURE_VISIT.test(raw) || (FUTURE_SEE_DR.test(raw) && FORWARD_VISIT_EVIDENCE.test(raw));
-  const hasMedication = MEDICATION.test(raw);
+  let hasMedication = MEDICATION.test(raw);
   const hasAdvice = ADVICE.test(raw);
 
   if (hasPastVisit && !hasMedicalVisitDomainEvidence(raw)) {
@@ -352,6 +526,15 @@ export function detectMedicalEvent(text: string): MedicalEvent | null {
   // hasMedicalVisitDomainEvidence.
   if (hasFutureVisit && !hasMedicalVisitDomainEvidence(raw)) {
     hasFutureVisit = false;
+  }
+  // Medication admission guard (2026-09-06) — see hasMedicationDomainEvidence
+  // above. Computed before the "nothing matched" early return below, exactly
+  // mirroring hasPastVisit/hasFutureVisit's own guard shape. The candidate
+  // is extracted once here and reused for the final drug_name field so
+  // extractDrugName never runs twice.
+  const medicationCandidate = hasMedication ? extractDrugName(raw) : undefined;
+  if (hasMedication && !hasMedicationDomainEvidence(raw, medicationCandidate)) {
+    hasMedication = false;
   }
 
   if (!hasPastVisit && !hasFutureVisit && !hasMedication && !hasAdvice) return null;
@@ -375,7 +558,7 @@ export function detectMedicalEvent(text: string): MedicalEvent | null {
 
   const doctor_name = extractDoctorName(raw);
   const specialty = extractSpecialty(raw);
-  const drug_name = hasMedication ? extractDrugName(raw) : undefined;
+  const drug_name = hasMedication ? medicationCandidate : undefined;
   const dosage = raw.match(DOSAGE)?.[1];
   const frequency = hasMedication ? extractFrequency(raw) : undefined;
   const advice = hasAdvice ? extractAdvice(raw) : undefined;

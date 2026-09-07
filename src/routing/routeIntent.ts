@@ -5,7 +5,10 @@
 import type { IntentRecord, ClassifyOutcome } from '../hooks/llmLayers';
 import type { TierDecision, LocalContext } from './tierRouter';
 import { writeServiceProvider, detectServiceCapture, detectPhoneCapture, detectInsuranceCapture, captureHouseholdInsurance, normalizeCarrier } from '../utils/householdCapture';
-import { detectDiagnosisCapture, detectDoctorIntroCapture, detectMedicalEvent, isReadShapedUtterance } from '../utils/detectMedicalEvent';
+import { detectDiagnosisCapture, detectDoctorIntroCapture, detectMedicalEvent, isReadShapedUtterance, hasMedicationDomainEvidence, extractDrugName } from '../utils/detectMedicalEvent';
+import type { LlamaContext } from 'llama.rn';
+import { MEDICATION_SEMANTIC_INTERPRETATION_ENABLED } from '../constants/features';
+import { generateMedicationSemanticProposal, admitMedicationSemanticProposal } from './medicationSemanticInterpretation';
 import { detectFamilyCapture } from '../utils/familyCapture';
 import { getDB } from '../db/schema';
 import { capturePerson } from '../db/capturePerson';
@@ -238,6 +241,26 @@ export async function mapCallIntents(
     out.push(i);
   }
   return out;
+}
+
+// Medication bypass closure (CTO review resolution §1, medication-only,
+// additive). classifyLLM's own prompt (llmLayers.ts) instructs it to
+// self-extract drug/dosage/frequency directly from free text for
+// 'medical_capture' — the ONLY gate standing between that model output and
+// DOMAIN_WRITERS.medical_capture was shouldRefuseLlmCaptureProposal's D1/D3/
+// D4/D5, which test address/narrative shape, never medication-domain
+// evidence. This closes that gap at the single site (below) where an
+// 'llm'-sourced capture becomes a RouteDecision, by requiring the exact same,
+// completely unmodified hasMedicationDomainEvidence the deterministic floor
+// already uses. Deliberately scoped to 'medical_capture' only — does not
+// generalize to any other STATE_CAPTURE_TYPES member, does not modify
+// speechActAuthority.ts, does not touch classifyLLM or DOMAIN_WRITERS.
+export function llmMedicationCaptureLacksEvidence(text: string, intents: IntentRecord[]): boolean {
+  return intents.some((i) => {
+    if (i.type !== 'medical_capture') return false;
+    const candidate = i.drug?.trim() || extractDrugName(text);
+    return !hasMedicationDomainEvidence(text, candidate);
+  });
 }
 
 /**
@@ -1967,6 +1990,11 @@ export async function routeIntent(
     llmStatus?: 'unavailable' | 'loading' | 'ready' | 'error';
     captureContext?: CaptureContext;
     resolveContact?: (nameOrRelation: string) => Promise<{phone:string;name:string;contactId?:string;source:'herald'|'device'}|{phone:null;name:string;source:'device';candidateNames:string[];deviceCandidates:{name:string;phone:string}[]}|null>;
+    /** Medication Semantic Interpretation V1 seam only. Injected accessor for
+     *  the interpreter's own model context — independent of classifyLLM/
+     *  llmReady above. Omitted or returning null => the seam treats the
+     *  interpreter as unavailable and falls through unchanged. */
+    getMedicationSemanticInterpreterCtx?: () => LlamaContext | null;
   },
 ): Promise<RouteDecision> {
   const routeT0 = latMono();
@@ -2220,6 +2248,57 @@ export async function routeIntent(
     };
   }
 
+  // ── Medication Semantic Interpretation V1 seam ──────────────────────────
+  // Governing docs: HERALD_MEDICATION_SEMANTIC_INTERPRETATION_V1_IMPLEMENTATION_DESIGN.md,
+  // HERALD_MEDICATION_SEMANTIC_INTERPRETATION_V1_CTO_REVIEW_RESOLUTION.md.
+  // Placement: AFTER every deterministic capturer/floor mechanism above —
+  // including detectMedicalEvent/hasMedicationDomainEvidence via the tier-1
+  // medical_capture intercept immediately above, and every capturer in
+  // CAPTURERS_WITH_PHONE earlier in this function — has already had first
+  // refusal, and BEFORE the generic classifyLLM tier-3 capture path below.
+  // Does not move existing routing precedence. Law 0 (emergency) and pending
+  // ownership are checked upstream in processUtterance, before routeIntent is
+  // ever called (processUtterance.ts) — this block cannot see, preempt, or
+  // race either; ctx.hasPending is passed as false here only as the required
+  // defensive re-check inside admitMedicationSemanticProposal itself (that
+  // function DEFERs unconditionally if it were ever true).
+  //
+  // The interpreter proposes meaning only. Admission is a pure, deterministic
+  // function (medicationSemanticInterpretation.ts). On ADMIT this constructs
+  // nothing but the pre-existing 'medical_capture' IntentRecord using only
+  // provenance-verified values and the original raw utterance, tagged
+  // source:'llm' so it travels through the existing generic confirm gate
+  // (applyIntents, processUtterance.ts) and DOMAIN_WRITERS.medical_capture's
+  // own confirm gate, unmodified — no new writer, DB path, table, pending
+  // primitive, or IntentRecord variant is created.
+  if (MEDICATION_SEMANTIC_INTERPRETATION_ENABLED) {
+    const generation = await generateMedicationSemanticProposal(
+      text,
+      deps.getMedicationSemanticInterpreterCtx ?? (() => null),
+    );
+    if (generation.status === 'ok') {
+      const admission = admitMedicationSemanticProposal(text, generation.proposal, { hasPending: false });
+      if (admission.decision === 'ADMIT') {
+        return {
+          kind: 'capture',
+          intents: [{
+            type: 'medical_capture',
+            drug: admission.drug,
+            dosage: admission.dosage,
+            frequency: admission.frequency,
+            raw: text,
+          }],
+          source: 'llm',
+          reason: 'semantic_proposal:medication_admit',
+        };
+      }
+      // CLARIFY / REJECT / DEFER: fall through unchanged — identical to
+      // today's behavior, exactly as an empty classifier result already does.
+    }
+    // 'parse_fail' / 'unavailable': fall through unchanged — treated
+    // identically to "no proposal."
+  }
+
   // LAT-ARC-B: tracks whether a REAL classifyLLM completion happened for
   // this utterance (never set for a not_ready/never-attempted classifier).
   // Carried only onto the 'backend' return below — 'capture'/source:'llm'
@@ -2282,7 +2361,22 @@ export async function routeIntent(
       await mapCallIntents(out.intents, text, deps)
     ).filter(i => i.type !== 'pass');
     // CONV-C1: narration must not acquire capture authority from structural validity alone.
-    if (llmResult.length > 0 && !shouldRefuseLlmCaptureProposal(text, llmResult)) {
+    // Medication bypass closure (CTO review resolution, §1): classifyLLM may
+    // self-extract a drug name directly from free text for 'medical_capture'
+    // (llmLayers.ts prompt) with no medication-domain-evidence check of its
+    // own — shouldRefuseLlmCaptureProposal's D1/D3/D4/D5 test address/tense
+    // only. Medication-only, additive: reuses hasMedicationDomainEvidence
+    // completely unmodified, at this sole llm-capture conversion site. A
+    // failing check falls through unchanged to the existing
+    // needs_clarification tail below, exactly as an empty classifier result
+    // already does today — no new state, whole batch declines together
+    // (same all-or-nothing precedent processUtterance's allConverted gate
+    // already applies to this exact array).
+    if (
+      llmResult.length > 0 &&
+      !shouldRefuseLlmCaptureProposal(text, llmResult) &&
+      !llmMedicationCaptureLacksEvidence(text, llmResult)
+    ) {
       return {
         kind: 'capture',
         intents: llmResult,

@@ -1,0 +1,247 @@
+// src/routing/medicationSemanticInterpretation.ts
+// Medication Semantic Interpretation V1 — the probabilistic proposal +
+// deterministic admission seam approved in:
+//   HERALD_MEDICATION_SEMANTIC_INTERPRETATION_V1_IMPLEMENTATION_DESIGN.md
+//   HERALD_MEDICATION_SEMANTIC_INTERPRETATION_V1_CTO_REVIEW_RESOLUTION.md
+//
+// Ratified architecture:
+//   natural-language utterance -> probabilistic SemanticProposal
+//     -> deterministic admission -> existing authoritative capability
+//     -> authoritative state/action.
+// The interpreter proposes meaning, never authority. This module contains
+// NO database access, NO session/pending mutation, and NO write authority of
+// any kind — it produces a pure decision that the caller (routeIntent.ts)
+// converts into the pre-existing 'medical_capture' IntentRecord shape.
+//
+// SemanticProposal remains provider-neutral and storage-blind:
+//   { act, mentions[], predicate, focus, confidence }
+
+import type { LlamaContext } from 'llama.rn';
+import {
+  detectMedicalEvent,
+  extractDosage,
+  extractFrequency,
+  hasIndependentMedicationEvidence,
+} from '../utils/detectMedicalEvent';
+
+// ─── SemanticProposal (ratified shape, unmodified) ────────────────────────
+
+/** Closed act vocabulary for the medication capability only — not a
+ *  redefinition of the shared SemanticProposal contract's field names. Only
+ *  'assert' can ever be admitted; every other value rejects deterministically. */
+export type SemanticAct = 'assert' | 'read' | 'correct' | 'cancel' | 'confirm' | 'fragment' | 'unclear';
+
+const SEMANTIC_ACTS = new Set<SemanticAct>(['assert', 'read', 'correct', 'cancel', 'confirm', 'fragment', 'unclear']);
+
+export type SemanticMention = {
+  text: string;
+};
+
+export type SemanticProposal = {
+  act: SemanticAct;
+  mentions: SemanticMention[];
+  predicate: string;
+  focus: string;
+  confidence: number;
+};
+
+// ─── Strict parse / validation — no coercion ───────────────────────────────
+// Mirrors the validate-and-reject-on-any-mismatch discipline already proven
+// by parseSemanticProposal in src/dev/listRemoveInterpretationShadow.ts.
+// Any field of the wrong type or shape rejects the WHOLE proposal (null) —
+// never defaulted, never coerced, never partially trusted.
+export function parseSemanticProposal(rawModelOutput: string): SemanticProposal | null {
+  const start = rawModelOutput.indexOf('{');
+  const end = rawModelOutput.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawModelOutput.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+  const o = parsed as Record<string, unknown>;
+
+  if (!SEMANTIC_ACTS.has(o.act as SemanticAct)) return null;
+  if (typeof o.predicate !== 'string') return null;
+  if (typeof o.focus !== 'string') return null;
+  if (typeof o.confidence !== 'number' || Number.isNaN(o.confidence) || !Number.isFinite(o.confidence)) return null;
+  if (o.confidence < 0 || o.confidence > 1) return null;
+  if (!Array.isArray(o.mentions)) return null;
+
+  const mentions: SemanticMention[] = [];
+  for (const m of o.mentions) {
+    if (!m || typeof m !== 'object') return null;
+    const text = (m as Record<string, unknown>).text;
+    if (typeof text !== 'string') return null;
+    mentions.push({ text });
+  }
+
+  return {
+    act: o.act as SemanticAct,
+    mentions,
+    predicate: o.predicate,
+    focus: o.focus,
+    confidence: o.confidence,
+  };
+}
+
+// ─── Provenance verification (Invariant 3) ─────────────────────────────────
+// A trust-critical span is authoritative only if it is (a) a contiguous,
+// case/whitespace-normalized substring of raw_phrase, or (b) the output of
+// an EXISTING registered deterministic normalizer (extractDosage's own
+// spoken-number table) applied to raw_phrase — mirroring passesSubstringGate
+// (src/db/medicalDB.ts) exactly, so a model rephrasing/normalization that is
+// not one of those two things can never become an authoritative value
+// (Invariant 4). This function does not import passesSubstringGate itself
+// (that would pull a DB-adjacent module into a DB-free module) but
+// reproduces its exact normalization rule for spans this module inspects
+// before any IntentRecord is ever constructed — the write path re-checks the
+// identical rule independently at write time (defense in depth, unchanged).
+function normalizeForProvenance(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+export function isProvenanceVerified(value: string, raw: string): boolean {
+  const v = value?.trim();
+  if (!v) return false;
+  const normValue = normalizeForProvenance(v);
+  const normRaw = normalizeForProvenance(raw);
+  if (normRaw.includes(normValue)) return true;
+  const normalizedDosage = extractDosage(raw);
+  if (normalizedDosage && normalizeForProvenance(normalizedDosage) === normValue) return true;
+  return false;
+}
+
+// ─── Deterministic admission ────────────────────────────────────────────────
+
+export type MedicationAdmissionDecision =
+  | { decision: 'ADMIT'; drug: string; dosage?: string; frequency?: string }
+  | { decision: 'CLARIFY'; reason: string }
+  | { decision: 'REJECT'; reason: string }
+  | { decision: 'DEFER'; reason: string };
+
+export type MedicationAdmissionContext = {
+  /** Invariant 1: pending state owns the turn. True whenever
+   *  session.hasPending() is armed — this function must never be reached in
+   *  that state by call-site construction, but is re-checked here defensively. */
+  hasPending: boolean;
+};
+
+const MEDICATION_SEMANTIC_CONFIDENCE_THRESHOLD = 0.6; // tunable; not a safety boundary (Invariant 6)
+
+/**
+ * Pure, synchronous, deterministic. No DB, no network, no session mutation
+ * (Invariant 8). Produces exactly one of ADMIT / CLARIFY / REJECT / DEFER.
+ *
+ * Evaluates the WHOLE utterance as one proposal — no clause segmentation is
+ * added here (V1 compound-utterance boundary, unchanged from the approved
+ * design).
+ */
+export function admitMedicationSemanticProposal(
+  raw: string,
+  proposal: SemanticProposal,
+  ctx: MedicationAdmissionContext,
+): MedicationAdmissionDecision {
+  // Invariant 1 — pending state owns the turn.
+  if (ctx.hasPending) return { decision: 'DEFER', reason: 'pending_owns_turn' };
+
+  // Invariant 2 — existing deterministic medication detection owns the turn
+  // first. Re-checks the exact, unmodified detectMedicalEvent the deterministic
+  // floor already runs (belt-and-suspenders against a future call-site
+  // regression; the approved insertion point in routeIntent.ts already
+  // guarantees this by construction/ordering).
+  if (detectMedicalEvent(raw)) return { decision: 'DEFER', reason: 'deterministic_floor_already_claims' };
+
+  if (proposal.act !== 'assert') {
+    return { decision: 'REJECT', reason: `non_assertive_act:${proposal.act}` };
+  }
+
+  const focus = proposal.focus.trim();
+  if (!focus) return { decision: 'REJECT', reason: 'empty_focus' };
+
+  // Invariant 3 — every trust-critical span provenance-verified against raw.
+  // A single unverified mention rejects the whole proposal — a hallucinated
+  // span is never merely dropped and silently proceeded with.
+  for (const mention of proposal.mentions) {
+    if (!isProvenanceVerified(mention.text, raw)) {
+      return { decision: 'REJECT', reason: 'unverified_mention' };
+    }
+  }
+  if (!isProvenanceVerified(focus, raw)) {
+    return { decision: 'REJECT', reason: 'unverified_focus' };
+  }
+
+  // Invariant 6 — confidence may cause clarification; it never grants
+  // admission by itself. Checked only AFTER provenance, never as a substitute
+  // for it.
+  if (proposal.confidence < MEDICATION_SEMANTIC_CONFIDENCE_THRESHOLD) {
+    return { decision: 'CLARIFY', reason: 'low_confidence' };
+  }
+
+  // Invariant 5 & 7 — hasIndependentMedicationEvidence (never
+  // hasMedicationDomainEvidence) supplies domain evidence, and itself refuses
+  // a filler/category focus ("medicine", "pill", "prescription") as a name.
+  if (!hasIndependentMedicationEvidence(raw, focus)) {
+    return { decision: 'CLARIFY', reason: 'insufficient_domain_evidence' };
+  }
+
+  // Invariant 4 — dosage/frequency are NEVER taken from the model's proposal
+  // (the ratified SemanticProposal V1 shape has no dosage/frequency field at
+  // all). They are independently re-derived from raw via the existing,
+  // already-production deterministic normalizers — the only route by which a
+  // dosage/frequency value may become authoritative.
+  const dosage = extractDosage(raw);
+  const frequency = extractFrequency(raw);
+
+  return { decision: 'ADMIT', drug: focus, dosage, frequency };
+}
+
+// ─── Proposal generation (interpreter I/O boundary) ────────────────────────
+// No DB, no session, no write authority (Invariant 8). Mirrors
+// generateShadowProposal's try/catch/unavailable discipline
+// (src/dev/listRemoveInterpretationShadow.ts) exactly. `getCtx` is injected
+// by the caller so this module has no direct wiring to any particular model
+// instance/lifecycle.
+
+export type ProposalGenerationResult =
+  | { status: 'ok'; proposal: SemanticProposal }
+  | { status: 'parse_fail'; raw: string }
+  | { status: 'unavailable' };
+
+export const MEDICATION_SEMANTIC_PROPOSAL_SYSTEM_PROMPT = `You extract JSON describing what a sentence expresses, for medication interpretation only.
+Do not claim any action occurred. Do not invent medication names, doctors, or dosages not present in the sentence.
+Return ONLY a JSON object with these keys:
+act: one of assert,read,correct,cancel,confirm,fragment,unclear
+mentions: array of {text} — each text MUST be copied verbatim from the sentence
+predicate: the verb/relation expressed (e.g. "take", "prescribed", "put on"), copied or closely derived from the sentence
+focus: the single span that names the medication being discussed, copied verbatim from the sentence; empty string if none
+confidence: number 0 to 1
+Describe the sentence, not the world. Never resolve or normalize a name. confidence never authorizes a capture by itself.`;
+
+export async function generateMedicationSemanticProposal(
+  raw: string,
+  getCtx: () => LlamaContext | null,
+): Promise<ProposalGenerationResult> {
+  const ctx = getCtx();
+  if (!ctx) return { status: 'unavailable' };
+  try {
+    const result = await ctx.completion({
+      messages: [
+        { role: 'system', content: MEDICATION_SEMANTIC_PROPOSAL_SYSTEM_PROMPT },
+        { role: 'user', content: raw },
+      ],
+      n_predict: 128,
+      temperature: 0,
+      top_p: 0.8,
+      top_k: 20,
+      min_p: 0,
+    } as any);
+    const text = String((result as any)?.content || (result as any)?.text || '').trim();
+    const proposal = parseSemanticProposal(text);
+    return proposal ? { status: 'ok', proposal } : { status: 'parse_fail', raw: text };
+  } catch {
+    return { status: 'unavailable' };
+  }
+}
