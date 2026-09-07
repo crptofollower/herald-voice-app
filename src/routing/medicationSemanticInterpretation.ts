@@ -48,6 +48,7 @@ import {
   isReadShapedUtterance,
   isMedicationQuestionShape,
 } from '../utils/detectMedicalEvent';
+import { isLlamaContextBusy } from '../utils/llamaContextExclusive';
 
 // ─── SemanticProposal (corrected shape) ────────────────────────────────────
 
@@ -243,12 +244,38 @@ focus: the single span that names the medication being discussed, copied verbati
 confidence: number 0 to 1
 Describe the sentence, not the world. Never resolve or normalize a name. confidence never authorizes a capture by itself.`;
 
+// Concurrency guard (bounded runtime wiring, 2026-09-07): this interpreter
+// has exactly one call site and one dedicated context — it needs only
+// "reject a re-entrant call to myself," not the multi-owner/wait-queue
+// machinery llamaContextExclusive.ts provides for the shared classifier
+// context (which arbitrates several named owners over one resource). A
+// single module-level flag is the smallest mechanism that guarantees no two
+// medication semantic completions run concurrently against this context.
+// Set/cleared around exactly one call site; the `finally` below is the only
+// reset point, so success, a caught exception, and a rejected completion
+// promise all clear it identically — no exit path can leave it stuck true.
+//
+// Also checks isLlamaContextBusy() (read-only, already exported by
+// llamaContextExclusive.ts — not modified here) before starting inference:
+// even though this context never shares KV state with the shared classifier
+// context, running two native inference sessions at the same wall-clock
+// moment on a resource-constrained mobile device is a real, unproven
+// concern this codebase has no evidence to dismiss. Deferring to
+// "unavailable" costs nothing and avoids it entirely, per the standing
+// preference for safe serialization over speculative concurrency
+// optimization. Never queues, never waits — both checks are plain
+// early-returns before any state is claimed.
+let interpreterInFlight = false;
+
 export async function generateMedicationSemanticProposal(
   raw: string,
   getCtx: () => LlamaContext | null,
 ): Promise<ProposalGenerationResult> {
   const ctx = getCtx();
   if (!ctx) return { status: 'unavailable' };
+  if (interpreterInFlight) return { status: 'unavailable' };
+  if (isLlamaContextBusy()) return { status: 'unavailable' };
+  interpreterInFlight = true;
   try {
     const result = await ctx.completion({
       messages: [
@@ -266,5 +293,7 @@ export async function generateMedicationSemanticProposal(
     return proposal ? { status: 'ok', proposal } : { status: 'parse_fail', raw: text };
   } catch {
     return { status: 'unavailable' };
+  } finally {
+    interpreterInFlight = false;
   }
 }

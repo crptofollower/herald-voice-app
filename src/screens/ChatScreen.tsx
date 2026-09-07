@@ -72,6 +72,7 @@ import { useMic } from "../hooks/useMic";
 import { useRaiseToWake } from "../hooks/useRaiseToWake";
 import { useDeviceMemory } from "../hooks/useDeviceMemory";
 import { useLocalLLM } from '../hooks/useLocalLLM';
+import { useMedicationSemanticInterpreterEngine } from '../hooks/useMedicationSemanticInterpreterEngine';
 import { classifyWithLLM } from '../hooks/llmLayers';
 import {
   selectConversationalWorker,
@@ -393,6 +394,7 @@ export default function ChatScreen() {
   const { status: llmStatus, activeModel, getCtx, getModelIdentity } = useLocalLLM();
   const { status: experimentalConvStatus, getCtx: getExperimentalCtx } = useExperimentalConversationalEngine();
   const { getCtx: getListRemoveShadowCtx } = useListRemoveInterpretationShadowEngine();
+  const { getCtx: getMedicationSemanticInterpreterCtx } = useMedicationSemanticInterpreterEngine();
   void activeModel;
 
   type ResolveContactFn = (nameOrRelation: string) => Promise<{ phone: string; name: string; contactId?: string; source: 'herald' | 'device' } | { phone: null; name: string; source: 'device'; candidateNames: string[]; deviceCandidates: { name: string; phone: string }[] } | null>;
@@ -1584,6 +1586,7 @@ export default function ChatScreen() {
         lists: getKnownListNames(),
       },
       resolveContact: resolveContactPhoneRef.current ?? undefined,
+      getMedicationSemanticInterpreterCtx,
     }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current, calendarPresentationRef.current, calendarContinuationRef.current, discourseRef.current);
     if (shadowSnapshot) {
       const rd = outcome.handled ? undefined : outcome.routeDecision;
@@ -2525,7 +2528,7 @@ export default function ChatScreen() {
         });
       } catch { /* never block the UI */ }
     }
-  }, [userId, messages, personaKey, lat, lng, locationLabel, getContextBlock, addMessage, setError, resetSpeech, enqueueSentence, resetStreamState, stop, llmStatus, getCtx, getModelIdentity, experimentalConvStatus, getExperimentalCtx, getListRemoveShadowCtx, dispatchLocalIntent, dispatchEmergency]);
+  }, [userId, messages, personaKey, lat, lng, locationLabel, getContextBlock, addMessage, setError, resetSpeech, enqueueSentence, resetStreamState, stop, llmStatus, getCtx, getModelIdentity, experimentalConvStatus, getExperimentalCtx, getListRemoveShadowCtx, getMedicationSemanticInterpreterCtx, dispatchLocalIntent, dispatchEmergency]);
 
   const handleSend = useCallback(() => {
     sendMessage(inputText.trim());
