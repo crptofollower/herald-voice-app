@@ -848,11 +848,15 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       if (!name || name.trim().length < 2) {
         return { status: 'failed', ack: 'What medication is that?' };
       }
-      const { isMedicationCorroborated } = await import('../db/factDB');
-      const confirmedBits = [name, dosage, frequency].filter(Boolean).join(', ');
-      const confirmPrompt = isMedicationCorroborated(raw)
-        ? `Got it — ${confirmedBits}. Sound right?`
-        : `Want me to remember ${name} as a medication?`;
+      // Conversational Presentation Contract V1: confirmation recites only
+      // already-authoritative name/dosage/frequency. Comma between drug and
+      // dosage; space-only between drug and frequency when dosage is absent.
+      const taking =
+        dosage && frequency ? `${name}, ${dosage}, ${frequency}`
+        : dosage ? `${name}, ${dosage}`
+        : frequency ? `${name} ${frequency}`
+        : name;
+      const confirmPrompt = `You're taking ${taking}. Want me to remember that?`;
       return {
         status: 'pending',
         prompt: confirmPrompt,
@@ -871,11 +875,10 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
             }
             if (result.action === 'superseded') {
               return { status: 'committed',
-                ack: composeCaptureAck('medical_capture', dosage ? `I've updated your ${name} to ${dosage}.` : `I've updated your ${name}.`) };
+                ack: composeCaptureAck('medical_capture', "Got it. I've updated it.") };
             }
             return { status: 'committed',
-              ack: composeCaptureAck('medical_capture', dosage ? `I'll remember ${name}, ${dosage}, with your medications.`
-                          : `I'll remember ${name} with your medications.`) };
+              ack: composeCaptureAck('medical_capture', "Got it. I'll remember that.") };
           } catch {
             return { status: 'failed', ack: "I'm having trouble holding onto that — say it once more?" };
           }

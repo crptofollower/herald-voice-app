@@ -225,13 +225,13 @@ export async function applyIntents(
   session: ConversationSession,
   ctx: { resolveContact?: ResolveContactFn } | undefined,
   source: 'deterministic' | 'llm',
-  llmGate?: { declineAck?: string },
+  llmGate?: { declineAck?: string; domainConfirmOwnsCapture?: boolean },
 ): Promise<{ responseText: string; commits: CommitResult[] }> {
   const results: CommitResult[] = [];
   for (const intent of intents) {
     const writer = DOMAIN_WRITERS[intent.type];
     if (!writer) continue;
-    if (source === 'llm') {
+    if (source === 'llm' && !llmGate?.domainConfirmOwnsCapture) {
       // Build C: do not call writer.add until the user confirms.
       results.push({
         status: 'pending',
@@ -776,13 +776,24 @@ export async function processUtterance(
     const declineAck = routeDecision.reason === 'llm:capture:ambiguous_operational_list'
       ? formatOperationalListClarification(extractAmbiguousAcquisitionObject(text) ?? '')
       : undefined;
+    // Conversational Presentation Contract V1: a Semantic Interpretation
+    // ADMIT is already deterministically admitted; domain-writer confirmation
+    // owns the capture. Keep RouteDecision.source as 'llm' (provenance). Do
+    // not send this path through Build C's generic prompt.
+    const domainConfirmOwnsCapture =
+      routeDecision.source === 'llm'
+      && routeDecision.reason === 'semantic_proposal:medication_admit';
+    const llmGate = {
+      ...(declineAck ? { declineAck } : {}),
+      ...(domainConfirmOwnsCapture ? { domainConfirmOwnsCapture: true } : {}),
+    };
     const { responseText, commits } = await applyIntents(
       routeDecision.intents,
       text,
       session,
       { resolveContact: deps.resolveContact },
       routeDecision.source,
-      declineAck ? { declineAck } : undefined,
+      Object.keys(llmGate).length > 0 ? llmGate : undefined,
     );
     if (discourse && commits.some((c) => c.status === 'committed')) {
       for (const intent of routeDecision.intents) {
