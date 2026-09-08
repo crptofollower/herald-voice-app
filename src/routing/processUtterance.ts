@@ -394,7 +394,13 @@ export async function processUtterance(
       outcome: commitResultOutcome(result.status),
       authorityTier: 'deterministic',
       assistantReplySummary: result.status === 'committed' || result.status === 'noop' || result.status === 'failed' ? result.ack : null,
-      focus: buildFocusEntry(result.focus, { status: result.status, source: 'deterministic' }),
+      // Active Subject / Reference Continuity V1: threads a resume closure's
+      // own referenceOnly signal (e.g. active-subject ambiguity resolution)
+      // through to buildFocusEntry so a grounded reference is recorded as
+      // tier:'conversational', never misread as an authoritative/proposal
+      // capture. Every existing domain resume closure omits this field, so
+      // this is a no-op for them (undefined, same as before).
+      focus: buildFocusEntry(result.focus, { status: result.status, source: 'deterministic', referenceOnly: result.referenceOnly }),
     });
     return { handled: true, source: 'pending_resume', responseText: composeAck([result]), commits: [result] };
   }

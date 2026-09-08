@@ -121,7 +121,15 @@ export function classifyFocusAuthority(facts: {
   status: CommitResult['status'];
   source: 'deterministic' | 'llm';
   resolverKey: string | undefined;
+  /** Active Subject / Reference Continuity V1: true only when this focus
+   *  came from GROUNDING a reference to an already-established candidate
+   *  (resolving "he" to Dr. Smith) rather than from a domain writer
+   *  claiming a fresh fact. Checked first, before the commit-lifecycle
+   *  facts below — a resolved reference is conversational evidence, never
+   *  authoritative or a proposal, regardless of status/resolverKey. */
+  referenceOnly?: boolean;
 }): ConversationTurnFocusTier {
+  if (facts.referenceOnly) return 'conversational';
   const hasResolverKey = typeof facts.resolverKey === 'string' && facts.resolverKey.length > 0;
   if (facts.status === 'committed' && hasResolverKey) return 'authoritative';
   if (facts.source === 'llm') return 'llm_proposal';
@@ -139,13 +147,14 @@ export function classifyFocusAuthority(facts: {
  */
 export function buildFocusEntry(
   envelope: DomainFocusEnvelope | undefined,
-  facts: { status: CommitResult['status']; source: 'deterministic' | 'llm' },
+  facts: { status: CommitResult['status']; source: 'deterministic' | 'llm'; referenceOnly?: boolean },
 ): ConversationTurnFocusEntry[] {
   if (!envelope) return [];
   const tier = classifyFocusAuthority({
     status: facts.status,
     source: facts.source,
     resolverKey: envelope.resolverKey,
+    referenceOnly: facts.referenceOnly,
   });
   return [
     {

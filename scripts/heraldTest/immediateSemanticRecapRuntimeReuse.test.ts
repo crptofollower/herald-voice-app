@@ -41,10 +41,14 @@ export async function runImmediateSemanticRecapRuntimeReuseTests() {
   // choice of which context to inject determines availability.
   assertTrue('Stage B module (immediateSemanticRecap.ts) never references LOCAL_LLM_ENABLED', !recapSrc.includes('LOCAL_LLM_ENABLED'));
 
-  // Q9 proof: both ChatScreen.tsx call sites now inject the independent
-  // interpreter context, not the dormant general classifier context.
+  // Q9 proof: every ChatScreen.tsx call site injects the independent
+  // interpreter context, not the dormant general classifier context. Was 2
+  // (both answerImmediateSemanticRecap sites); Active Subject / Reference
+  // Continuity V1 added a third, legitimate site (answerActiveSubjectReference,
+  // needs_clarification block) reusing the SAME bounded runtime the same way
+  // — not a new context, not a weakened check, one more correct call site.
   const recapCtxWiring = (chatSrc.match(/getInterpreterCtx:\s*getMedicationSemanticInterpreterCtx,/g) || []).length;
-  assertTrue('both resolveImmediateRecap call sites inject getMedicationSemanticInterpreterCtx', recapCtxWiring === 2);
+  assertTrue('every recap/active-subject call site injects getMedicationSemanticInterpreterCtx', recapCtxWiring === 3);
   assertTrue('no resolveImmediateRecap call site still injects the dormant general getCtx', !/resolveImmediateRecap: \(\) => answerImmediateSemanticRecap\(text, \{\s*\n\s*ledgerEntries: conversationLedgerRef\.current\.peek\(Date\.now\(\)\),\s*\n\s*getInterpreterCtx: getCtx,/.test(chatSrc));
 
   // Q2 proof: the interpreter engine hook itself is gated on its OWN flag,

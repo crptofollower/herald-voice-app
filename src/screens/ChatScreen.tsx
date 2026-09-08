@@ -111,6 +111,7 @@ import {
 import { createHotNarrativeRing, hasImmediatelyAdjacentHotAuthorization } from '../utils/hotNarrativeRing';
 import { createConversationTurnLedger, type ConversationTurnLedger } from '../routing/conversationTurnLedger';
 import { answerImmediateSemanticRecap } from '../routing/immediateSemanticRecap';
+import { answerActiveSubjectReference } from '../routing/activeSubjectReference';
 import { answerFromDevice } from '../utils/localAnswers';
 import { parseTimeFromText } from '../utils/parseTime';
 import { detectFamilyRead, answerFamilyRead } from '../utils/familyRead';
@@ -1688,6 +1689,29 @@ export default function ChatScreen() {
         ledgerEntries: conversationLedgerRef.current.peek(Date.now()),
         getInterpreterCtx: getMedicationSemanticInterpreterCtx,
       });
+      // Active Subject / Reference Continuity V1 (2026-09-xx). ONE generic
+      // opportunity, tried only after recap declines — the two mechanisms'
+      // Stage A shapes are structurally disjoint (recap answers "what did I
+      // just tell you"; this answers reference/identity-continuation shapes),
+      // so this never double-invokes for a turn recap already claimed.
+      // CTO correction: a successfully grounded continuation must NOT leave
+      // the canned misunderstanding reply standing (that would contradict
+      // what the mechanism actually understood) — it now claims the reply
+      // too, with a minimal neutral acknowledgment ('Okay.') that implies
+      // nothing about persistence. Only a genuine handled:false (shape
+      // didn't match, or Stage B could not confirm this was even the act —
+      // see activeSubjectReference.ts) falls through to the existing
+      // reason-specific chain below.
+      const activeSubjectOutcome = recapOutcome.handled
+        ? ({ handled: false } as const)
+        : await answerActiveSubjectReference(text, {
+            ledgerEntries: conversationLedgerRef.current.peek(Date.now()),
+            getInterpreterCtx: getMedicationSemanticInterpreterCtx,
+          });
+      const groundedFocus =
+        activeSubjectOutcome.handled && activeSubjectOutcome.kind === 'grounding'
+          ? activeSubjectOutcome.focus
+          : [];
       if (recapOutcome.handled) {
         reply = recapOutcome.reply;
         if (recapOutcome.kind === 'clarify_ambiguous') {
@@ -1699,6 +1723,34 @@ export default function ChatScreen() {
           ledgerOperation = 'read';
           ledgerOutcome = 'presented';
           ledgerAuthorityTier = 'deterministic';
+        }
+      } else if (activeSubjectOutcome.handled) {
+        reply = activeSubjectOutcome.reply;
+        if (activeSubjectOutcome.kind === 'ambiguous') {
+          clarifyRepairTurnRef.current = turnIndexRef.current;
+          // Existing ConversationSession pending authority (Correction 2) —
+          // no new ambiguity holder, no second clarification architecture.
+          // The next turn's reply (e.g. "Dr. Smith.") is deterministically
+          // consumed by processUtterance's own session.hasPending() check,
+          // before routing is ever reached, same as every other domain's
+          // pending. Its resume closure's CommitResult carries
+          // referenceOnly:true, so the ledger record it produces is
+          // recorded as tier:'conversational', never 'authoritative'.
+          sessionRef.current.setPending({
+            pendingKey: 'active_subject_clarify',
+            resume: activeSubjectOutcome.resume,
+          });
+          ledgerOperation = 'clarify_request';
+          ledgerOutcome = 'clarified';
+          ledgerAuthorityTier = 'conversational';
+        } else {
+          // 'grounding' and 'identity'/'content' alike: a plain,
+          // non-authoritative conversational turn (RAM evidence only, or a
+          // read of it) — never 'deterministic', which would misrepresent
+          // this as a domain read/write.
+          ledgerOperation = activeSubjectOutcome.kind === 'grounding' ? 'conversational' : 'read';
+          ledgerOutcome = activeSubjectOutcome.kind === 'grounding' ? 'generated' : 'presented';
+          ledgerAuthorityTier = 'conversational';
         }
       } else if (outcome.routeDecision.reason === 'ambiguous_operational_list') {
         reply = formatOperationalListClarification(outcome.routeDecision.guess ?? '');
@@ -1778,6 +1830,11 @@ export default function ChatScreen() {
         outcome: ledgerOutcome,
         authorityTier: ledgerAuthorityTier,
         assistantReplySummary: reply,
+        // Active Subject / Reference Continuity V1: [] for every existing
+        // path (unchanged); a resolved 'grounding' outcome attaches its
+        // tier:'conversational' focus here — the ONE ledger push this whole
+        // block already makes, not a second write.
+        focus: groundedFocus,
       });
       addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
       addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });

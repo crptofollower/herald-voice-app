@@ -79,6 +79,14 @@ export type DomainFocusEnvelope = {
   role?: 'primary' | 'secondary';
 };
 
+// Active Subject / Reference Continuity V1: a resume closure that only
+// GROUNDED a reference (resolved which existing candidate a pronoun/mention
+// denoted) rather than committing a domain fact sets this true alongside its
+// `focus`. It is the one signal conversationTurnLedgerWrite.ts's
+// classifyFocusAuthority() needs to route such a focus to `tier:'conversational'`
+// instead of misreading a resolved reference as a fresh authoritative/proposal
+// capture. Optional, defaults falsy — every existing writer/resume closure
+// omits it and is completely unaffected.
 export type CommitResult =
   | { status: 'committed'; ack: string;
       effect?:
@@ -88,7 +96,8 @@ export type CommitResult =
       /** Optional — see DomainFocusEnvelope above. Absence is legal; a
        *  writer that doesn't populate this has its commit completely
        *  unaffected (Slice 4 proof: focus is carried, never load-bearing). */
-      focus?: DomainFocusEnvelope }
+      focus?: DomainFocusEnvelope;
+      referenceOnly?: boolean }
   | { status: 'pending';   prompt: string; pendingKey: string;
       kind?: 'standard' | 'destructive';
       reaskPrompt?: string;
@@ -99,9 +108,10 @@ export type CommitResult =
       correctable?: import('./conversationSession').CorrectableField;
       resume: (userText: string) => Promise<CommitResult>;
       /** Proposed semantic identity, pre-confirmation — see DomainFocusEnvelope. */
-      focus?: DomainFocusEnvelope }
-  | { status: 'noop';      ack: string; focus?: DomainFocusEnvelope }
-  | { status: 'failed';    ack: string; focus?: DomainFocusEnvelope };
+      focus?: DomainFocusEnvelope;
+      referenceOnly?: boolean }
+  | { status: 'noop';      ack: string; focus?: DomainFocusEnvelope; referenceOnly?: boolean }
+  | { status: 'failed';    ack: string; focus?: DomainFocusEnvelope; referenceOnly?: boolean };
 
 export type ResolveContactFn = (n: string) => Promise<{phone:string;name:string;contactId?:string;source:'herald'|'device'}|{phone:null;name:string;source:'device';candidateNames:string[];deviceCandidates:{name:string;phone:string}[]}|null>;
 
@@ -1033,7 +1043,16 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
         if (visitOutcome) {
           attachVisitOutcome(id, visitOutcome, raw);
         }
-        return { status: 'committed', ack: composeCaptureAck('medical_visit', `I'll remember you saw ${doctorName}.`) };
+        return {
+          status: 'committed',
+          ack: composeCaptureAck('medical_visit', `I'll remember you saw ${doctorName}.`),
+          // Doctors carry no opaque entity id in this schema (see
+          // conversationalSubject.ts) — every deterministic doctor reader
+          // (getLastVisit, getUpcomingAppointments, getMedicalContacts) keys
+          // by normalized name, not the medical_records row id `id` above.
+          // resolverKey must be the name itself to stay reread-able.
+          focus: { kind: 'person', displayValue: doctorName, resolverKey: doctorName, referable: true },
+        };
       };
 
       const confirmVisit = (doctorName: string): CommitResult => {
@@ -1318,7 +1337,13 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
             if (!verified) {
               return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
             }
-            return { status: 'committed', ack: composeCaptureAck('doctor_intro_capture', `I'll remember ${name} as your ${specialty}.`) };
+            return {
+              status: 'committed',
+              ack: composeCaptureAck('doctor_intro_capture', `I'll remember ${name} as your ${specialty}.`),
+              // Same name-as-resolverKey convention as medical_visit above —
+              // doctors have no opaque entity id in this schema.
+              focus: { kind: 'person', displayValue: name, resolverKey: name, referable: true },
+            };
           } catch {
             return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
           }
