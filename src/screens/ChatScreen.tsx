@@ -110,6 +110,7 @@ import {
 } from '../utils/ephemeralConversation';
 import { createHotNarrativeRing, hasImmediatelyAdjacentHotAuthorization } from '../utils/hotNarrativeRing';
 import { createConversationTurnLedger, type ConversationTurnLedger } from '../routing/conversationTurnLedger';
+import { answerImmediateSemanticRecap } from '../routing/immediateSemanticRecap';
 import { answerFromDevice } from '../utils/localAnswers';
 import { parseTimeFromText } from '../utils/parseTime';
 import { detectFamilyRead, answerFamilyRead } from '../utils/familyRead';
@@ -1703,6 +1704,23 @@ export default function ChatScreen() {
           threadEvidence: hotContextForGeneration
             .map((e) => (e.assistantHotPolicy === 'include' ? `${e.user}\n${e.assistant}` : e.user))
             .join('\n'),
+          // Bounded runtime reuse (2026-09-xx CTO gate): Stage B borrows the
+          // independent, already-certified 3B interpreter context
+          // (useMedicationSemanticInterpreterEngine — gated on its own
+          // MEDICATION_SEMANTIC_INTERPRETATION_ENABLED flag, unrelated to
+          // and unaffected by LOCAL_LLM_ENABLED) instead of the dormant
+          // general classifier context. Same context object
+          // medicationSemanticInterpretation.ts already uses for capture
+          // proposals — never invoked concurrently with this call, since
+          // one turn's routing (which may call that) fully completes
+          // before this seam (which may call this) ever begins. Reuses the
+          // RUNTIME only; the prompt/task sent here is this module's own,
+          // already-approved, domain-agnostic recap-classification prompt
+          // — unchanged.
+          resolveImmediateRecap: () => answerImmediateSemanticRecap(text, {
+            ledgerEntries: conversationLedgerRef.current.peek(Date.now()),
+            getInterpreterCtx: getMedicationSemanticInterpreterCtx,
+          }),
         });
         reply = seamOutcome.reply;
         if (seamOutcome.kind === 'generative' && seamOutcome.grantContinuation) {
@@ -2137,9 +2155,9 @@ export default function ChatScreen() {
         // as the needs_clarification/online seam site above: defaults cover
         // the plain "not connected" canned-reply branch, overridden once the
         // ephemeral seam's actual outcome is known.
-        let ledgerOperation: 'conversational' | 'clarify_request' = 'conversational';
-        let ledgerOutcome: 'declined' | 'clarified' | 'generated' = 'declined';
-        const ledgerAuthorityTier: 'conversational' = 'conversational';
+        let ledgerOperation: 'conversational' | 'clarify_request' | 'read' = 'conversational';
+        let ledgerOutcome: 'declined' | 'clarified' | 'generated' | 'presented' = 'declined';
+        let ledgerAuthorityTier: 'conversational' | 'deterministic' = 'conversational';
         let offlineReply: string;
         if (llmStatus !== 'ready' && experimentalConvStatus !== 'ready') {
           const offlineReplies = [
@@ -2181,6 +2199,13 @@ export default function ChatScreen() {
             threadEvidence: hotContextForGeneration
               .map((e) => (e.assistantHotPolicy === 'include' ? `${e.user}\n${e.assistant}` : e.user))
               .join('\n'),
+            // Bounded runtime reuse (2026-09-xx CTO gate) — see the online
+            // needs_clarification call site above for the full rationale;
+            // identical wiring here for the offline_fallback path.
+            resolveImmediateRecap: () => answerImmediateSemanticRecap(text, {
+              ledgerEntries: conversationLedgerRef.current.peek(Date.now()),
+              getInterpreterCtx: getMedicationSemanticInterpreterCtx,
+            }),
           });
           offlineReply = seamOutcome.reply;
           if (seamOutcome.kind === 'generative' && seamOutcome.grantContinuation) {
@@ -2199,6 +2224,10 @@ export default function ChatScreen() {
             clarifyRepairTurnRef.current = turnIndexRef.current;
             ledgerOperation = 'clarify_request';
             ledgerOutcome = 'clarified';
+          } else if (seamOutcome.kind === 'authoritative') {
+            ledgerOperation = 'read';
+            ledgerOutcome = 'presented';
+            ledgerAuthorityTier = 'deterministic';
           }
         }
         conversationLedgerRef.current.push({

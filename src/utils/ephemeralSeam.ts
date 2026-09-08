@@ -1,6 +1,17 @@
 // Ephemeral Trust Containment V1 — shared seam authority (2026-08-23).
 // Pure predicates + pre-ephemeral owner ordering. No LLM, no DB imports here
 // beyond what authoritative owner helpers already touch.
+//
+// Conversation Continuity Consumer V1 addendum (2026-09-xx): the
+// immediate-semantic-recap check below is injected as a caller-supplied
+// async callback (resolveImmediateRecap), the same pattern `generate`
+// already uses for ephemeral conversation — this file still imports no
+// LLM/DB code of its own. It runs after the existing synchronous
+// authoritative-owner checks (family/local-device/read-intent/household)
+// and before ephemeral generation, so it is unreachable while a
+// deterministic pending is armed (processUtterance's own pending check
+// already intercepts the turn before routing ever reaches this seam) and
+// never outranks any existing authoritative owner above it.
 
 import {
   canRunEphemeralConversation,
@@ -13,6 +24,7 @@ import { captureHousehold } from './householdCapture';
 import { dispatchReadIntents, type ReadIntentMeta } from '../routing/readIntent';
 import { utteranceHasInteractionReportShape } from '../routing/speechActAuthority';
 import { COMPLETED_PAST_FIRST_PERSON_RE } from './instructionSignals';
+import type { ImmediateRecapOutcome } from '../routing/immediateSemanticRecap';
 
 export const EPHEMERAL_CLARIFY_REPLY =
   "I'm not sure I'm following you — can you help me understand?";
@@ -178,11 +190,32 @@ export async function resolveEphemeralSeam(input: {
   skipAuthoritativeOwners?: boolean;
   /** Prior HOT-ring user/assistant text — evidence only, not a referent binder. */
   threadEvidence?: string;
+  /** Conversation Continuity Consumer V1 — Immediate Semantic Recap. Caller
+   *  supplies the bounded ledger evidence + interpreter access already
+   *  baked in (mirrors `generate` above); this file never imports the
+   *  ledger, an LLM context, or any domain module itself. Optional — when
+   *  omitted, this seam behaves exactly as before this consumer existed. */
+  resolveImmediateRecap?: () => Promise<ImmediateRecapOutcome>;
 }): Promise<EphemeralSeamOutcome> {
   if (!input.skipAuthoritativeOwners) {
     const owner = tryAuthoritativeLocalOwnersBeforeEphemeral(input.text, input.readMeta);
     if (owner.handled) {
       return { kind: 'authoritative', reply: owner.reply };
+    }
+  }
+
+  if (input.resolveImmediateRecap) {
+    const recap = await input.resolveImmediateRecap();
+    if (recap.handled) {
+      // 'clarify_ambiguous' specifically maps to this seam's own 'clarify'
+      // kind (not 'authoritative') so the existing one-turn repair-hold
+      // mechanism (clarifyRepairTurnRef in ChatScreen.tsx) authorizes the
+      // user's disambiguating follow-up turn — the same benefit any other
+      // clarify already gets. Every other recap outcome is a final answer.
+      if (recap.kind === 'clarify_ambiguous') {
+        return { kind: 'clarify', reply: recap.reply, grantContinuation: true };
+      }
+      return { kind: 'authoritative', reply: recap.reply };
     }
   }
 
