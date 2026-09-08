@@ -32,6 +32,69 @@
 import type { LlamaContext } from 'llama.rn';
 import type { ConversationTurnFocusEntry, ConversationTurnRecord } from './conversationTurnLedger';
 
+// ─── Diagnostics only (2026-09-xx, device acceptance gate) ────────────────
+// Pure observability: one compact event per answerImmediateSemanticRecap()
+// call, emitted immediately before each existing return statement — no
+// existing branch, condition, or return VALUE is touched. Bounded to
+// exactly the fields already present in the normalized focus contract
+// (kind/displayValue/tier/resolverKey-PRESENCE/intentType) — never a raw
+// resolverKey value, never a DB field beyond what the ledger already
+// carries. See HERALD_IMMEDIATE_RECAP_DIAG_SCHEMA below for the full shape.
+export type ImmediateRecapDiagCandidate = {
+  index: number;
+  kind: ConversationTurnFocusEntry['kind'];
+  displayValue: string;
+  tier: ConversationTurnFocusEntry['tier'];
+  hasResolverKey: boolean;
+  intentType: string | null;
+};
+
+export type ImmediateRecapDiagStageB =
+  | { status: 'not_invoked' }
+  | { status: 'no_interpreter_context' }
+  | { status: 'unavailable' }
+  | { status: 'parse_fail' }
+  | { status: 'ok'; isImmediateRecap: boolean; selectedIndex: number | null; confidence: number };
+
+export type ImmediateRecapDiagEvent = {
+  invoked: true;
+  utteranceNormalized: string;
+  stageAMatched: boolean;
+  stageB: ImmediateRecapDiagStageB;
+  candidateCount: number;
+  candidates: ImmediateRecapDiagCandidate[];
+  selectedCandidateIndex: number | null;
+  selectedCandidateTier: ConversationTurnFocusEntry['tier'] | null;
+  adapterFound: boolean | null;
+  rereadOutcome: 'success' | 'stale_miss' | 'not_applicable';
+  finalResult:
+    | 'answered_authoritative' | 'answered_unconfirmed' | 'answered_proposal' | 'answered_conversational'
+    | 'clarify_ambiguous' | 'capability_gap' | 'no_candidate' | 'stale_reference_miss' | 'not_recap';
+};
+
+const DIAG_UTTERANCE_MAX_CHARS = 200;
+const DIAG_DISPLAY_VALUE_MAX_CHARS = 100;
+
+function boundDiagText(text: string, maxChars: number): string {
+  const t = text.trim();
+  return t.length > maxChars ? t.slice(0, maxChars) : t;
+}
+
+function toDiagCandidate(c: RecapCandidate): ImmediateRecapDiagCandidate {
+  return {
+    index: c.index,
+    kind: c.kind,
+    displayValue: boundDiagText(c.displayValue, DIAG_DISPLAY_VALUE_MAX_CHARS),
+    tier: c.focus.tier,
+    hasResolverKey: !!c.focus.resolverKey,
+    intentType: c.intentType,
+  };
+}
+
+function logImmediateRecapDiag(event: ImmediateRecapDiagEvent): void {
+  console.warn('HERALD_IMMEDIATE_RECAP_DIAG ' + JSON.stringify(event));
+}
+
 // ─── Stage A — deterministic fast path (closed deictic grammar, NOT domain phrases) ───
 // Recognizes only the grammatical SHAPE "did/was/'d I (just) tell/say/mention
 // [you]" or "remind me what I (just) said/told you/mentioned" — the subject
@@ -279,9 +342,17 @@ function frameCandidate(c: RecapCandidate): { reply: string; kind: ImmediateReca
   return { reply: `You mentioned ${c.displayValue}.`, kind: 'conversational_recap' };
 }
 
-async function answerFromCandidate(c: RecapCandidate): Promise<ImmediateRecapOutcome> {
+/** Diagnostics-only sink (2026-09-xx device gate) — optional, written to as
+ *  a pure side effect. Never read by this function, never influences a
+ *  branch, condition, or return value below. Omitting it (existing callers
+ *  outside this module, if any were ever added, or direct unit tests that
+ *  don't care) leaves behavior byte-identical to before this instrumentation. */
+type AnswerFromCandidateDiagSink = { adapterFound?: boolean; rereadOutcome?: 'success' | 'stale_miss' };
+
+async function answerFromCandidate(c: RecapCandidate, diagSink?: AnswerFromCandidateDiagSink): Promise<ImmediateRecapOutcome> {
   if (c.focus.tier === 'authoritative' && c.focus.resolverKey) {
     const adapter = RECAP_REREAD_ADAPTERS[c.intentType ?? ''];
+    if (diagSink) diagSink.adapterFound = !!adapter;
     if (!adapter) {
       // Bounded capability gap: authoritative evidence exists but no
       // deterministic reread adapter is registered for this domain yet.
@@ -291,6 +362,7 @@ async function answerFromCandidate(c: RecapCandidate): Promise<ImmediateRecapOut
       return { handled: true, reply: `You mentioned ${c.displayValue}, though I can't pull up the current saved details for that right now.`, kind: 'capability_gap' };
     }
     const reread = await adapter(c.focus.resolverKey);
+    if (diagSink) diagSink.rereadOutcome = reread.found ? 'success' : 'stale_miss';
     if (!reread.found) {
       // Row no longer resolves (deleted/deactivated since the focus was
       // recorded) — honest miss, never fabricate from stale displayValue.
@@ -320,16 +392,55 @@ export async function answerImmediateSemanticRecap(
   deps: ImmediateSemanticRecapDeps,
 ): Promise<ImmediateRecapOutcome> {
   const candidates = buildRecapCandidates(deps.ledgerEntries);
+  const diagCandidates = candidates.map(toDiagCandidate);
+  const utteranceNormalized = boundDiagText(text, DIAG_UTTERANCE_MAX_CHARS);
+
+  // Diagnostics-only helper (2026-09-xx device gate): assembles and emits
+  // exactly one HERALD_IMMEDIATE_RECAP_DIAG event, reusing whatever
+  // fields are already known at each call site. Never called more than
+  // once per invocation (once per existing return statement, all mutually
+  // exclusive branches) and never itself returns a value used by the
+  // function — pure side effect, same discipline as HERALD_GATE_A_DIAG
+  // already established in ChatScreen.tsx.
+  function emitDiag(fields: {
+    stageB: ImmediateRecapDiagStageB;
+    selectedCandidateIndex: number | null;
+    selectedCandidateTier: ConversationTurnFocusEntry['tier'] | null;
+    adapterFound: boolean | null;
+    rereadOutcome: 'success' | 'stale_miss' | 'not_applicable';
+    finalResult: ImmediateRecapDiagEvent['finalResult'];
+  }): void {
+    logImmediateRecapDiag({
+      invoked: true,
+      utteranceNormalized,
+      stageAMatched: deterministic,
+      candidateCount: candidates.length,
+      candidates: diagCandidates,
+      ...fields,
+    });
+  }
 
   const deterministic = classifyImmediateRecapDeterministic(text);
 
   if (deterministic) {
     if (candidates.length === 0) {
+      emitDiag({ stageB: { status: 'not_invoked' }, selectedCandidateIndex: null, selectedCandidateTier: null, adapterFound: null, rereadOutcome: 'not_applicable', finalResult: 'no_candidate' });
       return { handled: true, reply: "I don't have anything recent to go on — what were you referring to?", kind: 'honest_miss' };
     }
     if (candidates.length === 1) {
-      return answerFromCandidate(candidates[0]!);
+      const diagSink: AnswerFromCandidateDiagSink = {};
+      const outcome = await answerFromCandidate(candidates[0]!, diagSink);
+      emitDiag({
+        stageB: { status: 'not_invoked' },
+        selectedCandidateIndex: candidates[0]!.index,
+        selectedCandidateTier: candidates[0]!.focus.tier,
+        adapterFound: diagSink.adapterFound ?? null,
+        rereadOutcome: diagSink.rereadOutcome ?? 'not_applicable',
+        finalResult: diagFinalResultFromOutcome(outcome),
+      });
+      return outcome;
     }
+    emitDiag({ stageB: { status: 'not_invoked' }, selectedCandidateIndex: null, selectedCandidateTier: null, adapterFound: null, rereadOutcome: 'not_applicable', finalResult: 'clarify_ambiguous' });
     return {
       handled: true,
       reply: `Did you mean ${candidates.slice(0, 3).map((c) => c.displayValue).join(' or ')}?`,
@@ -341,16 +452,39 @@ export async function answerImmediateSemanticRecap(
   // interpretation only if there is anything to interpret against and an
   // interpreter context is actually available.
   if (candidates.length === 0 || !deps.getInterpreterCtx) {
+    emitDiag({
+      stageB: candidates.length === 0 ? { status: 'not_invoked' } : { status: 'no_interpreter_context' },
+      selectedCandidateIndex: null, selectedCandidateTier: null, adapterFound: null, rereadOutcome: 'not_applicable',
+      finalResult: candidates.length === 0 ? 'no_candidate' : 'not_recap',
+    });
     return { handled: false };
   }
   const generation = await generateRecapInterpretationProposal(text, candidates, deps.getInterpreterCtx);
-  if (generation.status !== 'ok') return { handled: false };
+  if (generation.status !== 'ok') {
+    emitDiag({ stageB: { status: generation.status }, selectedCandidateIndex: null, selectedCandidateTier: null, adapterFound: null, rereadOutcome: 'not_applicable', finalResult: 'not_recap' });
+    return { handled: false };
+  }
   const { proposal } = generation;
+  const stageBDiag: ImmediateRecapDiagStageB = { status: 'ok', isImmediateRecap: proposal.isImmediateRecap, selectedIndex: proposal.selectedIndex, confidence: proposal.confidence };
   if (!proposal.isImmediateRecap || proposal.confidence < RECAP_INTERPRETATION_CONFIDENCE_THRESHOLD) {
+    emitDiag({ stageB: stageBDiag, selectedCandidateIndex: null, selectedCandidateTier: null, adapterFound: null, rereadOutcome: 'not_applicable', finalResult: 'not_recap' });
     return { handled: false };
   }
   if (proposal.selectedIndex === null) {
-    if (candidates.length === 1) return answerFromCandidate(candidates[0]!);
+    if (candidates.length === 1) {
+      const diagSink: AnswerFromCandidateDiagSink = {};
+      const outcome = await answerFromCandidate(candidates[0]!, diagSink);
+      emitDiag({
+        stageB: stageBDiag,
+        selectedCandidateIndex: candidates[0]!.index,
+        selectedCandidateTier: candidates[0]!.focus.tier,
+        adapterFound: diagSink.adapterFound ?? null,
+        rereadOutcome: diagSink.rereadOutcome ?? 'not_applicable',
+        finalResult: diagFinalResultFromOutcome(outcome),
+      });
+      return outcome;
+    }
+    emitDiag({ stageB: stageBDiag, selectedCandidateIndex: null, selectedCandidateTier: null, adapterFound: null, rereadOutcome: 'not_applicable', finalResult: 'clarify_ambiguous' });
     return {
       handled: true,
       reply: `Did you mean ${candidates.slice(0, 3).map((c) => c.displayValue).join(' or ')}?`,
@@ -358,6 +492,41 @@ export async function answerImmediateSemanticRecap(
     };
   }
   const selected = candidates[proposal.selectedIndex];
-  if (!selected) return { handled: false }; // defensive; parseRecapInterpretationProposal already bounds-checks
-  return answerFromCandidate(selected);
+  if (!selected) {
+    // defensive; parseRecapInterpretationProposal already bounds-checks
+    emitDiag({ stageB: stageBDiag, selectedCandidateIndex: proposal.selectedIndex, selectedCandidateTier: null, adapterFound: null, rereadOutcome: 'not_applicable', finalResult: 'not_recap' });
+    return { handled: false };
+  }
+  const diagSink: AnswerFromCandidateDiagSink = {};
+  const outcome = await answerFromCandidate(selected, diagSink);
+  emitDiag({
+    stageB: stageBDiag,
+    selectedCandidateIndex: selected.index,
+    selectedCandidateTier: selected.focus.tier,
+    adapterFound: diagSink.adapterFound ?? null,
+    rereadOutcome: diagSink.rereadOutcome ?? 'not_applicable',
+    finalResult: diagFinalResultFromOutcome(outcome),
+  });
+  return outcome;
+}
+
+/** Diagnostics-only mapping from an already-computed ImmediateRecapOutcome
+ *  to the diagnostic event's finalResult vocabulary — read-only, derives
+ *  nothing new, changes nothing about the outcome itself. Only ever called
+ *  after answerFromCandidate resolves (a real candidate was selected), so
+ *  its 'honest_miss' kind here always means a stale/deleted resolver
+ *  reference — never "no candidate" (that path never reaches this
+ *  function; it logs 'no_candidate' directly at its own call site). */
+function diagFinalResultFromOutcome(outcome: ImmediateRecapOutcome): ImmediateRecapDiagEvent['finalResult'] {
+  if (!outcome.handled) return 'not_recap';
+  switch (outcome.kind) {
+    case 'authoritative_reread': return 'answered_authoritative';
+    case 'unconfirmed_recap': return 'answered_unconfirmed';
+    case 'proposal_recap': return 'answered_proposal';
+    case 'conversational_recap': return 'answered_conversational';
+    case 'clarify_ambiguous': return 'clarify_ambiguous';
+    case 'capability_gap': return 'capability_gap';
+    case 'honest_miss': return 'stale_reference_miss';
+    default: return 'not_recap';
+  }
 }

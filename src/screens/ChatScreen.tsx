@@ -1667,7 +1667,40 @@ export default function ChatScreen() {
       let ledgerOperation: 'clarify_request' | 'read' | 'conversational' = 'clarify_request';
       let ledgerOutcome: 'clarified' | 'presented' | 'generated' = 'clarified';
       let ledgerAuthorityTier: 'deterministic' | 'llm_proposal' | 'conversational' = 'conversational';
-      if (outcome.routeDecision.reason === 'ambiguous_operational_list') {
+
+      // Immediate Semantic Recap reachability repair (2026-09-xx). ONE
+      // generic inspection opportunity for every needs_clarification reason
+      // — route reason must not gate whether recap may look at the
+      // utterance (that decision belongs entirely to
+      // answerImmediateSemanticRecap's own Stage A/Stage B/candidate logic,
+      // unchanged). Runs BEFORE the reason-specific chain below; a
+      // handled:false result falls through to that chain completely
+      // unmodified — this is strictly additive, never a second
+      // clarification router. Placed here, not duplicated per reason
+      // branch, and NOT also left inside the 'default' branch's
+      // resolveEphemeralSeam call below (removed there — see comment at
+      // that call site) so recap can never run twice for one turn.
+      // Pending/consequential authority is already guaranteed resolved
+      // before this point (processUtterance's own pending check runs
+      // before routeIntent is ever called) — this check has no channel to
+      // see or preempt it either way.
+      const recapOutcome = await answerImmediateSemanticRecap(text, {
+        ledgerEntries: conversationLedgerRef.current.peek(Date.now()),
+        getInterpreterCtx: getMedicationSemanticInterpreterCtx,
+      });
+      if (recapOutcome.handled) {
+        reply = recapOutcome.reply;
+        if (recapOutcome.kind === 'clarify_ambiguous') {
+          clarifyRepairTurnRef.current = turnIndexRef.current;
+          ledgerOperation = 'clarify_request';
+          ledgerOutcome = 'clarified';
+          ledgerAuthorityTier = 'conversational';
+        } else {
+          ledgerOperation = 'read';
+          ledgerOutcome = 'presented';
+          ledgerAuthorityTier = 'deterministic';
+        }
+      } else if (outcome.routeDecision.reason === 'ambiguous_operational_list') {
         reply = formatOperationalListClarification(outcome.routeDecision.guess ?? '');
       } else if (outcome.routeDecision.reason === 'default') {
         const adoptedRecovery = adoptContinuationRecoveryCandidates(
@@ -1704,23 +1737,13 @@ export default function ChatScreen() {
           threadEvidence: hotContextForGeneration
             .map((e) => (e.assistantHotPolicy === 'include' ? `${e.user}\n${e.assistant}` : e.user))
             .join('\n'),
-          // Bounded runtime reuse (2026-09-xx CTO gate): Stage B borrows the
-          // independent, already-certified 3B interpreter context
-          // (useMedicationSemanticInterpreterEngine — gated on its own
-          // MEDICATION_SEMANTIC_INTERPRETATION_ENABLED flag, unrelated to
-          // and unaffected by LOCAL_LLM_ENABLED) instead of the dormant
-          // general classifier context. Same context object
-          // medicationSemanticInterpretation.ts already uses for capture
-          // proposals — never invoked concurrently with this call, since
-          // one turn's routing (which may call that) fully completes
-          // before this seam (which may call this) ever begins. Reuses the
-          // RUNTIME only; the prompt/task sent here is this module's own,
-          // already-approved, domain-agnostic recap-classification prompt
-          // — unchanged.
-          resolveImmediateRecap: () => answerImmediateSemanticRecap(text, {
-            ledgerEntries: conversationLedgerRef.current.peek(Date.now()),
-            getInterpreterCtx: getMedicationSemanticInterpreterCtx,
-          }),
+          // Recap reachability repair (2026-09-xx): resolveImmediateRecap is
+          // deliberately NOT wired here anymore. The generic, reason-agnostic
+          // recap check now runs once at the top of the needs_clarification
+          // block (above) and already returned handled:false by the time
+          // this 'default' branch is reached — wiring it here too would
+          // invoke the recap consumer (and, when Stage A is inconclusive,
+          // the 3B interpreter) a second time for the same turn.
         });
         reply = seamOutcome.reply;
         if (seamOutcome.kind === 'generative' && seamOutcome.grantContinuation) {
