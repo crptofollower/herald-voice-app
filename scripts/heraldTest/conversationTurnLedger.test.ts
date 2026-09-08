@@ -131,21 +131,35 @@ export async function runConversationTurnLedgerTests() {
     );
     const src = fs.readFileSync(srcPath, 'utf8');
     assertTrue('no persistence: module source imports no db/storage module', !/from ['"]\.\.\/db\//.test(src) && !/AsyncStorage|SecureStore|SQLite/.test(src));
-    assertTrue('no write authority: module never references CommitResult', !/CommitResult/.test(src));
+    // The module discusses CommitResult in prose comments (explaining why it
+    // deliberately has no dependency on it) — what matters is no import.
+    const importLines = src.split('\n').filter((l) => /^\s*import\b/.test(l)).join('\n');
+    assertTrue('no write authority: module has no import of CommitResult (no actual dependency)', !importLines.includes('CommitResult'));
+    assertTrue('no write authority: module has no import statement at all (fully standalone)', importLines.trim().length === 0);
   }
 
-  // ── Trust: focus/committedRef always fixed regardless of caller input ──
+  // ── Focus (Semantic Focus Contract V1 — Slice 3): the ledger now STORES
+  // a caller-supplied focus array as-is — it is domain-agnostic bounded
+  // storage, not an authority gate. The authority guarantee moved to a
+  // TYPE-LEVEL one in conversationTurnLedgerWrite.ts (DomainFocusEnvelope
+  // has no tier field to smuggle) — see conversationTurnLedgerFocus.test.ts
+  // for that contract's own dedicated proof. This ledger-module test only
+  // proves storage fidelity: whatever ConversationTurnFocusEntry[] is
+  // pushed comes back unchanged. ──────────────────────────────────────────
   {
     const ledger = createConversationTurnLedger();
     const t0 = Date.now();
-    // NewConversationTurnRecord structurally excludes focus/committedRef, so
-    // a well-typed caller cannot even attempt this. This proves the RUNTIME
-    // guarantee holds independently of the type system (`as any` bypasses
-    // compile-time exclusion on purpose, to test push()'s own enforcement).
-    const smuggled = { ...rec({ establishedAt: t0 }), focus: [{ kind: 'person', displayName: 'smuggled' }], committedRef: { table: 'x', id: '1' } } as unknown as NewConversationTurnRecord;
-    const pushed = ledger.push(smuggled);
-    assert('trust: focus is always empty regardless of caller input', pushed.focus, []);
-    assert('trust: committedRef is always undefined regardless of caller input', pushed.committedRef, undefined);
+    const focus: NewConversationTurnRecord['focus'] = [
+      { kind: 'thing', displayValue: 'Eliquis', resolverKey: 'med_1', referable: true, tier: 'authoritative' },
+    ];
+    const pushed = ledger.push({ ...rec({ establishedAt: t0 }), focus });
+    assert('storage fidelity: pushed focus array is stored and returned unchanged', pushed.focus, focus);
+  }
+  {
+    const ledger = createConversationTurnLedger();
+    const t0 = Date.now();
+    const pushed = ledger.push(rec({ establishedAt: t0 }));
+    assert('storage fidelity: omitting focus defaults to [] (missing focus stays legal)', pushed.focus, []);
   }
 
   // ── Bounded text ─────────────────────────────────────────────────────────

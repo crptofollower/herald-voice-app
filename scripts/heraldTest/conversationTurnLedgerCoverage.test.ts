@@ -115,8 +115,12 @@ export async function runConversationTurnLedgerCoverageTests() {
     // the actual classifyQuery trace) — capture source is 'deterministic',
     // not 'llm'. This is a corrected test expectation, not a code change.
     assert('med capture: turn 1 authorityTier reflects the actual (deterministic) capture source', afterT1[0]?.authorityTier, 'deterministic');
-    assert('med capture: turn 1 focus is empty (not yet implemented — see report)', afterT1[0]?.focus, []);
-    assert('med capture: turn 1 committedRef is undefined (not yet implemented — see report)', afterT1[0]?.committedRef, undefined);
+    // Semantic Focus Contract V1 — Slice 3/4 (superseded this Slice-2-era
+    // expectation): medical_capture now populates focus generically via
+    // the writer + glue layer. Full dedicated proof lives in
+    // conversationTurnLedgerFocus.test.ts; this assertion is updated only
+    // so this file's own record stays accurate, not duplicated in depth.
+    assert('med capture: turn 1 focus now populated (proposal-tier) — see conversationTurnLedgerFocus.test.ts for full proof', afterT1[0]?.focus[0]?.tier, 'deterministic_unconfirmed');
 
     const t2 = await processUtterance('Yes.', session, deps, null, null, null, null, null, null, ledger);
     assertTrue('med capture: turn 2 handled as pending_resume', t2.handled === true && t2.source === 'pending_resume');
@@ -319,10 +323,12 @@ export async function runConversationTurnLedgerCoverageTests() {
     !/operation: 'clarify_resolution'/.test(fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src/screens/ChatScreen.tsx'), 'utf8'))
     && !/operation: 'clarify_resolution'/.test(fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src/routing/processUtterance.ts'), 'utf8')),
   );
-  // (focus/committedRef are never populated by Slice 2 — proven structurally
-  // in conversationTurnLedger.test.ts: NewConversationTurnRecord excludes
-  // both fields from the type, and push() forces them to [] / undefined
-  // regardless of caller input. Not re-asserted here.)
+  // (focus is now populated for medical_capture/list_add/todo_add as of
+  // Semantic Focus Contract V1 Slice 3/4 — see conversationTurnLedgerFocus.test.ts
+  // for that contract's full proof, including the authority-tier guarantee.
+  // `committedRef` as a separate top-level field was removed in Slice 3 —
+  // the equivalent reference now lives inside each focus entry's
+  // `resolverKey`, which is where DomainFocusEnvelope always produces it.)
 
   const total = passed + failures.length;
   console.log(

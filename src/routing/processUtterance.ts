@@ -2,7 +2,7 @@ import { routeIntent, DOMAIN_WRITERS, composeAck, allConverted } from './routeIn
 import type { RouteDecision, CommitResult, ResolveContactFn } from './routeIntent';
 import type { IntentRecord } from '../hooks/llmLayers';
 import type { ConversationTurnLedger } from './conversationTurnLedger';
-import { commitResultOutcome, captureAuthorityTier } from './conversationTurnLedgerWrite';
+import { commitResultOutcome, captureAuthorityTier, buildFocusEntry } from './conversationTurnLedgerWrite';
 import { ConversationSession, CONFIRM_YES_RE, CONFIRM_NO_RE } from './conversationSession';
 import { CALL_TEXT_RECOVERY_KEY, shouldPreemptCallTextRecovery } from './callTextReadiness';
 import { detectEmergency } from './emergencySignals';
@@ -256,6 +256,10 @@ export async function applyIntents(
           return { status: 'noop', ack: '' };
         },
       };
+      // No domain envelope available here: Build C withholds writer.add()
+      // until confirmed, so no domain code has run yet at this exact point
+      // — buildFocusEntry(undefined, ...) legally yields []. Semantic Focus
+      // Contract V1 does not change this gate's existing behavior.
       ledger?.push({
         establishedAt: Date.now(),
         utterance: rawText,
@@ -264,6 +268,7 @@ export async function applyIntents(
         outcome: commitResultOutcome(queuedPending.status),
         authorityTier: captureAuthorityTier(source),
         assistantReplySummary: queuedPending.prompt,
+        focus: buildFocusEntry(undefined, { status: queuedPending.status, source }),
       });
       results.push(queuedPending);
       continue;
@@ -277,6 +282,7 @@ export async function applyIntents(
       outcome: commitResultOutcome(added.status),
       authorityTier: captureAuthorityTier(source),
       assistantReplySummary: added.status === 'committed' || added.status === 'noop' || added.status === 'failed' ? added.ack : null,
+      focus: buildFocusEntry(added.focus, { status: added.status, source }),
     });
     results.push(added);
   }
@@ -365,6 +371,21 @@ export async function processUtterance(
     // phone_repair_needed/medical_read_pending), keyed only on CommitResult,
     // which is intentType-agnostic. intentType is honestly null here: the
     // original IntentRecord is not available at this call site.
+    // Semantic Focus Contract V1 — Slice 4. `source` is hardcoded
+    // 'deterministic' here (same pre-existing Slice 2 simplification as
+    // `authorityTier` above — the original IntentRecord's capture source
+    // is not available at this call site). This only under-classifies tier
+    // in the narrow case of an LLM-sourced capture whose own domain writer
+    // (e.g. medical_capture) returns its OWN nested 'pending' from inside
+    // Build C's generic resume closure — that second-layer pending would
+    // read as 'deterministic_unconfirmed' instead of 'llm_proposal'.
+    // Disclosed, not fixed: both are non-authoritative tiers (nothing
+    // becomes falsely authoritative), and fixing it requires threading the
+    // original source through ConversationSession's pending-storage shape,
+    // out of this slice's additive-only scope. When result.status is
+    // 'committed', this hardcoding has no effect on the outcome at all —
+    // classifyFocusAuthority only branches on `source` for non-committed
+    // results.
     ledger?.push({
       establishedAt: Date.now(),
       utterance: text,
@@ -373,6 +394,7 @@ export async function processUtterance(
       outcome: commitResultOutcome(result.status),
       authorityTier: 'deterministic',
       assistantReplySummary: result.status === 'committed' || result.status === 'noop' || result.status === 'failed' ? result.ack : null,
+      focus: buildFocusEntry(result.focus, { status: result.status, source: 'deterministic' }),
     });
     return { handled: true, source: 'pending_resume', responseText: composeAck([result]), commits: [result] };
   }

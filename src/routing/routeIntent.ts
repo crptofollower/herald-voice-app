@@ -52,12 +52,43 @@ export type RouteDecision =
 // CommitResult: the only gate for ACK strings. A string is never spoken for a
 // write that was not verified. Added here; wired to domains one commit at a time.
 
+// Semantic Focus Contract V1 — Slice 3. Domain-produced semantic IDENTITY
+// only (what this result is about) — NO authority/tier field. Per the CTO's
+// ARCHITECTURAL AMENDMENT (AUTHORITY HAS ONE OWNER), authority is assigned
+// exclusively by conversationTurnLedgerWrite.ts's classifyFocusAuthority(),
+// never by the domain that produces this envelope — there is deliberately
+// no field here through which a domain could supply, claim, or influence
+// one. `sourceIntentType`/a domain taxonomy is deliberately omitted too:
+// the enclosing ConversationTurnRecord.intentType (a zero-enumeration raw
+// passthrough of IntentRecord['type'], already present since Slice 2)
+// already carries sufficient provenance for every focus entry in that
+// record — duplicating it here was evaluated and rejected as unjustified.
+export type DomainFocusEnvelope = {
+  kind: 'person' | 'thing' | 'event' | 'collection' | 'item';
+  displayValue: string;
+  /** Present ONLY when the domain already possesses a real, stable identity
+   *  at this exact call site (e.g. a row id just written/verified, or a
+   *  name-is-the-identity convention like Flow C's doctor matching).
+   *  NEVER derived by searching text/names after the fact — if a domain
+   *  doesn't already have it, it omits this field, never invents one. */
+  resolverKey?: string;
+  referable: boolean;
+  /** Only meaningful when a single writer/read-dispatch call legitimately
+   *  produces more than one co-equal entity — not exercised by any Slice 4
+   *  domain (medical_capture/list_add/todo_add each produce exactly one). */
+  role?: 'primary' | 'secondary';
+};
+
 export type CommitResult =
   | { status: 'committed'; ack: string;
       effect?:
         | { kind: 'dial'; phone: string; failAck: string }
         | { kind: 'sms'; phone: string; body?: string; failAck: string }
-        | { kind: 'navigate'; address: string; failAck: string } }
+        | { kind: 'navigate'; address: string; failAck: string };
+      /** Optional — see DomainFocusEnvelope above. Absence is legal; a
+       *  writer that doesn't populate this has its commit completely
+       *  unaffected (Slice 4 proof: focus is carried, never load-bearing). */
+      focus?: DomainFocusEnvelope }
   | { status: 'pending';   prompt: string; pendingKey: string;
       kind?: 'standard' | 'destructive';
       reaskPrompt?: string;
@@ -66,9 +97,11 @@ export type CommitResult =
       /** Presentation-only Call/Text capture-repair choices. Not an action path. */
       recoveryChoices?: string[];
       correctable?: import('./conversationSession').CorrectableField;
-      resume: (userText: string) => Promise<CommitResult> }
-  | { status: 'noop';      ack: string }
-  | { status: 'failed';    ack: string };
+      resume: (userText: string) => Promise<CommitResult>;
+      /** Proposed semantic identity, pre-confirmation — see DomainFocusEnvelope. */
+      focus?: DomainFocusEnvelope }
+  | { status: 'noop';      ack: string; focus?: DomainFocusEnvelope }
+  | { status: 'failed';    ack: string; focus?: DomainFocusEnvelope };
 
 export type ResolveContactFn = (n: string) => Promise<{phone:string;name:string;contactId?:string;source:'herald'|'device'}|{phone:null;name:string;source:'device';candidateNames:string[];deviceCandidates:{name:string;phone:string}[]}|null>;
 
@@ -467,10 +500,19 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       if (addedCount === 0) {
         return { status: 'noop', ack: `${itemList.length === 1 ? `${itemList[0]} was` : 'Those were'} already on your ${listName} list.` };
       }
+      // Semantic Focus Contract V1 — Slice 4. list.id is the real list row
+      // id — either just SELECTed or just INSERTed and already COMMITted
+      // above, never derived after the fact. Collection-level only,
+      // deliberately: an "add milk, eggs, and bananas" turn does not
+      // produce per-item focus merely because itemList.length > 1 — the
+      // list itself is what remains conversationally referable at this
+      // boundary; item-level addressability stays with the existing
+      // presentation-holder mechanism, unchanged this slice.
+      const listFocus = { kind: 'collection' as const, displayValue: `${listName} list`, resolverKey: list.id, referable: true };
       if (addedCount === 1) {
-        return { status: 'committed', ack: composeCaptureAck('list_add', `${capitalizeFirst(itemList[0])} is on your ${listName} list.`) };
+        return { status: 'committed', ack: composeCaptureAck('list_add', `${capitalizeFirst(itemList[0])} is on your ${listName} list.`), focus: listFocus };
       }
-      return { status: 'committed', ack: composeCaptureAck('list_add', `${addedCount} items are on your ${listName} list now.`) };
+      return { status: 'committed', ack: composeCaptureAck('list_add', `${addedCount} items are on your ${listName} list now.`), focus: listFocus };
     },
     async remove(item: string): Promise<CommitResult> {
       return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
@@ -503,9 +545,10 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       if (exists) {
         return { status: 'noop', ack: `That's already on your to-do list.` };
       }
+      const newItemId = `todo_${Date.now()}`;
       db.runSync(
         `INSERT INTO list_items (id, list_id, body, checked, created_at) VALUES (?, ?, ?, 0, ?)`,
-        [`todo_${Date.now()}`, todoList.id, body, new Date().toISOString()],
+        [newItemId, todoList.id, body, new Date().toISOString()],
       );
       const openCount = db.getFirstSync<{ n: number }>(
         `SELECT COUNT(*) as n FROM list_items li JOIN lists l ON l.id = li.list_id WHERE l.name = 'todos' AND li.checked = 0`,
@@ -513,7 +556,10 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       const ack = composeCaptureAck('todo_add', openCount === 1
         ? `'${body}' is on your to-do list.`
         : `'${body}' is on your to-do list. You've got ${openCount} open.`);
-      return { status: 'committed', ack };
+      // Semantic Focus Contract V1 — Slice 4. newItemId is the exact id
+      // just inserted above (same value, reused — not regenerated), the
+      // real, stable identity for this item, never derived after the fact.
+      return { status: 'committed', ack, focus: { kind: 'item', displayValue: body, resolverKey: newItemId, referable: true } };
     },
     async remove(item: string): Promise<CommitResult> {
       const db = getDB();
@@ -858,10 +904,17 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
         : frequency ? `${name} ${frequency}`
         : name;
       const confirmPrompt = `You're taking ${taking}. Want me to remember that?`;
+      // Semantic Focus Contract V1 — Slice 4. Proposed identity only: no
+      // medication row exists yet, so no resolverKey. The glue layer
+      // (conversationTurnLedgerWrite.ts) is solely responsible for turning
+      // this into tier:'deterministic_unconfirmed'/'llm_proposal' — this
+      // function has no say in that classification.
+      const proposedFocus = { kind: 'thing' as const, displayValue: name, referable: true };
       return {
         status: 'pending',
         prompt: confirmPrompt,
         pendingKey: 'medical_capture',
+        focus: proposedFocus,
         resume: async (userText: string): Promise<CommitResult> => {
           const YES = /^(yes|yeah|yep|yup|correct|right|that'?s right|sure|ok|okay|sounds good|y)\b/i;
           const NO  = /^(no|nope|nah|wrong|not right|cancel|nevermind|never mind)\b/i;
@@ -874,12 +927,21 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
             if (!verified) {
               return { status: 'failed', ack: "I'm having trouble holding onto that — say it once more?" };
             }
+            // Semantic Focus Contract V1 — Slice 4. result.id is the real,
+            // just-written-and-verified medication row id (verified above
+            // via getActiveMedications().some(...)) — the exact
+            // "already possesses a real, stable identity at this call
+            // site" case DomainFocusEnvelope.resolverKey requires. Never
+            // derived by searching name/text after the fact.
+            const committedFocus = { kind: 'thing' as const, displayValue: name, resolverKey: result.id, referable: true };
             if (result.action === 'superseded') {
               return { status: 'committed',
-                ack: composeCaptureAck('medical_capture', "Got it. I've updated it.") };
+                ack: composeCaptureAck('medical_capture', "Got it. I've updated it."),
+                focus: committedFocus };
             }
             return { status: 'committed',
-              ack: composeCaptureAck('medical_capture', "Got it. I'll remember that.") };
+              ack: composeCaptureAck('medical_capture', "Got it. I'll remember that."),
+              focus: committedFocus };
           } catch {
             return { status: 'failed', ack: "I'm having trouble holding onto that — say it once more?" };
           }

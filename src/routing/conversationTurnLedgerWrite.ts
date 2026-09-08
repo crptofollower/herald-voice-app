@@ -16,9 +16,11 @@
 // label. `intentType` below is a straight, zero-enumeration field copy, not
 // a semantic mapping.
 
-import type { CommitResult, RouteDecision } from './routeIntent';
+import type { CommitResult, RouteDecision, DomainFocusEnvelope } from './routeIntent';
 import type {
   ConversationTurnAuthorityTier,
+  ConversationTurnFocusEntry,
+  ConversationTurnFocusTier,
   ConversationTurnOperation,
   ConversationTurnOutcome,
 } from './conversationTurnLedger';
@@ -84,3 +86,75 @@ export const ROUTE_OUTCOME_LEDGER_POLICY: Record<RouteDecision['kind'], RouteOut
   // needs_clarification block), not this flat per-kind table.
   needs_clarification: { record: false, reason: 'handled by a dedicated hook keyed on reason/seamOutcome, not this flat table' },
 };
+
+// ─────────────────────────────────────────────────────────────────────────
+// Semantic Focus Contract V1 — Slice 3 (carrier/schema) + Slice 4 (proof in
+// medical_capture / list_add / todo_add only).
+//
+// ARCHITECTURAL AMENDMENT — AUTHORITY HAS ONE OWNER. A domain/capability
+// (writer or read-dispatcher) owns semantic IDENTITY only — what this turn
+// is about, its kind, display value, role, and a stable resolver reference
+// IF ONE GENUINELY EXISTS. A domain never supplies, claims, or influences
+// its own authority tier — DomainFocusEnvelope below has no field for one.
+// classifyFocusAuthority()/buildFocusEntry() in THIS file are the ONLY
+// place in the codebase that construct a ConversationTurnFocusEntry's
+// `tier`, and they derive it exclusively from objective lifecycle facts:
+// commit status, deterministic-vs-LLM capture source, and whether a
+// resolverKey is actually present. No domain-specific branch appears
+// anywhere below — every function here is generic over any domain that
+// correctly emits a DomainFocusEnvelope.
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * The ONLY function in the codebase permitted to decide `tier`. Pure,
+ * domain-agnostic — takes exactly the objective lifecycle facts the CTO's
+ * amendment names (commit status, capture source, resolver-key presence)
+ * and nothing else. A domain cannot influence this even indirectly: there
+ * is no parameter through which one could pass an opinion about its own
+ * authority.
+ *
+ * `status:'committed'` with NO resolverKey does NOT reach 'authoritative'
+ * — satisfies the trust requirement that a committed status alone is
+ * never sufficient without a verified reference to back it.
+ */
+export function classifyFocusAuthority(facts: {
+  status: CommitResult['status'];
+  source: 'deterministic' | 'llm';
+  resolverKey: string | undefined;
+}): ConversationTurnFocusTier {
+  const hasResolverKey = typeof facts.resolverKey === 'string' && facts.resolverKey.length > 0;
+  if (facts.status === 'committed' && hasResolverKey) return 'authoritative';
+  if (facts.source === 'llm') return 'llm_proposal';
+  return 'deterministic_unconfirmed';
+}
+
+/**
+ * Wraps a domain's optional DomainFocusEnvelope into the ledger's
+ * ConversationTurnFocusEntry[] shape, attaching the ONE authoritative
+ * `tier` this file computes. Missing envelope (domain attached none) is
+ * legal and yields `[]` — mirrors Slice 2's "missing focus stays legal"
+ * behavior exactly; a writer that doesn't (yet) populate semantic focus
+ * never has its commit blocked, degraded, or otherwise affected by this
+ * function's absence of input.
+ */
+export function buildFocusEntry(
+  envelope: DomainFocusEnvelope | undefined,
+  facts: { status: CommitResult['status']; source: 'deterministic' | 'llm' },
+): ConversationTurnFocusEntry[] {
+  if (!envelope) return [];
+  const tier = classifyFocusAuthority({
+    status: facts.status,
+    source: facts.source,
+    resolverKey: envelope.resolverKey,
+  });
+  return [
+    {
+      kind: envelope.kind,
+      displayValue: envelope.displayValue,
+      resolverKey: envelope.resolverKey,
+      referable: envelope.referable,
+      role: envelope.role,
+      tier,
+    },
+  ];
+}
