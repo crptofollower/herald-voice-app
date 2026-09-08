@@ -109,6 +109,7 @@ import {
   isEligibleForEphemeralConversation,
 } from '../utils/ephemeralConversation';
 import { createHotNarrativeRing, hasImmediatelyAdjacentHotAuthorization } from '../utils/hotNarrativeRing';
+import { createConversationTurnLedger, type ConversationTurnLedger } from '../routing/conversationTurnLedger';
 import { answerFromDevice } from '../utils/localAnswers';
 import { parseTimeFromText } from '../utils/parseTime';
 import { detectFamilyRead, answerFamilyRead } from '../utils/familyRead';
@@ -525,6 +526,13 @@ export default function ChatScreen() {
   const calendarPresentationRef = useRef<CalendarPresentationHolder>(new CalendarPresentationHolder());
   const calendarContinuationRef = useRef<CalendarContinuationHolder>(new CalendarContinuationHolder());
   const discourseRef = useRef<DiscourseContinuityHolder>(new DiscourseContinuityHolder());
+
+  // Conversation Continuity Contract V1 — Slice 1/2 (2026-09-08). Bounded
+  // RAM-only turn ledger, written additively alongside HOT/WCS/Flow C/
+  // clarifyRepairTurnRef below. No consumer reads from it yet (Slice 3+,
+  // not authorized this session) — its presence changes no existing
+  // behavior. See conversationTurnLedger.ts / conversationTurnLedgerWrite.ts.
+  const conversationLedgerRef = useRef<ConversationTurnLedger>(createConversationTurnLedger());
 
   // Step 5a: bounded HOT narrative ring — RAM-only, peek semantics, written ONLY
   // from the three authorized Step 4 sites (ephemeral success ×2, chit_chat read).
@@ -1587,7 +1595,7 @@ export default function ChatScreen() {
       },
       resolveContact: resolveContactPhoneRef.current ?? undefined,
       getMedicationSemanticInterpreterCtx,
-    }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current, calendarPresentationRef.current, calendarContinuationRef.current, discourseRef.current);
+    }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current, calendarPresentationRef.current, calendarContinuationRef.current, discourseRef.current, conversationLedgerRef.current);
     if (shadowSnapshot) {
       const rd = outcome.handled ? undefined : outcome.routeDecision;
       const action = rd && rd.kind === 'device_action' ? rd.actionIntent : undefined;
@@ -1649,6 +1657,15 @@ export default function ChatScreen() {
     if (outcome.routeDecision.kind === 'needs_clarification') {
       const canned = EPHEMERAL_CLARIFY_REPLY;
       let reply = canned;
+      // Conversation Continuity Contract V1 — Slice 2 hook (needs_clarification
+      // / ephemeral-seam outcome). Defaults cover the ambiguous_operational_list
+      // canned-reply branch; the reason:'default' branch below overrides these
+      // once the ephemeral seam's actual outcome (authoritative/clarify/
+      // generative) is known. Additive only — no existing branch's control
+      // flow or return value changes.
+      let ledgerOperation: 'clarify_request' | 'read' | 'conversational' = 'clarify_request';
+      let ledgerOutcome: 'clarified' | 'presented' | 'generated' = 'clarified';
+      let ledgerAuthorityTier: 'deterministic' | 'llm_proposal' | 'conversational' = 'conversational';
       if (outcome.routeDecision.reason === 'ambiguous_operational_list') {
         reply = formatOperationalListClarification(outcome.routeDecision.guess ?? '');
       } else if (outcome.routeDecision.reason === 'default') {
@@ -1698,10 +1715,29 @@ export default function ChatScreen() {
           });
           immediateContextAuthorizedRef.current = true;
           clarifyRepairTurnRef.current = null;
+          ledgerOperation = 'conversational';
+          ledgerOutcome = 'generated';
+          ledgerAuthorityTier = 'conversational';
         } else if (seamOutcome.kind === 'clarify' && seamOutcome.grantContinuation) {
           clarifyRepairTurnRef.current = turnIndexRef.current;
+          ledgerOperation = 'clarify_request';
+          ledgerOutcome = 'clarified';
+          ledgerAuthorityTier = 'conversational';
+        } else if (seamOutcome.kind === 'authoritative') {
+          ledgerOperation = 'read';
+          ledgerOutcome = 'presented';
+          ledgerAuthorityTier = 'deterministic';
         }
       }
+      conversationLedgerRef.current.push({
+        establishedAt: Date.now(),
+        utterance: text,
+        intentType: null,
+        operation: ledgerOperation,
+        outcome: ledgerOutcome,
+        authorityTier: ledgerAuthorityTier,
+        assistantReplySummary: reply,
+      });
       addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
       addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
       speak(reply);
@@ -1769,7 +1805,7 @@ export default function ChatScreen() {
         );
                 if (llmCaptures.length > 0) {
           if (allConverted(llmCaptures)) {
-            const { responseText, commits } = await applyIntents(llmCaptures, text, sessionRef.current, { resolveContact: resolveContactPhoneRef.current ?? undefined }, 'llm');
+            const { responseText, commits } = await applyIntents(llmCaptures, text, sessionRef.current, { resolveContact: resolveContactPhoneRef.current ?? undefined }, 'llm', undefined, conversationLedgerRef.current);
             addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
             addMessage({ id: generateId('msg'), role: 'assistant', content: responseText, timestamp: Date.now() });
             speak(responseText);
@@ -1867,6 +1903,8 @@ export default function ChatScreen() {
               sessionRef.current,
               undefined,
               'deterministic',
+              undefined,
+              conversationLedgerRef.current,
             );
             addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
             addMessage({ id: generateId('msg'), role: 'assistant', content: responseText, timestamp: Date.now() });
@@ -1893,6 +1931,8 @@ export default function ChatScreen() {
               sessionRef.current,
               undefined,
               'deterministic',
+              undefined,
+              conversationLedgerRef.current,
             );
             addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
             addMessage({ id: generateId('msg'), role: 'assistant', content: responseText, timestamp: Date.now() });
@@ -1958,6 +1998,15 @@ export default function ChatScreen() {
             buildDispatchDeps(),
           );
           noteDeterministicChitChatContext(rdTier1Response);
+          conversationLedgerRef.current.push({
+            establishedAt: Date.now(),
+            utterance: text,
+            intentType: null,
+            operation: 'read',
+            outcome: 'presented',
+            authorityTier: 'deterministic',
+            assistantReplySummary: rdTier1Response,
+          });
           setInputText('');
           sendingRef.current = false;
           return;
@@ -2036,7 +2085,7 @@ export default function ChatScreen() {
             );
                         if (results.length > 0) {
               if (allConverted(results)) {
-                const { responseText, commits } = await applyIntents(results, text, sessionRef.current, undefined, 'llm');
+                const { responseText, commits } = await applyIntents(results, text, sessionRef.current, undefined, 'llm', undefined, conversationLedgerRef.current);
                 addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
                 addMessage({ id: generateId('msg'), role: 'assistant', content: responseText, timestamp: Date.now() });
                 speak(responseText);
@@ -2084,6 +2133,13 @@ export default function ChatScreen() {
         // Honest offline fallback
         // Model unavailable → "not connected" pool is honest.
         // Model ready but nothing usable → Graceful Confusion (don't claim offline).
+        // Conversation Continuity Contract V1 — Slice 2 hook, same discipline
+        // as the needs_clarification/online seam site above: defaults cover
+        // the plain "not connected" canned-reply branch, overridden once the
+        // ephemeral seam's actual outcome is known.
+        let ledgerOperation: 'conversational' | 'clarify_request' = 'conversational';
+        let ledgerOutcome: 'declined' | 'clarified' | 'generated' = 'declined';
+        const ledgerAuthorityTier: 'conversational' = 'conversational';
         let offlineReply: string;
         if (llmStatus !== 'ready' && experimentalConvStatus !== 'ready') {
           const offlineReplies = [
@@ -2137,10 +2193,23 @@ export default function ChatScreen() {
             });
             immediateContextAuthorizedRef.current = true;
             clarifyRepairTurnRef.current = null;
+            ledgerOperation = 'conversational';
+            ledgerOutcome = 'generated';
           } else if (seamOutcome.kind === 'clarify' && seamOutcome.grantContinuation) {
             clarifyRepairTurnRef.current = turnIndexRef.current;
+            ledgerOperation = 'clarify_request';
+            ledgerOutcome = 'clarified';
           }
         }
+        conversationLedgerRef.current.push({
+          establishedAt: Date.now(),
+          utterance: text,
+          intentType: null,
+          operation: ledgerOperation,
+          outcome: ledgerOutcome,
+          authorityTier: ledgerAuthorityTier,
+          assistantReplySummary: offlineReply,
+        });
         addMessage({ id: generateId('msg'), role: 'user',
           content: text, timestamp: Date.now() });
         addMessage({ id: generateId('msg'), role: 'assistant',
@@ -2161,6 +2230,15 @@ export default function ChatScreen() {
       // Device action intent — alarm or SMS, no network needed
       if (rdActionIntent) {
         await dispatchAction(rdActionIntent, text, buildDispatchDeps());
+        conversationLedgerRef.current.push({
+          establishedAt: Date.now(),
+          utterance: text,
+          intentType: rdActionIntent.type,
+          operation: 'action',
+          outcome: 'presented',
+          authorityTier: 'deterministic',
+          assistantReplySummary: null,
+        });
         // Residual scan — catch a second intent in the same utterance (compound speech)
         const residual = await scanResidualIntent(text, rdActionIntent.type);
         if (residual?.actionIntent) {
@@ -2202,6 +2280,15 @@ export default function ChatScreen() {
           buildDispatchDeps(),
         );
         noteDeterministicChitChatContext(rdTier1Response);
+        conversationLedgerRef.current.push({
+          establishedAt: Date.now(),
+          utterance: text,
+          intentType: null,
+          operation: 'read',
+          outcome: 'presented',
+          authorityTier: 'deterministic',
+          assistantReplySummary: rdTier1Response,
+        });
         sendingRef.current = false;
         setInputText('');
         return;
@@ -2618,6 +2705,8 @@ export default function ChatScreen() {
               sessionRef.current,
               { resolveContact: resolveContactPhone },
               'deterministic',
+              undefined,
+              conversationLedgerRef.current,
             );
             addMessage({
               id: generateId("msg"),
@@ -3150,6 +3239,7 @@ export default function ChatScreen() {
     orderedPresentation: orderedPresentationRef.current,
     medicationPresentation: medicationPresentationRef.current,
     conversationalSubject: subjectRef.current,
+    conversationLedger: conversationLedgerRef.current,
   }), [addMessage, speak, llmStatus, getCtx]);
 
   // ── Render ────────────────────────────────────────────────────────────────

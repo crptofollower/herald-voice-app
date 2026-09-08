@@ -1,6 +1,8 @@
 import { routeIntent, DOMAIN_WRITERS, composeAck, allConverted } from './routeIntent';
 import type { RouteDecision, CommitResult, ResolveContactFn } from './routeIntent';
 import type { IntentRecord } from '../hooks/llmLayers';
+import type { ConversationTurnLedger } from './conversationTurnLedger';
+import { commitResultOutcome, captureAuthorityTier } from './conversationTurnLedgerWrite';
 import { ConversationSession, CONFIRM_YES_RE, CONFIRM_NO_RE } from './conversationSession';
 import { CALL_TEXT_RECOVERY_KEY, shouldPreemptCallTextRecovery } from './callTextReadiness';
 import { detectEmergency } from './emergencySignals';
@@ -226,6 +228,7 @@ export async function applyIntents(
   ctx: { resolveContact?: ResolveContactFn } | undefined,
   source: 'deterministic' | 'llm',
   llmGate?: { declineAck?: string; domainConfirmOwnsCapture?: boolean },
+  ledger?: ConversationTurnLedger | null,
 ): Promise<{ responseText: string; commits: CommitResult[] }> {
   const results: CommitResult[] = [];
   for (const intent of intents) {
@@ -233,11 +236,16 @@ export async function applyIntents(
     if (!writer) continue;
     if (source === 'llm' && !llmGate?.domainConfirmOwnsCapture) {
       // Build C: do not call writer.add until the user confirms.
-      results.push({
-        status: 'pending',
+      const queuedPending = {
+        status: 'pending' as const,
         prompt: "Say yes and I'll remember that.",
         pendingKey: `llm_confirm:${intent.type}`,
         resume: async (userText: string): Promise<CommitResult> => {
+          // No ledger push in this closure: it runs later, as the resumed
+          // pending, via processUtterance's `session.resolvePending(text)`
+          // call site below (Hook 2), which pushes exactly once per resume
+          // regardless of which pending-construction site created the
+          // closure. Pushing here too would double-count this turn.
           const trimmed = userText.trim();
           if (CONFIRM_NO_RE.test(trimmed)) {
             return { status: 'noop', ack: llmGate?.declineAck ?? "No problem — I won't remember that." };
@@ -247,10 +255,30 @@ export async function applyIntents(
           }
           return { status: 'noop', ack: '' };
         },
+      };
+      ledger?.push({
+        establishedAt: Date.now(),
+        utterance: rawText,
+        intentType: intent.type,
+        operation: 'capture',
+        outcome: commitResultOutcome(queuedPending.status),
+        authorityTier: captureAuthorityTier(source),
+        assistantReplySummary: queuedPending.prompt,
       });
+      results.push(queuedPending);
       continue;
     }
-    results.push(await writer.add(intent, rawText, ctx));
+    const added = await writer.add(intent, rawText, ctx);
+    ledger?.push({
+      establishedAt: Date.now(),
+      utterance: rawText,
+      intentType: intent.type,
+      operation: 'capture',
+      outcome: commitResultOutcome(added.status),
+      authorityTier: captureAuthorityTier(source),
+      assistantReplySummary: added.status === 'committed' || added.status === 'noop' || added.status === 'failed' ? added.ack : null,
+    });
+    results.push(added);
   }
   const responseText = composeAck(results);
   const pending = results.find(r => r.status === 'pending');
@@ -278,6 +306,7 @@ export async function processUtterance(
   calendarPresentation?: CalendarPresentationHolder | null,
   calendarContinuation?: CalendarContinuationHolder | null,
   discourse?: DiscourseContinuityHolder | null,
+  ledger?: ConversationTurnLedger | null,
 ): Promise<UtteranceOutcome> {
   const turnId = getActiveTurnId();
   latLog('processUtterance START', { turnId });
@@ -330,6 +359,21 @@ export async function processUtterance(
     calendarPresentation?.clear();
     calendarContinuation?.clear();
     const result = await session.resolvePending(text);
+    // Generic pending-resume hook: covers every resume closure uniformly
+    // (both applyIntents' own LLM-confirm closure, already separately
+    // instrumented above, and any other pending built elsewhere — e.g.
+    // phone_repair_needed/medical_read_pending), keyed only on CommitResult,
+    // which is intentType-agnostic. intentType is honestly null here: the
+    // original IntentRecord is not available at this call site.
+    ledger?.push({
+      establishedAt: Date.now(),
+      utterance: text,
+      intentType: null,
+      operation: 'capture',
+      outcome: commitResultOutcome(result.status),
+      authorityTier: 'deterministic',
+      assistantReplySummary: result.status === 'committed' || result.status === 'noop' || result.status === 'failed' ? result.ack : null,
+    });
     return { handled: true, source: 'pending_resume', responseText: composeAck([result]), commits: [result] };
   }
   discourse?.noteNarrativeUtterance(text);
@@ -708,6 +752,8 @@ export async function processUtterance(
         session,
         { resolveContact: deps.resolveContact },
         'deterministic',
+        undefined,
+        ledger,
       );
       if (commits.some((c) => c.status === 'committed')) {
         discourse.establishDomain(liveDomain.domain);
@@ -727,6 +773,8 @@ export async function processUtterance(
         session,
         { resolveContact: deps.resolveContact },
         'deterministic',
+        undefined,
+        ledger,
       );
       if (commits.some((c) => c.status === 'committed')) {
         discourse.establishDomain(domain === 'todo' ? 'todo' : 'grocery');
@@ -794,6 +842,7 @@ export async function processUtterance(
       { resolveContact: deps.resolveContact },
       routeDecision.source,
       Object.keys(llmGate).length > 0 ? llmGate : undefined,
+      ledger,
     );
     if (discourse && commits.some((c) => c.status === 'committed')) {
       for (const intent of routeDecision.intents) {

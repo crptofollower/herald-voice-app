@@ -16,6 +16,7 @@ import type { ConversationSession } from '../../routing/conversationSession';
 import type { ConversationalSubjectHolder } from '../../routing/conversationalSubject';
 import type { MedicationPresentationHolder } from '../../routing/medicationPresentation';
 import type { OrderedPresentationHolder } from '../../routing/orderedPresentation';
+import type { ConversationTurnLedger } from '../../routing/conversationTurnLedger';
 // Type-only: erased at compile time, never resolves the real
 // expo-intent-launcher module. The runtime value is loaded lazily at each
 // call site below (harness compatibility fix, 2026-09-07, same pattern as
@@ -104,6 +105,10 @@ export interface DispatchDeps extends DispatchPendingRefs {
   orderedPresentation?: OrderedPresentationHolder | null;
   medicationPresentation?: MedicationPresentationHolder | null;
   conversationalSubject?: ConversationalSubjectHolder | null;
+  /** Conversation Continuity Contract V1 — Slice 2. Additive only; absence
+   *  (undefined/null) simply means no ledger write for this call, same as
+   *  every other optional holder above. */
+  conversationLedger?: ConversationTurnLedger | null;
 }
 
 /** Shared launch ACK. True → success copy. False/throw → honest fail. Never "Opening" on fail. */
@@ -646,6 +651,12 @@ export async function dispatchAction(
                 const callIntent = await resolveContactCallIntent(ready.contactName, `call ${ready.contactName}`, {
                   resolveContact: resolveContactPhone,
                 });
+                // No ledger push here: this resume closure is registered via
+                // session.setPending and is invoked later by
+                // processUtterance's own generic resolvePending hook, which
+                // pushes exactly once per resume already — pushing here too
+                // would double-count this turn (same discipline as
+                // applyIntents' own LLM-confirm closure).
                 const { responseText, commits } = await applyIntents([callIntent], `call ${ready.contactName}`, session, undefined, 'deterministic');
                 const first = commits[0];
                 if (first) return first;
@@ -669,7 +680,7 @@ export async function dispatchAction(
           const callIntent = await resolveContactCallIntent(rawContact, text, {
             resolveContact: resolveContactPhone,
           });
-          const { responseText, commits } = await applyIntents([callIntent], text, session, undefined, 'deterministic');
+          const { responseText, commits } = await applyIntents([callIntent], text, session, undefined, 'deterministic', undefined, deps.conversationLedger);
           releaseOverlappingContactCollect(pendingContactCollectRef, session);
           addMessage({ id: generateId('msg'), role: 'assistant', content: responseText, timestamp: Date.now() });
           speak(responseText);
