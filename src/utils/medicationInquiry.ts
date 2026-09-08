@@ -1,7 +1,10 @@
 // Deterministic named-medication inquiry (read) — not capture.
 // Speech-act + named entity + stored fields. No fuzzy match. No LLM facts.
 
-import { isMedicationInquirySpeechAct } from './detectMedicalEvent';
+import {
+  isCatalogMedicationReadUtterance,
+  isMedicationInquirySpeechAct,
+} from './detectMedicalEvent';
 import {
   formatCurrentMedicationReadback,
   getActiveMedications,
@@ -12,10 +15,11 @@ const LIST_CONTEXT =
   /\b(grocery|shopping|to-?do|todo)\s+lists?\b|\b(off|from|on|to)\s+(my|the)\s+lists?\b|\bmy\s+lists?\b/i;
 
 const CATALOG_READ = [
-  /what (medication|medications|meds|pills) am i (on|taking)/i,
+  /what (medication|medications|meds|pills) (?:am i|i(?:'m| am)) (currently )?(on|taking)/i,
+  /\bthe (medication|medications|medicine|meds|pills|prescriptions) (that )?i(?:'m| am) (currently )?(on|taking)\b/i,
   /my (medication|medications|meds|prescriptions)/i,
   /\bwhat do i take\b/i,
-  /\bwhat am i (taking|on)\b/i,
+  /\bwhat am i (currently )?(taking|on)\b/i,
   /\bwhat (should i|do i) take\b/i,
   /\bmy (meds|medications|pills|prescriptions)\b/i,
   /\bdo i take (any )?(medication|meds|pills)\b/i,
@@ -38,6 +42,7 @@ export type MedicationInquiry = {
 };
 
 function isCatalogMedicationRead(text: string): boolean {
+  if (isCatalogMedicationReadUtterance(text)) return true;
   return CATALOG_READ.some((re) => re.test(text));
 }
 

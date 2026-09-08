@@ -322,14 +322,15 @@ function isCalendarReadIntent(msg: string): boolean {
 
 const TIER1_SIGNALS = {
   medical: [
-    /what (medication|medications|meds|pills) am i (on|taking)/i,
+    /what (medication|medications|meds|pills) (?:am i|i(?:'m| am)) (currently )?(on|taking)/i,
+    /\bthe (medication|medications|medicine|meds|pills|prescriptions) (that )?i(?:'m| am) (currently )?(on|taking)\b/i,
     /my (medication|medications|meds|prescriptions)/i,
     /medical (history|records|info)/i,
     /what do you (have|know) about my (health|medical|medications|meds)/i,
     /what (medication|medications|meds|pills|prescriptions) do you (have|know)/i,
     /do you (have|know) (my|any of my) (medication|medications|meds|pills|prescriptions)/i,
     /\bwhat do i take\b/i,
-    /\bwhat am i (taking|on)\b/i,
+    /\bwhat am i (currently )?(taking|on)\b/i,
     /\bwhat (should i|do i) take\b/i,
     /\bmy (meds|medications|pills|prescriptions)\b/i,
     /\bdo i take (any )?(medication|meds|pills)\b/i,

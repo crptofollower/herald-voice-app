@@ -260,6 +260,83 @@ export async function runMedicationInquiryTests() {
   check('L2 catalog is not named-inquiry owner',
     detectMedicationInquiry('What medications am I taking?') == null);
 
+  // Path W — wrapped/contracted catalog reads are summary, never capture
+  {
+    const phrase = "Can you tell me the medication I'm on";
+    check('W1 wrapped "the medication I\'m on" is not capture',
+      detectMedicalEvent(phrase) == null);
+    const d = await classifyQuery(phrase);
+    check('W2 wrapped "the medication I\'m on" routes medical:summary',
+      d.reason === 'medical:summary' && d.actionIntent?.type !== 'medical_capture');
+    check('W3 wrapped catalog is not named-inquiry',
+      detectMedicationInquiry(phrase) == null);
+  }
+  {
+    const phrase = "Can you tell me what medication I'm currently taking";
+    check('W4 wrapped "currently taking" is not capture',
+      detectMedicalEvent(phrase) == null);
+    const d = await classifyQuery(phrase);
+    check('W5 wrapped "currently taking" routes medical:summary',
+      d.reason === 'medical:summary' && d.actionIntent?.type !== 'medical_capture');
+    check('W6 wrapped currently-taking is not named-inquiry',
+      detectMedicationInquiry(phrase) == null);
+  }
+  {
+    const phrase = "Tell me what medications I'm taking";
+    check('W7 "Tell me what medications I\'m taking" is not capture',
+      detectMedicalEvent(phrase) == null);
+    const d = await classifyQuery(phrase);
+    check('W8 "Tell me what medications I\'m taking" routes medical:summary',
+      d.reason === 'medical:summary' && d.actionIntent?.type !== 'medical_capture');
+    check('W9 tell-me catalog is not named-inquiry',
+      detectMedicationInquiry(phrase) == null);
+  }
+  {
+    const d = await classifyQuery('what medication am I on');
+    check('W10 "what medication am I on" remains medical:summary',
+      d.reason === 'medical:summary');
+  }
+  {
+    const phrase = 'My doctor prescribed metformin';
+    const ev = detectMedicalEvent(phrase);
+    check('W11 prescribed metformin still captures',
+      ev?.type === 'medication');
+    const d = await classifyQuery(phrase);
+    check('W12 prescribed metformin remains medical_capture',
+      d.reason === 'action:medical_capture' && d.actionIntent?.type === 'medical_capture');
+  }
+  {
+    const phrase = 'My doctor has me taking Lisinopril 10 mg once a day';
+    const ev = detectMedicalEvent(phrase);
+    check('W13 Lisinopril assertion still captures with drug/dose/freq',
+      ev?.type === 'medication'
+      && /lisinopril/i.test(ev?.drug_name ?? '')
+      && /10\s*mg/i.test(ev?.dosage ?? '')
+      && /once a day/i.test(ev?.frequency ?? ''));
+    const d = await classifyQuery(phrase);
+    const event = d.actionIntent?.type === 'medical_capture' ? d.actionIntent.event : undefined;
+    check('W14 Lisinopril remains Tier-1 medical_capture with fields',
+      d.reason === 'action:medical_capture'
+      && d.actionIntent?.type === 'medical_capture'
+      && /lisinopril/i.test(event?.drug_name ?? '')
+      && /10\s*mg/i.test(event?.dosage ?? '')
+      && /once a day/i.test(event?.frequency ?? ''));
+  }
+  {
+    freshDB();
+    seedNamedMeds();
+    const d = await classifyQuery('How often do I take Eliquis?');
+    check('W15 Eliquis frequency remains medical:named_inquiry',
+      d.reason === 'medical:named_inquiry' && d.actionIntent == null);
+  }
+  {
+    const d = await classifyQuery('take milk off the list');
+    check('W16 take milk off the list remains list_remove',
+      d.actionIntent?.type === 'list_remove');
+    check('W17 grocery/list take-off is not a medical event',
+      detectMedicalEvent('take milk off the list') == null);
+  }
+
   // Negatives / Path F
   check('N1 grocery take-off-list is not a medical event',
     detectMedicalEvent('take chocolate milk off my grocery list') == null);

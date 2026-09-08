@@ -126,8 +126,25 @@ const FREQUENCY_INQUIRY = /\bhow\s+often\b|\bhow\s+many\s+times\b/i;
 const TIMING_INQUIRY = /\bwhen\s+do\s+i\s+take\b/i;
 const DO_I_TAKE_INQUIRY = /\bdo\s+i\s+take\b/i;
 const DOSE_INQUIRY = /\b(?:dose|dosage)\b/i;
-const CATALOG_MED_READ =
-  /\bdo i take (any )?(medication|meds|pills)\b|\bwhat (medication|medications|meds|pills) am i (on|taking)\b|\bwhat do i take\b|\bwhat am i (taking|on)\b/i;
+const CATALOG_MED_NOUN = '(?:medication|medications|medicine|meds|pills|prescriptions)';
+const CATALOG_MED_READ = new RegExp(
+  '\\bdo i take (any )?(?:medication|meds|pills)\\b' +
+    `|\\bwhat ${CATALOG_MED_NOUN} (?:am i|i(?:'m| am)) (?:currently )?(?:on|taking)\\b` +
+    `|\\bthe ${CATALOG_MED_NOUN} (?:that )?i(?:'m| am) (?:currently )?(?:on|taking)\\b` +
+    '|\\bwhat do i take\\b' +
+    '|\\bwhat am i (?:currently )?(?:taking|on)\\b',
+  'i',
+);
+
+/** Catalog medication list-read (not a named-drug inquiry, not a capture). */
+export function isCatalogMedicationReadUtterance(text: string): boolean {
+  const raw = text.trim();
+  if (!raw) return false;
+  if (CATALOG_MED_READ.test(raw)) return true;
+  const unwrapped = afterLeadingReadRequestWrapper(raw);
+  if (unwrapped !== raw && CATALOG_MED_READ.test(unwrapped)) return true;
+  return false;
+}
 
 // General, domain-agnostic yes/no question shape: an utterance opening with
 // subject-auxiliary inversion for first-person "I" ("Am I", "Should I", "Do
@@ -149,7 +166,7 @@ export function isFirstPersonAuxiliaryQuestionShape(text: string): boolean {
 export function isMedicationInquirySpeechAct(text: string): boolean {
   const raw = text.trim();
   if (!raw || LIST_CONTEXT.test(raw)) return false;
-  if (CATALOG_MED_READ.test(raw)) return false;
+  if (isCatalogMedicationReadUtterance(raw)) return false;
   if (isFirstPersonAuxiliaryQuestionShape(raw)) return true;
   if (FREQUENCY_INQUIRY.test(raw) && /\btake\b/i.test(raw)) return true;
   if (TIMING_INQUIRY.test(raw)) return true;
@@ -486,6 +503,7 @@ export function detectMedicalEvent(text: string): MedicalEvent | null {
   const raw = text.trim();
   if (!raw) return null;
   if (isReadShapedUtterance(raw)) return null;
+  if (isCatalogMedicationReadUtterance(raw)) return null;
   if (isMedicationInquirySpeechAct(raw)) return null;
   if (REMINDER_START.test(raw)) return null;
   // Build A: never read a list operation as a medical event.
