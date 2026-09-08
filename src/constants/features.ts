@@ -27,7 +27,7 @@ export const CONVERSATIONAL_WORKER_EXPERIMENT_ENABLED = true;
 //   context, no completion, no shadow logs, no production timing from this
 //   path. Never writes, speaks, pending-arms, or shares the conversational
 //   Qwen context.
-export const LIST_REMOVE_INTERPRETATION_SHADOW_ENABLED = true;
+export const LIST_REMOVE_INTERPRETATION_SHADOW_ENABLED = false;
 
 // PROACTIVE_SURFACING_ENABLED:
 //   Gates Beat 1 medical appointment surfacing on cold mount
