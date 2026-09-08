@@ -7,8 +7,9 @@ import type { TierDecision, LocalContext } from './tierRouter';
 import { writeServiceProvider, detectServiceCapture, detectPhoneCapture, detectInsuranceCapture, captureHouseholdInsurance, normalizeCarrier } from '../utils/householdCapture';
 import { detectDiagnosisCapture, detectDoctorIntroCapture, detectMedicalEvent, isReadShapedUtterance, hasMedicationDomainEvidence, extractDrugName } from '../utils/detectMedicalEvent';
 import type { LlamaContext } from 'llama.rn';
-import { MEDICATION_SEMANTIC_INTERPRETATION_ENABLED } from '../constants/features';
+import { MEDICATION_SEMANTIC_INTERPRETATION_ENABLED, CAPABILITY_READ_ROUTER_ENABLED } from '../constants/features';
 import { generateMedicationSemanticProposal, admitMedicationSemanticProposal } from './medicationSemanticInterpretation';
+import { generateCapabilityProposal, admitCapabilityProposal, WIRED_READ_CAPABILITY } from './capabilityRouting';
 import { detectFamilyCapture } from '../utils/familyCapture';
 import { getDB } from '../db/schema';
 import { capturePerson } from '../db/capturePerson';
@@ -2207,6 +2208,88 @@ export async function routeIntent(
              reason: intents.length > 1
                ? 'tier1:list_todo_intercept+medical'
                : 'tier1:list_todo_intercept' };
+  }
+
+  // ── Natural Language Authority V1 / Slice 1: medication catalog READ ─────
+  // Governing design: HERALD_NL_AUTHORITY_ARCHITECTURE_SYNTHESIS_2026-09-07.md.
+  // Probabilistic bounded-capability selection (closed vocabulary, constrained
+  // decode) → deterministic STRUCTURAL admission (schema + membership + risk
+  // class + confidence bucket; NO medication-language evidence gate, NO
+  // transcript regex) → the EXISTING authoritative SQLite medication summary
+  // reader (composeMedicalSummary — the identical reader the legacy
+  // 'medical:summary' tier-1 branch uses, incl. presentedMedicationIds so
+  // ordinal follow-ups arm identically).
+  //
+  // Placement rationale:
+  //  • The legacy medication READ banks (TIER1_SIGNALS.medical etc.) run inside
+  //    classifyQuery and already returned a tier-1 device_read up top — they get
+  //    first refusal and are frozen. Reaching here means they missed the wording.
+  //  • This block runs BEFORE the Site-A personal-memory-recall decline fence
+  //    below, so an unseen catalog read the model admits is ANSWERED from the
+  //    authoritative reader rather than declined to a canned clarify. On any
+  //    non-admit outcome it falls through and that fence (and every existing
+  //    path) still applies unchanged — semantic-first, deterministic-decline
+  //    fallback.
+  //  • Guarded to genuine fall-through only (decision.tier === 3 &&
+  //    reason === 'default'): it never runs for a tier-1 deterministic claim, so
+  //    it CANNOT reinterpret a floor-claimed medication capture (handled just
+  //    below at the medical_capture intercept), a device action, or a world-data
+  //    'live:data' query as a read. The deterministic floor always wins.
+  //
+  // Read-only and isolated from the write path: this block constructs ONLY a
+  // device_read RouteDecision. It never builds an IntentRecord, never calls a
+  // DOMAIN_WRITER, never arms a pending, never mutates. Reuses the SAME
+  // independent medication 3B context as the write seam
+  // (deps.getMedicationSemanticInterpreterCtx); adds no new context. Law 0 and
+  // pending ownership are enforced upstream in processUtterance before
+  // routeIntent is called, so this block cannot see, preempt, or race either.
+  if (
+    CAPABILITY_READ_ROUTER_ENABLED &&
+    decision.tier === 3 &&
+    decision.reason === 'default'
+  ) {
+    const capGen = await generateCapabilityProposal(
+      text,
+      deps.getMedicationSemanticInterpreterCtx ?? (() => null),
+    );
+    if (capGen.status === 'ok') {
+      const admission = admitCapabilityProposal(capGen.proposal);
+      if (admission.decision === 'ADMIT_READ') {
+        const { composeMedicalSummary } = await import('../db/medicalDB');
+        const summary = composeMedicalSummary();
+        return {
+          kind: 'device_read',
+          tier: 1,
+          response: summary.response,
+          isMedical: true,
+          reason: 'medical:summary',
+          presentedMedicationIds: summary.medicationIds,
+        };
+      }
+      // Structural safing (pre-commit correction): the interpreter identified
+      // this utterance AS a personal medication recall (it proposed
+      // WIRED_READ_CAPABILITY) but admission could not resolve it (e.g. low
+      // confidence). Such a KNOWN-but-unresolved personal medication recall must
+      // never fall through to the generative ephemeral (Qwen) path and be
+      // answered as though Herald knows the user's medications. Decline it with
+      // the existing recall-declined reason — reason !== 'default', so
+      // mayRunGenerativeEphemeralPersonalProse (ephemeralSeam.ts) returns false
+      // and the turn resolves to a canned clarify, never a generated personal
+      // answer. This is NOT natural-language detection: the signal is the
+      // model's own structured `capability`, not any inspection of the
+      // transcript. Off-ramp capabilities (the model did NOT call this a
+      // medication recall) fall through unchanged.
+      if (capGen.proposal.capability === WIRED_READ_CAPABILITY) {
+        return { kind: 'needs_clarification', reason: 'personal_memory:recall_declined' };
+      }
+      // ABSTAIN on an off-ramp capability: fall through unchanged to the fence
+      // below.
+    }
+    // 'parse_fail' / 'unavailable': fall through unchanged — treated identically
+    // to "no proposal." No structured signal exists that this is a medication
+    // recall, and manufacturing one would require the natural-language
+    // detection this architecture forbids; baseline routing (incl. the Site-A
+    // recall fence) still applies. See the pre-commit safing report.
   }
 
   // Site-A fence (early): recall-shaped questions must fail closed before a

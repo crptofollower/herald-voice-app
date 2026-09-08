@@ -56,3 +56,26 @@ export const CORRECTION_REPAIR_ENABLED = true;
 //   strictly narrows an existing gap — not new capability requiring a flag).
 //   Default OFF — do not flip without CTO review of device evidence.
 export const MEDICATION_SEMANTIC_INTERPRETATION_ENABLED = true;
+
+// CAPABILITY_READ_ROUTER_ENABLED:
+//   Governing design: HERALD_NL_AUTHORITY_ARCHITECTURE_SYNTHESIS_2026-09-07.md
+//   (Natural Language Authority V1 / Slice 1 — medication catalog READ).
+//   Gates the bounded capability-selection READ path in routeIntent.ts
+//   (capabilityRouting.ts): a probabilistic CapabilityProposal over a closed
+//   vocabulary → deterministic structural admission → the EXISTING authoritative
+//   SQLite medication summary reader (composeMedicalSummary). Runs only after
+//   every deterministic capturer/floor + the legacy medication read banks have
+//   had first refusal, and before the write seam. It is READ-ONLY: it can only
+//   return a device_read RouteDecision; it constructs no IntentRecord, reaches
+//   no writer, and mutates nothing. OFF ⇒ the read path never generates a
+//   proposal, never calls admission, and routing is byte-for-byte identical to
+//   before this flag existed.
+//
+//   Default ON, deliberately: this path is safe by construction (SQL-sourced,
+//   no persistence, no fabrication) and its purpose is to close a live hole in
+//   which a personal medication-recall question the legacy banks miss can reach
+//   the generative Qwen ephemeral path. It is strictly lower-risk than the
+//   already-ON write sibling above. CTO may set OFF to hold activation until the
+//   Slice 1 falsification battery is run on device — the closing behavior only
+//   takes effect while this is ON.
+export const CAPABILITY_READ_ROUTER_ENABLED = true;
