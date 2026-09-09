@@ -242,16 +242,39 @@ export async function answerHistoricalCalendarVisitEvidence(
 ): Promise<string> {
   const BACK_MONTHS = HISTORICAL_CALENDAR_VISIT_EVIDENCE_MONTHS;
   const { normalizeDoctorNameForMatch } = await import('../db/medicalDB');
-  const { queryCalendarEvidence, formatCalendarEvidenceForSpeech } = await import('../db/calendarCacheDB');
+  const {
+    queryCalendarEvidence,
+    formatCalendarEvidenceForSpeech,
+    titleMatchesDoctorCalendarTerm,
+    doctorCalendarIdentityKey,
+  } = await import('../db/calendarCacheDB');
   const now = new Date();
   const backStart = new Date(now);
   backStart.setMonth(backStart.getMonth() - BACK_MONTHS);
-  const rangeResult = await queryCalendarEvidence(doctorTerm, normalizeDoctorNameForMatch, backStart, now);
+  const matchTitle = (title: string) =>
+    titleMatchesDoctorCalendarTerm(title, doctorTerm, normalizeDoctorNameForMatch);
+  const rangeResult = await queryCalendarEvidence(
+    doctorTerm,
+    normalizeDoctorNameForMatch,
+    backStart,
+    now,
+    { matchTitle },
+  );
   if (rangeResult.status === 'unavailable') {
     return "I couldn't check your calendar right now.";
   }
   if (rangeResult.events.length > 0) {
-    return formatCalendarEvidenceForSpeech(displayName, rangeResult.events[rangeResult.events.length - 1], 'date');
+    return speakDoctorCalendarHits(
+      displayName,
+      doctorTerm,
+      rangeResult.events,
+      'date',
+      normalizeDoctorNameForMatch,
+      doctorCalendarIdentityKey,
+      formatCalendarEvidenceForSpeech,
+      `in the past ${BACK_MONTHS} months`,
+      'last',
+    );
   }
   return `I don't see anything with ${displayName} on your calendar in the past ${BACK_MONTHS} months.`;
 }
@@ -315,8 +338,9 @@ export function isReferentUpcomingVisitQuestion(text: string): boolean {
 
 // Bounded doctor-calendar identity fence: same surname with distinct
 // doctor-shaped titles (Dr. Estil Vance vs Dr. Robert Vance) must not
-// auto-pick one identity. Same identity key still takes the soonest event.
-function speakUpcomingDoctorCalendarHits(
+// auto-pick one identity. Upcoming same-key hits take the soonest event;
+// historical same-key hits take the most recent past event.
+function speakDoctorCalendarHits(
   displayName: string,
   doctorTerm: string,
   events: { title: string; start_ms: number }[],
@@ -324,6 +348,8 @@ function speakUpcomingDoctorCalendarHits(
   normalize: (s: string) => string,
   identityKey: (title: string, rawTerm: string, normalize: (s: string) => string) => string,
   formatSpeech: (displayName: string, event: any, mode?: 'weekday' | 'date') => string,
+  windowPhrase: string,
+  singlePick: 'first' | 'last',
 ): string {
   const keys = new Set(events.map((e) => identityKey(e.title, doctorTerm, normalize)));
   if (keys.size > 1) {
@@ -335,9 +361,10 @@ function speakUpcomingDoctorCalendarHits(
       });
       return `${h.title} on ${dateLabel}`;
     });
-    return `Your calendar shows ${events.length} things with ${displayName} in the next 6 months — ${dates.join(', ')}. Which one did you mean?`;
+    return `Your calendar shows ${events.length} things with ${displayName} ${windowPhrase} — ${dates.join(', ')}. Which one did you mean?`;
   }
-  return formatSpeech(displayName, events[0], mode);
+  const event = singlePick === 'last' ? events[events.length - 1] : events[0];
+  return formatSpeech(displayName, event, mode);
 }
 
 /**
@@ -361,7 +388,7 @@ export async function answerUpcomingCalendarEvidence(
     titleMatchesDoctorCalendarTerm(title, doctorTerm, normalizeDoctorNameForMatch);
   const calMatches = findUpcomingEventsMatchingTerm(doctorTerm, normalizeDoctorNameForMatch, matchTitle);
   if (calMatches.length > 0) {
-    return speakUpcomingDoctorCalendarHits(
+    return speakDoctorCalendarHits(
       displayName,
       doctorTerm,
       calMatches,
@@ -369,6 +396,8 @@ export async function answerUpcomingCalendarEvidence(
       normalizeDoctorNameForMatch,
       doctorCalendarIdentityKey,
       formatCalendarEvidenceForSpeech,
+      'in the next 6 months',
+      'first',
     );
   }
   const FORWARD_MONTHS = 6;
@@ -386,7 +415,7 @@ export async function answerUpcomingCalendarEvidence(
     return "I couldn't check your calendar right now.";
   }
   if (wideResult.events.length > 0) {
-    return speakUpcomingDoctorCalendarHits(
+    return speakDoctorCalendarHits(
       displayName,
       doctorTerm,
       wideResult.events,
@@ -394,6 +423,8 @@ export async function answerUpcomingCalendarEvidence(
       normalizeDoctorNameForMatch,
       doctorCalendarIdentityKey,
       formatCalendarEvidenceForSpeech,
+      'in the next 6 months',
+      'first',
     );
   }
   return `I don't see anything with ${displayName} on your calendar in the next ${FORWARD_MONTHS} months.`;

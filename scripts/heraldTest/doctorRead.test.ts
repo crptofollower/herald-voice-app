@@ -971,6 +971,80 @@ export async function runDoctorReadTests() {
       },
     );
   }
+  {
+    freshDB();
+    const calMs = monthsFromNowMs(-2);
+    await withFakeCalendarEvents(
+      [{ id: 'cal_estil', title: 'Dr. Estil Vance - on follow-up', startDate: new Date(calMs).toISOString() }],
+      async () => {
+        const before = getMedicalRecords().length;
+        const d = await classifyQuery('When did I last see Dr Vance?');
+        assert('CEC7 historical surname matches Dr. Estil Vance', d.tier1Response,
+          (v) => typeof v === 'string' && /Your calendar shows/i.test(v) && /Vance/i.test(v) && !/You last saw/i.test(v) && !/which one did you mean/i.test(v),
+          'Your calendar shows Vance');
+        assert('CEC7 calendar surname hit does not write medical_records', getMedicalRecords().length, (v) => v === before, String(before));
+      },
+    );
+  }
+  {
+    freshDB();
+    const estilMs = monthsFromNowMs(-3);
+    const robertMs = monthsFromNowMs(-1);
+    await withFakeCalendarEvents(
+      [
+        { id: 'cal_estil', title: 'Dr. Estil Vance', startDate: new Date(estilMs).toISOString() },
+        { id: 'cal_robert', title: 'Dr. Robert Vance', startDate: new Date(robertMs).toISOString() },
+      ],
+      async () => {
+        const d = await classifyQuery('When did I last see Dr Vance?');
+        assert('CEC8 two historical Vance identities clarify', d.tier1Response,
+          (v) => typeof v === 'string'
+            && v.startsWith('Your calendar shows')
+            && /which one did you mean/i.test(v)
+            && /Estil/i.test(v)
+            && /Robert/i.test(v)
+            && /past 12 months/i.test(v)
+            && !/^Your calendar shows Dr Vance on /.test(v),
+          'clarification naming both titles');
+      },
+    );
+  }
+  {
+    freshDB();
+    const olderMs = monthsFromNowMs(-8);
+    const newerMs = monthsFromNowMs(-1);
+    const olderLabel = new Date(olderMs).toLocaleDateString([], { month: 'long', day: 'numeric', year: 'numeric' });
+    const newerLabel = new Date(newerMs).toLocaleDateString([], { month: 'long', day: 'numeric', year: 'numeric' });
+    await withFakeCalendarEvents(
+      [
+        { id: 'cal_old', title: 'Dr. Estil Vance - on follow-up', startDate: new Date(olderMs).toISOString() },
+        { id: 'cal_new', title: 'Dr. Estil Vance - on follow-up', startDate: new Date(newerMs).toISOString() },
+      ],
+      async () => {
+        const d = await classifyQuery('When did I last see Dr Vance?');
+        assert('CEC9 same identity keeps most recent historical event', d.tier1Response,
+          (v) => typeof v === 'string'
+            && /Your calendar shows/i.test(v)
+            && v.includes(newerLabel)
+            && !v.includes(olderLabel)
+            && !/which one did you mean/i.test(v),
+          'most recent past Estil event only');
+      },
+    );
+  }
+  {
+    freshDB();
+    const calMs = monthsFromNowMs(-2);
+    await withFakeCalendarEvents(
+      [{ id: 'cal_estil', title: 'Dr. Estil Vance - on follow-up', startDate: new Date(calMs).toISOString() }],
+      async () => {
+        const d = await classifyQuery('When did I last see Dr Estelle Vance?');
+        assert('CEC10 Dr Estelle remains a non-match for Estil Vance', d.tier1Response,
+          (v) => typeof v === 'string' && /past 12 months/i.test(v) && !/Your calendar shows/i.test(v),
+          'bounded absence, not Estil equivalence');
+      },
+    );
+  }
 
   const total = passed + failures.length;
   console.log(

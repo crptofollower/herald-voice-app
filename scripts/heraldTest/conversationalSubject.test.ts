@@ -1215,6 +1215,22 @@ export async function runConversationalSubjectTests() {
     );
   }
 
+  // C3 — pronoun historical path reuses the upcoming doctor-title matcher
+  {
+    freshFlow();
+    const pastMs = monthsFromNowMs(-4, 10);
+    await withFakeCalendarEvents(
+      [{ id: 'e1', title: 'Dr. Estil Vance - on follow-up', startDate: new Date(pastMs).toISOString() }],
+      async () => {
+        const subj = { domain: 'medical_doctor' as const, entityId: 'Dr Vance', displayName: 'Dr Vance', establishedAtTurn: 1 };
+        const result = await answerReferentVisitDate(subj);
+        assert('RANGE-C3 Flow C historical surname matches Dr. Estil Vance', result,
+          (v: string | null) => v !== null && v.startsWith('Your calendar shows Dr Vance on ') && /\d{4}/.test(v) && !/which one did you mean/i.test(v),
+          'Your calendar shows Dr Vance on [Month Day, Year]');
+      },
+    );
+  }
+
   // C2 — historical: a SUCCESSFUL 12-month search with zero matches must
   //      speak a BOUNDED no-result (CTO trust correction), never the old
   //      unbounded "yet" claim, which read as a lifetime/complete-history
