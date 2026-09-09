@@ -19,6 +19,7 @@ import {
   isReferentYearBoundedVisitQuestion,
   answerReferentYearBoundedVisit,
 } from './conversationalSubject';
+import { isClosedActiveSubjectIdentityLookup } from './activeSubjectReference';
 import { detectFamilyRead, resolveFamilyRead } from '../utils/familyRead';
 import { resolveHouseholdProvider } from '../utils/householdRead';
 import { getLastVisit } from '../db/medicalDB';
@@ -715,8 +716,9 @@ export async function processUtterance(
   }
   // 1b) Flow C — closed pronoun-phone speech act against the one-turn
   //     conversational subject. Eligible referent consumes and clears.
-  //     Any other next turn clears as unused. Explicit named asks are
-  //     not this speech act and fall through to routeIntent.
+  //     Closed Active Subject identity against a live medical_doctor is not
+  //     unused-clear. Any other next turn still clears as unused. Explicit
+  //     named asks are not this speech act and fall through to routeIntent.
   if (subject?.hasLive()) {
     subject.markReferentEvaluated();
     if (isReferentPhoneQuestion(text)) {
@@ -768,14 +770,21 @@ export async function processUtterance(
       }
     }
     const unused = subject.peek();
-    if (unused?.displayName) {
-      recordContinuationRecoveryCandidate(
-        continuationRecoveryCandidates,
-        'person',
-        unused.displayName,
-      );
+    // Closed Active Subject identity ("Who was I talking about?") is not an
+    // unused/domain-switch turn when a medical_doctor subject is already live.
+    // Preserve that referent; do not republish or infer doctorhood from the ledger.
+    if (unused?.domain === 'medical_doctor' && isClosedActiveSubjectIdentityLookup(text)) {
+      // fall through to routeIntent / Active Subject; holder unchanged
+    } else {
+      if (unused?.displayName) {
+        recordContinuationRecoveryCandidate(
+          continuationRecoveryCandidates,
+          'person',
+          unused.displayName,
+        );
+      }
+      subject.clear();
     }
-    subject.clear();
   }
   // 1c) Live operational-list continuation — structurally trailing-add against
   //     the RAM domain slot only. Domain is evidence, not write permission.

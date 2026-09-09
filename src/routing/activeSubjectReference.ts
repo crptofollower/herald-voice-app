@@ -138,6 +138,12 @@ function logActiveSubjectDiag(event: ActiveSubjectDiagEvent): void {
 const IDENTITY_LOOKUP_RE =
   /^(?:who|what)\s+(?:am|was|were|are)\s+(?:i|we)\s+(?:talking\s+about|saying)\s*[?.!]*$/i;
 
+/** Same closed identity class as Stage A. Used by processUtterance so a
+ *  live Flow C medical_doctor is not unused-cleared on this turn. */
+export function isClosedActiveSubjectIdentityLookup(text: string): boolean {
+  return IDENTITY_LOOKUP_RE.test(text.trim());
+}
+
 /** "what did/was I say/saying about him/her/them" — a CLOSED shape,
  *  pronoun-object set only, no noun-phrase generalization ("that doctor")
  *  added here. Matching this deterministically CONFIRMS a content-lookup

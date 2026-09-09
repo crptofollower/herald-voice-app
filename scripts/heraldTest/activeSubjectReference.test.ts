@@ -682,6 +682,35 @@ export async function runActiveSubjectReferenceTests() {
     assertTrue('doctor: Flow C reread names the visit, not Level-1 identity-only', when.handled === true && /last saw/i.test(when.responseText) && /smith/i.test(when.responseText));
   }
 
+  console.log(`\n${BOLD}-- Medical_doctor preservation across closed identity processUtterance --${RESET}`);
+  {
+    const { session, deps } = freshDb();
+    writeMedicalRecord({ doctor_name: 'Dr Smith', visit_date: '2026-08-01', status: 'noted' });
+    const ledger = createConversationTurnLedger();
+    const subject = new ConversationalSubjectHolder();
+    const discourse = new DiscourseContinuityHolder();
+    await processUtterance('What was my last visit with Dr Smith?', session, deps, subject, null, null, null, null, discourse, ledger);
+    const whoTurn = await processUtterance('Who was I talking about?', session, deps, subject, null, null, null, null, discourse, ledger);
+    assertTrue('identity-bridge: identity turn is not Flow C consume', whoTurn.handled === false);
+    assertTrue('identity-bridge: medical_doctor remains live', subject.hasLive() && subject.peek()?.domain === 'medical_doctor');
+    assertTrue('identity-bridge: preserved subject is still Smith', !!subject.peek()?.displayName && /smith/i.test(subject.peek()!.displayName));
+    const when = await processUtterance('When did I last see him?', session, deps, subject, null, null, null, null, discourse, ledger);
+    assertTrue('identity-bridge: when-did-I-last-see-him is referent_resume', when.handled === true && when.source === 'referent_resume');
+    assertTrue('identity-bridge: fresh visit-history reread names Smith', when.handled === true && /last saw/i.test(when.responseText) && /smith/i.test(when.responseText));
+    assertTrue('identity-bridge: not unresolved_referent', !(when.handled === false && when.routeDecision.kind === 'device_read' && when.routeDecision.reason === 'medical:visit_history_unresolved_referent'));
+  }
+  {
+    const { session, deps } = freshDb();
+    writeMedicalRecord({ doctor_name: 'Dr Smith', visit_date: '2026-08-01', status: 'noted' });
+    const subject = new ConversationalSubjectHolder();
+    await processUtterance('What was my last visit with Dr Smith?', session, deps, subject, null, null, null, null, null, null);
+    const unused = await processUtterance('Open YouTube', session, deps, subject, null, null, null, null, null, null);
+    assertTrue('unused-control: unrelated turn is not referent_resume', !(unused.handled === true && unused.source === 'referent_resume'));
+    assertTrue('unused-control: medical_doctor cleared', !subject.hasLive());
+    const later = await processUtterance('When did I last see him?', session, deps, subject, null, null, null, null, null, null);
+    assertTrue('unused-control: later pronoun is unresolved_referent', later.handled === false && later.routeDecision.kind === 'device_read' && later.routeDecision.reason === 'medical:visit_history_unresolved_referent');
+  }
+
   console.log(`\n${BOLD}-- Pass 1: medication thing consumption --${RESET}`);
   {
     const pending = rec({
