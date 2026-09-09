@@ -17,6 +17,16 @@ const SUSPEND_TIMEOUT_MS = 1200;
 export function useMic(
   onTranscript: (text: string) => void,
   ttsActiveRef?: { current: boolean },
+  // Voice-recognition state-leak repair, 2026-09-xx: fires ONLY for a
+  // genuine content-free recognition outcome -- no transcript, no partial,
+  // no fabricated text -- exactly the two branches below that previously
+  // did nothing at all. Never carries any text; never itself decides
+  // whether a pending confirmation exists (that is the caller's authority,
+  // via the SAME sessionRef.current.hasPending() check ChatScreen already
+  // uses for mic-mode selection). This is what lets a caller feed silence
+  // into the existing ConversationSession re-ask/budget/release ladder
+  // instead of a pending state leaking indefinitely -- see oneShotEndDecision.ts.
+  onNoRecognizableSpeech?: () => void,
 ) {
   const [isRecording, setIsRecording] = useState(false);
   // Read-only mirror of latestPartialRef for presentation (live STT partial).
@@ -312,6 +322,12 @@ export function useMic(
         deliverBufferWithoutNativeStop('no_speech');
         return;
       }
+      // Genuine content-free no-speech (teardown, not flush): no transcript
+      // exists to deliver. Never fabricate one -- surface the outcome only,
+      // so a caller with an active pending confirmation can advance its own
+      // re-ask/budget ladder instead of this silently disappearing.
+      log('NO_RECOGNIZABLE_SPEECH', { source: 'no_speech_error' });
+      onNoRecognizableSpeech?.();
     }
     if (event.error !== 'no-speech') {
       console.error('[useMic] Speech recognition error:', event.error);
@@ -355,9 +371,16 @@ export function useMic(
       deliverBufferWithoutNativeStop('native_end_partial');
       return;
     }
-    if (decision === 'heard_unrecognized') {
-      log('HEARD_UNRECOGNIZED');
-      rlog('HEARD_UNRECOGNIZED');
+    if (decision === 'heard_unrecognized' || decision === 'silence') {
+      if (decision === 'heard_unrecognized') {
+        log('HEARD_UNRECOGNIZED');
+        rlog('HEARD_UNRECOGNIZED');
+      }
+      // Same content-free surfacing as the no-speech error branch above --
+      // no transcript, nothing fabricated, caller decides relevance via its
+      // own pending check.
+      log('NO_RECOGNIZABLE_SPEECH', { source: 'native_end', decision });
+      onNoRecognizableSpeech?.();
     }
     setIsRecording(false);
     turnActiveRef.current = false;

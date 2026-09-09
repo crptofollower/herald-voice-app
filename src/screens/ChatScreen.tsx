@@ -2753,7 +2753,48 @@ export default function ChatScreen() {
       sendMessage(trimmed, 'speech');
     }, 600);
   }, [sendMessage]);
-  const { isRecording, startRecording, stopRecording, suspendForSpeech, partialText } = useMic(handleTranscript, isSpeakingRef);
+  // Voice-recognition state-leak repair, 2026-09-xx: a genuine content-free
+  // recognition outcome (no transcript, no partial -- true silence/no-speech)
+  // must not leak an armed pending confirmation forever. Fires ONLY when a
+  // pending actually exists (the SAME sessionRef.current.hasPending() check
+  // already trusted for mic-mode selection below) -- with no pending, this
+  // is a complete no-op, identical to today's behavior. Never fabricates
+  // transcript text: feeds an empty string into the existing
+  // ConversationSession pending resolution so its own re-ask/budget/release
+  // ladder (unchanged) can advance instead of the pending sitting forever.
+  // Deliberately bypasses sendMessage (turn bookkeeping, hot-ring context,
+  // a user message bubble) -- nothing was said, so none of that applies;
+  // only the assistant's re-ask/release reply, if any, is surfaced.
+  const handleNoRecognizableSpeech = useCallback(async () => {
+    if (sendingRef.current || !sessionRef.current.hasPending()) return;
+    sendingRef.current = true;
+    try {
+      const outcome = await processUtterance('', sessionRef.current, {
+        classifyQuery,
+        classifyLLM: async (t: string) => classifyWithLLM(t, getCtx(), {
+          contacts: getKnownContactNames(),
+          lists: getKnownListNames(),
+          name: undefined,
+        }, { modelIdentity: getModelIdentity() }),
+        llmReady: llmStatus === 'ready',
+        llmStatus,
+        captureContext: {
+          contacts: getKnownContactNames(),
+          lists: getKnownListNames(),
+        },
+        resolveContact: resolveContactPhoneRef.current ?? undefined,
+        getMedicationSemanticInterpreterCtx,
+      }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current, calendarPresentationRef.current, calendarContinuationRef.current, discourseRef.current, conversationLedgerRef.current);
+      if (outcome.handled && outcome.source === 'pending_resume' && outcome.responseText) {
+        addMessage({ id: generateId('msg'), role: 'assistant', content: outcome.responseText, timestamp: Date.now() });
+        speak(outcome.responseText);
+      }
+    } finally {
+      sendingRef.current = false;
+    }
+  }, [classifyQuery, getCtx, getKnownContactNames, getKnownListNames, llmStatus, getModelIdentity, getMedicationSemanticInterpreterCtx, addMessage, speak]);
+
+  const { isRecording, startRecording, stopRecording, suspendForSpeech, partialText } = useMic(handleTranscript, isSpeakingRef, handleNoRecognizableSpeech);
   suspendForSpeechRef.current = suspendForSpeech;
 
   useRaiseToWake({
