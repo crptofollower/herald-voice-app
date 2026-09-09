@@ -20,6 +20,7 @@ import {
   answerActiveSubjectReference,
   resolveActiveSubjectCandidate,
   ACTIVE_SUBJECT_GROUNDING_ACK,
+  isClosedActiveSubjectIdentityLookup,
 } from '../../src/routing/activeSubjectReference.ts';
 import { DOMAIN_WRITERS } from '../../src/routing/routeIntent.ts';
 import { continuityLedgerFocus } from '../../src/routing/conversationTurnLedgerWrite.ts';
@@ -709,6 +710,54 @@ export async function runActiveSubjectReferenceTests() {
     assertTrue('unused-control: medical_doctor cleared', !subject.hasLive());
     const later = await processUtterance('When did I last see him?', session, deps, subject, null, null, null, null, null, null);
     assertTrue('unused-control: later pronoun is unresolved_referent', later.handled === false && later.routeDecision.kind === 'device_read' && later.routeDecision.reason === 'medical:visit_history_unresolved_referent');
+  }
+
+  console.log(`\n${BOLD}-- Closed identity grammar: speech/ASR variants --${RESET}`);
+  {
+    const positives = [
+      'Who was I talking about?',
+      'Who was I just talking about?',
+      'Who was I talking about just now?',
+      'Who were we talking about?',
+      "Who's I talking about",
+      "Who's I just talking about",
+      'Who\u2019s I just talking about',
+    ];
+    for (const phrase of positives) {
+      assertTrue(`closed identity accepts: ${JSON.stringify(phrase)}`, isClosedActiveSubjectIdentityLookup(phrase));
+    }
+    const negatives = [
+      'Open YouTube',
+      "Who's my plumber?",
+      "Who's my doctor?",
+      'Who was the last doctor I saw?',
+      'Who was just talking about?',
+      'What did I ask the doctor?',
+    ];
+    for (const phrase of negatives) {
+      assertTrue(`closed identity rejects: ${JSON.stringify(phrase)}`, !isClosedActiveSubjectIdentityLookup(phrase));
+    }
+  }
+  {
+    const identityVariants = [
+      'Who was I talking about?',
+      'Who was I just talking about?',
+      'Who was I talking about just now?',
+      'Who were we talking about?',
+      "Who's I talking about",
+      "Who's I just talking about",
+      'Who\u2019s I just talking about',
+    ];
+    for (const phrase of identityVariants) {
+      const { session, deps } = freshDb();
+      writeMedicalRecord({ doctor_name: 'Dr Smith', visit_date: '2026-08-01', status: 'noted' });
+      const subject = new ConversationalSubjectHolder();
+      await processUtterance('What was my last visit with Dr Smith?', session, deps, subject, null, null, null, null, null, null);
+      await processUtterance(phrase, session, deps, subject, null, null, null, null, null, null);
+      assertTrue(`variant preserve: ${JSON.stringify(phrase)} keeps medical_doctor Smith`, subject.hasLive() && subject.peek()?.domain === 'medical_doctor' && /smith/i.test(subject.peek()?.displayName ?? ''));
+      const when = await processUtterance('When did I last see him?', session, deps, subject, null, null, null, null, null, null);
+      assertTrue(`variant reread: ${JSON.stringify(phrase)} then when-last-see-him is referent_resume`, when.handled === true && when.source === 'referent_resume' && /last saw/i.test(when.responseText) && /smith/i.test(when.responseText));
+    }
   }
 
   console.log(`\n${BOLD}-- Pass 1: medication thing consumption --${RESET}`);

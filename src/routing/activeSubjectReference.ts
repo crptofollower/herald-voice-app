@@ -129,14 +129,15 @@ function logActiveSubjectDiag(event: ActiveSubjectDiagEvent): void {
 
 // ─── Stage A — closed structural shapes ────────────────────────────────────
 
-/** "who/what am/was/were/are I/we talking about/saying" — a CLOSED shape.
- *  Matching this deterministically CONFIRMS the utterance is an identity-
- *  lookup act (not merely a candidate for Stage B to judge). Deliberately
- *  NOT extended with "discussing"/"mean(t)" or any other held-out
- *  paraphrase — those must succeed through Stage B's own applicability
- *  judgment, never by growing this list. */
+/** Closed first-person identity lookup: who or what, then an auxiliary,
+ *  then I or we, then talking about or saying.
+ *  Auxiliary is a separate was, am, are, or were, or a local who-apostrophe-s
+ *  contraction (straight or curly) — not a global contraction expander.
+ *  Optional temporal filler just before the verb, and optional just now after.
+ *  Matching this CONFIRMS the identity-lookup act. Held-out paraphrases stay
+ *  on Stage B. */
 const IDENTITY_LOOKUP_RE =
-  /^(?:who|what)\s+(?:am|was|were|are)\s+(?:i|we)\s+(?:talking\s+about|saying)\s*[?.!]*$/i;
+  /^(?:who|what)(?:['\u2019]s|\s+(?:am|was|were|are))\s+(?:i|we)\s+(?:just\s+)?(?:talking\s+about|saying)(?:\s+just\s+now)?\s*[?.!]*$/i;
 
 /** Same closed identity class as Stage A. Used by processUtterance so a
  *  live Flow C medical_doctor is not unused-cleared on this turn. */
