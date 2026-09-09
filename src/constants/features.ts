@@ -79,3 +79,31 @@ export const MEDICATION_SEMANTIC_INTERPRETATION_ENABLED = true;
 //   Slice 1 falsification battery is run on device — the closing behavior only
 //   takes effect while this is ON.
 export const CAPABILITY_READ_ROUTER_ENABLED = true;
+
+// SPEECH_PROVIDER_AB_GOOGLE_TTS:
+//   Bounded diagnostic ONLY — a device-validation experiment to determine
+//   whether Herald speech recognition works when explicitly bound to the
+//   installed com.google.android.tts (Google Speech Services) recognition
+//   provider instead of the currently-failing com.google.android.as
+//   (AiAi/SODA) on-device path. This is NOT production fallback policy and
+//   must not be treated as one. Covers BOTH recognition modes ('open' and
+//   'control_confirmation') this round — an earlier, narrower version of
+//   this same experiment (open-only) was implemented, reviewed, then
+//   reverted before confirmation-mode behavior was ever validated on
+//   device; this flag re-opens exactly that gap.
+//   expo-speech-recognition@56.0.0's native createSpeechRecognizer()
+//   branches first on requiresOnDeviceRecognition (Android 13+) — that
+//   branch always wins and silently ignores any androidRecognitionServicePackage
+//   value if both are set. Selecting the Google provider therefore REQUIRES
+//   omitting requiresOnDeviceRecognition entirely (see
+//   recognitionModeConfig.ts) — this experiment carries NO source-level
+//   on-device/offline guarantee of its own. The downstream deterministic
+//   confirmation path (ConversationSession.resolvePending, CONFIRM_YES_RE/
+//   CONFIRM_NO_RE, medical write authority) is provider-agnostic by
+//   construction and is unaffected either way — this flag only changes
+//   which recognizer produces the text those mechanisms already consume
+//   identically regardless of source (see recognitionModeConfig.ts).
+//   EXPERIMENT STATE: UNRESOLVED — positive prior open-mode device
+//   evidence exists; confirmation-mode behavior has not yet been
+//   validated on device. Do not revert without explicit CTO closure.
+export const SPEECH_PROVIDER_AB_GOOGLE_TTS = true;

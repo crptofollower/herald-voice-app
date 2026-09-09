@@ -1,3 +1,5 @@
+import { SPEECH_PROVIDER_AB_GOOGLE_TTS } from '../constants/features';
+
 export type RecognitionMode = 'open' | 'control_confirmation';
 
 // M1 short-utterance follow-on, 2026-08-13: STT biasing only -- the
@@ -25,8 +27,12 @@ export type SpeechRecognitionStartConfig = {
   lang: string;
   interimResults: boolean;
   continuous: boolean;
-  requiresOnDeviceRecognition: boolean;
+  /** Omitted entirely (not false) by the SPEECH_PROVIDER_AB_GOOGLE_TTS branch
+   *  below -- see that branch's comment for why omission, not `false`, is
+   *  required. */
+  requiresOnDeviceRecognition?: boolean;
   contextualStrings?: string[];
+  androidRecognitionServicePackage?: string;
 };
 
 /**
@@ -42,7 +48,7 @@ export type SpeechRecognitionStartConfig = {
  */
 export function buildStartConfig(mode: RecognitionMode): SpeechRecognitionStartConfig {
   const contextualStrings = getContextualStringsForMode(mode);
-  return {
+  const base = {
     lang: 'en-US',
     interimResults: false,
     // 2026-08-13, AMBIENT_CONTINUOUS short-utterance experiment: continuous:true
@@ -55,7 +61,27 @@ export function buildStartConfig(mode: RecognitionMode): SpeechRecognitionStartC
     // matching how keyboard voice typing (and, per SODA's log tag, a
     // non-ambient domain) behaves. See state doc for the full archaeology.
     continuous: false,
-    requiresOnDeviceRecognition: true,
     ...(contextualStrings ? { contextualStrings } : {}),
+  };
+
+  // SPEECH_PROVIDER_AB_GOOGLE_TTS (bounded device-validation diagnostic,
+  // 2026-09-xx): applies to BOTH modes uniformly -- confirmation biasing
+  // (contextualStrings, already merged into `base` above) is unaffected
+  // either way. expo-speech-recognition@56.0.0's native
+  // createSpeechRecognizer() branches first on requiresOnDeviceRecognition
+  // (Android 13+): that branch always wins and silently ignores
+  // androidRecognitionServicePackage if both are set, so selecting the
+  // Google provider REQUIRES omitting requiresOnDeviceRecognition entirely
+  // here, not setting it false. See features.ts for the full rationale.
+  if (SPEECH_PROVIDER_AB_GOOGLE_TTS) {
+    return {
+      ...base,
+      androidRecognitionServicePackage: 'com.google.android.tts',
+    };
+  }
+
+  return {
+    ...base,
+    requiresOnDeviceRecognition: true,
   };
 }

@@ -65,24 +65,34 @@ export async function runRecognitionModeConfigTests() {
       'no web_search, no androidIntentOptions in either mode');
   }
 
+  // SPEECH_PROVIDER_AB_GOOGLE_TTS device-validation diagnostic (2026-09-xx):
+  // both modes now explicitly select com.google.android.tts and omit
+  // requiresOnDeviceRecognition (mutual exclusivity with
+  // androidRecognitionServicePackage in expo-speech-recognition@56.0.0's
+  // native createSpeechRecognizer() -- see features.ts/recognitionModeConfig.ts
+  // comments). This extends the assertions to the new intentional shape
+  // rather than weakening them -- base fields (lang/interimResults/
+  // continuous) and control_confirmation's contextualStrings are still
+  // checked exactly as before.
   {
     const got = buildStartConfig('open');
-    assert('buildStartConfig open preserves lang/continuous:false/requiresOnDeviceRecognition/interimResults', got,
+    assert('buildStartConfig open: base fields intact, explicit Google provider, on-device flag omitted, no contextualStrings', got,
       (v) => {
         if (!v || typeof v !== 'object') return false;
         const o = v as Record<string, unknown>;
         return o.lang === 'en-US'
           && o.interimResults === false
           && o.continuous === false
-          && o.requiresOnDeviceRecognition === true
+          && o.androidRecognitionServicePackage === 'com.google.android.tts'
+          && ('requiresOnDeviceRecognition' in o) === false
           && ('contextualStrings' in o) === false;
       },
-      "{ lang: 'en-US', interimResults: false, continuous: false, requiresOnDeviceRecognition: true } (no contextualStrings key)");
+      "{ lang: 'en-US', interimResults: false, continuous: false, androidRecognitionServicePackage: 'com.google.android.tts' } (no requiresOnDeviceRecognition, no contextualStrings)");
   }
 
   {
     const got = buildStartConfig('control_confirmation');
-    assert('buildStartConfig control_confirmation includes contextualStrings alongside unchanged base config', got,
+    assert('buildStartConfig control_confirmation: contextualStrings intact alongside explicit Google provider, on-device flag omitted', got,
       (v) => {
         if (!v || typeof v !== 'object') return false;
         const o = v as Record<string, unknown>;
@@ -90,9 +100,10 @@ export async function runRecognitionModeConfigTests() {
           && o.lang === 'en-US'
           && o.interimResults === false
           && o.continuous === false
-          && o.requiresOnDeviceRecognition === true;
+          && o.androidRecognitionServicePackage === 'com.google.android.tts'
+          && ('requiresOnDeviceRecognition' in o) === false;
       },
-      'base config unchanged + contextualStrings === CONTROL_CONFIRMATION_STRINGS');
+      "contextualStrings === CONTROL_CONFIRMATION_STRINGS + base config intact + androidRecognitionServicePackage: 'com.google.android.tts' (no requiresOnDeviceRecognition)");
   }
 
   const total = passed + failures.length;

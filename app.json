@@ -62,7 +62,8 @@
           "speechRecognitionPermission": "Herald uses speech recognition to understand you.",
           "requiresOnDeviceRecognition": true,
           "androidSpeechServicePackages": [
-            "com.google.android.as"
+            "com.google.android.as",
+            "com.google.android.tts"
           ]
         }
       ],
