@@ -129,10 +129,25 @@ function normalizeContractions(text: string): string {
   return text.replace(/\b(what|which)'d\b/gi, '$1 did');
 }
 
+/** Closed Active Subject acts Recap must not steal (person content-about-pronoun,
+ *  medication identity "talking about"). Generic "what did I say about my medicine"
+ *  remains Recap Stage A — that is not the pronoun content-lookup class. */
+const RECAP_YIELDS_CONTENT_ABOUT_PERSON_RE =
+  /\b(?:tell(?:ing)?\s+you|say(?:ing)?|mention(?:ing)?)\s+about\s+(?:him|her|them)\b/i;
+const RECAP_YIELDS_MEDICATION_IDENTITY_RE =
+  /^(?:so[,]?\s+)?(?:um+[,]?\s+|uh+[,]?\s+)?(?:can\s+you\s+|could\s+you\s+|would\s+you\s+)?(?:please\s+)?(?:what|which)\s+(?:medication|medicine|drug|meds?)\s+(?:was|were|am|are)\s+(?:i|we)\s+talking\s+about\s*[?.!]*$/i;
+
+function recapYieldsToActiveSubject(text: string): boolean {
+  const t = normalizeContractions(text.trim());
+  if (!t) return false;
+  return RECAP_YIELDS_CONTENT_ABOUT_PERSON_RE.test(t) || RECAP_YIELDS_MEDICATION_IDENTITY_RE.test(t);
+}
+
 export function classifyImmediateRecapDeterministic(text: string): boolean {
   const t = normalizeContractions(text.trim());
   if (!t) return false;
   if (ASSISTANT_RECAP_RE.test(t)) return false;
+  if (recapYieldsToActiveSubject(t)) return false;
   return IMMEDIATE_RECAP_RE.test(t) || REMIND_ME_RE.test(t);
 }
 
@@ -394,6 +409,23 @@ export async function answerImmediateSemanticRecap(
   const candidates = buildRecapCandidates(deps.ledgerEntries);
   const diagCandidates = candidates.map(toDiagCandidate);
   const utteranceNormalized = boundDiagText(text, DIAG_UTTERANCE_MAX_CHARS);
+
+  if (recapYieldsToActiveSubject(text)) {
+    logImmediateRecapDiag({
+      invoked: true,
+      utteranceNormalized,
+      stageAMatched: false,
+      stageB: { status: 'not_invoked' },
+      candidateCount: candidates.length,
+      candidates: diagCandidates,
+      selectedCandidateIndex: null,
+      selectedCandidateTier: null,
+      adapterFound: null,
+      rereadOutcome: 'not_applicable',
+      finalResult: 'not_recap',
+    });
+    return { handled: false };
+  }
 
   // Diagnostics-only helper (2026-09-xx device gate): assembles and emits
   // exactly one HERALD_IMMEDIATE_RECAP_DIAG event, reusing whatever

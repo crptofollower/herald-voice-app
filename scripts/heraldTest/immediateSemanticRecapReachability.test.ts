@@ -151,13 +151,13 @@ export async function runImmediateSemanticRecapReachabilityTests() {
     assertTrue('ITEM-1: recap consumer handles the device-failed phrase given ONLY ledger evidence (no reason parameter involved at all)', outcome.handled === true);
   }
   {
-    // Item 2: "Which medicine was I talking about?" — the reason:'default'
-    // Stage-B phrase that already worked. Confirms unchanged.
-    assertTrue('Stage A structurally does not match this phrase (Stage B required, as designed)', !classifyImmediateRecapDeterministic('Which medicine was I talking about?'));
+    // Item 2: "Which medicine was I talking about?" is now a closed Active
+    // Subject medication-identity act. Recap must yield (not Stage-B reread).
+    assertTrue('Stage A structurally does not match this phrase', !classifyImmediateRecapDeterministic('Which medicine was I talking about?'));
     const commit = rec({ focus: [{ kind: 'thing', displayValue: 'Eliquis', resolverKey: 'med_1', referable: true, tier: 'authoritative' }] });
     const mockCtx = { completion: async () => ({ text: '{"isImmediateRecap":true,"selectedIndex":0,"confidence":0.9}' }) } as any;
     const outcome = await answerImmediateSemanticRecap('Which medicine was I talking about?', { ledgerEntries: [commit], getInterpreterCtx: () => mockCtx });
-    assertTrue('ITEM-2: still resolves via Stage B given ledger evidence + interpreter, exactly as before this repair', outcome.handled === true);
+    assertTrue('ITEM-2: recap yields medication-identity "talking about" to Active Subject', outcome.handled === false);
   }
   {
     // Items 3/4: the function itself has no concept of "reason" at all — it

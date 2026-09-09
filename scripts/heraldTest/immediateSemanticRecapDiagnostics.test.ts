@@ -201,7 +201,7 @@ export async function runImmediateSemanticRecapDiagnosticsTests() {
     // 'no_interpreter_context' precisely because the function itself was
     // never supplied).
     const commit = rec({ focus: [{ kind: 'thing', displayValue: 'Eliquis', referable: true, tier: 'authoritative', resolverKey: 'med_1' }] });
-    const { events } = await captureDiagEvents(() => answerImmediateSemanticRecap('Which medicine was I talking about?', {
+    const { events } = await captureDiagEvents(() => answerImmediateSemanticRecap('What was that medication I mentioned?', {
       ledgerEntries: [commit],
       getInterpreterCtx: () => null,
     }));
@@ -214,17 +214,15 @@ export async function runImmediateSemanticRecapDiagnosticsTests() {
     await processUtterance('I take Lisinopril 10 mg.', session, deps, null, null, null, null, null, null, ledger);
     await processUtterance('Yes.', session, deps, null, null, null, null, null, null, ledger);
     db.prepare(`UPDATE medications SET removed_at = ? WHERE name = 'Lisinopril'`).run(new Date().toISOString());
-    const mockCtx = { completion: async () => ({ text: '{"isImmediateRecap":true,"selectedIndex":0,"confidence":0.9}' }) } as any;
-    const { result, events } = await captureDiagEvents(() => answerImmediateSemanticRecap('Which medicine was I talking about?', {
+    const { result, events } = await captureDiagEvents(() => answerImmediateSemanticRecap("What did I just tell you I'm taking?", {
       ledgerEntries: ledger.peek(Date.now()),
-      getInterpreterCtx: () => mockCtx,
     }));
     assert('stale-reference path: finalResult', events[0]?.finalResult, 'stale_reference_miss');
     assert('stale-reference path: rereadOutcome', events[0]?.rereadOutcome, 'stale_miss');
     assert('stale-reference path: adapterFound true (adapter existed, row just gone)', events[0]?.adapterFound, true);
     assertTrue('stale-reference path: outcome unaffected (still honest miss reply)', result.handled === true && result.kind === 'honest_miss');
-    assert('stale-reference path: stageB status ok with selection', events[0]?.stageB?.status, 'ok');
-    assert('stale-reference path: stageB selectedIndex', events[0]?.stageB?.selectedIndex, 0);
+    assert('stale-reference path: stageAMatched (generic recap, not talking-about)', events[0]?.stageAMatched, true);
+    assert('stale-reference path: selectedCandidateIndex', events[0]?.selectedCandidateIndex, 0);
   }
   {
     // Stage B invoked, low confidence → not recap.

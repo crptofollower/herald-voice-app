@@ -301,15 +301,22 @@ export class WorkingConversationState {
     return { turnIndex: this.turn, focus, candidateSet };
   }
 
-  noteNarrativeUtterance(text: string): void {
+  /**
+   * `exactlyOneNarrativePerson` is set only when this turn's local
+   * qualifying name list has length 1 at the extraction site — never
+   * inferred from peekTopic() (last-of-many also stores a single topic).
+   * Orchestration may publish that name as conversational ledger focus.
+   * This holder does not write the ledger.
+   */
+  noteNarrativeUtterance(text: string): { exactlyOneNarrativePerson: string | null } {
     const live = this.peekTopic();
     if (live && hasLiveTopicContinuation(text, live.displayName)) {
       if (isReferenceQuestion(text)) {
         this.refreshTopic();
-        return;
+        return { exactlyOneNarrativePerson: null };
       }
       this.appendTopicEvidence(text);
-      return;
+      return { exactlyOneNarrativePerson: null };
     }
     const items = extractNarrativeOperationalCandidates(text);
     if (items) {
@@ -318,9 +325,14 @@ export class WorkingConversationState {
       else this.establishCandidateSet(null, items);
     }
     const names = qualifyingNarrativePersonNames(text);
+    if (names.length === 1) {
+      this.establishTopic(names[0], text);
+      return { exactlyOneNarrativePerson: names[0] };
+    }
     if (names.length > 0) {
       this.establishTopic(names[names.length - 1], text);
     }
+    return { exactlyOneNarrativePerson: null };
   }
 
   private expireStale(): void {

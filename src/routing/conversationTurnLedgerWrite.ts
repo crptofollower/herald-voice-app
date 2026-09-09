@@ -118,7 +118,10 @@ export const ROUTE_OUTCOME_LEDGER_POLICY: Record<RouteDecision['kind'], RouteOut
  * never sufficient without a verified reference to back it.
  */
 export function classifyFocusAuthority(facts: {
-  status: CommitResult['status'];
+  /** Writer lifecycle, or `'presented'` for a successful read (not a commit).
+   *  `'presented'` never satisfies `status === 'committed'`; existing writer
+   *  classification is unchanged. */
+  status: CommitResult['status'] | Extract<ConversationTurnOutcome, 'presented'>;
   source: 'deterministic' | 'llm';
   resolverKey: string | undefined;
   /** Active Subject / Reference Continuity V1: true only when this focus
@@ -147,7 +150,11 @@ export function classifyFocusAuthority(facts: {
  */
 export function buildFocusEntry(
   envelope: DomainFocusEnvelope | undefined,
-  facts: { status: CommitResult['status']; source: 'deterministic' | 'llm'; referenceOnly?: boolean },
+  facts: {
+    status: CommitResult['status'] | Extract<ConversationTurnOutcome, 'presented'>;
+    source: 'deterministic' | 'llm';
+    referenceOnly?: boolean;
+  },
 ): ConversationTurnFocusEntry[] {
   if (!envelope) return [];
   const tier = classifyFocusAuthority({
@@ -166,4 +173,19 @@ export function buildFocusEntry(
       tier,
     },
   ];
+}
+
+/** Orchestration-layer helper: attach continuity identity to an existing ledger write. */
+export function continuityLedgerFocus(
+  envelope: DomainFocusEnvelope | undefined,
+  referenceOnly: boolean,
+): ConversationTurnFocusEntry[] {
+  return buildFocusEntry(envelope, {
+    // Not a writer commit. Narrative short-circuits on referenceOnly.
+    // Doctor visit-history is a successful read → ledger outcome 'presented',
+    // which classifies as deterministic_unconfirmed when a resolverKey exists.
+    status: 'presented',
+    source: 'deterministic',
+    referenceOnly,
+  });
 }

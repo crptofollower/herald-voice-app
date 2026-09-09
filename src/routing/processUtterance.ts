@@ -1,5 +1,5 @@
 import { routeIntent, DOMAIN_WRITERS, composeAck, allConverted } from './routeIntent';
-import type { RouteDecision, CommitResult, ResolveContactFn } from './routeIntent';
+import type { RouteDecision, CommitResult, ResolveContactFn, DomainFocusEnvelope } from './routeIntent';
 import type { IntentRecord } from '../hooks/llmLayers';
 import type { ConversationTurnLedger } from './conversationTurnLedger';
 import { commitResultOutcome, captureAuthorityTier, buildFocusEntry } from './conversationTurnLedgerWrite';
@@ -97,7 +97,26 @@ export type UtteranceOutcome =
       handled: false;
       routeDecision: RouteDecision;
       continuationRecoveryCandidates: ContinuationRecoveryCandidate[];
+      /** Orchestration publishes this on the turn's existing ledger write. */
+      continuityFocus?: DomainFocusEnvelope;
+      continuityReferenceOnly?: boolean;
     };
+
+/** Narrative reference-only focus is admitted only on the conversational
+ *  path (needs_clarification / backend without a classified read). A
+ *  successful device_read, device_action, or other domain operation may
+ *  contain a title-case name; that name is not conversational subject
+ *  merely because WCS extracted it. Doctor visit-history uses its own
+ *  Flow C + reason gate, not this helper. */
+function admitsNarrativeContinuityPublication(routeDecision: RouteDecision): boolean {
+  if (routeDecision.kind === 'needs_clarification') {
+    if (routeDecision.reason === 'ambiguous_operational_list') return false;
+    if (routeDecision.readMeta) return false;
+    return true;
+  }
+  if (routeDecision.kind === 'backend' && !routeDecision.readMeta) return true;
+  return false;
+}
 
 function maybeEstablishConversationalSubject(
   text: string,
@@ -404,7 +423,9 @@ export async function processUtterance(
     });
     return { handled: true, source: 'pending_resume', responseText: composeAck([result]), commits: [result] };
   }
-  discourse?.noteNarrativeUtterance(text);
+  const exactlyOneNarrativePerson = discourse
+    ? discourse.noteNarrativeUtterance(text).exactlyOneNarrativePerson
+    : null;
   if (discourse) {
     console.log('[WCS]', JSON.stringify(discourse.snapshot()));
   }
@@ -975,5 +996,43 @@ export async function processUtterance(
     medicationPresentation,
     orderedPresentation,
   );
-  return { handled: false, routeDecision, continuationRecoveryCandidates };
+  let continuityFocus: DomainFocusEnvelope | undefined;
+  let continuityReferenceOnly: boolean | undefined;
+  if (
+    personEstablished
+    && routeDecision.kind === 'device_read'
+    && routeDecision.reason === 'medical:visit_history_read'
+  ) {
+    const live = subject?.peek();
+    if (live?.domain === 'medical_doctor' && live.displayName.trim()) {
+      continuityFocus = {
+        kind: 'person',
+        displayValue: live.displayName,
+        resolverKey: live.entityId,
+        referable: true,
+      };
+      continuityReferenceOnly = false;
+    }
+  }
+  if (
+    !continuityFocus
+    && !personEstablished
+    && exactlyOneNarrativePerson
+    && admitsNarrativeContinuityPublication(routeDecision)
+  ) {
+    continuityFocus = {
+      kind: 'person',
+      displayValue: exactlyOneNarrativePerson,
+      referable: true,
+    };
+    continuityReferenceOnly = true;
+  }
+  return {
+    handled: false,
+    routeDecision,
+    continuationRecoveryCandidates,
+    ...(continuityFocus
+      ? { continuityFocus, continuityReferenceOnly: continuityReferenceOnly === true }
+      : {}),
+  };
 }

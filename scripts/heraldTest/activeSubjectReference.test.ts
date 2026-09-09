@@ -22,6 +22,11 @@ import {
   ACTIVE_SUBJECT_GROUNDING_ACK,
 } from '../../src/routing/activeSubjectReference.ts';
 import { DOMAIN_WRITERS } from '../../src/routing/routeIntent.ts';
+import { continuityLedgerFocus } from '../../src/routing/conversationTurnLedgerWrite.ts';
+import { ConversationalSubjectHolder } from '../../src/routing/conversationalSubject.ts';
+import { DiscourseContinuityHolder } from '../../src/routing/discourseContinuity.ts';
+import { writeMedicalRecord } from '../../src/db/medicalDB.ts';
+import { classifyImmediateRecapDeterministic, answerImmediateSemanticRecap } from '../../src/routing/immediateSemanticRecap.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -585,6 +590,186 @@ export async function runActiveSubjectReferenceTests() {
     // normalized fields (same discipline as HERALD_IMMEDIATE_RECAP_DIAG).
     const src = fs.readFileSync(activeSubjectModulePath, 'utf8');
     assertTrue('diag: no raw resolverKey value is ever placed on the logged event shape', !/resolverKey:\s*c\.focus\.resolverKey/.test(src.split('function toDiagCandidate')[1] ?? ''));
+  }
+
+  function publishContinuity(
+    ledger: ReturnType<typeof createConversationTurnLedger>,
+    text: string,
+    outcome: Awaited<ReturnType<typeof processUtterance>>,
+  ) {
+    if (outcome.handled) return;
+    const isRead = outcome.routeDecision.kind === 'device_read';
+    ledger.push({
+      establishedAt: Date.now(),
+      utterance: text,
+      intentType: null,
+      operation: isRead ? 'read' : 'conversational',
+      outcome: isRead ? 'presented' : 'generated',
+      authorityTier: isRead ? 'deterministic' : 'conversational',
+      assistantReplySummary: null,
+      focus: continuityLedgerFocus(outcome.continuityFocus, outcome.continuityReferenceOnly === true),
+    });
+  }
+
+  console.log(`\n${BOLD}-- Pass 1: narrative person exactly-one publication --${RESET}`);
+  {
+    const { session, deps } = freshDb();
+    const ledger = createConversationTurnLedger();
+    const discourse = new DiscourseContinuityHolder();
+    const subject = new ConversationalSubjectHolder();
+    const text = 'Paul called me yesterday.';
+    const outcome = await processUtterance(text, session, deps, subject, null, null, null, null, discourse, ledger);
+    assertTrue('narrative: unhandled (not a domain write)', outcome.handled === false);
+    assert('narrative: WCS stores Paul', discourse.peekTopic()?.displayName, 'Paul');
+    assertTrue('narrative: Flow C not armed', !subject.hasLive());
+    assertTrue('narrative: orchestration exposes exactly-one person focus', !outcome.handled && outcome.continuityFocus?.kind === 'person' && outcome.continuityFocus.displayValue === 'Paul');
+    assertTrue('narrative: referenceOnly publication', !outcome.handled && outcome.continuityReferenceOnly === true);
+    publishContinuity(ledger, text, outcome);
+    const published = ledger.peek(Date.now()).flatMap((e) => e.focus);
+    assert('narrative: ledger focus tier is conversational', published[0]?.tier, 'conversational');
+    assertTrue('narrative: no resolverKey (not a stored contact)', published[0]?.resolverKey === undefined);
+    const who = await answerActiveSubjectReference('Who was I talking about?', { ledgerEntries: ledger.peek(Date.now()) });
+    assertTrue('narrative: identity resolves Paul', who.handled === true && who.kind === 'identity' && who.reply.includes('Paul'));
+    assertTrue('narrative: Level-1 reply is not a stored-contact claim', who.handled === true && !/number|phone|contact/i.test(who.reply));
+  }
+  {
+    const { session, deps } = freshDb();
+    const ledger = createConversationTurnLedger();
+    const discourse = new DiscourseContinuityHolder();
+    const text = "What's on my grocery list for Paul?";
+    const outcome = await processUtterance(text, session, deps, null, null, null, null, null, discourse, ledger);
+    assertTrue('domain-read: unhandled device_read (not narrative)', outcome.handled === false && outcome.routeDecision.kind === 'device_read');
+    assertTrue('domain-read: does not publish narrative continuityFocus from WCS extraction', outcome.handled === false && outcome.continuityFocus === undefined);
+    publishContinuity(ledger, text, outcome);
+    assert('domain-read: ledger has no person focus', ledger.peek(Date.now()).flatMap((e) => e.focus).length, 0);
+  }
+  {
+    const { session, deps } = freshDb();
+    const ledger = createConversationTurnLedger();
+    const discourse = new DiscourseContinuityHolder();
+    const text = 'Paul and Mary called me.';
+    const outcome = await processUtterance(text, session, deps, null, null, null, null, null, discourse, ledger);
+    assertTrue('two-name: no exactly-one continuityFocus', outcome.handled === false && outcome.continuityFocus === undefined);
+    publishContinuity(ledger, text, outcome);
+    assert('two-name: no person focus published', ledger.peek(Date.now()).flatMap((e) => e.focus).length, 0);
+    const who = await answerActiveSubjectReference('Who was I talking about?', { ledgerEntries: ledger.peek(Date.now()) });
+    assertTrue('two-name: no false selection', who.handled === false);
+  }
+
+  console.log(`\n${BOLD}-- Pass 1: doctor visit-history read + Flow C coexistence --${RESET}`);
+  {
+    const { session, deps } = freshDb();
+    writeMedicalRecord({ doctor_name: 'Dr Smith', visit_date: '2026-08-01', status: 'noted' });
+    const ledger = createConversationTurnLedger();
+    const subject = new ConversationalSubjectHolder();
+    const discourse = new DiscourseContinuityHolder();
+    const text = 'What was my last visit with Dr Smith?';
+    const outcome = await processUtterance(text, session, deps, subject, null, null, null, null, discourse, ledger);
+    assertTrue('doctor: Flow C medical subject established', subject.peek()?.domain === 'medical_doctor');
+    assertTrue('doctor: Flow C displayName is the resolved doctor', !!subject.peek()?.displayName && /smith/i.test(subject.peek()!.displayName));
+    assertTrue('doctor: continuity person focus present', !outcome.handled && outcome.continuityFocus?.kind === 'person' && /smith/i.test(outcome.continuityFocus.displayValue));
+    assertTrue('doctor: not referenceOnly (name-as-resolverKey, deterministic read)', !outcome.handled && outcome.continuityReferenceOnly === false);
+    publishContinuity(ledger, text, outcome);
+    const focus = ledger.peek(Date.now()).flatMap((e) => e.focus);
+    assertTrue('doctor: ledger has person focus', focus[0]?.kind === 'person' && /smith/i.test(focus[0].displayValue));
+    assert('doctor: resolverKey is the doctor name, not an invented row id', focus[0]?.resolverKey, subject.peek()?.entityId);
+    assert('doctor: read-resolved focus is deterministic_unconfirmed, not a fake commit', focus[0]?.tier, 'deterministic_unconfirmed');
+    assertTrue('doctor: focus is not authoritative', focus[0]?.tier !== 'authoritative');
+    const who = await answerActiveSubjectReference('Who was I talking about?', { ledgerEntries: ledger.peek(Date.now()) });
+    assertTrue('doctor: Level-1 names Dr Smith', who.handled === true && who.kind === 'identity' && /smith/i.test(who.reply));
+    const when = await processUtterance('When did I see him?', session, deps, subject, null, null, null, null, discourse, ledger);
+    assertTrue('doctor: Flow C still owns when-did-I-see-him', when.handled === true && when.source === 'referent_resume');
+    assertTrue('doctor: Flow C reread names the visit, not Level-1 identity-only', when.handled === true && /last saw/i.test(when.responseText) && /smith/i.test(when.responseText));
+  }
+
+  console.log(`\n${BOLD}-- Pass 1: medication thing consumption --${RESET}`);
+  {
+    const pending = rec({
+      utterance: 'I take lisinopril.',
+      intentType: 'medical_capture',
+      operation: 'capture',
+      outcome: 'pending',
+      focus: [{ kind: 'thing', displayValue: 'lisinopril', referable: true, tier: 'deterministic_unconfirmed' }],
+    });
+    const pendingOut = await answerActiveSubjectReference('Which medication was I talking about?', { ledgerEntries: [pending] });
+    assertTrue('med-pending: handled identity', pendingOut.handled === true && pendingOut.kind === 'identity');
+    assertTrue('med-pending: names lisinopril', pendingOut.handled === true && /lisinopril/i.test(pendingOut.reply));
+    assertTrue('med-pending: does not assert stored-truth "you take"', pendingOut.handled === true && !/\byou take\b/i.test(pendingOut.reply));
+    const recapYield = await answerImmediateSemanticRecap('Which medication was I talking about?', { ledgerEntries: [pending] });
+    assertTrue('med-pending: recap yields (does not reread as Level-2)', recapYield.handled === false);
+  }
+  {
+    const committed = rec({
+      utterance: 'Yes.',
+      intentType: 'medical_capture',
+      operation: 'capture',
+      outcome: 'committed',
+      focus: [{ kind: 'thing', displayValue: 'lisinopril', resolverKey: 'med_lisinopril', referable: true, tier: 'authoritative' }],
+    });
+    const committedOut = await answerActiveSubjectReference('Which medication was I talking about?', { ledgerEntries: [committed] });
+    assertTrue('med-commit: Level-1 identity still resolves', committedOut.handled === true && committedOut.kind === 'identity' && /lisinopril/i.test(committedOut.reply));
+    assertTrue('med-commit: Level-1 does not speak dosage/reread', committedOut.handled === true && !/\d+\s*mg/i.test(committedOut.reply));
+  }
+  {
+    const a = rec({ turnIndex: 1, utterance: 'lisinopril', intentType: 'medical_capture', focus: [{ kind: 'thing', displayValue: 'lisinopril', resolverKey: 'm1', referable: true, tier: 'authoritative' }] });
+    const b = rec({ turnIndex: 2, utterance: 'metformin', intentType: 'medical_capture', focus: [{ kind: 'thing', displayValue: 'metformin', resolverKey: 'm2', referable: true, tier: 'authoritative' }] });
+    const amb = await answerActiveSubjectReference('Which medication was I talking about?', { ledgerEntries: [a, b] });
+    assertTrue('med-two: clarifies, no silent newest pick', amb.handled === true && amb.kind === 'ambiguous');
+    assertTrue('med-two: names both', amb.handled === true && amb.kind === 'ambiguous' && /lisinopril/i.test(amb.reply) && /metformin/i.test(amb.reply));
+  }
+  {
+    const miss = await answerActiveSubjectReference('Which medication was I talking about?', { ledgerEntries: [] });
+    assertTrue('med-zero: honest miss (handled, no fabricated name)', miss.handled === true && miss.kind === 'identity' && !/lisinopril|metformin/i.test(miss.reply));
+  }
+  {
+    const groceryThing = rec({
+      turnIndex: 1,
+      utterance: 'bananas',
+      intentType: 'list_add',
+      operation: 'capture',
+      focus: [{ kind: 'thing', displayValue: 'bananas', resolverKey: 'item_1', referable: true, tier: 'authoritative' }],
+    });
+    const miss = await answerActiveSubjectReference('Which medication was I talking about?', { ledgerEntries: [groceryThing] });
+    assertTrue('med-provenance: non-medical thing is not eligible', miss.handled === true && miss.kind === 'identity' && !/bananas/i.test(miss.reply));
+  }
+  {
+    const groceryThing = rec({
+      turnIndex: 1,
+      utterance: 'bananas',
+      intentType: 'list_add',
+      focus: [{ kind: 'thing', displayValue: 'bananas', resolverKey: 'item_1', referable: true, tier: 'authoritative' }],
+    });
+    const med = rec({
+      turnIndex: 2,
+      utterance: 'lisinopril',
+      intentType: 'medical_capture',
+      focus: [{ kind: 'thing', displayValue: 'lisinopril', resolverKey: 'm1', referable: true, tier: 'authoritative' }],
+    });
+    const out = await answerActiveSubjectReference('Which medication was I talking about?', { ledgerEntries: [groceryThing, med] });
+    assertTrue('med-provenance: medical_capture thing remains eligible beside a non-medical thing', out.handled === true && out.kind === 'identity' && /lisinopril/i.test(out.reply));
+    assertTrue('med-provenance: does not name the non-medical thing', out.handled === true && !/bananas/i.test(out.reply));
+  }
+
+  console.log(`\n${BOLD}-- Pass 1: routing ownership + authority fence --${RESET}`);
+  {
+    assertTrue('routing: recap Stage A does not steal "What did I say about him?"', !classifyImmediateRecapDeterministic('What did I say about him?'));
+    assertTrue('routing: recap Stage A still matches generic "What did I just say?"', classifyImmediateRecapDeterministic('What did I just say?'));
+    const himLedger = [establishDrSmith];
+    const recapHim = await answerImmediateSemanticRecap('What did I say about him?', { ledgerEntries: himLedger });
+    assertTrue('routing: recap declines about-him (Active Subject owns)', recapHim.handled === false);
+    const asHim = await answerActiveSubjectReference('What did I say about him?', { ledgerEntries: himLedger });
+    assertTrue('routing: Active Subject owns about-him', asHim.handled === true && asHim.kind === 'content');
+  }
+  {
+    const { session, deps } = freshDb();
+    const ledger = createConversationTurnLedger();
+    const discourse = new DiscourseContinuityHolder();
+    const establish = await processUtterance('Paul called me yesterday.', session, deps, null, null, null, null, null, discourse, ledger);
+    publishContinuity(ledger, 'Paul called me yesterday.', establish);
+    const focus = ledger.peek(Date.now()).flatMap((e) => e.focus)[0];
+    assert('authority: narrative focus is conversational', focus?.tier, 'conversational');
+    const textPaul = await processUtterance('Text Paul', session, deps, null, null, null, null, null, discourse, ledger);
+    assertTrue('authority: Text Paul is not authorized by narrative ledger focus', !(textPaul.handled && textPaul.source === 'capture' && textPaul.commits.some((c) => c.status === 'committed')));
   }
 
   const total = passed + failures.length;

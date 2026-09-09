@@ -130,6 +130,7 @@ import { DiscourseContinuityHolder } from '../routing/discourseContinuity';
 import { formatOperationalListClarification } from '../routing/operationalListContinuity';
 import { CalendarPresentationHolder } from '../routing/calendarPresentation';
 import { processUtterance, applyIntents } from '../routing/processUtterance';
+import { continuityLedgerFocus } from '../routing/conversationTurnLedgerWrite';
 import { alreadyClassifiedByRouteIntent, mayInvokeBackendStream } from '../utils/llmClassificationOwnership';
 import {
   beginChatScreenMount,
@@ -1598,6 +1599,9 @@ export default function ChatScreen() {
       resolveContact: resolveContactPhoneRef.current ?? undefined,
       getMedicationSemanticInterpreterCtx,
     }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current, calendarPresentationRef.current, calendarContinuationRef.current, discourseRef.current, conversationLedgerRef.current);
+    const continuityFocus = !outcome.handled
+      ? continuityLedgerFocus(outcome.continuityFocus, outcome.continuityReferenceOnly === true)
+      : [];
     if (shadowSnapshot) {
       const rd = outcome.handled ? undefined : outcome.routeDecision;
       const action = rd && rd.kind === 'device_action' ? rd.actionIntent : undefined;
@@ -1834,7 +1838,7 @@ export default function ChatScreen() {
         // path (unchanged); a resolved 'grounding' outcome attaches its
         // tier:'conversational' focus here — the ONE ledger push this whole
         // block already makes, not a second write.
-        focus: groundedFocus,
+        focus: groundedFocus.length > 0 ? groundedFocus : continuityFocus,
       });
       addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
       addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
@@ -2104,6 +2108,7 @@ export default function ChatScreen() {
             outcome: 'presented',
             authorityTier: 'deterministic',
             assistantReplySummary: rdTier1Response,
+            focus: continuityFocus,
           });
           setInputText('');
           sendingRef.current = false;
@@ -2318,6 +2323,7 @@ export default function ChatScreen() {
           outcome: ledgerOutcome,
           authorityTier: ledgerAuthorityTier,
           assistantReplySummary: offlineReply,
+          focus: continuityFocus,
         });
         addMessage({ id: generateId('msg'), role: 'user',
           content: text, timestamp: Date.now() });
@@ -2397,6 +2403,7 @@ export default function ChatScreen() {
           outcome: 'presented',
           authorityTier: 'deterministic',
           assistantReplySummary: rdTier1Response,
+          focus: continuityFocus,
         });
         sendingRef.current = false;
         setInputText('');

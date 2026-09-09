@@ -83,7 +83,7 @@ export type ActiveSubjectDiagCandidate = {
   intentType: string | null;
 };
 
-export type ActiveSubjectDiagAct = 'grounding' | 'identity_lookup' | 'content_lookup' | 'not_applicable';
+export type ActiveSubjectDiagAct = 'grounding' | 'identity_lookup' | 'content_lookup' | 'medication_identity' | 'not_applicable';
 export type ActiveSubjectDiagSemanticResult = 'not_invoked' | 'selected' | 'ambiguous' | 'none' | 'not_applicable';
 export type ActiveSubjectDiagFinalOutcome = 'grounded' | 'answered' | 'ambiguous' | 'not_handled';
 
@@ -91,6 +91,7 @@ export type ActiveSubjectDiagEvent = {
   invoked: true;
   utteranceNormalized: string;
   act: ActiveSubjectDiagAct;
+  targetKind: ConversationTurnFocusEntry['kind'] | null;
   candidateCount: number;
   candidates: ActiveSubjectDiagCandidate[];
   fastPathUsed: boolean;
@@ -144,6 +145,10 @@ const IDENTITY_LOOKUP_RE =
  *  default identity-style framing. */
 const CONTENT_LOOKUP_RE =
   /^what\s+(?:did\s+i\s+say|was\s+i\s+saying)\s+about\s+(?:him|her|them)\s*[?.!]*$/i;
+
+/** Closed medication/thing identity lookup — V1's only non-person Active Subject kind. */
+const MEDICATION_IDENTITY_RE =
+  /^(?:so[,]?\s+)?(?:what|which)\s+(?:medication|medicine|drug|meds?)\s+(?:was|were|am|are)\s+(?:i|we)\s+talking\s+about\s*[?.!]*$/i;
 
 function looksLikeQuestionShape(t: string): boolean {
   if (/\?\s*$/.test(t)) return true;
@@ -334,11 +339,17 @@ export async function resolveActiveSubjectCandidate(
   text: string,
   allCandidates: RecapCandidate[],
   getInterpreterCtx?: () => LlamaContext | null,
-  options?: { actConfirmed?: boolean },
+  options?: { actConfirmed?: boolean; kinds?: ConversationTurnFocusEntry['kind'][]; intentTypes?: string[] },
   diagSink?: ActiveSubjectResolutionDiagSink,
 ): Promise<ActiveSubjectResolution> {
   const actConfirmed = options?.actConfirmed ?? true;
-  const candidates = allCandidates.filter((c) => c.kind === 'person');
+  const kinds = options?.kinds ?? ['person'];
+  const intentTypes = options?.intentTypes;
+  const candidates = allCandidates.filter((c) => {
+    if (!kinds.includes(c.kind)) return false;
+    if (!intentTypes) return true;
+    return typeof c.intentType === 'string' && intentTypes.includes(c.intentType);
+  });
   if (candidates.length === 0) {
     if (diagSink) { diagSink.fastPathUsed = false; diagSink.semanticStageInvoked = false; }
     return { kind: 'none' };
@@ -347,6 +358,10 @@ export async function resolveActiveSubjectCandidate(
   if (actConfirmed && candidates.length === 1) {
     if (diagSink) { diagSink.fastPathUsed = true; diagSink.semanticStageInvoked = false; }
     return { kind: 'resolved', candidate: candidates[0]! };
+  }
+  if (actConfirmed && kinds.length === 1 && kinds[0] === 'thing' && candidates.length > 1) {
+    if (diagSink) { diagSink.fastPathUsed = false; diagSink.semanticStageInvoked = false; diagSink.semanticResult = 'ambiguous'; }
+    return { kind: 'ambiguous', candidates };
   }
   if (diagSink) diagSink.fastPathUsed = false;
 
@@ -461,6 +476,7 @@ export async function answerActiveSubjectReference(
 
   function emit(fields: {
     act: ActiveSubjectDiagAct;
+    targetKind: ConversationTurnFocusEntry['kind'] | null;
     candidates: RecapCandidate[];
     fastPathUsed: boolean;
     semanticStageInvoked: boolean;
@@ -482,44 +498,70 @@ export async function answerActiveSubjectReference(
   }
 
   if (!t) {
-    emit({ act: 'not_applicable', candidates: [], fastPathUsed: false, semanticStageInvoked: false, semanticResult: 'not_invoked', selectedCandidateIndex: null, selectedCandidateKind: null, resultingFocusTier: null, pendingArmed: false, finalOutcome: 'not_handled' });
+    emit({ act: 'not_applicable', targetKind: null, candidates: [], fastPathUsed: false, semanticStageInvoked: false, semanticResult: 'not_invoked', selectedCandidateIndex: null, selectedCandidateKind: null, resultingFocusTier: null, pendingArmed: false, finalOutcome: 'not_handled' });
     return { handled: false };
   }
 
   const isGrounding = isGroundingContinuationShape(t);
-  const isClosedIdentity = !isGrounding && IDENTITY_LOOKUP_RE.test(t);
-  const isClosedContent = !isGrounding && !isClosedIdentity && CONTENT_LOOKUP_RE.test(t);
-  const isClosedQuestion = isClosedIdentity || isClosedContent;
+  const isClosedMedication = !isGrounding && MEDICATION_IDENTITY_RE.test(t);
+  const isClosedIdentity = !isGrounding && !isClosedMedication && IDENTITY_LOOKUP_RE.test(t);
+  const isClosedContent = !isGrounding && !isClosedMedication && !isClosedIdentity && CONTENT_LOOKUP_RE.test(t);
+  const isClosedQuestion = isClosedIdentity || isClosedContent || isClosedMedication;
   const isPlausibleUnseenQuestion = !isGrounding && !isClosedQuestion && isPlausibleReferenceQuestionShape(text, t);
 
   if (!isGrounding && !isClosedQuestion && !isPlausibleUnseenQuestion) {
-    emit({ act: 'not_applicable', candidates: [], fastPathUsed: false, semanticStageInvoked: false, semanticResult: 'not_invoked', selectedCandidateIndex: null, selectedCandidateKind: null, resultingFocusTier: null, pendingArmed: false, finalOutcome: 'not_handled' });
+    emit({ act: 'not_applicable', targetKind: null, candidates: [], fastPathUsed: false, semanticStageInvoked: false, semanticResult: 'not_invoked', selectedCandidateIndex: null, selectedCandidateKind: null, resultingFocusTier: null, pendingArmed: false, finalOutcome: 'not_handled' });
     return { handled: false };
   }
 
+  const targetKind: ConversationTurnFocusEntry['kind'] = isClosedMedication ? 'thing' : 'person';
   const actConfirmed = isGrounding || isClosedQuestion;
-  const attemptedAct: ActiveSubjectDiagAct = isGrounding ? 'grounding' : isClosedContent ? 'content_lookup' : 'identity_lookup';
+  const attemptedAct: ActiveSubjectDiagAct = isGrounding
+    ? 'grounding'
+    : isClosedMedication
+      ? 'medication_identity'
+      : isClosedContent
+        ? 'content_lookup'
+        : 'identity_lookup';
 
   const allCandidates = buildRecapCandidates(deps.ledgerEntries);
   const diagSink: ActiveSubjectResolutionDiagSink = {};
-  const resolution = await resolveActiveSubjectCandidate(t, allCandidates, deps.getInterpreterCtx, { actConfirmed }, diagSink);
+  const resolution = await resolveActiveSubjectCandidate(
+    t,
+    allCandidates,
+    deps.getInterpreterCtx,
+    {
+      actConfirmed,
+      kinds: [targetKind],
+      ...(isClosedMedication ? { intentTypes: ['medical_capture'] } : {}),
+    },
+    diagSink,
+  );
 
-  const personCandidates = allCandidates.filter((c) => c.kind === 'person');
+  const eligibleCandidates = allCandidates.filter((c) => {
+    if (c.kind !== targetKind) return false;
+    if (!isClosedMedication) return true;
+    return c.intentType === 'medical_capture';
+  });
   const act: ActiveSubjectDiagAct = diagSink.semanticResult === 'not_applicable' ? 'not_applicable' : attemptedAct;
 
   if (resolution.kind === 'none') {
     emit({
-      act, candidates: personCandidates, fastPathUsed: diagSink.fastPathUsed ?? false,
+      act, targetKind, candidates: eligibleCandidates, fastPathUsed: diagSink.fastPathUsed ?? false,
       semanticStageInvoked: diagSink.semanticStageInvoked ?? false, semanticResult: diagSink.semanticResult ?? 'not_invoked',
-      selectedCandidateIndex: null, selectedCandidateKind: null, resultingFocusTier: null, pendingArmed: false, finalOutcome: 'not_handled',
+      selectedCandidateIndex: null, selectedCandidateKind: null, resultingFocusTier: null, pendingArmed: false,
+      finalOutcome: isClosedMedication ? 'answered' : 'not_handled',
     });
+    if (isClosedMedication) {
+      return { handled: true, kind: 'identity', reply: "I don't have anything recent to go on — what were you referring to?", focus: [] };
+    }
     return { handled: false };
   }
 
   if (resolution.kind === 'ambiguous') {
     const names = resolution.candidates.slice(0, 3).map((c) => c.displayValue).join(' or ');
     emit({
-      act, candidates: personCandidates, fastPathUsed: diagSink.fastPathUsed ?? false,
+      act, targetKind, candidates: eligibleCandidates, fastPathUsed: diagSink.fastPathUsed ?? false,
       semanticStageInvoked: diagSink.semanticStageInvoked ?? false, semanticResult: diagSink.semanticResult ?? 'ambiguous',
       selectedCandidateIndex: null, selectedCandidateKind: null, resultingFocusTier: null, pendingArmed: true, finalOutcome: 'ambiguous',
     });
@@ -539,7 +581,7 @@ export async function answerActiveSubjectReference(
       { status: 'committed', source: 'deterministic', referenceOnly: true },
     );
     emit({
-      act, candidates: personCandidates, fastPathUsed: diagSink.fastPathUsed ?? false,
+      act, targetKind, candidates: eligibleCandidates, fastPathUsed: diagSink.fastPathUsed ?? false,
       semanticStageInvoked: diagSink.semanticStageInvoked ?? false, semanticResult: diagSink.semanticResult ?? 'selected',
       selectedCandidateIndex: candidate.index, selectedCandidateKind: candidate.kind, resultingFocusTier: focus[0]?.tier ?? null,
       pendingArmed: false, finalOutcome: 'grounded',
@@ -550,9 +592,9 @@ export async function answerActiveSubjectReference(
   const kind: 'identity' | 'content' = isClosedContent ? 'content' : 'identity';
   const reply = kind === 'content'
     ? `You said: "${candidate.record.utterance}"`
-    : `You're talking about ${candidate.displayValue}.`;
+    : `You were talking about ${candidate.displayValue}.`;
   emit({
-    act, candidates: personCandidates, fastPathUsed: diagSink.fastPathUsed ?? false,
+    act, targetKind, candidates: eligibleCandidates, fastPathUsed: diagSink.fastPathUsed ?? false,
     semanticStageInvoked: diagSink.semanticStageInvoked ?? false, semanticResult: diagSink.semanticResult ?? 'selected',
     selectedCandidateIndex: candidate.index, selectedCandidateKind: candidate.kind, resultingFocusTier: null,
     pendingArmed: false, finalOutcome: 'answered',

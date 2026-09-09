@@ -143,6 +143,8 @@ export async function runImmediateSemanticRecapTests() {
   assertTrue('NEGATIVE: grocery add is not a recap request', !classifyImmediateRecapDeterministic('Add milk to my grocery list.'));
   assertTrue('NEGATIVE: third-party subject is not a recap request', !classifyImmediateRecapDeterministic('What did Dr. Smith tell me?'));
   assertTrue('NEGATIVE: assistant-recap (opposite direction) is not a self-recap match', !classifyImmediateRecapDeterministic('What did you just tell me?'));
+  assertTrue('NEGATIVE: person-content "What did I say about him?" yields to Active Subject', !classifyImmediateRecapDeterministic('What did I say about him?'));
+  assertTrue('REGRESSION: generic "What did I just say?" remains Stage A recap', classifyImmediateRecapDeterministic('What did I just say?'));
 
   console.log(`\n${BOLD}-- buildRecapCandidates: dedup + newest-first identity resolution --${RESET}`);
   {
@@ -272,11 +274,11 @@ export async function runImmediateSemanticRecapTests() {
     const mockCtx = {
       completion: async () => ({ text: '{"isImmediateRecap":true,"selectedIndex":0,"confidence":0.85}' }),
     } as any;
-    const outcome = await answerImmediateSemanticRecap('Which medicine was I talking about?', {
+    const outcome = await answerImmediateSemanticRecap('What was that medication I mentioned?', {
       ledgerEntries: [commit],
       getInterpreterCtx: () => mockCtx,
     });
-    assertTrue('STAGE-B-PATH: held-out wording resolved via semantic fallback (not Stage A)', !classifyImmediateRecapDeterministic('Which medicine was I talking about?'));
+    assertTrue('STAGE-B-PATH: held-out wording resolved via semantic fallback (not Stage A)', !classifyImmediateRecapDeterministic('What was that medication I mentioned?'));
     assert('STAGE-B-PATH: mocked interpreter selection resolves to authoritative reread', outcome.handled ? outcome.kind : null, 'capability_gap');
     // (capability_gap because getActiveMedicationById needs a real DB row;
     // this test proves Stage B's plumbing/selection, not the DB reread —
@@ -308,7 +310,7 @@ export async function runImmediateSemanticRecapTests() {
   {
     // No interpreter available and Stage A didn't match → not handled.
     const commit = rec({ turnIndex: 1, focus: [{ kind: 'thing', displayValue: 'Eliquis', resolverKey: 'med_1', referable: true, tier: 'authoritative' }] });
-    const outcome = await answerImmediateSemanticRecap('Which medicine was I talking about?', { ledgerEntries: [commit] });
+    const outcome = await answerImmediateSemanticRecap('What was that medication I mentioned?', { ledgerEntries: [commit] });
     assertTrue('STAGE-B unavailable (no interpreter ctx) → not handled, falls through honestly', outcome.handled === false);
   }
 
