@@ -1939,11 +1939,7 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     }
     const visit = getLastVisit(doctorHint);
     let response: string;
-    if (!visit) {
-      response = doctorHint
-        ? `I don't have a visit with ${doctorHint} yet — tell me and I'll remember.`
-        : "I don't have any visits yet — tell me and I'll remember.";
-    } else {
+    if (visit) {
       const who = visit.doctorName ?? 'your doctor';
       const spoken = formatSpokenDate(visit.visitDate);
       const details: string[] = [];
@@ -1955,6 +1951,11 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
       // Sentence shape is duplicated with answerReferentVisitDate
       // (conversationalSubject.ts). Do not factor (Continuity Step 3 / Rule 11).
       response = `You last saw ${who} on ${spoken}${reasonPart}.`;
+    } else if (doctorHint) {
+      const { answerHistoricalCalendarVisitEvidence } = await import('./conversationalSubject');
+      response = await answerHistoricalCalendarVisitEvidence(doctorHint, doctorHint);
+    } else {
+      response = "I don't have any visits yet — tell me and I'll remember.";
     }
     return { tier: 1, tier1Response: response, isMedical: true, reason: "medical:visit_history_read" };
   }

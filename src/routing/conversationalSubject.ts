@@ -231,6 +231,31 @@ export function answerReferentPhone(subject: ConversationalSubject): string {
  * these same two modules the same way. Static imports from a routing module
  * into db/ and utils/ are a cycle risk this pattern removes outright.
  */
+export const HISTORICAL_CALENDAR_VISIT_EVIDENCE_MONTHS = 12;
+
+/** Bounded past-calendar fallback after a medical getLastVisit miss.
+ *  Shared by Flow C pronoun visit-date and named visit-history.
+ *  Calendar evidence only — never writes medical_records, never "You last saw". */
+export async function answerHistoricalCalendarVisitEvidence(
+  doctorTerm: string,
+  displayName: string,
+): Promise<string> {
+  const BACK_MONTHS = HISTORICAL_CALENDAR_VISIT_EVIDENCE_MONTHS;
+  const { normalizeDoctorNameForMatch } = await import('../db/medicalDB');
+  const { queryCalendarEvidence, formatCalendarEvidenceForSpeech } = await import('../db/calendarCacheDB');
+  const now = new Date();
+  const backStart = new Date(now);
+  backStart.setMonth(backStart.getMonth() - BACK_MONTHS);
+  const rangeResult = await queryCalendarEvidence(doctorTerm, normalizeDoctorNameForMatch, backStart, now);
+  if (rangeResult.status === 'unavailable') {
+    return "I couldn't check your calendar right now.";
+  }
+  if (rangeResult.events.length > 0) {
+    return formatCalendarEvidenceForSpeech(displayName, rangeResult.events[rangeResult.events.length - 1], 'date');
+  }
+  return `I don't see anything with ${displayName} on your calendar in the past ${BACK_MONTHS} months.`;
+}
+
 export async function answerReferentVisitDate(
   subject: ConversationalSubject,
 ): Promise<string | null> {
@@ -239,35 +264,7 @@ export async function answerReferentVisitDate(
   const { formatSpokenDate } = await import('../utils/parseTime');
   const visit = getLastVisit(subject.entityId);
   if (!visit) {
-    // Android Calendar Range V1: no confirmed medical visit. Try bounded
-    // historical calendar evidence (BACK_MONTHS back) before the honest
-    // miss. Date phrasing, not weekday -- an event up to a year old needs
-    // an actual calendar date, not an ambiguous day-of-week.
-    const BACK_MONTHS = 12;
-    const { normalizeDoctorNameForMatch } = await import('../db/medicalDB');
-    const { queryCalendarEvidence, formatCalendarEvidenceForSpeech } = await import('../db/calendarCacheDB');
-    const now = new Date();
-    const backStart = new Date(now);
-    backStart.setMonth(backStart.getMonth() - BACK_MONTHS);
-    const rangeResult = await queryCalendarEvidence(subject.entityId, normalizeDoctorNameForMatch, backStart, now);
-    if (rangeResult.status === 'unavailable') {
-      // Not evidence of absence -- must never be spoken as any absence
-      // claim, bounded or not. Source-honest, distinct third voice.
-      return "I couldn't check your calendar right now.";
-    }
-    if (rangeResult.events.length > 0) {
-      // Ascending sort -- most recent PAST match is the last element.
-      return formatCalendarEvidenceForSpeech(subject.displayName, rangeResult.events[rangeResult.events.length - 1], 'date');
-    }
-    // CTO trust correction: a successful search with zero matches is real
-    // evidence of absence WITHIN THE CHECKED BOUND -- but "I don't have a
-    // visit ... yet" (no bound stated, invites "tell me") reads as a
-    // lifetime/complete-history claim once a calendar search backs it,
-    // which Herald never performed (only the past BACK_MONTHS were
-    // checked; there is no full-history search). Must never imply Herald
-    // searched the user's entire life. This string MUST stay in sync with
-    // BACK_MONTHS above.
-    return `I don't see anything with ${subject.displayName} on your calendar in the past ${BACK_MONTHS} months.`;
+    return answerHistoricalCalendarVisitEvidence(subject.entityId, subject.displayName);
   }
   const who = visit.doctorName ?? subject.displayName;
   const spoken = formatSpokenDate(visit.visitDate);

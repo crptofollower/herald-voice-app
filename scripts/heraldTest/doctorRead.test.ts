@@ -25,8 +25,9 @@
 
 import Database from 'better-sqlite3';
 import { setDB } from '../../src/db/schema.ts';
-import { writeMedicalContact, writeMedication, writeMedicalRecord, attachVisitOutcome, getMedicalSummary } from '../../src/db/medicalDB.ts';
+import { writeMedicalContact, writeMedication, writeMedicalRecord, attachVisitOutcome, getMedicalSummary, getMedicalRecords } from '../../src/db/medicalDB.ts';
 import { classifyQuery } from '../../src/routing/tierRouter.ts';
+import { setCalendarEventFetcher, resetCalendarEventFetcher } from '../../src/db/calendarCacheDB.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
 
@@ -864,6 +865,111 @@ export async function runDoctorReadTests() {
     assert('DR51b names Alvarez from history', d.tier1Response,
       (v) => typeof v === 'string' && v.includes('Alvarez') && !/don't have a visit/i.test(v),
       'response names Alvarez');
+  }
+
+  console.log(`\n${BOLD}-- Named visit-history calendar fallback (composition V1) --${RESET}\n`);
+
+  function monthsFromNowMs(monthsOffset: number, hour = 11): number {
+    const d = new Date();
+    d.setDate(1);
+    d.setHours(hour, 0, 0, 0);
+    d.setMonth(d.getMonth() + monthsOffset);
+    return d.getTime();
+  }
+  async function withFakeCalendarEvents<T>(
+    events: { id: string; title: string; startDate: string | Date }[],
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    setCalendarEventFetcher(async () => ({ status: 'ok' as const, events: events as any }));
+    try {
+      return await fn();
+    } finally {
+      resetCalendarEventFetcher();
+    }
+  }
+  async function withUnavailableCalendar<T>(fn: () => Promise<T>): Promise<T> {
+    setCalendarEventFetcher(async () => ({ status: 'unavailable' as const, reason: 'permission-denied' }));
+    try {
+      return await fn();
+    } finally {
+      resetCalendarEventFetcher();
+    }
+  }
+
+  {
+    freshDB();
+    writeMedicalRecord({ doctor_name: 'Dr Smith', visit_date: '2026-08-01', status: 'noted' });
+    const calMs = monthsFromNowMs(-1);
+    await withFakeCalendarEvents(
+      [{ id: 'cal_smith', title: 'Dr Smith follow-up', startDate: new Date(calMs).toISOString() }],
+      async () => {
+        const d = await classifyQuery('When did I last see Dr Smith?');
+        assert('CEC1 medical hit is visit_history_read', d.reason, (v) => v === 'medical:visit_history_read', 'medical:visit_history_read');
+        assert('CEC1 confirmed medical phrasing, not calendar', d.tier1Response,
+          (v) => typeof v === 'string' && /You last saw/i.test(v) && /Smith/i.test(v) && !/Your calendar shows/i.test(v),
+          'You last saw Smith, not calendar prefix');
+      },
+    );
+  }
+  {
+    freshDB();
+    const calMs = monthsFromNowMs(-2);
+    await withFakeCalendarEvents(
+      [{ id: 'cal_vance', title: 'Appointment with Dr Vance', startDate: new Date(calMs).toISOString() }],
+      async () => {
+        const before = getMedicalRecords().length;
+        const d = await classifyQuery('When did I last see Dr Vance?');
+        assert('CEC2 medical miss + calendar hit is visit_history_read', d.reason, (v) => v === 'medical:visit_history_read', 'medical:visit_history_read');
+        assert('CEC2 calendar provenance, not You last saw', d.tier1Response,
+          (v) => typeof v === 'string' && /Your calendar shows/i.test(v) && /Vance/i.test(v) && !/You last saw/i.test(v),
+          'Your calendar shows Vance');
+        assert('CEC2 calendar hit does not write medical_records', getMedicalRecords().length, (v) => v === before, String(before));
+      },
+    );
+  }
+  {
+    freshDB();
+    await withFakeCalendarEvents([], async () => {
+      const d = await classifyQuery('When did I last see Dr Vance?');
+      assert('CEC3 empty calendar is bounded 12-month absence', d.tier1Response,
+        (v) => typeof v === 'string' && /don't see anything with Dr Vance on your calendar in the past 12 months/i.test(v) && !/You last saw/i.test(v),
+        'bounded calendar absence');
+    });
+  }
+  {
+    freshDB();
+    await withUnavailableCalendar(async () => {
+      const d = await classifyQuery('When did I last see Dr Vance?');
+      assert('CEC4 unavailable is not absence', d.tier1Response,
+        (v) => v === "I couldn't check your calendar right now.",
+        "I couldn't check your calendar right now.");
+    });
+  }
+  {
+    freshDB();
+    const oldMs = monthsFromNowMs(-13);
+    await withFakeCalendarEvents(
+      [{ id: 'cal_old', title: 'Appointment with Dr Vance', startDate: new Date(oldMs).toISOString() }],
+      async () => {
+        const d = await classifyQuery('When did I last see Dr Vance?');
+        assert('CEC5 event older than 12 months is not fallback evidence', d.tier1Response,
+          (v) => typeof v === 'string' && /past 12 months/i.test(v) && !/Your calendar shows/i.test(v),
+          'bounded absence, not calendar hit');
+      },
+    );
+  }
+  {
+    freshDB();
+    const calMs = monthsFromNowMs(-1);
+    await withFakeCalendarEvents(
+      [{ id: 'cal_son', title: 'Appointment with Dr Smithson', startDate: new Date(calMs).toISOString() }],
+      async () => {
+        const d = await classifyQuery('When did I last see Dr Smith?');
+        assert('CEC6 namesake Smithson does not match Smith', d.tier1Response,
+          (v) => typeof v === 'string' && !/Your calendar shows/i.test(v) && /past 12 months/i.test(v),
+          'no calendar hit for Smithson');
+      },
+    );
   }
 
   const total = passed + failures.length;
