@@ -45,6 +45,15 @@ export const TODO_ADD_SIGNALS = [
 export const TODO_ADD_PREFIX =
   /^(I need to|I have to|I gotta|I've got to|don't let me forget|I should|I must)\s+/i;
 
+/** Remainder after a TODO prefix is already an existing named-list add. */
+function namedListAddOwnsRemainder(body: string): boolean {
+  const t = body.trim();
+  // LIST_ADD_SIGNALS may match a later conjunct. Ownership requires the
+  // remainder itself to begin with the existing add/put list-add operators.
+  if (!/^(?:please\s+)?(?:add|put)\b/i.test(t)) return false;
+  return LIST_ADD_SIGNALS.some((p) => p.test(t));
+}
+
 /**
  * Residual/compound capture boundary. Cuts a captured tail at the start of a
  * new clause/intent — not at every "and" (so "work out and start dinner" and
@@ -85,6 +94,9 @@ export type TodoAddExtraction =
 /**
  * Clause-initial TODO_ADD body capture. A trigger later in a compound
  * utterance is not authority to commit the whole string as the task body.
+ * If the remainder after a TODO prefix is already an explicit named-list
+ * add (existing LIST_ADD_SIGNALS), this returns null so list destination
+ * ownership can admit — it does not invent list grammar.
  */
 export function extractTodoAdd(msg: string): TodoAddExtraction | null {
   if (!TODO_ADD_SIGNALS.some((p) => p.test(msg))) return null;
@@ -97,7 +109,9 @@ export function extractTodoAdd(msg: string): TodoAddExtraction | null {
   const prefixAtStart = rest.match(TODO_ADD_PREFIX);
   if (prefixAtStart) {
     const body = boundCapturedTail(rest.slice(prefixAtStart[0].length));
-    return body.length > 2 ? { kind: 'add', body } : null;
+    if (body.length <= 2) return null;
+    if (namedListAddOwnsRemainder(body)) return null;
+    return { kind: 'add', body };
   }
   const vocative = rest.match(/^(?!I\b)([A-Za-z]{2,16})[,:]?\s+(.+)$/s);
   if (vocative) {
@@ -105,7 +119,9 @@ export function extractTodoAdd(msg: string): TodoAddExtraction | null {
     const namedPrefix = afterName.match(TODO_ADD_PREFIX);
     if (namedPrefix) {
       const body = boundCapturedTail(afterName.slice(namedPrefix[0].length));
-      return body.length > 2 ? { kind: 'add', body } : null;
+      if (body.length <= 2) return null;
+      if (namedListAddOwnsRemainder(body)) return null;
+      return { kind: 'add', body };
     }
   }
   return { kind: 'clarify' };

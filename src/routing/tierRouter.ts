@@ -1349,7 +1349,9 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     return { tier: 3, reason: 'ambiguous_operational_list' };
   }
 
-  // Device: todo add — trigger phrases WITHOUT a resolvable date (date = reminder, not todo)
+  // Device: todo add — trigger phrases WITHOUT a resolvable date (date = reminder, not todo).
+  // extractTodoAdd refuses when the remainder is already an explicit named-list
+  // add (LIST_ADD_SIGNALS); those turns fall through to list_add below.
   if (TODO_ADD_SIGNALS.some((p) => p.test(msg)) && !TODO_DATE_SIGNALS.test(msg) && !detectMedicalEvent(msg)) {
     const extracted = extractTodoAdd(msg);
     if (extracted?.kind === 'clarify') {
