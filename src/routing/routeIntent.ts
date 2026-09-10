@@ -14,7 +14,7 @@ import {
   admitGrocerySemanticP2,
   tryP1GrocerySemanticItems,
 } from './grocerySemanticDecomposition';
-import { generateCapabilityProposal, admitCapabilityProposal, WIRED_READ_CAPABILITY, type CapabilityId } from './capabilityRouting';
+import { generateCapabilityProposal, admitCapabilityProposal, WIRED_READ_CAPABILITY, type CapabilityId, logSemanticDispatchDiag, type SemanticDispatchDiag } from './capabilityRouting';
 import { detectFamilyCapture } from '../utils/familyCapture';
 import { getDB } from '../db/schema';
 import { capturePerson } from '../db/capturePerson';
@@ -2195,6 +2195,7 @@ export async function routeIntent(
   const routeT0 = latMono();
   const turnId = getActiveTurnId();
   latLog('routeIntent START', { turnId });
+  let dispatchDiag: (Omit<SemanticDispatchDiag, 'finalOutcome'> & { finalOutcome?: SemanticDispatchDiag['finalOutcome'] }) | null = null;
   try {
   const decision = await deps.classifyQuery(text);
   console.log('[classifyQuery]', JSON.stringify({ tier: decision.tier, actionIntent: decision.actionIntent, reason: decision.reason }));
@@ -2473,10 +2474,44 @@ export async function routeIntent(
     const capGen = await generateCapabilityProposal(text, getSemanticCtx);
     if (capGen.status === 'ok') {
       dispatchSelected = capGen.proposal.capability;
+      dispatchDiag = {
+        invoked: true,
+        generationStatus: 'ok',
+        unavailableReason: null,
+        proposedCapability: capGen.proposal.capability,
+        selectedCapability: capGen.proposal.capability,
+        specialistInvoked: 'none',
+        specialistResult: 'not_run',
+      };
       if (dispatchSelected === WIRED_READ_CAPABILITY && capabilityReadOn) {
         const readDecision = await admitWiredMedicationRead(capGen.proposal);
-        if (readDecision) return readDecision;
+        if (readDecision) {
+          dispatchDiag.finalOutcome = readDecision.reason === 'personal_memory:recall_declined'
+            ? 'recall_declined'
+            : 'read_admit';
+          return readDecision;
+        }
       }
+    } else if (capGen.status === 'parse_fail') {
+      dispatchDiag = {
+        invoked: true,
+        generationStatus: 'parse_fail',
+        unavailableReason: null,
+        proposedCapability: null,
+        selectedCapability: null,
+        specialistInvoked: 'none',
+        specialistResult: 'not_run',
+      };
+    } else {
+      dispatchDiag = {
+        invoked: true,
+        generationStatus: 'unavailable',
+        unavailableReason: capGen.reason,
+        proposedCapability: null,
+        selectedCapability: null,
+        specialistInvoked: 'none',
+        specialistResult: 'not_run',
+      };
     }
   } else if (capabilityReadOn && eligibleDefaultFallthrough) {
     const capGen = await generateCapabilityProposal(text, getSemanticCtx);
@@ -2506,7 +2541,13 @@ export async function routeIntent(
   // fallthrough and medical_capture misfires (e.g. "Did you say the doctor…").
   if (isPersonalMemoryRecallQuestion(text)) {
     if (isHeraldSelfReferentConversationalShape(text)) {
+      if (dispatchDiag && dispatchDiag.finalOutcome == null) {
+        dispatchDiag.finalOutcome = 'fallback';
+      }
       return { kind: 'needs_clarification', reason: 'default' };
+    }
+    if (dispatchDiag && dispatchDiag.finalOutcome == null) {
+      dispatchDiag.finalOutcome = 'recall_declined';
     }
     return { kind: 'needs_clarification', reason: 'personal_memory:recall_declined' };
   }
@@ -2567,11 +2608,31 @@ export async function routeIntent(
   // primitive, or IntentRecord variant is created.
   if (dispatchSeamRan) {
     if (dispatchSelected === 'medication.capture' && medicationSemanticOn) {
+      if (dispatchDiag) {
+        dispatchDiag.specialistInvoked = 'medication';
+        dispatchDiag.specialistResult = 'no_admit';
+      }
       const medDecision = await tryMedicationSemanticCaptureRoute(text, getSemanticCtx);
-      if (medDecision) return medDecision;
+      if (medDecision) {
+        if (dispatchDiag) {
+          dispatchDiag.specialistResult = 'admit';
+          dispatchDiag.finalOutcome = 'specialist_admit';
+        }
+        return medDecision;
+      }
     } else if (dispatchSelected === 'grocery.capture' && grocerySemanticOn) {
+      if (dispatchDiag) {
+        dispatchDiag.specialistInvoked = 'grocery';
+        dispatchDiag.specialistResult = 'no_admit';
+      }
       const groceryDecision = await tryGrocerySemanticP2Route(text, getSemanticCtx);
-      if (groceryDecision) return groceryDecision;
+      if (groceryDecision) {
+        if (dispatchDiag) {
+          dispatchDiag.specialistResult = 'admit';
+          dispatchDiag.finalOutcome = 'specialist_admit';
+        }
+        return groceryDecision;
+      }
     }
   } else {
     if (medicationSemanticOn) {
@@ -2695,6 +2756,12 @@ export async function routeIntent(
     readMeta,
   };
   } finally {
+    if (dispatchDiag) {
+      logSemanticDispatchDiag({
+        ...dispatchDiag,
+        finalOutcome: dispatchDiag.finalOutcome ?? 'fallback',
+      });
+    }
     latLog('routeIntent END', {
       turnId,
       durationMs: Math.round((latMono() - routeT0) * 100) / 100,

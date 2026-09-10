@@ -171,10 +171,37 @@ export function admitCapabilityProposal(proposal: CapabilityProposal): Capabilit
 // instance/lifecycle — the caller supplies the SAME independent medication 3B
 // context the write seam uses (Slice 1: reuse the live context, add none).
 
+export type CapabilityUnavailableReason = 'ctx_missing' | 'ctx_busy' | 'in_flight' | 'error';
+
 export type CapabilityGenerationResult =
   | { status: 'ok'; proposal: CapabilityProposal }
   | { status: 'parse_fail'; raw: string }
-  | { status: 'unavailable' };
+  | { status: 'unavailable'; reason: CapabilityUnavailableReason };
+
+export const SEMANTIC_DISPATCH_DIAG_TAG = 'HERALD_SEMANTIC_DISPATCH_DIAG';
+
+export type SemanticDispatchSpecialist = 'medication' | 'grocery' | 'none';
+export type SemanticDispatchSpecialistResult = 'admit' | 'no_admit' | 'not_run';
+export type SemanticDispatchFinalOutcome =
+  | 'read_admit'
+  | 'recall_declined'
+  | 'specialist_admit'
+  | 'fallback';
+
+export type SemanticDispatchDiag = {
+  invoked: true;
+  generationStatus: 'ok' | 'unavailable' | 'parse_fail';
+  unavailableReason: CapabilityUnavailableReason | null;
+  proposedCapability: CapabilityId | null;
+  selectedCapability: CapabilityId | null;
+  specialistInvoked: SemanticDispatchSpecialist;
+  specialistResult: SemanticDispatchSpecialistResult;
+  finalOutcome: SemanticDispatchFinalOutcome;
+};
+
+export function logSemanticDispatchDiag(diag: SemanticDispatchDiag): void {
+  console.warn(`[${SEMANTIC_DISPATCH_DIAG_TAG}] ${JSON.stringify(diag)}`);
+}
 
 // Capability definitions, not phrase templates. The model is told what each
 // capability MEANS and picks one; there are no example utterances, no keyword
@@ -235,9 +262,9 @@ export async function generateCapabilityProposal(
   getCtx: () => LlamaContext | null,
 ): Promise<CapabilityGenerationResult> {
   const ctx = getCtx();
-  if (!ctx) return { status: 'unavailable' };
-  if (capabilityInterpreterInFlight) return { status: 'unavailable' };
-  if (isLlamaContextBusy()) return { status: 'unavailable' };
+  if (!ctx) return { status: 'unavailable', reason: 'ctx_missing' };
+  if (capabilityInterpreterInFlight) return { status: 'unavailable', reason: 'in_flight' };
+  if (isLlamaContextBusy()) return { status: 'unavailable', reason: 'ctx_busy' };
   capabilityInterpreterInFlight = true;
   try {
     const result = await ctx.completion({
@@ -256,7 +283,7 @@ export async function generateCapabilityProposal(
     const proposal = parseCapabilityProposal(text);
     return proposal ? { status: 'ok', proposal } : { status: 'parse_fail', raw: text };
   } catch {
-    return { status: 'unavailable' };
+    return { status: 'unavailable', reason: 'error' };
   } finally {
     capabilityInterpreterInFlight = false;
   }
