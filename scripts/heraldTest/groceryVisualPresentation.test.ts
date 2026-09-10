@@ -86,6 +86,13 @@ export async function runGroceryVisualPresentationTests() {
     assert('ChatScreen does not add a todo presentation surface',
       /TodoListSurface/.test(chatSrc),
       (v) => v === false, 'false');
+    const surfaceSrc = fs.readFileSync(path.join(root, 'src/components/GroceryListSurface.tsx'), 'utf8');
+    assert('surface keeps GROCERY LIST heading and numbered rows',
+      /GROCERY LIST/.test(surfaceSrc) && /row\.position/.test(surfaceSrc) && /countLabel/.test(surfaceSrc),
+      (v) => v === true, 'heading + count + numbered rows');
+    assert('surface item text stays compact relative to prior oversized rows',
+      !/fontSize:\s*24/.test(surfaceSrc) && !/fontSize:\s*28/.test(surfaceSrc),
+      (v) => v === true, 'no 24/28 item type');
     const bubbleSrc = fs.readFileSync(path.join(root, 'src/components/MessageBubble.tsx'), 'utf8');
     assert('transcript MessageBubble remains',
       /export function MessageBubble/.test(bubbleSrc),
