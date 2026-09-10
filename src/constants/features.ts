@@ -80,6 +80,25 @@ export const MEDICATION_SEMANTIC_INTERPRETATION_ENABLED = true;
 //   takes effect while this is ON.
 export const CAPABILITY_READ_ROUTER_ENABLED = true;
 
+// GROCERY_SEMANTIC_DECOMPOSITION_ENABLED:
+//   Grocery Semantic Decomposition V1. Gates P1 candidate re-decomposition
+//   on existing deterministic grocery list_add, and P2 confirmation-gated
+//   grocery_capture proposals (grocerySemanticDecomposition.ts). OFF ⇒
+//   neither path generates a proposal; routing/writing is byte-for-byte
+//   identical to before this flag existed. Default ON — device-proof activation.
+export const GROCERY_SEMANTIC_DECOMPOSITION_ENABLED = true;
+
+// SEMANTIC_CAPABILITY_DISPATCH_ENABLED:
+//   Semantic Capability Dispatch V1. When ON, eligible tier-3/default
+//   fall-through runs generateCapabilityProposal once as the sole semantic
+//   domain selector, then at most one governed domain interpreter
+//   (capability-read admission, medication semantic, or grocery P2).
+//   OFF ⇒ routing is byte-for-byte identical to before this flag existed
+//   (capability-read, medication semantic, and grocery P2 still run as
+//   their own flags dictate, including serial probing). Default ON —
+//   device-proof activation. Does not admit writes or reads by itself.
+export const SEMANTIC_CAPABILITY_DISPATCH_ENABLED = true;
+
 // SPEECH_PROVIDER_AB_GOOGLE_TTS:
 //   Bounded diagnostic ONLY — a device-validation experiment to determine
 //   whether Herald speech recognition works when explicitly bound to the

@@ -9,6 +9,7 @@ import { applyIntents, processUtterance } from '../../src/routing/processUtteran
 import { routeIntent, DOMAIN_WRITERS } from '../../src/routing/routeIntent.ts';
 import { ConversationSession } from '../../src/routing/conversationSession.ts';
 import { classifyQuery } from '../../src/routing/tierRouter.ts';
+import { CAPABILITY_PROPOSAL_SYSTEM_PROMPT } from '../../src/routing/capabilityRouting.ts';
 import { detectMedicalEvent } from '../../src/utils/detectMedicalEvent.ts';
 import { getActiveMedications } from '../../src/db/medicalDB.ts';
 import type { ClassifyOutcome, IntentRecord } from '../../src/hooks/llmLayers.ts';
@@ -56,7 +57,13 @@ function mockProposalCtx(focus: string, mentions?: string[]) {
     confidence: 0.95,
   });
   return {
-    completion: async () => ({ content: payload }),
+    completion: async (opts?: { messages?: Array<{ content?: string }> }) => {
+      const sys = String(opts?.messages?.[0]?.content ?? '');
+      if (sys === CAPABILITY_PROPOSAL_SYSTEM_PROMPT) {
+        return { content: '{"capability":"medication.capture","confidence":"high"}' };
+      }
+      return { content: payload };
+    },
   } as any;
 }
 

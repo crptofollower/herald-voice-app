@@ -247,7 +247,7 @@ export async function applyIntents(
   session: ConversationSession,
   ctx: { resolveContact?: ResolveContactFn } | undefined,
   source: 'deterministic' | 'llm',
-  llmGate?: { declineAck?: string; domainConfirmOwnsCapture?: boolean },
+  llmGate?: { declineAck?: string; domainConfirmOwnsCapture?: boolean; confirmPrompt?: string },
   ledger?: ConversationTurnLedger | null,
 ): Promise<{ responseText: string; commits: CommitResult[] }> {
   const results: CommitResult[] = [];
@@ -258,7 +258,7 @@ export async function applyIntents(
       // Build C: do not call writer.add until the user confirms.
       const queuedPending = {
         status: 'pending' as const,
-        prompt: "Say yes and I'll remember that.",
+        prompt: llmGate?.confirmPrompt ?? "Say yes and I'll remember that.",
         pendingKey: `llm_confirm:${intent.type}`,
         resume: async (userText: string): Promise<CommitResult> => {
           // No ledger push in this closure: it runs later, as the resumed
@@ -268,9 +268,18 @@ export async function applyIntents(
           // closure. Pushing here too would double-count this turn.
           const trimmed = userText.trim();
           if (CONFIRM_NO_RE.test(trimmed)) {
+            if (intent.type === 'list_add' && llmGate?.confirmPrompt) {
+              console.warn('[grocerySemanticDecomposition] ' + JSON.stringify({ event: 'confirmation_rejected' }));
+            }
             return { status: 'noop', ack: llmGate?.declineAck ?? "No problem — I won't remember that." };
           }
           if (CONFIRM_YES_RE.test(trimmed)) {
+            if (intent.type === 'list_add' && llmGate?.confirmPrompt) {
+              console.warn('[grocerySemanticDecomposition] ' + JSON.stringify({
+                event: 'confirmation_accepted',
+                handoff: 'list_add_writer',
+              }));
+            }
             return writer.add(intent, rawText, ctx);
           }
           return { status: 'noop', ack: '' };
@@ -889,9 +898,18 @@ export async function processUtterance(
     const domainConfirmOwnsCapture =
       routeDecision.source === 'llm'
       && routeDecision.reason === 'semantic_proposal:medication_admit';
+    let groceryConfirmPrompt: string | undefined;
+    if (routeDecision.source === 'llm' && routeDecision.reason === 'semantic_proposal:grocery_admit') {
+      const groceryIntent = routeDecision.intents.find((i) => i.type === 'list_add');
+      if (groceryIntent && groceryIntent.type === 'list_add') {
+        const { formatGroceryCaptureConfirmPrompt } = await import('./grocerySemanticDecomposition');
+        groceryConfirmPrompt = formatGroceryCaptureConfirmPrompt(groceryIntent.items);
+      }
+    }
     const llmGate = {
       ...(declineAck ? { declineAck } : {}),
       ...(domainConfirmOwnsCapture ? { domainConfirmOwnsCapture: true } : {}),
+      ...(groceryConfirmPrompt ? { confirmPrompt: groceryConfirmPrompt } : {}),
     };
     const { responseText, commits } = await applyIntents(
       routeDecision.intents,

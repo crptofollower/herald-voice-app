@@ -7,9 +7,14 @@ import type { TierDecision, LocalContext } from './tierRouter';
 import { writeServiceProvider, detectServiceCapture, detectPhoneCapture, detectInsuranceCapture, captureHouseholdInsurance, normalizeCarrier } from '../utils/householdCapture';
 import { detectDiagnosisCapture, detectDoctorIntroCapture, detectMedicalEvent, isReadShapedUtterance, hasMedicationDomainEvidence, extractDrugName } from '../utils/detectMedicalEvent';
 import type { LlamaContext } from 'llama.rn';
-import { MEDICATION_SEMANTIC_INTERPRETATION_ENABLED, CAPABILITY_READ_ROUTER_ENABLED } from '../constants/features';
+import { MEDICATION_SEMANTIC_INTERPRETATION_ENABLED, CAPABILITY_READ_ROUTER_ENABLED, GROCERY_SEMANTIC_DECOMPOSITION_ENABLED, SEMANTIC_CAPABILITY_DISPATCH_ENABLED } from '../constants/features';
 import { generateMedicationSemanticProposal, admitMedicationSemanticProposal } from './medicationSemanticInterpretation';
-import { generateCapabilityProposal, admitCapabilityProposal, WIRED_READ_CAPABILITY } from './capabilityRouting';
+import {
+  generateGrocerySemanticProposal,
+  admitGrocerySemanticP2,
+  tryP1GrocerySemanticItems,
+} from './grocerySemanticDecomposition';
+import { generateCapabilityProposal, admitCapabilityProposal, WIRED_READ_CAPABILITY, type CapabilityId } from './capabilityRouting';
 import { detectFamilyCapture } from '../utils/familyCapture';
 import { getDB } from '../db/schema';
 import { capturePerson } from '../db/capturePerson';
@@ -2095,6 +2100,73 @@ export function isUnresolvedPersonalCapture(decision: RouteDecision): boolean {
   return decision.kind === 'capture';
 }
 
+async function tryMedicationSemanticCaptureRoute(
+  text: string,
+  getCtx: () => LlamaContext | null,
+): Promise<RouteDecision | null> {
+  const generation = await generateMedicationSemanticProposal(text, getCtx);
+  if (generation.status !== 'ok') return null;
+  const admission = admitMedicationSemanticProposal(text, generation.proposal, { hasPending: false });
+  if (admission.decision !== 'ADMIT') return null;
+  return {
+    kind: 'capture',
+    intents: [{
+      type: 'medical_capture',
+      drug: admission.drug,
+      dosage: admission.dosage,
+      frequency: admission.frequency,
+      raw: text,
+    }],
+    source: 'llm',
+    reason: 'semantic_proposal:medication_admit',
+  };
+}
+
+async function tryGrocerySemanticP2Route(
+  text: string,
+  getCtx: () => LlamaContext | null,
+): Promise<RouteDecision | null> {
+  const generation = await generateGrocerySemanticProposal(text, getCtx);
+  if (generation.status !== 'ok') return null;
+  const admission = admitGrocerySemanticP2(text, generation.proposal, { hasPending: false });
+  if (admission.decision !== 'ADMIT') return null;
+  console.warn('[grocerySemanticDecomposition] ' + JSON.stringify({
+    event: 'confirmation_required',
+    admissionClass: 'P2',
+    candidateCount: admission.candidates.length,
+  }));
+  return {
+    kind: 'capture',
+    intents: [{
+      type: 'list_add',
+      items: admission.candidates,
+      listName: 'grocery',
+    }],
+    source: 'llm',
+    reason: 'semantic_proposal:grocery_admit',
+  };
+}
+
+async function admitWiredMedicationRead(proposal: { capability: CapabilityId; confidence: 'high' | 'medium' | 'low' }): Promise<RouteDecision | null> {
+  const admission = admitCapabilityProposal(proposal);
+  if (admission.decision === 'ADMIT_READ') {
+    const { composeMedicalSummary } = await import('../db/medicalDB');
+    const summary = composeMedicalSummary();
+    return {
+      kind: 'device_read',
+      tier: 1,
+      response: summary.response,
+      isMedical: true,
+      reason: 'medical:summary',
+      presentedMedicationIds: summary.medicationIds,
+    };
+  }
+  if (proposal.capability === WIRED_READ_CAPABILITY) {
+    return { kind: 'needs_clarification', reason: 'personal_memory:recall_declined' };
+  }
+  return null;
+}
+
 export async function routeIntent(
   text: string,
   deps: {
@@ -2110,6 +2182,14 @@ export async function routeIntent(
      *  llmReady above. Omitted or returning null => the seam treats the
      *  interpreter as unavailable and falls through unchanged. */
     getMedicationSemanticInterpreterCtx?: () => LlamaContext | null;
+    /** Test/injection override. Omitted ⇒ features.ts GROCERY_SEMANTIC_DECOMPOSITION_ENABLED. */
+    grocerySemanticDecompositionEnabled?: boolean;
+    /** Test/injection override. Omitted ⇒ features.ts SEMANTIC_CAPABILITY_DISPATCH_ENABLED. */
+    semanticCapabilityDispatchEnabled?: boolean;
+    /** Test/injection override. Omitted ⇒ features.ts CAPABILITY_READ_ROUTER_ENABLED. */
+    capabilityReadRouterEnabled?: boolean;
+    /** Test/injection override. Omitted ⇒ features.ts MEDICATION_SEMANTIC_INTERPRETATION_ENABLED. */
+    medicationSemanticInterpretationEnabled?: boolean;
   },
 ): Promise<RouteDecision> {
   const routeT0 = latMono();
@@ -2308,6 +2388,27 @@ export async function routeIntent(
     decision.actionIntent?.type === 'list_add' ||
     decision.actionIntent?.type === 'todo_add'
   ) {
+    const grocerySemanticOn =
+      deps.grocerySemanticDecompositionEnabled ?? GROCERY_SEMANTIC_DECOMPOSITION_ENABLED;
+    if (
+      grocerySemanticOn
+      && decision.actionIntent.type === 'list_add'
+      && (decision.actionIntent.listName ?? 'grocery').toLowerCase() !== 'todo'
+      && (decision.actionIntent.listName ?? 'grocery').toLowerCase() !== 'todos'
+    ) {
+      const decomposed = await tryP1GrocerySemanticItems(
+        text,
+        deps.getMedicationSemanticInterpreterCtx ?? (() => null),
+      );
+      if (decomposed && decomposed.length > 0) {
+        console.warn('[grocerySemanticDecomposition] ' + JSON.stringify({
+          event: 'handoff_writer',
+          admissionClass: 'P1',
+          candidateCount: decomposed.length,
+        }));
+        decision.actionIntent = { ...decision.actionIntent, items: decomposed };
+      }
+    }
     const medEvent = detectMedicalEvent(text);
     const intents: IntentRecord[] = [];
     if (medEvent && medEvent.type === 'medication' && medEvent.tense === 'past') {
@@ -2354,15 +2455,31 @@ export async function routeIntent(
   // (deps.getMedicationSemanticInterpreterCtx); adds no new context. Law 0 and
   // pending ownership are enforced upstream in processUtterance before
   // routeIntent is called, so this block cannot see, preempt, or race either.
-  if (
-    CAPABILITY_READ_ROUTER_ENABLED &&
-    decision.tier === 3 &&
-    decision.reason === 'default'
-  ) {
-    const capGen = await generateCapabilityProposal(
-      text,
-      deps.getMedicationSemanticInterpreterCtx ?? (() => null),
-    );
+  const grocerySemanticOn =
+    deps.grocerySemanticDecompositionEnabled ?? GROCERY_SEMANTIC_DECOMPOSITION_ENABLED;
+  const dispatchOn =
+    deps.semanticCapabilityDispatchEnabled ?? SEMANTIC_CAPABILITY_DISPATCH_ENABLED;
+  const capabilityReadOn =
+    deps.capabilityReadRouterEnabled ?? CAPABILITY_READ_ROUTER_ENABLED;
+  const medicationSemanticOn =
+    deps.medicationSemanticInterpretationEnabled ?? MEDICATION_SEMANTIC_INTERPRETATION_ENABLED;
+  const getSemanticCtx = deps.getMedicationSemanticInterpreterCtx ?? (() => null);
+  const eligibleDefaultFallthrough = decision.tier === 3 && decision.reason === 'default';
+  let dispatchSeamRan = false;
+  let dispatchSelected: CapabilityId | null = null;
+
+  if (eligibleDefaultFallthrough && dispatchOn) {
+    dispatchSeamRan = true;
+    const capGen = await generateCapabilityProposal(text, getSemanticCtx);
+    if (capGen.status === 'ok') {
+      dispatchSelected = capGen.proposal.capability;
+      if (dispatchSelected === WIRED_READ_CAPABILITY && capabilityReadOn) {
+        const readDecision = await admitWiredMedicationRead(capGen.proposal);
+        if (readDecision) return readDecision;
+      }
+    }
+  } else if (capabilityReadOn && eligibleDefaultFallthrough) {
+    const capGen = await generateCapabilityProposal(text, getSemanticCtx);
     if (capGen.status === 'ok') {
       const admission = admitCapabilityProposal(capGen.proposal);
       if (admission.decision === 'ADMIT_READ') {
@@ -2377,30 +2494,10 @@ export async function routeIntent(
           presentedMedicationIds: summary.medicationIds,
         };
       }
-      // Structural safing (pre-commit correction): the interpreter identified
-      // this utterance AS a personal medication recall (it proposed
-      // WIRED_READ_CAPABILITY) but admission could not resolve it (e.g. low
-      // confidence). Such a KNOWN-but-unresolved personal medication recall must
-      // never fall through to the generative ephemeral (Qwen) path and be
-      // answered as though Herald knows the user's medications. Decline it with
-      // the existing recall-declined reason — reason !== 'default', so
-      // mayRunGenerativeEphemeralPersonalProse (ephemeralSeam.ts) returns false
-      // and the turn resolves to a canned clarify, never a generated personal
-      // answer. This is NOT natural-language detection: the signal is the
-      // model's own structured `capability`, not any inspection of the
-      // transcript. Off-ramp capabilities (the model did NOT call this a
-      // medication recall) fall through unchanged.
       if (capGen.proposal.capability === WIRED_READ_CAPABILITY) {
         return { kind: 'needs_clarification', reason: 'personal_memory:recall_declined' };
       }
-      // ABSTAIN on an off-ramp capability: fall through unchanged to the fence
-      // below.
     }
-    // 'parse_fail' / 'unavailable': fall through unchanged — treated identically
-    // to "no proposal." No structured signal exists that this is a medication
-    // recall, and manufacturing one would require the natural-language
-    // detection this architecture forbids; baseline routing (incl. the Site-A
-    // recall fence) still applies. See the pre-commit safing report.
   }
 
   // Site-A fence (early): recall-shaped questions must fail closed before a
@@ -2468,32 +2565,27 @@ export async function routeIntent(
   // (applyIntents, processUtterance.ts) and DOMAIN_WRITERS.medical_capture's
   // own confirm gate, unmodified — no new writer, DB path, table, pending
   // primitive, or IntentRecord variant is created.
-  if (MEDICATION_SEMANTIC_INTERPRETATION_ENABLED) {
-    const generation = await generateMedicationSemanticProposal(
-      text,
-      deps.getMedicationSemanticInterpreterCtx ?? (() => null),
-    );
-    if (generation.status === 'ok') {
-      const admission = admitMedicationSemanticProposal(text, generation.proposal, { hasPending: false });
-      if (admission.decision === 'ADMIT') {
-        return {
-          kind: 'capture',
-          intents: [{
-            type: 'medical_capture',
-            drug: admission.drug,
-            dosage: admission.dosage,
-            frequency: admission.frequency,
-            raw: text,
-          }],
-          source: 'llm',
-          reason: 'semantic_proposal:medication_admit',
-        };
-      }
-      // CLARIFY / REJECT / DEFER: fall through unchanged — identical to
-      // today's behavior, exactly as an empty classifier result already does.
+  if (dispatchSeamRan) {
+    if (dispatchSelected === 'medication.capture' && medicationSemanticOn) {
+      const medDecision = await tryMedicationSemanticCaptureRoute(text, getSemanticCtx);
+      if (medDecision) return medDecision;
+    } else if (dispatchSelected === 'grocery.capture' && grocerySemanticOn) {
+      const groceryDecision = await tryGrocerySemanticP2Route(text, getSemanticCtx);
+      if (groceryDecision) return groceryDecision;
     }
-    // 'parse_fail' / 'unavailable': fall through unchanged — treated
-    // identically to "no proposal."
+  } else {
+    if (medicationSemanticOn) {
+      const medDecision = await tryMedicationSemanticCaptureRoute(text, getSemanticCtx);
+      if (medDecision) return medDecision;
+    }
+    if (
+      grocerySemanticOn
+      && decision.tier === 3
+      && decision.reason === 'default'
+    ) {
+      const groceryDecision = await tryGrocerySemanticP2Route(text, getSemanticCtx);
+      if (groceryDecision) return groceryDecision;
+    }
   }
 
   // LAT-ARC-B: tracks whether a REAL classifyLLM completion happened for

@@ -38,11 +38,13 @@ import { isLlamaContextBusy } from '../utils/llamaContextExclusive';
 // has meaningful non-medication choices.
 
 export const CAPABILITY_IDS = [
-  'medication.read_summary', // WIRED (this slice) — the medication catalog read
-  'medication.capture',      // off-ramp: a medication write — handled by the write seam, not here
+  'medication.read_summary', // WIRED READ — medication catalog read admission
+  'medication.capture',      // dispatch: medication write interpreter (not admitted here)
+  'grocery.capture',         // dispatch: grocery write interpreter (not admitted here)
   'list.read',               // off-ramp: shopping / to-do list read
   'calendar.read',           // off-ramp: appointments / schedule read
   'contact.call',            // off-ramp: call or text someone
+  'uncertain',               // off-ramp: meaning too unclear to assign a capability
   'other',                   // off-ramp: anything else, general questions, small talk
 ] as const;
 
@@ -68,9 +70,11 @@ export type CapabilityRiskClass = 'read' | 'write' | 'external' | 'none';
 export const CAPABILITY_RISK_CLASS: Record<CapabilityId, CapabilityRiskClass> = {
   'medication.read_summary': 'read',
   'medication.capture': 'write',
+  'grocery.capture': 'write',
   'list.read': 'read',
   'calendar.read': 'read',
   'contact.call': 'external',
+  'uncertain': 'none',
   'other': 'none',
 };
 
@@ -179,14 +183,16 @@ export type CapabilityGenerationResult =
 // not do. Off-ramps (list.read / calendar.read / contact.call / other) give an
 // unrelated utterance a home so medication is never a forced choice.
 export const CAPABILITY_PROPOSAL_SYSTEM_PROMPT = `You label what a single spoken request is asking a memory assistant to do.
-Pick exactly one capability. If none clearly fits, pick "other".
+Pick exactly one capability. If none clearly fits, pick "other". If the request is too unclear to assign a capability, pick "uncertain".
 
 capability — one of:
   medication.read_summary : the person wants to hear which medications they take or are currently on.
   medication.capture      : the person is telling the assistant about a medication they take, so it can remember it.
+  grocery.capture         : the person wants the assistant to remember items to buy at the store.
   list.read               : the person wants to hear a shopping list or a to-do list.
   calendar.read           : the person wants to hear their appointments or schedule.
   contact.call            : the person wants to call or text someone.
+  uncertain               : the request is too unclear to assign a capability.
   other                   : anything else, including general questions and small talk.
 
 confidence — high, medium, or low: how sure you are of the capability.
