@@ -2133,6 +2133,9 @@ async function tryTodoSemanticP2Route(
   const generation = await generateTodoSemanticProposal(text, getCtx);
   if (generation.status !== 'ok') return null;
   const admission = admitTodoSemanticP2(text, generation.proposal, { hasPending: false });
+  if (admission.decision === 'CLARIFY') {
+    return { kind: 'needs_clarification', reason: 'semantic_proposal:todo_clarify' };
+  }
   if (admission.decision !== 'ADMIT') return null;
   console.warn('[todoSemanticCapture] ' + JSON.stringify({
     event: 'confirmation_required',
@@ -2696,11 +2699,14 @@ export async function routeIntent(
         dispatchDiag.specialistResult = 'no_admit';
       }
       const todoDecision = await tryTodoSemanticP2Route(text, getSemanticCtx);
-      if (todoDecision) {
+      if (todoDecision?.kind === 'capture') {
         if (dispatchDiag) {
           dispatchDiag.specialistResult = 'admit';
           dispatchDiag.finalOutcome = 'specialist_admit';
         }
+        return todoDecision;
+      }
+      if (todoDecision) {
         return todoDecision;
       }
     }

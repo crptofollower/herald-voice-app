@@ -139,8 +139,28 @@ export async function runTodoSemanticCaptureTests() {
     assert('ADMIT-P2 uncertain capability does not admit', d.decision, (v) => v !== 'ADMIT', 'not ADMIT');
   }
   {
-    const d = admitTodoSemanticP2('We need to water the plants.', proposal({ confidence: 0.2 }), { hasPending: false });
-    assert('ADMIT-P2 low confidence clarifies', d.decision, (v) => v === 'CLARIFY', 'CLARIFY');
+    const d = admitTodoSemanticP2(
+      'We need to take the dog to the groomers.',
+      proposal({ candidates: ['take the dog to the groomers'], confidence: 0.5 }),
+      { hasPending: false },
+    );
+    assert('ADMIT-P2 medium confidence still admits when grounded', d.decision, (v) => v === 'ADMIT', 'ADMIT');
+  }
+  {
+    const d = admitTodoSemanticP2(
+      'We need to take the dog to the groomers.',
+      proposal({ candidates: ['take the dog to the groomers'], confidence: 0.2 }),
+      { hasPending: false },
+    );
+    assert('ADMIT-P2 numeric confidence does not veto grounded P2', d.decision, (v) => v === 'ADMIT', 'ADMIT');
+  }
+  {
+    const d = admitTodoSemanticP2(
+      'We need to water the plants.',
+      proposal({ candidates: [] }),
+      { hasPending: false },
+    );
+    assert('ADMIT-P2 empty candidates clarify', d.decision, (v) => v === 'CLARIFY', 'CLARIFY');
   }
   {
     const d = admitTodoSemanticP2('We need to water the plants.', proposal(), { hasPending: true });
@@ -192,12 +212,37 @@ export async function runTodoSemanticCaptureTests() {
   }
 
   {
+    const utterance = 'We need to take the dog to the groomers.';
     const harness = openJourneyDb();
-    const deps = enabledDeps(harness, fakeCtx(proposal({ confidence: 0.2 })));
+    const deps = enabledDeps(harness, fakeCtx(proposal({
+      candidates: ['take the dog to the groomers'],
+      confidence: 0.5,
+    })));
+    const t1 = await processUtterance(normalizeInput(utterance), harness.session, deps);
+    assert('TSC4 medium confidence does not persist before YES', todoSet(harness.db), setEq([]), '[]');
+    assert('TSC4 medium + grounded is P2 pending', t1.commits.some((c) => c.status === 'pending'), (v) => v === true, 'pending');
+    assert('TSC4 prompt names the grounded task', t1.responseText,
+      (v) => typeof v === 'string' && /take the dog to the groomers/i.test(v) && /to-do list/i.test(v),
+      formatTodoCaptureConfirmPrompt(['take the dog to the groomers']));
+    const t2 = await processUtterance('yes', harness.session, deps);
+    assert('TSC4 YES uses todo_add writer', todoSet(harness.db), setEq(['take the dog to the groomers']), '["take the dog to the groomers"]');
+    assert('TSC4 YES commit-truth ack', t2.commits.some((c) => c.status === 'committed'), (v) => v === true, 'committed');
+    assert('TSC4 does not write grocery', grocerySet(harness.db), setEq([]), '[]');
+  }
+  {
+    const harness = openJourneyDb();
+    const deps = enabledDeps(harness, fakeCtx(proposal({ candidates: [] })));
     const t1 = await processUtterance(normalizeInput('We need to water the plants.'), harness.session, deps);
-    assert('TSC4 low confidence does not persist', todoSet(harness.db), setEq([]), '[]');
-    assert('TSC4 low confidence is not a write pending',
-      (t1 as { commits?: { status: string }[] }).commits?.some((c) => c.status === 'pending') ?? false, (v) => v === false, 'no pending');
+    assert('TSC4b empty candidates do not persist', todoSet(harness.db), setEq([]), '[]');
+    assert('TSC4b empty candidates are not a write pending',
+      t1.handled === false
+        ? false
+        : ((t1 as { commits?: { status: string }[] }).commits?.some((c) => c.status === 'pending') ?? false),
+      (v) => v === false, 'no pending');
+    assert('TSC4b empty candidates do not fall through as default conversation',
+      t1.handled === false ? t1.routeDecision.reason : null,
+      (v) => v === 'semantic_proposal:todo_clarify',
+      'semantic_proposal:todo_clarify');
   }
 
   {

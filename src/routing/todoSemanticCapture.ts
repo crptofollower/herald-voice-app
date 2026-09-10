@@ -34,7 +34,6 @@ export type TodoAdmissionDecision =
   | { decision: 'CLARIFY'; reason: string }
   | { decision: 'DEFER'; reason: string };
 
-const TODO_SEMANTIC_CONFIDENCE_THRESHOLD = 0.6;
 const TODO_SEMANTIC_TIMEOUT_MS = 8000;
 
 function logTodoSemantic(event: string, extra: Record<string, unknown> = {}) {
@@ -102,34 +101,44 @@ function speechActBlocksTodoCapture(raw: string): boolean {
   return shouldRefuseLlmCaptureProposal(raw, [{ type: 'todo_add', body: 'x' }]);
 }
 
+function logAdmission(decision: TodoAdmissionDecision): TodoAdmissionDecision {
+  const extra: Record<string, unknown> = { decision: decision.decision };
+  if (decision.decision !== 'ADMIT') extra.reason = decision.reason;
+  else extra.admissionClass = decision.admissionClass;
+  logTodoSemantic('admission', extra);
+  return decision;
+}
+
 export function admitTodoSemanticP2(
   raw: string,
   proposal: TodoSemanticProposal,
   ctx: { hasPending: boolean },
 ): TodoAdmissionDecision {
-  if (ctx.hasPending) return { decision: 'DEFER', reason: 'pending_owns_turn' };
+  if (ctx.hasPending) return logAdmission({ decision: 'DEFER', reason: 'pending_owns_turn' });
   if (speechActBlocksTodoCapture(raw)) {
-    return { decision: 'REJECT', reason: 'speech_act_refuse' };
+    return logAdmission({ decision: 'REJECT', reason: 'speech_act_refuse' });
   }
   if (proposal.capability === 'uncertain' || proposal.capability === 'not_todo_capture') {
-    return { decision: 'REJECT', reason: `capability_${proposal.capability}` };
+    return logAdmission({ decision: 'REJECT', reason: `capability_${proposal.capability}` });
   }
   if (proposal.capability !== 'todo_capture') {
-    return { decision: 'REJECT', reason: 'capability_unknown' };
+    return logAdmission({ decision: 'REJECT', reason: 'capability_unknown' });
   }
-  if (proposal.confidence < TODO_SEMANTIC_CONFIDENCE_THRESHOLD) {
-    return { decision: 'CLARIFY', reason: 'low_confidence' };
+  if (proposal.candidates.length === 0) {
+    return logAdmission({ decision: 'CLARIFY', reason: 'empty_candidates' });
   }
+  // Confidence is recorded on the proposal only. It never authorizes a write
+  // and must not veto a verbatim-grounded P2 confirmation.
   const grounded = groundTodoCandidates(raw, proposal.candidates);
   if (!grounded) {
     logTodoSemantic('grounding_failed', { admissionClass: 'P2', candidateCount: proposal.candidates.length });
-    return { decision: 'REJECT', reason: 'ungrounded_candidate' };
+    return logAdmission({ decision: 'REJECT', reason: 'ungrounded_candidate' });
   }
   if (shouldRefuseLlmCaptureProposal(raw, grounded.map((body) => ({ type: 'todo_add' as const, body })))) {
-    return { decision: 'REJECT', reason: 'speech_act_refuse' };
+    return logAdmission({ decision: 'REJECT', reason: 'speech_act_refuse' });
   }
   logTodoSemantic('grounding_ok', { admissionClass: 'P2', candidateCount: grounded.length });
-  return { decision: 'ADMIT', candidates: grounded, admissionClass: 'P2' };
+  return logAdmission({ decision: 'ADMIT', candidates: grounded, admissionClass: 'P2' });
 }
 
 export const TODO_SEMANTIC_PROPOSAL_SYSTEM_PROMPT = `You extract JSON describing whether a sentence is asking to remember tasks or to-dos, for to-do interpretation only.
