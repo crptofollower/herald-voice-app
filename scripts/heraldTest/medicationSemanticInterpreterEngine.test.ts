@@ -94,7 +94,7 @@ export async function runMedicationSemanticInterpreterEngineTests() {
       .map((line) => line.replace(/\/\/.*$/, ''))
       .join('\n');
     assert('STATIC1 hook imports LARGE_MODEL', /\bLARGE_MODEL\b/.test(code), (v) => v === true, 'true');
-    assert('STATIC2 hook imports isModelDownloaded (explicit presence check)', /\bisModelDownloaded\b/.test(code), (v) => v === true, 'true');
+    assert('STATIC2 hook delegates presence/provisioning to ensureSemanticLargeModel', /\bensureSemanticLargeModel\b/.test(code), (v) => v === true, 'true');
     assert('STATIC3 hook code never references SMALL_MODEL (comments excluded)', /\bSMALL_MODEL\b/.test(code), (v) => v === false, 'false (no occurrence outside comments)');
     assert('STATIC4 hook code never references getActiveModelPath (comments excluded)', /\bgetActiveModelPath\b/.test(code), (v) => v === false, 'false (no occurrence outside comments)');
     assert('STATIC5 hook checks the semantic feature flag before any model work', /MEDICATION_SEMANTIC_INTERPRETATION_ENABLED/.test(code), (v) => v === true, 'true');

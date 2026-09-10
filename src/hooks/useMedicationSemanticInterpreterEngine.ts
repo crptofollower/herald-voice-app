@@ -15,10 +15,15 @@
 // Q4_K_M) and nothing else. It does not import SMALL_MODEL or
 // getActiveModelPath from modelManager.ts — there is no code path by which
 // this hook can substitute the uncertified 1B model or "whatever happens to
-// be active" for the general classifier. If LARGE_MODEL is not yet
-// downloaded on this device (a real, ordinary, indefinite-duration state —
-// see modelDownloadService.ts's WiFi-gated background phase 2), this hook
-// stays 'unavailable' permanently for the session. It never falls back.
+// be active" for the general classifier.
+//
+// Provisioning of that certified file is independent of the retired
+// classifier download gate. The shared semantic context is initialized when
+// any semantic consumer requires it (medication / capability dispatch /
+// grocery). If the model is absent and WiFi is unavailable, status remains
+// unavailable and this hook waits for permitted WiFi in the same session,
+// then provisions and inits. It never falls back to SMALL_MODEL or a second
+// context.
 //
 // Must never share KV/cache with the shared classifier context
 // (useLocalLLM), the experimental conversational engine, or the list-remove
@@ -27,8 +32,14 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { initLlama, type LlamaContext } from 'llama.rn';
-import { MEDICATION_SEMANTIC_INTERPRETATION_ENABLED } from '../constants/features';
-import { getModelDir, isModelDownloaded, LARGE_MODEL } from '../utils/modelManager';
+import {
+  GROCERY_SEMANTIC_DECOMPOSITION_ENABLED,
+  MEDICATION_SEMANTIC_INTERPRETATION_ENABLED,
+  SEMANTIC_CAPABILITY_DISPATCH_ENABLED,
+} from '../constants/features';
+import { getModelDir, LARGE_MODEL } from '../utils/modelManager';
+import { ensureSemanticLargeModel } from '../utils/semanticModelProvisioning';
+import { semanticConsumersRequireContext } from '../utils/semanticProvisioningPolicy';
 
 export type MedicationSemanticInterpreterEngineStatus = 'unavailable' | 'loading' | 'ready' | 'error';
 
@@ -36,6 +47,12 @@ const MEDICATION_INTERPRETER_INIT = {
   n_ctx: 512,
   n_gpu_layers: 0,
 } as const;
+
+const SEMANTIC_CONSUMERS = {
+  medicationSemanticEnabled: MEDICATION_SEMANTIC_INTERPRETATION_ENABLED,
+  capabilityDispatchEnabled: SEMANTIC_CAPABILITY_DISPATCH_ENABLED,
+  grocerySemanticEnabled: GROCERY_SEMANTIC_DECOMPOSITION_ENABLED,
+};
 
 function logInterpreterEngine(event: string, extra: Record<string, unknown> = {}) {
   console.warn('[medicationSemanticInterpreterEngine] ' + JSON.stringify({ event, ...extra }));
@@ -52,34 +69,38 @@ export function useMedicationSemanticInterpreterEngine(): {
 
   useEffect(() => {
     let cancelled = false;
-    if (!MEDICATION_SEMANTIC_INTERPRETATION_ENABLED) {
+    const abort = new AbortController();
+    if (!semanticConsumersRequireContext(SEMANTIC_CONSUMERS)) {
       setStatus('unavailable');
       return () => {
         cancelled = true;
+        abort.abort();
       };
     }
 
     (async () => {
-      setStatus('loading');
       logInterpreterEngine('independent_ctx_init_begin');
       try {
-        const downloaded = await isModelDownloaded(LARGE_MODEL.filename);
-        if (!downloaded) {
-          // Certified artifact absent on this device. Never substitute
-          // SMALL_MODEL or resolve via getActiveModelPath() — those may
-          // silently select the uncertified 1B model. Stay unavailable.
-          logInterpreterEngine('independent_ctx_unavailable', { reason: 'certified_model_absent' });
-          if (!cancelled) setStatus('unavailable');
+        const ensured = await ensureSemanticLargeModel({
+          consumers: SEMANTIC_CONSUMERS,
+          signal: abort.signal,
+          onAction: (action) => {
+            if (cancelled) return;
+            if (action === 'wait' || action === 'none') setStatus('unavailable');
+            else setStatus('loading');
+          },
+        });
+        if (cancelled || abort.signal.aborted) {
+          logInterpreterEngine('independent_ctx_cancelled', { at: 'after_ensure' });
           return;
         }
-        if (cancelled) {
-          logInterpreterEngine('independent_ctx_cancelled', { at: 'after_presence_check' });
+        if (ensured.status !== 'ready') {
+          logInterpreterEngine('independent_ctx_unavailable', { reason: ensured.status });
+          if (!cancelled) {
+            setStatus(ensured.status === 'error' ? 'error' : 'unavailable');
+          }
           return;
         }
-        // getModelDir() already strips its own trailing slash (modelManager.ts's
-        // internal joinPath does this for every path it returns); a single
-        // '/' + filename join here is exactly equivalent to modelManager's own
-        // joinPath(getModelDir(), filename) for this one-segment case.
         const modelPath = `${getModelDir()}/${LARGE_MODEL.filename}`;
         const ctx = await initLlama({
           model: modelPath,
@@ -102,6 +123,7 @@ export function useMedicationSemanticInterpreterEngine(): {
 
     return () => {
       cancelled = true;
+      abort.abort();
       const ctx = ctxRef.current;
       ctxRef.current = null;
       if (ctx) void ctx.release().catch(() => {});
