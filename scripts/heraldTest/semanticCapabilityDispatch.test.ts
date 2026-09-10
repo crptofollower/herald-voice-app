@@ -102,6 +102,8 @@ const DISPATCH_GROCERY = '{"capability":"grocery.capture","confidence":"high"}';
 const DISPATCH_MED = '{"capability":"medication.capture","confidence":"high"}';
 const DISPATCH_READ = '{"capability":"medication.read_summary","confidence":"high"}';
 const DISPATCH_LIST_READ = '{"capability":"list.read","confidence":"high"}';
+const DISPATCH_LIST_READ_MED = '{"capability":"list.read","confidence":"medium"}';
+const DISPATCH_LIST_READ_LOW = '{"capability":"list.read","confidence":"low"}';
 
 const GROCERY_OK = JSON.stringify({
   capability: 'grocery_capture',
@@ -268,8 +270,47 @@ export async function runSemanticCapabilityDispatchTests() {
   {
     freshDB();
     const { ctx, counts } = countingCtx([DISPATCH_LIST_READ, GROCERY_OK, MED_OK]);
-    await routeIntent('how was your weekend', baseDeps(ctx));
-    assert('LIST.READ off-ramp does not invoke write interpreters',
+    const decision = await routeIntent('how was your weekend', baseDeps(ctx));
+    assert('LIST.READ high is device_read', decision.kind, (v) => v === 'device_read', 'device_read');
+    assert('LIST.READ high uses grocery list reader speech',
+      (decision as any).response, (v) => v === 'Your grocery list is empty.', 'Your grocery list is empty.');
+    assert('LIST.READ high includes presentedGroceryIds',
+      Array.isArray((decision as any).presentedGroceryIds), (v) => v === true, 'array');
+    assert('LIST.READ high reason matches deterministic grocery read',
+      (decision as any).reason, (v) => v === 'action:list_read', 'action:list_read');
+    assert('LIST.READ high does not invoke write interpreters',
+      counts.medication + counts.grocery, (v) => v === 0, '0');
+    assert('LIST.READ high dispatch once', counts.dispatch, (v) => v === 1, '1');
+  }
+
+  {
+    freshDB();
+    const { ctx, counts } = countingCtx([DISPATCH_LIST_READ_MED, GROCERY_OK, MED_OK]);
+    const decision = await routeIntent('how was your weekend', baseDeps(ctx));
+    assert('LIST.READ medium is device_read', decision.kind, (v) => v === 'device_read', 'device_read');
+    assert('LIST.READ medium does not invoke write interpreters',
+      counts.medication + counts.grocery, (v) => v === 0, '0');
+  }
+
+  {
+    freshDB();
+    const { ctx, counts } = countingCtx([DISPATCH_LIST_READ_LOW, GROCERY_OK, MED_OK]);
+    const decision = await routeIntent('how was your weekend', baseDeps(ctx));
+    assert('LIST.READ low is fallback not device_read',
+      decision.kind !== 'device_read' && decision.kind !== 'capture',
+      (v) => v === true, 'fallback');
+    assert('LIST.READ low does not invoke write interpreters',
+      counts.medication + counts.grocery, (v) => v === 0, '0');
+  }
+
+  {
+    freshDB();
+    const { ctx, counts } = countingCtx([DISPATCH_LIST_READ, GROCERY_OK, MED_OK]);
+    const decision = await routeIntent("what's on my grocery list", baseDeps(ctx));
+    assert('T1 list_read remains device_read', decision.kind, (v) => v === 'device_read', 'device_read');
+    assert('T1 list_read reason unchanged', (decision as any).reason, (v) => v === 'action:list_read', 'action:list_read');
+    assert('T1 list_read does not run dispatch', counts.dispatch, (v) => v === 0, '0');
+    assert('T1 list_read does not invoke write interpreters',
       counts.medication + counts.grocery, (v) => v === 0, '0');
   }
 

@@ -87,6 +87,8 @@ const DISPATCH_OTHER = '{"capability":"other","confidence":"high"}';
 const DISPATCH_UNCERTAIN = '{"capability":"uncertain","confidence":"high"}';
 const DISPATCH_GROCERY = '{"capability":"grocery.capture","confidence":"high"}';
 const DISPATCH_MED = '{"capability":"medication.capture","confidence":"high"}';
+const DISPATCH_LIST_READ = '{"capability":"list.read","confidence":"high"}';
+const DISPATCH_LIST_READ_LOW = '{"capability":"list.read","confidence":"low"}';
 const GROCERY_OK = JSON.stringify({
   capability: 'grocery_capture',
   candidates: ['milk', 'eggs', 'bread'],
@@ -184,6 +186,30 @@ export async function runSemanticDispatchDiagnosticsTests() {
     assert('OTHER specialist none', diags[0]?.specialistInvoked, (v) => v === 'none', 'none');
     assert('OTHER generation ok', diags[0]?.generationStatus, (v) => v === 'ok', 'ok');
     assert('OTHER finalOutcome fallback', diags[0]?.finalOutcome, (v) => v === 'fallback', 'fallback');
+  }
+
+  {
+    freshDB();
+    const { ctx, counts } = countingCtx([DISPATCH_LIST_READ, GROCERY_OK, MED_OK]);
+    const { result, diags } = await captureDispatchDiags(() =>
+      routeIntent('how was your weekend', baseDeps(ctx)));
+    assert('LIST.READ diagnostic finalOutcome read_admit', diags[0]?.finalOutcome, (v) => v === 'read_admit', 'read_admit');
+    assert('LIST.READ diagnostic specialistInvoked none', diags[0]?.specialistInvoked, (v) => v === 'none', 'none');
+    assert('LIST.READ diagnostic specialistResult not_run', diags[0]?.specialistResult, (v) => v === 'not_run', 'not_run');
+    assert('LIST.READ diagnostic selectedCapability list.read', diags[0]?.selectedCapability, (v) => v === 'list.read', 'list.read');
+    assert('LIST.READ diagnostic route is device_read', result.kind, (v) => v === 'device_read', 'device_read');
+    assert('LIST.READ diagnostic zero write specialists',
+      counts.medication + counts.grocery, (v) => v === 0, '0');
+  }
+
+  {
+    freshDB();
+    const { ctx } = countingCtx([DISPATCH_LIST_READ_LOW, GROCERY_OK, MED_OK]);
+    const { result, diags } = await captureDispatchDiags(() =>
+      routeIntent('how was your weekend', baseDeps(ctx)));
+    assert('LIST.READ low diagnostic finalOutcome fallback', diags[0]?.finalOutcome, (v) => v === 'fallback', 'fallback');
+    assert('LIST.READ low diagnostic specialist none', diags[0]?.specialistInvoked, (v) => v === 'none', 'none');
+    assert('LIST.READ low is not device_read', result.kind, (v) => v !== 'device_read', 'not device_read');
   }
 
   {

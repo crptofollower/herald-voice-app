@@ -14,7 +14,7 @@ import {
   admitGrocerySemanticP2,
   tryP1GrocerySemanticItems,
 } from './grocerySemanticDecomposition';
-import { generateCapabilityProposal, admitCapabilityProposal, WIRED_READ_CAPABILITY, type CapabilityId, logSemanticDispatchDiag, type SemanticDispatchDiag } from './capabilityRouting';
+import { generateCapabilityProposal, admitCapabilityProposal, WIRED_READ_CAPABILITY, CAPABILITY_RISK_CLASS, type CapabilityId, logSemanticDispatchDiag, type SemanticDispatchDiag } from './capabilityRouting';
 import { detectFamilyCapture } from '../utils/familyCapture';
 import { getDB } from '../db/schema';
 import { capturePerson } from '../db/capturePerson';
@@ -2491,6 +2491,23 @@ export async function routeIntent(
             : 'read_admit';
           return readDecision;
         }
+      }
+      if (
+        dispatchSelected === 'list.read'
+        && CAPABILITY_RISK_CLASS['list.read'] === 'read'
+        && capGen.proposal.confidence !== 'low'
+      ) {
+        const { getPresentedOpenListItems, composeOpenListSpeech } = await import('../db/listRead');
+        const listName = 'grocery';
+        const items = getPresentedOpenListItems(listName);
+        dispatchDiag.finalOutcome = 'read_admit';
+        return {
+          kind: 'device_read',
+          tier: 1,
+          response: composeOpenListSpeech(listName, items),
+          reason: 'action:list_read',
+          presentedGroceryIds: items.map((i) => i.id),
+        };
       }
     } else if (capGen.status === 'parse_fail') {
       dispatchDiag = {
