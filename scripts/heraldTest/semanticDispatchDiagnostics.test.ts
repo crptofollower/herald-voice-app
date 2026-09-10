@@ -89,6 +89,8 @@ const DISPATCH_GROCERY = '{"capability":"grocery.capture","confidence":"high"}';
 const DISPATCH_MED = '{"capability":"medication.capture","confidence":"high"}';
 const DISPATCH_LIST_READ = '{"capability":"list.read","confidence":"high"}';
 const DISPATCH_LIST_READ_LOW = '{"capability":"list.read","confidence":"low"}';
+const DISPATCH_TODO_READ = '{"capability":"todo.read","confidence":"high"}';
+const DISPATCH_TODO_READ_LOW = '{"capability":"todo.read","confidence":"low"}';
 const GROCERY_OK = JSON.stringify({
   capability: 'grocery_capture',
   candidates: ['milk', 'eggs', 'bread'],
@@ -200,6 +202,32 @@ export async function runSemanticDispatchDiagnosticsTests() {
     assert('LIST.READ diagnostic route is device_read', result.kind, (v) => v === 'device_read', 'device_read');
     assert('LIST.READ diagnostic zero write specialists',
       counts.medication + counts.grocery, (v) => v === 0, '0');
+  }
+
+  {
+    freshDB();
+    const { ctx, counts } = countingCtx([DISPATCH_TODO_READ, GROCERY_OK, MED_OK]);
+    const { result, diags } = await captureDispatchDiags(() =>
+      routeIntent('how was your weekend', baseDeps(ctx)));
+    assert('TODO.READ diagnostic finalOutcome read_admit', diags[0]?.finalOutcome, (v) => v === 'read_admit', 'read_admit');
+    assert('TODO.READ diagnostic specialistInvoked none', diags[0]?.specialistInvoked, (v) => v === 'none', 'none');
+    assert('TODO.READ diagnostic selectedCapability todo.read', diags[0]?.selectedCapability, (v) => v === 'todo.read', 'todo.read');
+    assert('TODO.READ diagnostic route is device_read', result.kind, (v) => v === 'device_read', 'device_read');
+    assert('TODO.READ diagnostic uses todo reader not grocery',
+      (result as { response?: string }).response,
+      (v) => v === "You're all clear — nothing on your to-do list.",
+      "You're all clear — nothing on your to-do list.");
+    assert('TODO.READ diagnostic zero write specialists',
+      counts.medication + counts.grocery, (v) => v === 0, '0');
+  }
+
+  {
+    freshDB();
+    const { ctx } = countingCtx([DISPATCH_TODO_READ_LOW, GROCERY_OK, MED_OK]);
+    const { result, diags } = await captureDispatchDiags(() =>
+      routeIntent('how was your weekend', baseDeps(ctx)));
+    assert('TODO.READ low diagnostic finalOutcome fallback', diags[0]?.finalOutcome, (v) => v === 'fallback', 'fallback');
+    assert('TODO.READ low is not device_read', result.kind, (v) => v !== 'device_read', 'not device_read');
   }
 
   {

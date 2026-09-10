@@ -103,7 +103,7 @@ export async function runCapabilityRoutingTests() {
   assert('vocabulary includes the wired read capability',
     CAPABILITY_IDS.includes('medication.read_summary' as CapabilityId), (v) => v === true, 'true');
   assert('vocabulary includes meaningful non-medication off-ramps',
-    ['list.read', 'calendar.read', 'contact.call', 'other', 'grocery.capture', 'uncertain'].every((c) => CAPABILITY_IDS.includes(c as CapabilityId)),
+    ['list.read', 'todo.read', 'calendar.read', 'contact.call', 'other', 'grocery.capture', 'uncertain'].every((c) => CAPABILITY_IDS.includes(c as CapabilityId)),
     (v) => v === true, 'true');
   assert('read capability risk class is read',
     CAPABILITY_RISK_CLASS['medication.read_summary'], (v) => v === 'read', 'read');
@@ -136,7 +136,7 @@ export async function runCapabilityRoutingTests() {
   // A write capability can NEVER be executed from the read admission path.
   assert('ABSTAIN for medication.capture (write off-ramp — never ADMIT_READ)', admit('medication.capture', 'high').decision, (v) => v === 'ABSTAIN', 'ABSTAIN');
   // Unrelated input cannot be forced into medication: every off-ramp abstains.
-  for (const offramp of ['list.read', 'calendar.read', 'contact.call', 'other', 'grocery.capture', 'uncertain'] as CapabilityId[]) {
+  for (const offramp of ['list.read', 'todo.read', 'calendar.read', 'contact.call', 'other', 'grocery.capture', 'uncertain'] as CapabilityId[]) {
     assert(`ABSTAIN for off-ramp ${offramp}`, admit(offramp, 'high').decision, (v) => v === 'ABSTAIN', 'ABSTAIN');
   }
 

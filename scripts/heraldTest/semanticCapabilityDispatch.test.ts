@@ -104,6 +104,9 @@ const DISPATCH_READ = '{"capability":"medication.read_summary","confidence":"hig
 const DISPATCH_LIST_READ = '{"capability":"list.read","confidence":"high"}';
 const DISPATCH_LIST_READ_MED = '{"capability":"list.read","confidence":"medium"}';
 const DISPATCH_LIST_READ_LOW = '{"capability":"list.read","confidence":"low"}';
+const DISPATCH_TODO_READ = '{"capability":"todo.read","confidence":"high"}';
+const DISPATCH_TODO_READ_MED = '{"capability":"todo.read","confidence":"medium"}';
+const DISPATCH_TODO_READ_LOW = '{"capability":"todo.read","confidence":"low"}';
 
 const GROCERY_OK = JSON.stringify({
   capability: 'grocery_capture',
@@ -160,12 +163,17 @@ export async function runSemanticCapabilityDispatchTests() {
   assert('FLAG default is ON', SEMANTIC_CAPABILITY_DISPATCH_ENABLED, (v) => v === true, 'true');
   assert('vocabulary includes grocery.capture',
     CAPABILITY_IDS.includes('grocery.capture' as CapabilityId), (v) => v === true, 'true');
+  assert('vocabulary includes todo.read',
+    CAPABILITY_IDS.includes('todo.read' as CapabilityId), (v) => v === true, 'true');
   assert('parse accepts grocery.capture',
     parseCapabilityProposal(DISPATCH_GROCERY),
     (v) => (v as { capability?: string } | null)?.capability === 'grocery.capture', 'grocery.capture');
   assert('parse accepts uncertain',
     parseCapabilityProposal(DISPATCH_UNCERTAIN),
     (v) => (v as { capability?: string } | null)?.capability === 'uncertain', 'uncertain');
+  assert('parse accepts todo.read',
+    parseCapabilityProposal(DISPATCH_TODO_READ),
+    (v) => (v as { capability?: string } | null)?.capability === 'todo.read', 'todo.read');
 
   {
     freshDB();
@@ -311,6 +319,60 @@ export async function runSemanticCapabilityDispatchTests() {
     assert('T1 list_read reason unchanged', (decision as any).reason, (v) => v === 'action:list_read', 'action:list_read');
     assert('T1 list_read does not run dispatch', counts.dispatch, (v) => v === 0, '0');
     assert('T1 list_read does not invoke write interpreters',
+      counts.medication + counts.grocery, (v) => v === 0, '0');
+  }
+
+  {
+    freshDB();
+    const { ctx, counts } = countingCtx([DISPATCH_TODO_READ, GROCERY_OK, MED_OK]);
+    const decision = await routeIntent('how was your weekend', baseDeps(ctx));
+    assert('TODO.READ high is device_read', decision.kind, (v) => v === 'device_read', 'device_read');
+    assert('TODO.READ high uses authoritative todo reader speech',
+      (decision as any).response, (v) => v === "You're all clear — nothing on your to-do list.",
+      "You're all clear — nothing on your to-do list.");
+    assert('TODO.READ high reason matches deterministic todo_read',
+      (decision as any).reason, (v) => v === 'action:todo_read', 'action:todo_read');
+    assert('TODO.READ high does not attach grocery presentation ids',
+      (decision as any).presentedGroceryIds, (v) => v === undefined, 'undefined');
+    assert('TODO.READ high does not invoke write interpreters',
+      counts.medication + counts.grocery, (v) => v === 0, '0');
+    assert('TODO.READ high dispatch once', counts.dispatch, (v) => v === 1, '1');
+  }
+
+  {
+    freshDB();
+    const { ctx, counts } = countingCtx([DISPATCH_TODO_READ_MED, GROCERY_OK, MED_OK]);
+    const decision = await routeIntent('how was your weekend', baseDeps(ctx));
+    assert('TODO.READ medium is device_read', decision.kind, (v) => v === 'device_read', 'device_read');
+    assert('TODO.READ medium uses authoritative todo reader speech',
+      (decision as any).response, (v) => v === "You're all clear — nothing on your to-do list.",
+      "You're all clear — nothing on your to-do list.");
+    assert('TODO.READ medium does not invoke write interpreters',
+      counts.medication + counts.grocery, (v) => v === 0, '0');
+  }
+
+  {
+    freshDB();
+    const { ctx, counts } = countingCtx([DISPATCH_TODO_READ_LOW, GROCERY_OK, MED_OK]);
+    const decision = await routeIntent('how was your weekend', baseDeps(ctx));
+    assert('TODO.READ low is fallback not device_read',
+      decision.kind !== 'device_read' && decision.kind !== 'capture',
+      (v) => v === true, 'fallback');
+    assert('TODO.READ low does not invoke write interpreters',
+      counts.medication + counts.grocery, (v) => v === 0, '0');
+  }
+
+  {
+    freshDB();
+    const { ctx, counts } = countingCtx([DISPATCH_TODO_READ, GROCERY_OK, MED_OK]);
+    const decision = await routeIntent('What do I need to do?', baseDeps(ctx));
+    assert('T1 todo_read remains device_read', decision.kind, (v) => v === 'device_read', 'device_read');
+    assert('T1 todo_read reason unchanged', (decision as any).reason, (v) => v === 'action:todo_read', 'action:todo_read');
+    assert('T1 todo_read uses todo speech not grocery speech',
+      (decision as any).response, (v) => v === "You're all clear — nothing on your to-do list.",
+      "You're all clear — nothing on your to-do list.");
+    assert('T1 todo_read does not run dispatch', counts.dispatch, (v) => v === 0, '0');
+    assert('T1 todo_read does not invoke write interpreters',
       counts.medication + counts.grocery, (v) => v === 0, '0');
   }
 

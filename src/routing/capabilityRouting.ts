@@ -41,7 +41,8 @@ export const CAPABILITY_IDS = [
   'medication.read_summary', // WIRED READ — medication catalog read admission
   'medication.capture',      // dispatch: medication write interpreter (not admitted here)
   'grocery.capture',         // dispatch: grocery write interpreter (not admitted here)
-  'list.read',               // off-ramp: shopping / to-do list read
+  'list.read',               // grocery / shopping list read
+  'todo.read',               // to-do list read
   'calendar.read',           // off-ramp: appointments / schedule read
   'contact.call',            // off-ramp: call or text someone
   'uncertain',               // off-ramp: meaning too unclear to assign a capability
@@ -72,6 +73,7 @@ export const CAPABILITY_RISK_CLASS: Record<CapabilityId, CapabilityRiskClass> = 
   'medication.capture': 'write',
   'grocery.capture': 'write',
   'list.read': 'read',
+  'todo.read': 'read',
   'calendar.read': 'read',
   'contact.call': 'external',
   'uncertain': 'none',
@@ -216,7 +218,8 @@ capability — one of:
   medication.read_summary : the person wants to hear which medications they take or are currently on.
   medication.capture      : the person is telling the assistant about a medication they take, so it can remember it.
   grocery.capture         : the person wants the assistant to remember items to buy at the store.
-  list.read               : the person wants to hear a shopping list or a to-do list.
+  list.read               : the person wants to hear a shopping list.
+  todo.read               : the person wants to hear their to-do list or tasks.
   calendar.read           : the person wants to hear their appointments or schedule.
   contact.call            : the person wants to call or text someone.
   uncertain               : the request is too unclear to assign a capability.

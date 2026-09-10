@@ -2509,6 +2509,21 @@ export async function routeIntent(
           presentedGroceryIds: items.map((i) => i.id),
         };
       }
+      if (
+        dispatchSelected === 'todo.read'
+        && CAPABILITY_RISK_CLASS['todo.read'] === 'read'
+        && capGen.proposal.confidence !== 'low'
+      ) {
+        const { getPresentedOpenListItems, composeTodoOpenSpeech } = await import('../db/listRead');
+        const items = getPresentedOpenListItems('todos');
+        dispatchDiag.finalOutcome = 'read_admit';
+        return {
+          kind: 'device_read',
+          tier: 1,
+          response: composeTodoOpenSpeech(items),
+          reason: 'action:todo_read',
+        };
+      }
     } else if (capGen.status === 'parse_fail') {
       dispatchDiag = {
         invoked: true,
