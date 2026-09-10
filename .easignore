@@ -11,3 +11,15 @@ android/build/
 android/app/build/
 android/app/.cxx/
 android/.cxx/
+
+# Local diagnostic / scratch artifacts — never upload to EAS
+/*.apk
+/*.zip
+/*.txt
+/*.diff
+/*.patch
+/*.log
+
+/_inspect_apk_extracted/
+/installed-herald-unpacked/
+/_tmp*/
