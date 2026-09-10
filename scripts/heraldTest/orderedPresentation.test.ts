@@ -266,8 +266,8 @@ export async function runOrderedPresentationTests() {
       'device_read action:list_read grocery IDs');
     assert('OP49 speech from post-dedupe', routed,
       v => v.handled === false && v.routeDecision?.kind === 'device_read'
-        && v.routeDecision.response === 'On your grocery list: Milk, Eggs, Apples.',
-      'Milk, Eggs, Apples');
+        && v.routeDecision.response === "You've got 3 things.",
+      'count summary');
     assert('OP50 IDs skip duplicate body', ordered.peek()?.presentedIds.join(','),
       v => v === 'g1,g2,g3', 'g1,g2,g3');
     assert('OP51 holder matches speech IDs', ordered.peek()?.presentedIds.join(','),
@@ -352,7 +352,9 @@ export async function runOrderedPresentationTests() {
     const again = presentGrocery(ordered, subject, medication);
     assert('OP68 new read replaces', ordered.peek()?.presentedIds.join(','),
       v => v === 'g1,g2,g3', 'g1,g2,g3');
-    assert('OP69 replacement speech', again.speech, v => v.includes('Apples'), 'includes Apples');
+    assert('OP69 replacement speech', again.speech, v => v === "You've got 3 things.", 'count summary');
+    assert('OP69b replacement items include Apples', again.items.map((i) => i.body).join(','),
+      v => v === 'Milk,Eggs,Apples', 'Milk,Eggs,Apples');
   }
 
   {

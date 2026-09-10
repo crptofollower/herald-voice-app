@@ -641,13 +641,18 @@ export async function runConversationFoundationSmoothMvpTests() {
     const readText = !read.handled && read.routeDecision.kind === 'device_read'
       ? read.routeDecision.response
       : '';
+    const presented = !read.handled && read.routeDecision.kind === 'device_read'
+      ? read.routeDecision.presentedGroceryIds ?? []
+      : [];
     assert('composed: grocery read is eggs, milk, bananas without wrapper language', (
       !read.handled
       && read.routeDecision.kind === 'device_read'
       && read.routeDecision.reason === 'action:list_read'
-      && /eggs/i.test(readText)
-      && /milk/i.test(readText)
-      && /bananas/i.test(readText)
+      && readText === "You've got 3 things."
+      && presented.length === 3
+      && afterAdd.includes('bananas')
+      && afterAdd.includes('eggs')
+      && afterAdd.includes('milk')
       && !/at the grocery store/i.test(readText)
     ));
   }
@@ -868,8 +873,10 @@ export async function runConversationFoundationSmoothMvpTests() {
     assert('WCS B4: grocery read-back is exactly eggs and chocolate milk', (
       !read.handled
       && read.routeDecision.kind === 'device_read'
-      && /eggs/i.test(readText)
-      && /chocolate milk/i.test(readText)
+      && readText === "You've got 2 things."
+      && afterThose.length === 2
+      && afterThose.includes('eggs')
+      && afterThose.includes('chocolate milk')
       && discourse.snapshot().focus?.displayName === 'Paul'
       && discourse.snapshot().candidateSet === null
     ));

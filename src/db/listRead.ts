@@ -2,6 +2,7 @@
 // from the same post-dedupe array. No second order query for positions.
 
 import { getDB } from './schema';
+import { realizeGroceryListReadAct } from '../conversation/groceryListReadRealization';
 
 export type PresentedListItem = { id: string; body: string };
 
@@ -24,6 +25,11 @@ export function getPresentedOpenListItems(listName: string): PresentedListItem[]
 }
 
 export function composeOpenListSpeech(listName: string, items: PresentedListItem[]): string {
+  if (listName === 'grocery') {
+    return items.length === 0
+      ? realizeGroceryListReadAct({ kind: 'empty' })
+      : realizeGroceryListReadAct({ kind: 'count', itemCount: items.length });
+  }
   return items.length === 0
     ? `Your ${listName} list is empty.`
     : `On your ${listName} list: ${items.map((i) => i.body).join(', ')}.`;

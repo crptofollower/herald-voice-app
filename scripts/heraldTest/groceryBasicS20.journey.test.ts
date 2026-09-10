@@ -80,9 +80,10 @@ function gradeT2(t: TurnRecord): ContractResult[] {
     c('C.authoritative_read', 'shared grocery list_read device_read',
       t.route_kind === 'device_read' && t.route_reason === 'action:list_read',
       `kind=${t.route_kind} reason=${t.route_reason}`),
-    c('D.read_matches_state', 'speech contains eggs and milk from store',
-      /eggs/i.test(text) && /milk/i.test(text) && /^On your grocery list:/.test(text)
-        && presented.length === 2,
+    c('D.read_matches_state', 'speech is count summary; eggs and milk remain presented',
+      /^You've got 2 things\.$/.test(text) && presented.length === 2
+        && presented.some((i) => /eggs/i.test(i.body))
+        && presented.some((i) => /milk/i.test(i.body)),
       `response=${JSON.stringify(text)} presented=${JSON.stringify(presented)}`),
     c('E.presentation_grant', 'OPR holder IDs equal presented durable IDs from the same read order',
       JSON.stringify(holder) === JSON.stringify(ids) && ids.length === 2,
@@ -137,7 +138,7 @@ function gradeT5(t: TurnRecord, milkId: string | undefined, eggsId: string | und
   return [
     c('J.reread_respects_mutation', 'reread presents remaining eggs, not milk',
       t.route_kind === 'device_read' && t.route_reason === 'action:list_read'
-        && /eggs/i.test(text) && !/\bmilk\b/i.test(text)
+        && /^You've got one thing\.$/.test(text)
         && open.length === 1 && open[0].id === eggsId
         && JSON.stringify(t.opr_presented_ids) === JSON.stringify(getPresentedOpenListItems('grocery').map((i) => i.id)),
       `response=${JSON.stringify(text)} open=${JSON.stringify(open)} holder=${JSON.stringify(t.opr_presented_ids)}`),

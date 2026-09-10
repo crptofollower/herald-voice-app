@@ -35,6 +35,8 @@ interface Props {
   persona: Persona;
   /** Current exchange vs prior transcript — presentation weight only. */
   visualWeight?: "current" | "prior";
+  /** Hide spoken duplicate while a structured presentation is showing it. */
+  hideProse?: boolean;
   /** Ephemeral heard-text preview before auto-send. */
   isEphemeral?: boolean;
   /** Feeds a displayed candidate name back through sendMessage / pending resume. */
@@ -46,6 +48,7 @@ export function MessageBubble({
   persona,
   visualWeight = "current",
   isEphemeral = false,
+  hideProse = false,
   onRecoveryChoice,
 }: Props) {
   const isUser = message.role === "user";
@@ -108,6 +111,10 @@ export function MessageBubble({
   }
 
   // ── Herald: floating words on a soft scrim with identity accent edge ─────
+  const hasRecovery = (message.recoveryChoices?.length ?? 0) > 0;
+  if (hideProse && !hasRecovery) {
+    return null;
+  }
   return (
     <Animated.View
       style={[
@@ -135,6 +142,7 @@ export function MessageBubble({
           { borderLeftColor: persona.colors.accent },
         ]}
       >
+        {hideProse ? null : (
         <Text
           style={[styles.heraldText, isPrior && styles.heraldTextPrior]}
           selectable
@@ -142,6 +150,7 @@ export function MessageBubble({
         >
           {message.content}
         </Text>
+        )}
         {message.role === "assistant"
           && onRecoveryChoice
           && (message.recoveryChoices?.length ?? 0) > 0 ? (

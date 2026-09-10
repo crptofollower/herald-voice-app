@@ -58,6 +58,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import { PersonaBackground } from "../components/PersonaBackground";
 import { MessageBubble } from "../components/MessageBubble";
+import { GroceryListSurface } from "../components/GroceryListSurface";
 import { CapabilitySurface } from "../components/CapabilitySurface";
 import { fetchNwsTomorrowForecast, isNwsTomorrowAtDeviceEligible, type NwsForecastResult } from "../capabilities/nwsWeather";
 import { ProactiveCard } from "../components/ProactiveCard";
@@ -125,6 +126,8 @@ import { classifyEmergencyCallReply } from '../utils/emergencyCallConfirm';
 import { ConversationalSubjectHolder } from '../routing/conversationalSubject';
 import { MedicationPresentationHolder } from '../routing/medicationPresentation';
 import { OrderedPresentationHolder } from '../routing/orderedPresentation';
+import { projectGroceryVisualFromPresentedIds, type GroceryVisualRow } from '../routing/groceryVisualPresentation';
+import { isGroceryListReadSummarySpeech } from '../conversation/groceryListReadRealization';
 import { CalendarContinuationHolder } from '../routing/calendarContinuation';
 import { DiscourseContinuityHolder } from '../routing/discourseContinuity';
 import { formatOperationalListClarification } from '../routing/operationalListContinuity';
@@ -490,6 +493,7 @@ export default function ChatScreen() {
   const [showProactive, setShowProactive] = useState(false);
   const [pendingAction, setPendingAction] = useState<IntentAction | null>(null);
   const [actionStatus, setActionStatus] = useState<ActionStatus>("confirming");
+  const [groceryVisualRows, setGroceryVisualRows] = useState<GroceryVisualRow[] | null>(null);
 
   const [streamingContent, setStreamingContent] = useState("");
   const [isWaiting, setIsWaiting] = useState(false);
@@ -536,6 +540,16 @@ export default function ChatScreen() {
   // not authorized this session) — its presence changes no existing
   // behavior. See conversationTurnLedger.ts / conversationTurnLedgerWrite.ts.
   const conversationLedgerRef = useRef<ConversationTurnLedger>(createConversationTurnLedger());
+
+  const refreshGroceryVisual = useCallback(() => {
+    const live = orderedPresentationRef.current.peek();
+    if (!live || live.owner !== 'grocery' || live.presentedIds.length === 0) {
+      setGroceryVisualRows(null);
+      return;
+    }
+    const rows = projectGroceryVisualFromPresentedIds(live.presentedIds);
+    setGroceryVisualRows(rows && rows.length > 0 ? rows : null);
+  }, []);
 
   // Step 5a: bounded HOT narrative ring — RAM-only, peek semantics, written ONLY
   // from the three authorized Step 4 sites (ephemeral success ×2, chit_chat read).
@@ -1599,6 +1613,7 @@ export default function ChatScreen() {
       resolveContact: resolveContactPhoneRef.current ?? undefined,
       getMedicationSemanticInterpreterCtx,
     }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current, calendarPresentationRef.current, calendarContinuationRef.current, discourseRef.current, conversationLedgerRef.current);
+    refreshGroceryVisual();
     const continuityFocus = !outcome.handled
       ? continuityLedgerFocus(outcome.continuityFocus, outcome.continuityReferenceOnly === true)
       : [];
@@ -2792,6 +2807,7 @@ export default function ChatScreen() {
         resolveContact: resolveContactPhoneRef.current ?? undefined,
         getMedicationSemanticInterpreterCtx,
       }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current, calendarPresentationRef.current, calendarContinuationRef.current, discourseRef.current, conversationLedgerRef.current);
+      refreshGroceryVisual();
       if (outcome.handled && outcome.source === 'pending_resume' && outcome.responseText) {
         addMessage({ id: generateId('msg'), role: 'assistant', content: outcome.responseText, timestamp: Date.now() });
         speak(outcome.responseText);
@@ -3365,12 +3381,19 @@ export default function ChatScreen() {
         message={item}
         persona={persona}
         visualWeight={index >= currentExchangeStart ? "current" : "prior"}
+        hideProse={
+          index >= currentExchangeStart
+          && item.role === "assistant"
+          && !!groceryVisualRows
+          && groceryVisualRows.length > 0
+          && isGroceryListReadSummarySpeech(item.content)
+        }
         onRecoveryChoice={
           index >= currentExchangeStart ? handleRecoveryChoice : undefined
         }
       />
     ),
-    [persona, currentExchangeStart, handleRecoveryChoice]
+    [persona, currentExchangeStart, handleRecoveryChoice, groceryVisualRows]
   );
 
   const buildDispatchDeps = useCallback((): DispatchDeps => ({
@@ -3601,6 +3624,9 @@ export default function ChatScreen() {
                       surfaceTint={persona.surfaceTint}
                       accent={persona.colors.accent}
                     />
+                  ) : null}
+                  {groceryVisualRows && groceryVisualRows.length > 0 ? (
+                    <GroceryListSurface rows={groceryVisualRows} />
                   ) : null}
                   {isWaiting && (
                     <View style={styles.typingRow}>

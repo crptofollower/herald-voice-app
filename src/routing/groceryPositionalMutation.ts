@@ -50,5 +50,5 @@ export function formatGroceryRemovalAck(
   if (remaining.length === 0) {
     return `Done — ${removedBody} is off your grocery list. That clears it.`;
   }
-  return `Done — ${removedBody} is off. Still on your grocery list: ${remaining.map((r) => r.body).join(', ')}.`;
+  return `Done — ${removedBody} is off.`;
 }
