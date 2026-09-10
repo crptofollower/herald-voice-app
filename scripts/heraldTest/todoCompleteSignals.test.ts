@@ -261,6 +261,58 @@ export async function runTodoCompleteSignalsTests() {
       'work out and start dinner');
   }
 
+  {
+    freshDB();
+    const d = await classifyQuery('What do I still need to get done?');
+    assert('interrogative get-done is not grocery list_add of done',
+      { type: actionType(d), items: (d.actionIntent as { items?: string[] } | undefined)?.items, reason: d.reason },
+      (v) => {
+        const x = v as { type?: string; items?: string[]; reason?: string };
+        return x.type !== 'list_add' && x.reason !== 'action:list_add:contextual' && !(x.items ?? []).includes('done');
+      },
+      'not list_add [done]');
+  }
+  {
+    freshDB();
+    const d = await classifyQuery('What do I need to get done today?');
+    assert('"What do I need to get done today?" remains todo_read',
+      actionType(d), (v) => v === 'todo_read', 'todo_read');
+  }
+  {
+    freshDB();
+    const d = await classifyQuery('We need to get milk');
+    assert('declarative we-need-to-get remains contextual grocery',
+      { type: actionType(d), items: (d.actionIntent as { items?: string[] } | undefined)?.items, listName: (d.actionIntent as { listName?: string } | undefined)?.listName },
+      (v) => {
+        const x = v as { type?: string; items?: string[]; listName?: string };
+        return x.type === 'list_add' && x.listName === 'grocery' && x.items?.length === 1 && x.items[0] === 'milk';
+      },
+      'list_add [milk]');
+  }
+  {
+    freshDB();
+    const d = await classifyQuery('I need to get milk');
+    assert('declarative I-need-to-get milk is not a read-shaped grocery steal',
+      actionType(d), (v) => v === 'list_add' || v === 'todo_add', 'list_add or todo_add');
+  }
+  {
+    freshDB();
+    const d = await classifyQuery('I need to pick up eggs');
+    assert('declarative I-need-to-pick-up eggs is not a read-shaped grocery steal',
+      actionType(d), (v) => v === 'list_add' || v === 'todo_add', 'list_add or todo_add');
+  }
+  {
+    freshDB();
+    const d = await classifyQuery("We're out of bread");
+    assert('out-of bread remains contextual grocery',
+      { type: actionType(d), items: (d.actionIntent as { items?: string[] } | undefined)?.items },
+      (v) => {
+        const x = v as { type?: string; items?: string[] };
+        return x.type === 'list_add' && x.items?.length === 1 && x.items[0] === 'bread';
+      },
+      'list_add [bread]');
+  }
+
   const total = passed + failures.length;
   console.log(
     `\n${BOLD}TodoCompleteSignals: ${passed}/${total} passed` +

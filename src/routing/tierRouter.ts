@@ -11,7 +11,7 @@ import { normalizeInput } from "../utils/normalizeInput";
 import { getProfileSummary, getProfileField } from "../db/profileDB";
 import { getMedicalSummary, composeMedicalSummary, getMedicalRecords, getDiagnosisSummary, getDoctorsSummary } from "../db/medicalDB";
 import { getRecentMentions, formatRecentMentions } from "../db/recallDB";
-import { detectMedicalEvent, extractDoctorName, afterLeadingReadRequestWrapper } from "../utils/detectMedicalEvent";
+import { detectMedicalEvent, extractDoctorName, afterLeadingReadRequestWrapper, isReadShapedUtterance } from "../utils/detectMedicalEvent";
 import { answerNamedMedicationInquiry } from "../utils/medicationInquiry";
 import type { MedicalEvent } from "../utils/detectMedicalEvent";
 import { MONTHS, CALENDAR_WRITE_TRIGGER, CALENDAR_WRITE_NAMED_APPOINTMENT, parseDatePhrase } from "../utils/parseTime";
@@ -843,6 +843,7 @@ const LIST_ADD_CONTEXTUAL_SIGNALS = [
 ];
 
 function extractContextualGroceryItem(msg: string): string | null {
+  if (isReadShapedUtterance(msg)) return null;
   if (
     !LIST_ADD_CONTEXTUAL_SIGNALS.some((p) => p.test(msg)) ||
     LIST_ADD_SIGNALS.some((p) => p.test(msg)) ||

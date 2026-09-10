@@ -751,6 +751,15 @@ export async function runConversationFoundationSmoothMvpTests() {
   }
 
   {
+    const phrase = 'What do I still need to get done?';
+    const d = await classifyQuery(phrase);
+    assert('composed: still-need-to-get-done is not contextual grocery list_add', (
+      d.actionIntent?.type !== 'list_add'
+      && d.reason !== 'action:list_add:contextual'
+    ));
+  }
+
+  {
     const { db, say } = fresh();
     await say('I need to call the dentist');
     const before = (db.prepare('SELECT COUNT(*) as n FROM list_items').get() as { n: number }).n;
