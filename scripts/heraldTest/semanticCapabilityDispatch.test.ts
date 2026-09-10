@@ -18,6 +18,7 @@ import {
 } from '../../src/routing/capabilityRouting.ts';
 import { MEDICATION_SEMANTIC_PROPOSAL_SYSTEM_PROMPT } from '../../src/routing/medicationSemanticInterpretation.ts';
 import { GROCERY_SEMANTIC_PROPOSAL_SYSTEM_PROMPT } from '../../src/routing/grocerySemanticDecomposition.ts';
+import { TODO_SEMANTIC_PROPOSAL_SYSTEM_PROMPT } from '../../src/routing/todoSemanticCapture.ts';
 import { SEMANTIC_CAPABILITY_DISPATCH_ENABLED } from '../../src/constants/features.ts';
 import type { ClassifyOutcome } from '../../src/hooks/llmLayers.ts';
 
@@ -67,17 +68,18 @@ function grocerySet(db: Database.Database): string[] {
     .sort();
 }
 
-type CallCounts = { dispatch: number; medication: number; grocery: number; total: number };
+type CallCounts = { dispatch: number; medication: number; grocery: number; todo: number; total: number };
 
-function classifySystem(content: string): 'dispatch' | 'medication' | 'grocery' | 'other' {
+function classifySystem(content: string): 'dispatch' | 'medication' | 'grocery' | 'todo' | 'other' {
   if (content === CAPABILITY_PROPOSAL_SYSTEM_PROMPT) return 'dispatch';
   if (content === MEDICATION_SEMANTIC_PROPOSAL_SYSTEM_PROMPT) return 'medication';
   if (content === GROCERY_SEMANTIC_PROPOSAL_SYSTEM_PROMPT) return 'grocery';
+  if (content === TODO_SEMANTIC_PROPOSAL_SYSTEM_PROMPT) return 'todo';
   return 'other';
 }
 
 function countingCtx(script: string[]) {
-  const counts: CallCounts = { dispatch: 0, medication: 0, grocery: 0, total: 0 };
+  const counts: CallCounts = { dispatch: 0, medication: 0, grocery: 0, todo: 0, total: 0 };
   let i = 0;
   const ctx = {
     completion: async (opts: any) => {
@@ -87,6 +89,7 @@ function countingCtx(script: string[]) {
       if (kind === 'dispatch') counts.dispatch++;
       if (kind === 'medication') counts.medication++;
       if (kind === 'grocery') counts.grocery++;
+      if (kind === 'todo') counts.todo++;
       const content = script[i] ?? '';
       i++;
       if (content === '__throw__') throw new Error('interpreter unavailable');
@@ -104,6 +107,7 @@ const DISPATCH_READ = '{"capability":"medication.read_summary","confidence":"hig
 const DISPATCH_LIST_READ = '{"capability":"list.read","confidence":"high"}';
 const DISPATCH_LIST_READ_MED = '{"capability":"list.read","confidence":"medium"}';
 const DISPATCH_LIST_READ_LOW = '{"capability":"list.read","confidence":"low"}';
+const DISPATCH_TODO_CAPTURE = '{"capability":"todo.capture","confidence":"high"}';
 const DISPATCH_TODO_READ = '{"capability":"todo.read","confidence":"high"}';
 const DISPATCH_TODO_READ_MED = '{"capability":"todo.read","confidence":"medium"}';
 const DISPATCH_TODO_READ_LOW = '{"capability":"todo.read","confidence":"low"}';
@@ -111,6 +115,16 @@ const DISPATCH_TODO_READ_LOW = '{"capability":"todo.read","confidence":"low"}';
 const GROCERY_OK = JSON.stringify({
   capability: 'grocery_capture',
   candidates: ['milk', 'eggs', 'bread'],
+  confidence: 0.92,
+});
+const TODO_OK = JSON.stringify({
+  capability: 'todo_capture',
+  candidates: ['water the plants'],
+  confidence: 0.92,
+});
+const TODO_MULTI = JSON.stringify({
+  capability: 'todo_capture',
+  candidates: ['water the plants', 'mail the package'],
   confidence: 0.92,
 });
 const GROCERY_HALLUC = JSON.stringify({
@@ -165,6 +179,8 @@ export async function runSemanticCapabilityDispatchTests() {
     CAPABILITY_IDS.includes('grocery.capture' as CapabilityId), (v) => v === true, 'true');
   assert('vocabulary includes todo.read',
     CAPABILITY_IDS.includes('todo.read' as CapabilityId), (v) => v === true, 'true');
+  assert('vocabulary includes todo.capture',
+    CAPABILITY_IDS.includes('todo.capture' as CapabilityId), (v) => v === true, 'true');
   assert('parse accepts grocery.capture',
     parseCapabilityProposal(DISPATCH_GROCERY),
     (v) => (v as { capability?: string } | null)?.capability === 'grocery.capture', 'grocery.capture');
@@ -174,6 +190,9 @@ export async function runSemanticCapabilityDispatchTests() {
   assert('parse accepts todo.read',
     parseCapabilityProposal(DISPATCH_TODO_READ),
     (v) => (v as { capability?: string } | null)?.capability === 'todo.read', 'todo.read');
+  assert('parse accepts todo.capture',
+    parseCapabilityProposal(DISPATCH_TODO_CAPTURE),
+    (v) => (v as { capability?: string } | null)?.capability === 'todo.capture', 'todo.capture');
 
   {
     freshDB();
@@ -204,6 +223,39 @@ export async function runSemanticCapabilityDispatchTests() {
     assert('GROCERY-P2 dispatch once', counts.dispatch, (v) => v === 1, '1');
     assert('GROCERY-P2 grocery interpreter once', counts.grocery, (v) => v === 1, '1');
     assert('GROCERY-P2 zero medication interpreter', counts.medication, (v) => v === 0, '0');
+    assert('GROCERY-P2 zero todo interpreter', counts.todo, (v) => v === 0, '0');
+  }
+
+  {
+    freshDB();
+    const { ctx, counts } = countingCtx([DISPATCH_TODO_CAPTURE, TODO_OK, GROCERY_OK, MED_OK]);
+    const utterance = 'We need to water the plants.';
+    const legacy = await classifyQuery(utterance);
+    assert('TODO-P2 classifyQuery is default fall-through',
+      `${legacy.tier}:${legacy.reason}`, (v) => v === '3:default', '3:default');
+    const decision = await routeIntent(utterance, baseDeps(ctx));
+    assert('TODO-P2 routes to capture', decision.kind, (v) => v === 'capture', 'capture');
+    assert('TODO-P2 is todo_add not list_add',
+      (decision as any).intents?.[0]?.type === 'todo_add'
+      && (decision as any).intents?.every((i: { type: string }) => i.type === 'todo_add'),
+      (v) => v === true, 'todo_add');
+    assert('TODO-P2 confirmation-gated (llm source)', (decision as any).source, (v) => v === 'llm', 'llm');
+    assert('TODO-P2 dispatch once', counts.dispatch, (v) => v === 1, '1');
+    assert('TODO-P2 todo interpreter once', counts.todo, (v) => v === 1, '1');
+    assert('TODO-P2 zero grocery interpreter', counts.grocery, (v) => v === 0, '0');
+    assert('TODO-P2 zero medication interpreter', counts.medication, (v) => v === 0, '0');
+  }
+
+  {
+    freshDB();
+    const { ctx, counts } = countingCtx([DISPATCH_TODO_CAPTURE, TODO_MULTI, GROCERY_OK]);
+    const decision = await routeIntent('We need to water the plants and mail the package.', baseDeps(ctx));
+    assert('TODO-P2-MULTI is two todo_add intents',
+      Array.isArray((decision as any).intents) && (decision as any).intents.length === 2
+      && (decision as any).intents.every((i: { type: string }) => i.type === 'todo_add'),
+      (v) => v === true, '2 todo_add');
+    assert('TODO-P2-MULTI one todo specialist', counts.todo, (v) => v === 1, '1');
+    assert('TODO-P2-MULTI zero grocery specialist', counts.grocery, (v) => v === 0, '0');
   }
 
   {
@@ -456,6 +508,17 @@ export async function runSemanticCapabilityDispatchTests() {
       decision.kind, (v) => v === 'capture', 'capture');
     assert('FLOOR capture is deterministic', (decision as any).source, (v) => v === 'deterministic', 'deterministic');
     assert('FLOOR does not run dispatch', counts.dispatch, (v) => v === 0, '0');
+  }
+
+  {
+    freshDB();
+    const { ctx, counts } = countingCtx([DISPATCH_TODO_CAPTURE, TODO_OK]);
+    const decision = await routeIntent('I need to call the dentist.', baseDeps(ctx));
+    assert('FLOOR todo_add is not stolen by dispatch',
+      decision.kind, (v) => v === 'capture', 'capture');
+    assert('FLOOR todo_add is deterministic', (decision as any).source, (v) => v === 'deterministic', 'deterministic');
+    assert('FLOOR todo_add does not run dispatch', counts.dispatch, (v) => v === 0, '0');
+    assert('FLOOR todo_add does not invoke todo specialist', counts.todo, (v) => v === 0, '0');
   }
 
   {

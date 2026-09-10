@@ -14,6 +14,10 @@ import {
   admitGrocerySemanticP2,
   tryP1GrocerySemanticItems,
 } from './grocerySemanticDecomposition';
+import {
+  generateTodoSemanticProposal,
+  admitTodoSemanticP2,
+} from './todoSemanticCapture';
 import { generateCapabilityProposal, admitCapabilityProposal, WIRED_READ_CAPABILITY, CAPABILITY_RISK_CLASS, type CapabilityId, logSemanticDispatchDiag, type SemanticDispatchDiag } from './capabilityRouting';
 import { detectFamilyCapture } from '../utils/familyCapture';
 import { getDB } from '../db/schema';
@@ -584,7 +588,7 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       if (exists) {
         return { status: 'noop', ack: `That's already on your to-do list.` };
       }
-      const newItemId = `todo_${Date.now()}`;
+      const newItemId = `todo_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
       db.runSync(
         `INSERT INTO list_items (id, list_id, body, checked, created_at) VALUES (?, ?, ?, 0, ?)`,
         [newItemId, todoList.id, body, new Date().toISOString()],
@@ -2122,6 +2126,27 @@ async function tryMedicationSemanticCaptureRoute(
   };
 }
 
+async function tryTodoSemanticP2Route(
+  text: string,
+  getCtx: () => LlamaContext | null,
+): Promise<RouteDecision | null> {
+  const generation = await generateTodoSemanticProposal(text, getCtx);
+  if (generation.status !== 'ok') return null;
+  const admission = admitTodoSemanticP2(text, generation.proposal, { hasPending: false });
+  if (admission.decision !== 'ADMIT') return null;
+  console.warn('[todoSemanticCapture] ' + JSON.stringify({
+    event: 'confirmation_required',
+    admissionClass: 'P2',
+    candidateCount: admission.candidates.length,
+  }));
+  return {
+    kind: 'capture',
+    intents: admission.candidates.map((body) => ({ type: 'todo_add' as const, body })),
+    source: 'llm',
+    reason: 'semantic_proposal:todo_admit',
+  };
+}
+
 async function tryGrocerySemanticP2Route(
   text: string,
   getCtx: () => LlamaContext | null,
@@ -2664,6 +2689,19 @@ export async function routeIntent(
           dispatchDiag.finalOutcome = 'specialist_admit';
         }
         return groceryDecision;
+      }
+    } else if (dispatchSelected === 'todo.capture') {
+      if (dispatchDiag) {
+        dispatchDiag.specialistInvoked = 'todo';
+        dispatchDiag.specialistResult = 'no_admit';
+      }
+      const todoDecision = await tryTodoSemanticP2Route(text, getSemanticCtx);
+      if (todoDecision) {
+        if (dispatchDiag) {
+          dispatchDiag.specialistResult = 'admit';
+          dispatchDiag.finalOutcome = 'specialist_admit';
+        }
+        return todoDecision;
       }
     }
   } else {

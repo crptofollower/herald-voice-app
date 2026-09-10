@@ -256,6 +256,12 @@ export async function applyIntents(
     if (!writer) continue;
     if (source === 'llm' && !llmGate?.domainConfirmOwnsCapture) {
       // Build C: do not call writer.add until the user confirms.
+      // Homogeneous LLM batches (semantic multi-task todo.capture) share one
+      // confirm; only the first pending is armed on the session.
+      if (results.some((r) => r.status === 'pending' && r.pendingKey === `llm_confirm:${intent.type}`)) {
+        continue;
+      }
+      const batch = intents.filter((i) => i.type === intent.type && DOMAIN_WRITERS[i.type]);
       const queuedPending = {
         status: 'pending' as const,
         prompt: llmGate?.confirmPrompt ?? "Say yes and I'll remember that.",
@@ -271,6 +277,9 @@ export async function applyIntents(
             if (intent.type === 'list_add' && llmGate?.confirmPrompt) {
               console.warn('[grocerySemanticDecomposition] ' + JSON.stringify({ event: 'confirmation_rejected' }));
             }
+            if (intent.type === 'todo_add' && llmGate?.confirmPrompt) {
+              console.warn('[todoSemanticCapture] ' + JSON.stringify({ event: 'confirmation_rejected' }));
+            }
             return { status: 'noop', ack: llmGate?.declineAck ?? "No problem — I won't remember that." };
           }
           if (CONFIRM_YES_RE.test(trimmed)) {
@@ -280,7 +289,25 @@ export async function applyIntents(
                 handoff: 'list_add_writer',
               }));
             }
-            return writer.add(intent, rawText, ctx);
+            if (intent.type === 'todo_add' && llmGate?.confirmPrompt) {
+              console.warn('[todoSemanticCapture] ' + JSON.stringify({
+                event: 'confirmation_accepted',
+                handoff: 'todo_add_writer',
+              }));
+            }
+            const written: CommitResult[] = [];
+            for (const next of batch) {
+              const nextWriter = DOMAIN_WRITERS[next.type];
+              if (!nextWriter) continue;
+              written.push(await nextWriter.add(next, rawText, ctx));
+            }
+            if (written.length === 1) return written[0];
+            const anyCommitted = written.some((c) => c.status === 'committed');
+            const anyFailed = written.some((c) => c.status === 'failed');
+            return {
+              status: anyCommitted ? 'committed' : (anyFailed ? 'failed' : 'noop'),
+              ack: composeAck(written),
+            };
           }
           return { status: 'noop', ack: '' };
         },
@@ -906,10 +933,22 @@ export async function processUtterance(
         groceryConfirmPrompt = formatGroceryCaptureConfirmPrompt(groceryIntent.items);
       }
     }
+    let todoConfirmPrompt: string | undefined;
+    if (routeDecision.source === 'llm' && routeDecision.reason === 'semantic_proposal:todo_admit') {
+      const todoBodies = routeDecision.intents
+        .filter((i) => i.type === 'todo_add')
+        .map((i) => i.type === 'todo_add' ? i.body : '')
+        .filter(Boolean);
+      if (todoBodies.length > 0) {
+        const { formatTodoCaptureConfirmPrompt } = await import('./todoSemanticCapture');
+        todoConfirmPrompt = formatTodoCaptureConfirmPrompt(todoBodies);
+      }
+    }
     const llmGate = {
       ...(declineAck ? { declineAck } : {}),
       ...(domainConfirmOwnsCapture ? { domainConfirmOwnsCapture: true } : {}),
       ...(groceryConfirmPrompt ? { confirmPrompt: groceryConfirmPrompt } : {}),
+      ...(todoConfirmPrompt ? { confirmPrompt: todoConfirmPrompt } : {}),
     };
     const { responseText, commits } = await applyIntents(
       routeDecision.intents,

@@ -43,6 +43,7 @@ export const CAPABILITY_IDS = [
   'grocery.capture',         // dispatch: grocery write interpreter (not admitted here)
   'list.read',               // grocery / shopping list read
   'todo.read',               // to-do list read
+  'todo.capture',            // dispatch: to-do write interpreter (not admitted here)
   'calendar.read',           // off-ramp: appointments / schedule read
   'contact.call',            // off-ramp: call or text someone
   'uncertain',               // off-ramp: meaning too unclear to assign a capability
@@ -74,6 +75,7 @@ export const CAPABILITY_RISK_CLASS: Record<CapabilityId, CapabilityRiskClass> = 
   'grocery.capture': 'write',
   'list.read': 'read',
   'todo.read': 'read',
+  'todo.capture': 'write',
   'calendar.read': 'read',
   'contact.call': 'external',
   'uncertain': 'none',
@@ -182,7 +184,7 @@ export type CapabilityGenerationResult =
 
 export const SEMANTIC_DISPATCH_DIAG_TAG = 'HERALD_SEMANTIC_DISPATCH_DIAG';
 
-export type SemanticDispatchSpecialist = 'medication' | 'grocery' | 'none';
+export type SemanticDispatchSpecialist = 'medication' | 'grocery' | 'todo' | 'none';
 export type SemanticDispatchSpecialistResult = 'admit' | 'no_admit' | 'not_run';
 export type SemanticDispatchFinalOutcome =
   | 'read_admit'
@@ -220,6 +222,7 @@ capability — one of:
   grocery.capture         : the person wants the assistant to remember items to buy at the store.
   list.read               : the person wants to hear a shopping list.
   todo.read               : the person wants to hear their to-do list or tasks.
+  todo.capture            : the person wants the assistant to remember a task or to-do.
   calendar.read           : the person wants to hear their appointments or schedule.
   contact.call            : the person wants to call or text someone.
   uncertain               : the request is too unclear to assign a capability.

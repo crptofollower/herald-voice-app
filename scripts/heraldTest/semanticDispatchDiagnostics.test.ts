@@ -14,6 +14,7 @@ import {
 } from '../../src/routing/capabilityRouting.ts';
 import { MEDICATION_SEMANTIC_PROPOSAL_SYSTEM_PROMPT } from '../../src/routing/medicationSemanticInterpretation.ts';
 import { GROCERY_SEMANTIC_PROPOSAL_SYSTEM_PROMPT } from '../../src/routing/grocerySemanticDecomposition.ts';
+import { TODO_SEMANTIC_PROPOSAL_SYSTEM_PROMPT } from '../../src/routing/todoSemanticCapture.ts';
 import { withLlamaContextExclusive } from '../../src/utils/llamaContextExclusive.ts';
 import type { ClassifyOutcome } from '../../src/hooks/llmLayers.ts';
 
@@ -63,10 +64,10 @@ function captureDispatchDiags<T>(fn: () => Promise<T>): Promise<{ result: T; dia
   });
 }
 
-type CallCounts = { dispatch: number; medication: number; grocery: number };
+type CallCounts = { dispatch: number; medication: number; grocery: number; todo: number };
 
 function countingCtx(script: string[]) {
-  const counts: CallCounts = { dispatch: 0, medication: 0, grocery: 0 };
+  const counts: CallCounts = { dispatch: 0, medication: 0, grocery: 0, todo: 0 };
   let i = 0;
   const ctx = {
     completion: async (opts: { messages?: Array<{ content?: string }> }) => {
@@ -74,6 +75,7 @@ function countingCtx(script: string[]) {
       if (sys === CAPABILITY_PROPOSAL_SYSTEM_PROMPT) counts.dispatch++;
       if (sys === MEDICATION_SEMANTIC_PROPOSAL_SYSTEM_PROMPT) counts.medication++;
       if (sys === GROCERY_SEMANTIC_PROPOSAL_SYSTEM_PROMPT) counts.grocery++;
+      if (sys === TODO_SEMANTIC_PROPOSAL_SYSTEM_PROMPT) counts.todo++;
       const content = script[i] ?? '';
       i++;
       if (content === '__throw__') throw new Error('interpreter unavailable');
@@ -89,11 +91,17 @@ const DISPATCH_GROCERY = '{"capability":"grocery.capture","confidence":"high"}';
 const DISPATCH_MED = '{"capability":"medication.capture","confidence":"high"}';
 const DISPATCH_LIST_READ = '{"capability":"list.read","confidence":"high"}';
 const DISPATCH_LIST_READ_LOW = '{"capability":"list.read","confidence":"low"}';
+const DISPATCH_TODO_CAPTURE = '{"capability":"todo.capture","confidence":"high"}';
 const DISPATCH_TODO_READ = '{"capability":"todo.read","confidence":"high"}';
 const DISPATCH_TODO_READ_LOW = '{"capability":"todo.read","confidence":"low"}';
 const GROCERY_OK = JSON.stringify({
   capability: 'grocery_capture',
   candidates: ['milk', 'eggs', 'bread'],
+  confidence: 0.92,
+});
+const TODO_OK = JSON.stringify({
+  capability: 'todo_capture',
+  candidates: ['water the plants'],
   confidence: 0.92,
 });
 const MED_OK = JSON.stringify({
@@ -161,9 +169,27 @@ export async function runSemanticDispatchDiagnosticsTests() {
     assert('GROCERY finalOutcome specialist_admit', diags[0]?.finalOutcome, (v) => v === 'specialist_admit', 'specialist_admit');
     assert('GROCERY one diagnostic', diags.length, (v) => v === 1, '1');
     assert('GROCERY model budget unchanged',
-      counts.dispatch === 1 && counts.grocery === 1 && counts.medication === 0,
-      (v) => v === true, '1 dispatch 1 grocery 0 med');
+      counts.dispatch === 1 && counts.grocery === 1 && counts.medication === 0 && counts.todo === 0,
+      (v) => v === true, '1 dispatch 1 grocery 0 med 0 todo');
     assert('GROCERY route still capture', result.kind, (v) => v === 'capture', 'capture');
+  }
+
+  {
+    freshDB();
+    const { ctx, counts } = countingCtx([DISPATCH_TODO_CAPTURE, TODO_OK]);
+    const { result, diags } = await captureDispatchDiags(() =>
+      routeIntent('We need to water the plants.', baseDeps(ctx)));
+    assert('TODO specialistInvoked todo', diags[0]?.specialistInvoked, (v) => v === 'todo', 'todo');
+    assert('TODO proposedCapability todo.capture', diags[0]?.proposedCapability, (v) => v === 'todo.capture', 'todo.capture');
+    assert('TODO specialistResult admit', diags[0]?.specialistResult, (v) => v === 'admit', 'admit');
+    assert('TODO finalOutcome specialist_admit', diags[0]?.finalOutcome, (v) => v === 'specialist_admit', 'specialist_admit');
+    assert('TODO one diagnostic', diags.length, (v) => v === 1, '1');
+    assert('TODO model budget one specialist',
+      counts.dispatch === 1 && counts.todo === 1 && counts.grocery === 0 && counts.medication === 0,
+      (v) => v === true, '1 dispatch 1 todo 0 grocery 0 med');
+    assert('TODO route still capture', result.kind, (v) => v === 'capture', 'capture');
+    assert('TODO handoff is todo_add',
+      (result as any).intents?.[0]?.type, (v) => v === 'todo_add', 'todo_add');
   }
 
   {
