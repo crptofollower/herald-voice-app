@@ -127,10 +127,13 @@ export async function runGroceryAddRealizationTests() {
   {
     // The multi-item acks stay literal in the writer — proven at the source, so
     // a later drive-by migration of those paths fails here rather than silently.
+    // Grocery Integrity V1 re-pinned the count expression from `addedCount` to
+    // `committed.length` (commit-truth); the user-facing wording is unchanged
+    // and still lives literally in the writer, unenrolled from realization.
     const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '../..');
     const src = fs.readFileSync(path.join(root, 'src/routing/routeIntent.ts'), 'utf8');
     assert('GAR13 multi-item committed ack still literal in list_add writer',
-      src.includes('${addedCount} items are on your ${listName} list now.'),
+      src.includes('${committed.length} items are on your ${listName} list now.'),
       (v) => v === true, 'true');
     assert('GAR14 multi-item already-present ack still literal in list_add writer',
       src.includes('Those were already on your ${listName} list.'),

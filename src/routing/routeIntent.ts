@@ -33,7 +33,7 @@ import { shouldRefuseLlmCaptureProposal } from './speechActAuthority';
 import type { ReadIntentMeta } from './readIntent';
 import {
   extractAmbiguousAcquisitionObject,
-  filterOperationalListItems,
+  normalizeGroceryListItems,
 } from './operationalListContinuity';
 
 type ActionIntent = NonNullable<TierDecision['actionIntent']>;
@@ -466,14 +466,19 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       }
       const rawListName = intent.listName ?? 'grocery';
       const listName = rawListName === 'todo' ? 'todos' : rawListName;
-      const itemList = filterOperationalListItems(intent.items ?? []);
+      // Grocery Integrity V1: normalize at the writer convergence point so
+      // deterministic- and classifier-produced intents are segmented identically
+      // (Oxford comma corrected; any compound element re-split) before commit.
+      const itemList = normalizeGroceryListItems(intent.items ?? []);
       if (itemList.length === 0) {
         return { status: 'failed', ack: `What did you want to add to your ${listName} list?` };
       }
       const db = getDB();
       let list = db.getFirstSync<{ id: string }>(`SELECT id FROM lists WHERE name = ?`, [listName]);
       const now = new Date().toISOString();
-      let addedCount = 0;
+      // Grocery Integrity V1: acknowledgement derives from commit truth, never
+      // from the requested candidate set. Track exactly which items committed.
+      const committed: string[] = [];
       // Same transaction pattern as calendarCacheDB: BEGIN IMMEDIATE / COMMIT / ROLLBACK
       // so list creation + item inserts are atomic (no partial multi-item write).
       try {
@@ -499,7 +504,7 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
               `INSERT INTO list_items (id, list_id, body, checked, created_at) VALUES (?, ?, ?, 0, ?)`,
               [`item_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, list.id, item, now],
             );
-            addedCount++;
+            committed.push(item);
           }
         }
         db.execSync('COMMIT;');
@@ -508,9 +513,11 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
         db.execSync('ROLLBACK;');
         return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
       }
-      if (addedCount === 0) {
-        // Response Realization V1 (single-item path only). The multi-item
-        // wording below was already grammatically correct and is not enrolled.
+      if (committed.length === 0) {
+        // Zero-commit: every requested item was already present. Truthful about
+        // count — a single requested duplicate names itself; multiple rejected
+        // duplicates never single one out. Response Realization V1 wording
+        // (single-item path only); the multi-item wording is not enrolled.
         return itemList.length === 1
           ? { status: 'noop', ack: realizeGroceryAddAct({ kind: 'already_had_one', item: itemList[0], listName }) }
           : { status: 'noop', ack: `Those were already on your ${listName} list.` };
@@ -524,17 +531,22 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       // boundary; item-level addressability stays with the existing
       // presentation-holder mechanism, unchanged this slice.
       const listFocus = { kind: 'collection' as const, displayValue: `${listName} list`, resolverKey: list.id, referable: true };
-      if (addedCount === 1) {
-        // Response Realization V1: same fact selection as before (itemList[0],
-        // unchanged), same list, same commit — only the sentence form differs,
-        // and it no longer needs the item to agree in number with a copula.
+      if (committed.length === 1) {
+        // Grocery Integrity V1: the ack names the item that ACTUALLY committed
+        // (committed[0]), not the first requested candidate — so when leading
+        // candidates were duplicates, the ack no longer claims one of them.
+        // Response Realization V1 wording/mechanism unchanged; only the input
+        // value is now commit-truth.
         return {
           status: 'committed',
-          ack: composeCaptureAck('list_add', realizeGroceryAddAct({ kind: 'added_one', item: itemList[0], listName })),
+          ack: composeCaptureAck('list_add', realizeGroceryAddAct({ kind: 'added_one', item: committed[0], listName })),
           focus: listFocus,
         };
       }
-      return { status: 'committed', ack: composeCaptureAck('list_add', `${addedCount} items are on your ${listName} list now.`), focus: listFocus };
+      // Collection-level focus stays ONE entry regardless of how many rows
+      // committed (Semantic Focus Contract V1 — Slice 4, unchanged); only the
+      // count spoken is now commit-truth.
+      return { status: 'committed', ack: composeCaptureAck('list_add', `${committed.length} items are on your ${listName} list now.`), focus: listFocus };
     },
     async remove(item: string): Promise<CommitResult> {
       return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };

@@ -99,6 +99,52 @@ export function filterOperationalListItems(items: readonly string[]): string[] {
   return items.map((i) => i.trim()).filter(isOperationalListItemShape);
 }
 
+// Grocery Integrity V1 — canonical grocery/list item delimiter normalizer.
+//
+// This is NOT a general natural-language or conjunction parser. It corrects the
+// proven segmentation defects at the writer convergence point using COMMA
+// STRUCTURE as the only split evidence:
+//
+//   1. Oxford comma: ", and " is one delimiter, not a comma delimiter that
+//      leaves "and X" glued to the next item — so "milk, bread, and bananas"
+//      yields ["milk","bread","bananas"], never ["milk","bread","and bananas"].
+//   2. A single element that itself carries a comma-delimited compound
+//      (classifier output like ["milk, bread, and bananas"]) becomes independent
+//      candidates before persistence.
+//
+// TRUST BOUND — a BARE embedded "and" is NOT split. Only a comma re-segments an
+// incoming item; an "and" is absorbed ONLY when it immediately follows a comma
+// (the Oxford case). So a legitimate single item like "peanut butter and jelly"
+// or "macaroni and cheese" is preserved intact — user trust outranks symmetry
+// with the deterministic upstream path, which is left unchanged. This is a
+// structural rule (comma vs. no comma), never a food dictionary or exception list.
+//
+// A residual LEADING conjunction on a candidate is still stripped, so an
+// already-separated pre-split array (["milk","bread","and bananas"]) normalizes
+// to ["milk","bread","bananas"] — that leading "and " is an artifact of prior
+// segmentation, not an embedded conjunction. Trailing sentence punctuation is
+// left intact here — the existing shape filter owns that, unchanged.
+const GROCERY_ITEM_DELIMITER_RE = /\s*,\s*(?:and\s+)?/i;
+const LEADING_CONJUNCTION_RE = /^(?:and|&)\s+/i;
+
+export function segmentGroceryListItems(items: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const raw of items) {
+    for (const piece of raw.split(GROCERY_ITEM_DELIMITER_RE)) {
+      const cleaned = piece.replace(LEADING_CONJUNCTION_RE, '').trim();
+      if (cleaned.length > 0) out.push(cleaned);
+    }
+  }
+  return out;
+}
+
+/** Writer-boundary normalization: Oxford-safe segmentation FIRST, then the
+ *  existing operational shape filter — so deterministic- and classifier-
+ *  produced intents reach commit through one identical final normalization. */
+export function normalizeGroceryListItems(items: readonly string[]): string[] {
+  return filterOperationalListItems(segmentGroceryListItems(items));
+}
+
 /** Bounded grocery vs todo resolution. List-type words, not item vocabulary. */
 export function parseOperationalDomainResolution(text: string): 'grocery' | 'todo' | 'decline' | null {
   const t = text.trim();
