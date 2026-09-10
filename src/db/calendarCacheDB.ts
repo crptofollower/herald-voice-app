@@ -23,6 +23,9 @@
 // because getDB() had to stay synchronous).
 import type * as Calendar from "expo-calendar";
 import { getDB } from "./schema";
+// Pure, zero-import realization module — safe to import statically (no
+// react-native/expo transitive load, so the headless harness is unaffected).
+import { realizeCalendarEvidenceAct } from "../conversation/calendarEvidenceRealization";
 
 async function getCalendarRuntime(): Promise<typeof Calendar> {
   return import("expo-calendar");
@@ -589,11 +592,19 @@ export function formatCalendarEvidenceForSpeech(
   event: CachedEvent,
   mode: 'weekday' | 'date' = 'weekday',
 ): string {
+  // Response Realization V1: this function still owns WHICH facts are spoken
+  // (it reads them from the event row via buildCalendarEvidenceParts); the
+  // sentence itself — including the load-bearing calendar-provenance prefix —
+  // is now owned by realizeCalendarEvidenceAct. Output is unchanged.
   const p = buildCalendarEvidenceParts(displayName, event);
-  const when = mode === 'date' ? p.dateLabel : p.weekday;
-  return p.timeStr === null
-    ? `${p.prefix} ${p.displayName} on ${when}.`
-    : `${p.prefix} ${p.displayName} on ${when} at ${p.timeStr}.`;
+  return realizeCalendarEvidenceAct({
+    kind: 'hit',
+    displayName: p.displayName,
+    weekday: p.weekday,
+    dateLabel: p.dateLabel,
+    timeStr: p.timeStr,
+    mode,
+  });
 }
 
 // ─── parseRawCalendarEvent ──────────────────────────────────────────────────

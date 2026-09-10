@@ -30,6 +30,13 @@
 //   - residual compound household action
 
 import { THIRD_PERSON_REFERENT } from '../utils/instructionSignals';
+// Response Realization V1 — Calendar Evidence. Pure, zero-import module, so a
+// static import here carries no cycle or harness-load risk (unlike the db/
+// modules this file deliberately loads dynamically below).
+import {
+  realizeCalendarEvidenceAct,
+  type CalendarEvidenceScope,
+} from '../conversation/calendarEvidenceRealization';
 import { findContactById } from '../db/contactsDB';
 import { getServiceProviderById } from '../utils/householdRead';
 import { formatPhoneForSpeech } from '../utils/phoneConfirm';
@@ -272,11 +279,15 @@ export async function answerHistoricalCalendarVisitEvidence(
       normalizeDoctorNameForMatch,
       doctorCalendarIdentityKey,
       formatCalendarEvidenceForSpeech,
-      `in the past ${BACK_MONTHS} months`,
+      { kind: 'relative_months', direction: 'past', months: BACK_MONTHS },
       'last',
     );
   }
-  return `I don't see anything with ${displayName} on your calendar in the past ${BACK_MONTHS} months.`;
+  return realizeCalendarEvidenceAct({
+    kind: 'miss',
+    displayName,
+    scope: { kind: 'relative_months', direction: 'past', months: BACK_MONTHS },
+  });
 }
 
 export async function answerReferentVisitDate(
@@ -348,7 +359,7 @@ function speakDoctorCalendarHits(
   normalize: (s: string) => string,
   identityKey: (title: string, rawTerm: string, normalize: (s: string) => string) => string,
   formatSpeech: (displayName: string, event: any, mode?: 'weekday' | 'date') => string,
-  windowPhrase: string,
+  scope: CalendarEvidenceScope,
   singlePick: 'first' | 'last',
 ): string {
   const keys = new Set(events.map((e) => identityKey(e.title, doctorTerm, normalize)));
@@ -361,7 +372,7 @@ function speakDoctorCalendarHits(
       });
       return `${h.title} on ${dateLabel}`;
     });
-    return `Your calendar shows ${events.length} things with ${displayName} ${windowPhrase} — ${dates.join(', ')}. Which one did you mean?`;
+    return realizeCalendarEvidenceAct({ kind: 'multi', displayName, scope, dates });
   }
   const event = singlePick === 'last' ? events[events.length - 1] : events[0];
   return formatSpeech(displayName, event, mode);
@@ -396,7 +407,9 @@ export async function answerUpcomingCalendarEvidence(
       normalizeDoctorNameForMatch,
       doctorCalendarIdentityKey,
       formatCalendarEvidenceForSpeech,
-      'in the next 6 months',
+      // Literal 6 preserved from the phrase this call site previously passed;
+      // the local FORWARD_MONTHS const is declared further down this function.
+      { kind: 'relative_months', direction: 'next', months: 6 },
       'first',
     );
   }
@@ -423,11 +436,15 @@ export async function answerUpcomingCalendarEvidence(
       normalizeDoctorNameForMatch,
       doctorCalendarIdentityKey,
       formatCalendarEvidenceForSpeech,
-      'in the next 6 months',
+      { kind: 'relative_months', direction: 'next', months: FORWARD_MONTHS },
       'first',
     );
   }
-  return `I don't see anything with ${displayName} on your calendar in the next ${FORWARD_MONTHS} months.`;
+  return realizeCalendarEvidenceAct({
+    kind: 'miss',
+    displayName,
+    scope: { kind: 'relative_months', direction: 'next', months: FORWARD_MONTHS },
+  });
 }
 
 const GENERIC_DOCTOR_CAL_FORWARD_MONTHS = 6;
@@ -663,5 +680,10 @@ export async function answerReferentYearBoundedVisit(
   // silently drop the "Your calendar shows" marker just because it asks a
   // question instead of stating a single fact.
   const dates = hits.map((h) => new Date(h.start_ms).toLocaleDateString([], { month: 'long', day: 'numeric' }));
-  return `Your calendar shows ${hits.length} things with ${subject.displayName} in ${year} — ${dates.join(', ')}. Which one did you mean?`;
+  return realizeCalendarEvidenceAct({
+    kind: 'multi',
+    displayName: subject.displayName,
+    scope: { kind: 'year', year },
+    dates,
+  });
 }

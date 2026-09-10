@@ -26,6 +26,7 @@ import {
   RECOVERY_BUDGET,
   type CallTextTask,
 } from './callTextReadiness';
+import { realizeGroceryAddAct } from '../conversation/groceryAddRealization';
 import { isPersonalMemoryRecallQuestion } from './personalMemoryRecall';
 import { isHeraldSelfReferentConversationalShape } from '../utils/ephemeralSelfReferent';
 import { shouldRefuseLlmCaptureProposal } from './speechActAuthority';
@@ -508,7 +509,11 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
         return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
       }
       if (addedCount === 0) {
-        return { status: 'noop', ack: `${itemList.length === 1 ? `${itemList[0]} was` : 'Those were'} already on your ${listName} list.` };
+        // Response Realization V1 (single-item path only). The multi-item
+        // wording below was already grammatically correct and is not enrolled.
+        return itemList.length === 1
+          ? { status: 'noop', ack: realizeGroceryAddAct({ kind: 'already_had_one', item: itemList[0], listName }) }
+          : { status: 'noop', ack: `Those were already on your ${listName} list.` };
       }
       // Semantic Focus Contract V1 — Slice 4. list.id is the real list row
       // id — either just SELECTed or just INSERTed and already COMMITted
@@ -520,7 +525,14 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       // presentation-holder mechanism, unchanged this slice.
       const listFocus = { kind: 'collection' as const, displayValue: `${listName} list`, resolverKey: list.id, referable: true };
       if (addedCount === 1) {
-        return { status: 'committed', ack: composeCaptureAck('list_add', `${capitalizeFirst(itemList[0])} is on your ${listName} list.`), focus: listFocus };
+        // Response Realization V1: same fact selection as before (itemList[0],
+        // unchanged), same list, same commit — only the sentence form differs,
+        // and it no longer needs the item to agree in number with a copula.
+        return {
+          status: 'committed',
+          ack: composeCaptureAck('list_add', realizeGroceryAddAct({ kind: 'added_one', item: itemList[0], listName })),
+          focus: listFocus,
+        };
       }
       return { status: 'committed', ack: composeCaptureAck('list_add', `${addedCount} items are on your ${listName} list now.`), focus: listFocus };
     },
