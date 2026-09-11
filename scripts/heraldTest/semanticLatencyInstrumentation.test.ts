@@ -141,7 +141,7 @@ export async function runSemanticLatencyInstrumentationTests() {
     const engine = fs.readFileSync(path.join(root, 'src/hooks/useMedicationSemanticInterpreterEngine.ts'), 'utf8');
     const chat = fs.readFileSync(path.join(root, 'src/screens/ChatScreen.tsx'), 'utf8');
     const dispatch = fs.readFileSync(path.join(root, 'src/screens/chat/dispatch.ts'), 'utf8');
-    assert('dispatch n_predict remains 48', /n_predict:\s*48/.test(cap), (v) => v === true, '48');
+    assert('dispatch n_predict is 128 (one-pass write payload budget)', /n_predict:\s*128/.test(cap), (v) => v === true, '128');
     assert('specialist n_predict remains 128 and timeouts remain 8000',
       /n_predict:\s*128/.test(todo) && /TODO_SEMANTIC_TIMEOUT_MS = 8000/.test(todo)
       && /n_predict:\s*128/.test(grocery) && /GROCERY_SEMANTIC_TIMEOUT_MS = 8000/.test(grocery)

@@ -56,6 +56,7 @@ import {
   logSemanticSpecialistInferenceStart,
   mono as latMono,
 } from '../utils/latencyInstrument';
+import type { CapabilityProposal } from './capabilityRouting';
 
 // ─── SemanticProposal (corrected shape) ────────────────────────────────────
 
@@ -101,6 +102,24 @@ export function parseSemanticProposal(rawModelOutput: string): SemanticProposal 
     predicate: o.predicate,
     focus: o.focus,
     confidence: o.confidence,
+  };
+}
+
+/** Lift a one-pass dispatch write payload into the specialist proposal shape. No inference. */
+export function medicationSemanticProposalFromDispatchWrite(
+  proposal: CapabilityProposal,
+): SemanticProposal | null {
+  if (proposal.capability !== 'medication.capture') return null;
+  const write = proposal.write;
+  if (!write) return null;
+  if (!write.mentions || write.predicate === undefined || write.focus === undefined || write.score === undefined) {
+    return null;
+  }
+  return {
+    mentions: write.mentions,
+    predicate: write.predicate,
+    focus: write.focus,
+    confidence: write.score,
   };
 }
 

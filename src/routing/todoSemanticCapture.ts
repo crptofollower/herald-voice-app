@@ -20,6 +20,7 @@ import {
 } from '../utils/latencyInstrument';
 import { isReadShapedUtterance } from '../utils/detectMedicalEvent';
 import { shouldRefuseLlmCaptureProposal } from './speechActAuthority';
+import type { CapabilityProposal } from './capabilityRouting';
 
 export const TODO_SEMANTIC_CAPABILITIES = ['todo_capture', 'not_todo_capture', 'uncertain'] as const;
 export type TodoSemanticCapability = (typeof TODO_SEMANTIC_CAPABILITIES)[number];
@@ -73,6 +74,24 @@ export function parseTodoSemanticProposal(rawModelOutput: string): TodoSemanticP
     capability: o.capability as TodoSemanticCapability,
     candidates,
     confidence: o.confidence,
+  };
+}
+
+/** Lift a one-pass dispatch write payload into the specialist proposal shape. No inference. */
+export function todoSemanticProposalFromDispatchWrite(
+  proposal: CapabilityProposal,
+): TodoSemanticProposal | null {
+  if (proposal.capability !== 'todo.capture') return null;
+  const write = proposal.write;
+  if (!write) return null;
+  if (write.op !== 'todo_capture' && write.op !== 'not_todo_capture' && write.op !== 'uncertain') {
+    return null;
+  }
+  if (!write.candidates || write.score === undefined) return null;
+  return {
+    capability: write.op,
+    candidates: write.candidates,
+    confidence: write.score,
   };
 }
 

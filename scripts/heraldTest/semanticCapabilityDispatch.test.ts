@@ -112,6 +112,35 @@ const DISPATCH_TODO_READ = '{"capability":"todo.read","confidence":"high"}';
 const DISPATCH_TODO_READ_MED = '{"capability":"todo.read","confidence":"medium"}';
 const DISPATCH_TODO_READ_LOW = '{"capability":"todo.read","confidence":"low"}';
 
+function onePassGrocery(candidates: string[], op = 'grocery_capture', score = 0.92): string {
+  return JSON.stringify({
+    capability: 'grocery.capture',
+    confidence: 'high',
+    op,
+    candidates,
+    score,
+  });
+}
+function onePassTodo(candidates: string[], op = 'todo_capture', score = 0.92): string {
+  return JSON.stringify({
+    capability: 'todo.capture',
+    confidence: 'high',
+    op,
+    candidates,
+    score,
+  });
+}
+function onePassMed(focus: string, mentions: string[] | undefined, score = 0.9): string {
+  return JSON.stringify({
+    capability: 'medication.capture',
+    confidence: 'high',
+    mentions: mentions ?? [focus],
+    predicate: 'is',
+    focus,
+    score,
+  });
+}
+
 const GROCERY_OK = JSON.stringify({
   capability: 'grocery_capture',
   candidates: ['milk', 'eggs', 'bread'],
@@ -122,26 +151,16 @@ const TODO_OK = JSON.stringify({
   candidates: ['water the plants'],
   confidence: 0.92,
 });
-const TODO_MULTI = JSON.stringify({
-  capability: 'todo_capture',
-  candidates: ['water the plants', 'mail the package'],
-  confidence: 0.92,
-});
-const GROCERY_HALLUC = JSON.stringify({
-  capability: 'grocery_capture',
-  candidates: ['milk', 'saffron'],
-  confidence: 0.92,
-});
+const ONE_PASS_GROCERY = onePassGrocery(['milk', 'eggs', 'bread']);
+const ONE_PASS_GROCERY_HALLUC = onePassGrocery(['milk', 'saffron']);
+const ONE_PASS_TODO = onePassTodo(['water the plants']);
+const ONE_PASS_TODO_MULTI = onePassTodo(['water the plants', 'mail the package']);
+const ONE_PASS_MED = onePassMed('Eliquis', ['Eliquis']);
+const ONE_PASS_MED_NO_EVIDENCE = onePassMed('vacation', ['vacation']);
 const MED_OK = JSON.stringify({
   mentions: ['Eliquis'],
   predicate: 'is',
   focus: 'Eliquis',
-  confidence: 0.9,
-});
-const MED_NO_EVIDENCE = JSON.stringify({
-  mentions: ['vacation'],
-  predicate: 'taking',
-  focus: 'vacation',
   confidence: 0.9,
 });
 
@@ -209,7 +228,7 @@ export async function runSemanticCapabilityDispatchTests() {
 
   {
     freshDB();
-    const { ctx, counts } = countingCtx([DISPATCH_GROCERY, GROCERY_OK, MED_OK]);
+    const { ctx, counts } = countingCtx([ONE_PASS_GROCERY, GROCERY_OK, MED_OK]);
     const utterance = 'We need milk eggs and bread.';
     const legacy = await classifyQuery(utterance);
     assert('GROCERY-P2 classifyQuery is default fall-through',
@@ -221,14 +240,14 @@ export async function runSemanticCapabilityDispatchTests() {
       (v) => v === true, 'list_add grocery');
     assert('GROCERY-P2 confirmation-gated (llm source)', (decision as any).source, (v) => v === 'llm', 'llm');
     assert('GROCERY-P2 dispatch once', counts.dispatch, (v) => v === 1, '1');
-    assert('GROCERY-P2 grocery interpreter once', counts.grocery, (v) => v === 1, '1');
+    assert('GROCERY-P2 grocery interpreter skipped (one-pass)', counts.grocery, (v) => v === 0, '0');
     assert('GROCERY-P2 zero medication interpreter', counts.medication, (v) => v === 0, '0');
     assert('GROCERY-P2 zero todo interpreter', counts.todo, (v) => v === 0, '0');
   }
 
   {
     freshDB();
-    const { ctx, counts } = countingCtx([DISPATCH_TODO_CAPTURE, TODO_OK, GROCERY_OK, MED_OK]);
+    const { ctx, counts } = countingCtx([ONE_PASS_TODO, TODO_OK, GROCERY_OK, MED_OK]);
     const utterance = 'We need to water the plants.';
     const legacy = await classifyQuery(utterance);
     assert('TODO-P2 classifyQuery is default fall-through',
@@ -241,26 +260,26 @@ export async function runSemanticCapabilityDispatchTests() {
       (v) => v === true, 'todo_add');
     assert('TODO-P2 confirmation-gated (llm source)', (decision as any).source, (v) => v === 'llm', 'llm');
     assert('TODO-P2 dispatch once', counts.dispatch, (v) => v === 1, '1');
-    assert('TODO-P2 todo interpreter once', counts.todo, (v) => v === 1, '1');
+    assert('TODO-P2 todo interpreter skipped (one-pass)', counts.todo, (v) => v === 0, '0');
     assert('TODO-P2 zero grocery interpreter', counts.grocery, (v) => v === 0, '0');
     assert('TODO-P2 zero medication interpreter', counts.medication, (v) => v === 0, '0');
   }
 
   {
     freshDB();
-    const { ctx, counts } = countingCtx([DISPATCH_TODO_CAPTURE, TODO_MULTI, GROCERY_OK]);
+    const { ctx, counts } = countingCtx([ONE_PASS_TODO_MULTI, GROCERY_OK]);
     const decision = await routeIntent('We need to water the plants and mail the package.', baseDeps(ctx));
     assert('TODO-P2-MULTI is two todo_add intents',
       Array.isArray((decision as any).intents) && (decision as any).intents.length === 2
       && (decision as any).intents.every((i: { type: string }) => i.type === 'todo_add'),
       (v) => v === true, '2 todo_add');
-    assert('TODO-P2-MULTI one todo specialist', counts.todo, (v) => v === 1, '1');
+    assert('TODO-P2-MULTI todo specialist skipped (one-pass)', counts.todo, (v) => v === 0, '0');
     assert('TODO-P2-MULTI zero grocery specialist', counts.grocery, (v) => v === 0, '0');
   }
 
   {
     freshDB();
-    const { ctx, counts } = countingCtx([DISPATCH_MED, MED_OK, GROCERY_OK]);
+    const { ctx, counts } = countingCtx([ONE_PASS_MED, MED_OK, GROCERY_OK]);
     const utterance = 'Eliquis is my blood thinner prescription.';
     const legacy = await classifyQuery(utterance);
     assert('MED-SEM classifyQuery is default fall-through',
@@ -270,7 +289,7 @@ export async function runSemanticCapabilityDispatchTests() {
     assert('MED-SEM is medical_capture',
       (decision as any).intents?.[0]?.type, (v) => v === 'medical_capture', 'medical_capture');
     assert('MED-SEM dispatch once', counts.dispatch, (v) => v === 1, '1');
-    assert('MED-SEM medication interpreter once', counts.medication, (v) => v === 1, '1');
+    assert('MED-SEM medication interpreter skipped (one-pass)', counts.medication, (v) => v === 0, '0');
     assert('MED-SEM zero grocery interpreter', counts.grocery, (v) => v === 0, '0');
   }
 
@@ -288,25 +307,25 @@ export async function runSemanticCapabilityDispatchTests() {
 
   {
     const harness = openJourneyDb();
-    const { ctx, counts } = countingCtx([DISPATCH_GROCERY, GROCERY_HALLUC, MED_OK]);
+    const { ctx, counts } = countingCtx([ONE_PASS_GROCERY_HALLUC, MED_OK]);
     await processUtterance(normalizeInput('We need milk.'), harness.session, {
       ...harness.deps,
       ...baseDeps(ctx),
       classifyLLM: async () => ({ status: 'ok' as const, intents: [] }),
     });
     assert('WRONG-GROCERY persists nothing', grocerySet(harness.db), (v) => Array.isArray(v) && v.length === 0, '[]');
-    assert('WRONG-GROCERY still one grocery interpreter', counts.grocery, (v) => v === 1, '1');
+    assert('WRONG-GROCERY grocery interpreter skipped (one-pass)', counts.grocery, (v) => v === 0, '0');
     assert('WRONG-GROCERY zero medication interpreter', counts.medication, (v) => v === 0, '0');
   }
 
   {
     const db = freshDB();
     const before = medicationRowCount(db);
-    const { ctx, counts } = countingCtx([DISPATCH_MED, MED_NO_EVIDENCE, GROCERY_OK]);
+    const { ctx, counts } = countingCtx([ONE_PASS_MED_NO_EVIDENCE, GROCERY_OK]);
     const decision = await routeIntent('We are taking a vacation next month.', baseDeps(ctx));
     assert('WRONG-MED is not capture', decision.kind, (v) => v !== 'capture', 'not capture');
     assert('WRONG-MED did not persist medications', medicationRowCount(db), (v) => v === before, `${before}`);
-    assert('WRONG-MED medication interpreter once', counts.medication, (v) => v === 1, '1');
+    assert('WRONG-MED medication interpreter skipped (one-pass)', counts.medication, (v) => v === 0, '0');
     assert('WRONG-MED zero grocery interpreter', counts.grocery, (v) => v === 0, '0');
   }
 
@@ -523,7 +542,7 @@ export async function runSemanticCapabilityDispatchTests() {
 
   {
     const harness = openJourneyDb();
-    const { ctx } = countingCtx([DISPATCH_GROCERY, GROCERY_OK]);
+    const { ctx } = countingCtx([ONE_PASS_GROCERY]);
     const deps = {
       ...harness.deps,
       ...baseDeps(ctx),

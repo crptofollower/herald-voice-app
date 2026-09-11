@@ -57,12 +57,42 @@ const GROCERY_OK = JSON.stringify({
   confidence: 0.92,
 });
 
+function onePassTodo(p: TodoSemanticProposal): string {
+  return JSON.stringify({
+    capability: 'todo.capture',
+    confidence: 'high',
+    op: p.capability,
+    candidates: p.candidates,
+    score: p.confidence,
+  });
+}
+
+function onePassGroceryFromJson(raw: string): string | null {
+  try {
+    const spec = JSON.parse(raw) as { capability?: string; candidates?: string[]; confidence?: number };
+    if (!Array.isArray(spec.candidates) || typeof spec.capability !== 'string') return null;
+    return JSON.stringify({
+      capability: 'grocery.capture',
+      confidence: 'high',
+      op: spec.capability,
+      candidates: spec.candidates,
+      score: spec.confidence,
+    });
+  } catch {
+    return null;
+  }
+}
+
 function fakeCtx(p: TodoSemanticProposal | string, dispatchJson = DISPATCH_TODO) {
   const content = typeof p === 'string' ? p : JSON.stringify(p);
   return {
     completion: async (opts?: { messages?: Array<{ content?: string }> }) => {
       const sys = String(opts?.messages?.[0]?.content ?? '');
       if (sys === CAPABILITY_PROPOSAL_SYSTEM_PROMPT) {
+        if (dispatchJson.includes('"grocery.capture"')) {
+          return { content: onePassGroceryFromJson(content) ?? dispatchJson };
+        }
+        if (typeof p !== 'string') return { content: onePassTodo(p) };
         return { content: dispatchJson };
       }
       if (sys === GROCERY_SEMANTIC_PROPOSAL_SYSTEM_PROMPT) {

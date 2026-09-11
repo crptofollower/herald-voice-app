@@ -125,9 +125,32 @@ export async function runCapabilityRoutingTests() {
     parseCapabilityProposal('{"capability":"medication.read_summary"}'), (v) => v === null, 'null');
   assert('parse rejects out-of-set confidence',
     parseCapabilityProposal('{"capability":"medication.read_summary","confidence":"0.9"}'), (v) => v === null, 'null');
-  assert('parse accepts a well-formed read proposal',
-    parseCapabilityProposal(READ_SUMMARY_JSON),
-    (v) => (v as CapabilityProposal | null)?.capability === 'medication.read_summary', 'read_summary proposal');
+    assert('parse accepts a well-formed read proposal',
+      parseCapabilityProposal(READ_SUMMARY_JSON),
+      (v) => (v as CapabilityProposal | null)?.capability === 'medication.read_summary', 'read_summary proposal');
+  assert('parse accepts todo.capture write payload without changing capability vocab',
+    parseCapabilityProposal(JSON.stringify({
+      capability: 'todo.capture',
+      confidence: 'high',
+      op: 'todo_capture',
+      candidates: ['water the plants'],
+      score: 0.92,
+    })),
+    (v) => (v as CapabilityProposal | null)?.write?.candidates?.[0] === 'water the plants'
+      && (v as CapabilityProposal | null)?.capability === 'todo.capture',
+    'todo write payload');
+  assert('parse rejects write score outside 0-1',
+    parseCapabilityProposal(JSON.stringify({
+      capability: 'todo.capture',
+      confidence: 'high',
+      op: 'todo_capture',
+      candidates: ['water the plants'],
+      score: 1.5,
+    })),
+    (v) => v === null, 'null');
+  assert('parse rejects non-string write candidates',
+    parseCapabilityProposal('{"capability":"grocery.capture","confidence":"high","op":"grocery_capture","candidates":[1],"score":0.9}'),
+    (v) => v === null, 'null');
 
   // ─── admission: only the wired read capability, non-low confidence, ADMITs ─
   const admit = (capability: CapabilityId, confidence: 'high' | 'medium' | 'low') =>

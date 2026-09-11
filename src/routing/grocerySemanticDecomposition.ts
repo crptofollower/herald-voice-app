@@ -19,6 +19,7 @@ import {
 } from '../utils/latencyInstrument';
 import { isReadShapedUtterance } from '../utils/detectMedicalEvent';
 import { shouldRefuseLlmCaptureProposal } from './speechActAuthority';
+import type { CapabilityProposal } from './capabilityRouting';
 
 export const GROCERY_SEMANTIC_CAPABILITIES = ['grocery_capture', 'not_grocery_capture', 'uncertain'] as const;
 export type GrocerySemanticCapability = (typeof GROCERY_SEMANTIC_CAPABILITIES)[number];
@@ -73,6 +74,24 @@ export function parseGrocerySemanticProposal(rawModelOutput: string): GrocerySem
     capability: o.capability as GrocerySemanticCapability,
     candidates,
     confidence: o.confidence,
+  };
+}
+
+/** Lift a one-pass dispatch write payload into the specialist proposal shape. No inference. */
+export function grocerySemanticProposalFromDispatchWrite(
+  proposal: CapabilityProposal,
+): GrocerySemanticProposal | null {
+  if (proposal.capability !== 'grocery.capture') return null;
+  const write = proposal.write;
+  if (!write) return null;
+  if (write.op !== 'grocery_capture' && write.op !== 'not_grocery_capture' && write.op !== 'uncertain') {
+    return null;
+  }
+  if (!write.candidates || write.score === undefined) return null;
+  return {
+    capability: write.op,
+    candidates: write.candidates,
+    confidence: write.score,
   };
 }
 

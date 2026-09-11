@@ -8,17 +8,19 @@ import { writeServiceProvider, detectServiceCapture, detectPhoneCapture, detectI
 import { detectDiagnosisCapture, detectDoctorIntroCapture, detectMedicalEvent, isReadShapedUtterance, hasMedicationDomainEvidence, extractDrugName } from '../utils/detectMedicalEvent';
 import type { LlamaContext } from 'llama.rn';
 import { MEDICATION_SEMANTIC_INTERPRETATION_ENABLED, CAPABILITY_READ_ROUTER_ENABLED, GROCERY_SEMANTIC_DECOMPOSITION_ENABLED, SEMANTIC_CAPABILITY_DISPATCH_ENABLED } from '../constants/features';
-import { generateMedicationSemanticProposal, admitMedicationSemanticProposal } from './medicationSemanticInterpretation';
+import { generateMedicationSemanticProposal, admitMedicationSemanticProposal, medicationSemanticProposalFromDispatchWrite } from './medicationSemanticInterpretation';
 import {
   generateGrocerySemanticProposal,
   admitGrocerySemanticP2,
   tryP1GrocerySemanticItems,
+  grocerySemanticProposalFromDispatchWrite,
 } from './grocerySemanticDecomposition';
 import {
   generateTodoSemanticProposal,
   admitTodoSemanticP2,
+  todoSemanticProposalFromDispatchWrite,
 } from './todoSemanticCapture';
-import { generateCapabilityProposal, admitCapabilityProposal, WIRED_READ_CAPABILITY, CAPABILITY_RISK_CLASS, type CapabilityId, logSemanticDispatchDiag, type SemanticDispatchDiag } from './capabilityRouting';
+import { generateCapabilityProposal, admitCapabilityProposal, WIRED_READ_CAPABILITY, CAPABILITY_RISK_CLASS, type CapabilityId, type CapabilityProposal, logSemanticDispatchDiag, type SemanticDispatchDiag } from './capabilityRouting';
 import { detectFamilyCapture } from '../utils/familyCapture';
 import { getDB } from '../db/schema';
 import { capturePerson } from '../db/capturePerson';
@@ -2104,13 +2106,11 @@ export function isUnresolvedPersonalCapture(decision: RouteDecision): boolean {
   return decision.kind === 'capture';
 }
 
-async function tryMedicationSemanticCaptureRoute(
+function medicationSemanticCaptureDecision(
   text: string,
-  getCtx: () => LlamaContext | null,
-): Promise<RouteDecision | null> {
-  const generation = await generateMedicationSemanticProposal(text, getCtx);
-  if (generation.status !== 'ok') return null;
-  const admission = admitMedicationSemanticProposal(text, generation.proposal, { hasPending: false });
+  proposal: import('./medicationSemanticInterpretation').SemanticProposal,
+): RouteDecision | null {
+  const admission = admitMedicationSemanticProposal(text, proposal, { hasPending: false });
   if (admission.decision !== 'ADMIT') return null;
   return {
     kind: 'capture',
@@ -2126,13 +2126,20 @@ async function tryMedicationSemanticCaptureRoute(
   };
 }
 
-async function tryTodoSemanticP2Route(
+async function tryMedicationSemanticCaptureRoute(
   text: string,
   getCtx: () => LlamaContext | null,
 ): Promise<RouteDecision | null> {
-  const generation = await generateTodoSemanticProposal(text, getCtx);
+  const generation = await generateMedicationSemanticProposal(text, getCtx);
   if (generation.status !== 'ok') return null;
-  const admission = admitTodoSemanticP2(text, generation.proposal, { hasPending: false });
+  return medicationSemanticCaptureDecision(text, generation.proposal);
+}
+
+function todoSemanticP2Decision(
+  text: string,
+  proposal: import('./todoSemanticCapture').TodoSemanticProposal,
+): RouteDecision | null {
+  const admission = admitTodoSemanticP2(text, proposal, { hasPending: false });
   if (admission.decision === 'CLARIFY') {
     return { kind: 'needs_clarification', reason: 'semantic_proposal:todo_clarify' };
   }
@@ -2150,13 +2157,20 @@ async function tryTodoSemanticP2Route(
   };
 }
 
-async function tryGrocerySemanticP2Route(
+async function tryTodoSemanticP2Route(
   text: string,
   getCtx: () => LlamaContext | null,
 ): Promise<RouteDecision | null> {
-  const generation = await generateGrocerySemanticProposal(text, getCtx);
+  const generation = await generateTodoSemanticProposal(text, getCtx);
   if (generation.status !== 'ok') return null;
-  const admission = admitGrocerySemanticP2(text, generation.proposal, { hasPending: false });
+  return todoSemanticP2Decision(text, generation.proposal);
+}
+
+function grocerySemanticP2Decision(
+  text: string,
+  proposal: import('./grocerySemanticDecomposition').GrocerySemanticProposal,
+): RouteDecision | null {
+  const admission = admitGrocerySemanticP2(text, proposal, { hasPending: false });
   if (admission.decision !== 'ADMIT') return null;
   console.warn('[grocerySemanticDecomposition] ' + JSON.stringify({
     event: 'confirmation_required',
@@ -2173,6 +2187,15 @@ async function tryGrocerySemanticP2Route(
     source: 'llm',
     reason: 'semantic_proposal:grocery_admit',
   };
+}
+
+async function tryGrocerySemanticP2Route(
+  text: string,
+  getCtx: () => LlamaContext | null,
+): Promise<RouteDecision | null> {
+  const generation = await generateGrocerySemanticProposal(text, getCtx);
+  if (generation.status !== 'ok') return null;
+  return grocerySemanticP2Decision(text, generation.proposal);
 }
 
 async function admitWiredMedicationRead(proposal: { capability: CapabilityId; confidence: 'high' | 'medium' | 'low' }): Promise<RouteDecision | null> {
@@ -2497,12 +2520,14 @@ export async function routeIntent(
   const eligibleDefaultFallthrough = decision.tier === 3 && decision.reason === 'default';
   let dispatchSeamRan = false;
   let dispatchSelected: CapabilityId | null = null;
+  let dispatchProposal: CapabilityProposal | null = null;
 
   if (eligibleDefaultFallthrough && dispatchOn) {
     dispatchSeamRan = true;
     const capGen = await generateCapabilityProposal(text, getSemanticCtx);
     if (capGen.status === 'ok') {
       dispatchSelected = capGen.proposal.capability;
+      dispatchProposal = capGen.proposal;
       dispatchDiag = {
         invoked: true,
         generationStatus: 'ok',
@@ -2674,7 +2699,10 @@ export async function routeIntent(
         dispatchDiag.specialistInvoked = 'medication';
         dispatchDiag.specialistResult = 'no_admit';
       }
-      const medDecision = await tryMedicationSemanticCaptureRoute(text, getSemanticCtx);
+      const pre = dispatchProposal
+        ? medicationSemanticProposalFromDispatchWrite(dispatchProposal)
+        : null;
+      const medDecision = pre ? medicationSemanticCaptureDecision(text, pre) : null;
       if (medDecision) {
         if (dispatchDiag) {
           dispatchDiag.specialistResult = 'admit';
@@ -2687,7 +2715,10 @@ export async function routeIntent(
         dispatchDiag.specialistInvoked = 'grocery';
         dispatchDiag.specialistResult = 'no_admit';
       }
-      const groceryDecision = await tryGrocerySemanticP2Route(text, getSemanticCtx);
+      const pre = dispatchProposal
+        ? grocerySemanticProposalFromDispatchWrite(dispatchProposal)
+        : null;
+      const groceryDecision = pre ? grocerySemanticP2Decision(text, pre) : null;
       if (groceryDecision) {
         if (dispatchDiag) {
           dispatchDiag.specialistResult = 'admit';
@@ -2700,7 +2731,10 @@ export async function routeIntent(
         dispatchDiag.specialistInvoked = 'todo';
         dispatchDiag.specialistResult = 'no_admit';
       }
-      const todoDecision = await tryTodoSemanticP2Route(text, getSemanticCtx);
+      const pre = dispatchProposal
+        ? todoSemanticProposalFromDispatchWrite(dispatchProposal)
+        : null;
+      const todoDecision = pre ? todoSemanticP2Decision(text, pre) : null;
       if (todoDecision?.kind === 'capture') {
         if (dispatchDiag) {
           dispatchDiag.specialistResult = 'admit';

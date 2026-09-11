@@ -60,7 +60,16 @@ function mockProposalCtx(focus: string, mentions?: string[]) {
     completion: async (opts?: { messages?: Array<{ content?: string }> }) => {
       const sys = String(opts?.messages?.[0]?.content ?? '');
       if (sys === CAPABILITY_PROPOSAL_SYSTEM_PROMPT) {
-        return { content: '{"capability":"medication.capture","confidence":"high"}' };
+        return {
+          content: JSON.stringify({
+            capability: 'medication.capture',
+            confidence: 'high',
+            mentions: mentions ?? [focus],
+            predicate: 'take',
+            focus,
+            score: 0.95,
+          }),
+        };
       }
       return { content: payload };
     },

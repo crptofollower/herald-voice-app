@@ -94,6 +94,28 @@ const DISPATCH_LIST_READ_LOW = '{"capability":"list.read","confidence":"low"}';
 const DISPATCH_TODO_CAPTURE = '{"capability":"todo.capture","confidence":"high"}';
 const DISPATCH_TODO_READ = '{"capability":"todo.read","confidence":"high"}';
 const DISPATCH_TODO_READ_LOW = '{"capability":"todo.read","confidence":"low"}';
+const ONE_PASS_GROCERY = JSON.stringify({
+  capability: 'grocery.capture',
+  confidence: 'high',
+  op: 'grocery_capture',
+  candidates: ['milk', 'eggs', 'bread'],
+  score: 0.92,
+});
+const ONE_PASS_TODO = JSON.stringify({
+  capability: 'todo.capture',
+  confidence: 'high',
+  op: 'todo_capture',
+  candidates: ['water the plants'],
+  score: 0.92,
+});
+const ONE_PASS_MED = JSON.stringify({
+  capability: 'medication.capture',
+  confidence: 'high',
+  mentions: ['Eliquis'],
+  predicate: 'is',
+  focus: 'Eliquis',
+  score: 0.9,
+});
 const GROCERY_OK = JSON.stringify({
   capability: 'grocery_capture',
   candidates: ['milk', 'eggs', 'bread'],
@@ -160,7 +182,7 @@ export async function runSemanticDispatchDiagnosticsTests() {
 
   {
     freshDB();
-    const { ctx, counts } = countingCtx([DISPATCH_GROCERY, GROCERY_OK]);
+    const { ctx, counts } = countingCtx([ONE_PASS_GROCERY]);
     const { result, diags } = await captureDispatchDiags(() =>
       routeIntent('We need milk eggs and bread.', baseDeps(ctx)));
     assert('GROCERY specialistInvoked grocery', diags[0]?.specialistInvoked, (v) => v === 'grocery', 'grocery');
@@ -168,15 +190,15 @@ export async function runSemanticDispatchDiagnosticsTests() {
     assert('GROCERY specialistResult admit', diags[0]?.specialistResult, (v) => v === 'admit', 'admit');
     assert('GROCERY finalOutcome specialist_admit', diags[0]?.finalOutcome, (v) => v === 'specialist_admit', 'specialist_admit');
     assert('GROCERY one diagnostic', diags.length, (v) => v === 1, '1');
-    assert('GROCERY model budget unchanged',
-      counts.dispatch === 1 && counts.grocery === 1 && counts.medication === 0 && counts.todo === 0,
-      (v) => v === true, '1 dispatch 1 grocery 0 med 0 todo');
+    assert('GROCERY model budget one-pass (no specialist inference)',
+      counts.dispatch === 1 && counts.grocery === 0 && counts.medication === 0 && counts.todo === 0,
+      (v) => v === true, '1 dispatch 0 grocery 0 med 0 todo');
     assert('GROCERY route still capture', result.kind, (v) => v === 'capture', 'capture');
   }
 
   {
     freshDB();
-    const { ctx, counts } = countingCtx([DISPATCH_TODO_CAPTURE, TODO_OK]);
+    const { ctx, counts } = countingCtx([ONE_PASS_TODO]);
     const { result, diags } = await captureDispatchDiags(() =>
       routeIntent('We need to water the plants.', baseDeps(ctx)));
     assert('TODO specialistInvoked todo', diags[0]?.specialistInvoked, (v) => v === 'todo', 'todo');
@@ -184,9 +206,9 @@ export async function runSemanticDispatchDiagnosticsTests() {
     assert('TODO specialistResult admit', diags[0]?.specialistResult, (v) => v === 'admit', 'admit');
     assert('TODO finalOutcome specialist_admit', diags[0]?.finalOutcome, (v) => v === 'specialist_admit', 'specialist_admit');
     assert('TODO one diagnostic', diags.length, (v) => v === 1, '1');
-    assert('TODO model budget one specialist',
-      counts.dispatch === 1 && counts.todo === 1 && counts.grocery === 0 && counts.medication === 0,
-      (v) => v === true, '1 dispatch 1 todo 0 grocery 0 med');
+    assert('TODO model budget one-pass (no specialist inference)',
+      counts.dispatch === 1 && counts.todo === 0 && counts.grocery === 0 && counts.medication === 0,
+      (v) => v === true, '1 dispatch 0 todo 0 grocery 0 med');
     assert('TODO route still capture', result.kind, (v) => v === 'capture', 'capture');
     assert('TODO handoff is todo_add',
       (result as any).intents?.[0]?.type, (v) => v === 'todo_add', 'todo_add');
@@ -194,15 +216,15 @@ export async function runSemanticDispatchDiagnosticsTests() {
 
   {
     freshDB();
-    const { ctx, counts } = countingCtx([DISPATCH_MED, MED_OK]);
+    const { ctx, counts } = countingCtx([ONE_PASS_MED]);
     const { result, diags } = await captureDispatchDiags(() =>
       routeIntent('Eliquis is my blood thinner prescription.', baseDeps(ctx)));
     assert('MED specialistInvoked medication', diags[0]?.specialistInvoked, (v) => v === 'medication', 'medication');
     assert('MED proposedCapability medication.capture', diags[0]?.proposedCapability, (v) => v === 'medication.capture', 'medication.capture');
     assert('MED specialistResult admit', diags[0]?.specialistResult, (v) => v === 'admit', 'admit');
-    assert('MED model budget unchanged',
-      counts.dispatch === 1 && counts.medication === 1 && counts.grocery === 0,
-      (v) => v === true, '1 dispatch 1 med 0 grocery');
+    assert('MED model budget one-pass (no specialist inference)',
+      counts.dispatch === 1 && counts.medication === 0 && counts.grocery === 0,
+      (v) => v === true, '1 dispatch 0 med 0 grocery');
     assert('MED route still capture', result.kind, (v) => v === 'capture', 'capture');
   }
 

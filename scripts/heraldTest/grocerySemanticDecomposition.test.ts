@@ -45,6 +45,26 @@ function fakeCtx(p: GrocerySemanticProposal | string) {
     completion: async (opts?: { messages?: Array<{ content?: string }> }) => {
       const sys = String(opts?.messages?.[0]?.content ?? '');
       if (sys === CAPABILITY_PROPOSAL_SYSTEM_PROMPT) {
+        try {
+          const spec = JSON.parse(content) as {
+            capability?: string;
+            candidates?: string[];
+            confidence?: number;
+          };
+          if (Array.isArray(spec.candidates) && typeof spec.capability === 'string') {
+            return {
+              content: JSON.stringify({
+                capability: 'grocery.capture',
+                confidence: 'high',
+                op: spec.capability,
+                candidates: spec.candidates,
+                score: spec.confidence,
+              }),
+            };
+          }
+        } catch {
+          // fall through to capability-only dispatch
+        }
         return { content: '{"capability":"grocery.capture","confidence":"high"}' };
       }
       return { content };

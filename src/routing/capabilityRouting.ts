@@ -59,13 +59,45 @@ export type CapabilityId = typeof CAPABILITY_IDS[number];
 
 export type CapabilityConfidence = 'high' | 'medium' | 'low';
 
+export const SEMANTIC_WRITE_OPS = [
+  'todo_capture',
+  'not_todo_capture',
+  'grocery_capture',
+  'not_grocery_capture',
+  'uncertain',
+] as const;
+export type SemanticWriteOp = typeof SEMANTIC_WRITE_OPS[number];
+
+/** Optional one-pass specialist fields. Absent on reads / off-ramps. */
+export type CapabilityWritePayload = {
+  op?: SemanticWriteOp;
+  candidates?: string[];
+  mentions?: string[];
+  predicate?: string;
+  focus?: string;
+  score?: number;
+};
+
 export type CapabilityProposal = {
   capability: CapabilityId;
   confidence: CapabilityConfidence;
+  write?: CapabilityWritePayload;
 };
 
 const CAPABILITY_ID_SET = new Set<string>(CAPABILITY_IDS);
 const CONFIDENCE_SET = new Set<string>(['high', 'medium', 'low']);
+const SEMANTIC_WRITE_OP_SET = new Set<string>(SEMANTIC_WRITE_OPS);
+
+function optionalStringArray(value: unknown): { ok: true; value?: string[] } | { ok: false } {
+  if (value === undefined) return { ok: true };
+  if (!Array.isArray(value)) return { ok: false };
+  const out: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string') return { ok: false };
+    out.push(item);
+  }
+  return { ok: true, value: out };
+}
 
 // ─── Risk class — a pure function of the capability, NEVER of confidence ─────
 // Confidence can only downgrade an admission to ABSTAIN; it can never raise
@@ -114,9 +146,36 @@ export function parseCapabilityProposal(rawModelOutput: string): CapabilityPropo
   const o = parsed as Record<string, unknown>;
   if (typeof o.capability !== 'string' || !CAPABILITY_ID_SET.has(o.capability)) return null;
   if (typeof o.confidence !== 'string' || !CONFIDENCE_SET.has(o.confidence)) return null;
+
+  const write: CapabilityWritePayload = {};
+  if (o.op !== undefined) {
+    if (typeof o.op !== 'string' || !SEMANTIC_WRITE_OP_SET.has(o.op)) return null;
+    write.op = o.op as SemanticWriteOp;
+  }
+  const candidates = optionalStringArray(o.candidates);
+  if (!candidates.ok) return null;
+  if (candidates.value) write.candidates = candidates.value;
+  const mentions = optionalStringArray(o.mentions);
+  if (!mentions.ok) return null;
+  if (mentions.value) write.mentions = mentions.value;
+  if (o.predicate !== undefined) {
+    if (typeof o.predicate !== 'string') return null;
+    write.predicate = o.predicate;
+  }
+  if (o.focus !== undefined) {
+    if (typeof o.focus !== 'string') return null;
+    write.focus = o.focus;
+  }
+  if (o.score !== undefined) {
+    if (typeof o.score !== 'number' || Number.isNaN(o.score) || !Number.isFinite(o.score)) return null;
+    if (o.score < 0 || o.score > 1) return null;
+    write.score = o.score;
+  }
+  const hasWrite = Object.keys(write).length > 0;
   return {
     capability: o.capability as CapabilityId,
     confidence: o.confidence as CapabilityConfidence,
+    ...(hasWrite ? { write } : {}),
   };
 }
 
@@ -235,7 +294,12 @@ capability — one of:
 
 confidence — high, medium, or low: how sure you are of the capability.
 
-Return ONLY a JSON object: {"capability": "...", "confidence": "..."}. Do not add any other text.`;
+Write payloads (verbatim spans only; omit on reads/off-ramps):
+  todo.capture: op (todo_capture|not_todo_capture|uncertain), candidates[], score 0-1
+  grocery.capture: op (grocery_capture|not_grocery_capture|uncertain), candidates[], score 0-1
+  medication.capture: mentions[], predicate, focus (or ""), score 0-1
+
+Return ONLY JSON. Do not add any other text.`;
 
 // Constrained structured output (llama.rn json_schema response_format, runtime
 // 0.12.x). The grammar restricts `capability` to the closed vocabulary and
@@ -253,6 +317,12 @@ export const CAPABILITY_PROPOSAL_RESPONSE_FORMAT = {
       properties: {
         capability: { type: 'string', enum: [...CAPABILITY_IDS] },
         confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+        op: { type: 'string', enum: [...SEMANTIC_WRITE_OPS] },
+        candidates: { type: 'array', items: { type: 'string' } },
+        mentions: { type: 'array', items: { type: 'string' } },
+        predicate: { type: 'string' },
+        focus: { type: 'string' },
+        score: { type: 'number' },
       },
     },
   },
@@ -285,7 +355,7 @@ export async function generateCapabilityProposal(
         { role: 'system', content: CAPABILITY_PROPOSAL_SYSTEM_PROMPT },
         { role: 'user', content: raw },
       ],
-      n_predict: 48,
+      n_predict: 128,
       temperature: 0,
       top_p: 0.8,
       top_k: 20,
