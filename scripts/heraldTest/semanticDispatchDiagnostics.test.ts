@@ -166,10 +166,9 @@ export async function runSemanticDispatchDiagnosticsTests() {
     freshDB();
     const { ctx } = countingCtx([DISPATCH_OTHER]);
     const { result, diags } = await captureDispatchDiags(() =>
-      routeIntent('how was your weekend', baseDeps(ctx)));
-    assert('T3 default emits exactly one dispatch diagnostic', diags.length, (v) => v === 1, '1');
-    assert('T3 default invoked true', diags[0]?.invoked, (v) => v === true, 'true');
-    assert('T3 default does not change fallback kind', result.kind, (v) => v === 'needs_clarification', 'needs_clarification');
+      routeIntent('The concert last night was louder than I expected.', baseDeps(ctx)));
+    assert('T3 ineligible default emits no dispatch diagnostic', diags.length, (v) => v === 0, '0');
+    assert('T3 ineligible default does not change fallback kind', result.kind, (v) => v === 'needs_clarification', 'needs_clarification');
   }
 
   {
@@ -232,17 +231,15 @@ export async function runSemanticDispatchDiagnosticsTests() {
     freshDB();
     const { ctx } = countingCtx([DISPATCH_OTHER, GROCERY_OK, MED_OK]);
     const { diags } = await captureDispatchDiags(() =>
-      routeIntent('tell me a joke', baseDeps(ctx)));
-    assert('OTHER specialist none', diags[0]?.specialistInvoked, (v) => v === 'none', 'none');
-    assert('OTHER generation ok', diags[0]?.generationStatus, (v) => v === 'ok', 'ok');
-    assert('OTHER finalOutcome fallback', diags[0]?.finalOutcome, (v) => v === 'fallback', 'fallback');
+      routeIntent('The concert last night was louder than I expected.', baseDeps(ctx)));
+    assert('OTHER ineligible emits no dispatch diagnostic', diags.length, (v) => v === 0, '0');
   }
 
   {
     freshDB();
     const { ctx, counts } = countingCtx([DISPATCH_LIST_READ, GROCERY_OK, MED_OK]);
     const { result, diags } = await captureDispatchDiags(() =>
-      routeIntent('how was your weekend', baseDeps(ctx)));
+      routeIntent('We need to clean the garage.', baseDeps(ctx)));
     assert('LIST.READ diagnostic finalOutcome read_admit', diags[0]?.finalOutcome, (v) => v === 'read_admit', 'read_admit');
     assert('LIST.READ diagnostic specialistInvoked none', diags[0]?.specialistInvoked, (v) => v === 'none', 'none');
     assert('LIST.READ diagnostic specialistResult not_run', diags[0]?.specialistResult, (v) => v === 'not_run', 'not_run');
@@ -256,7 +253,7 @@ export async function runSemanticDispatchDiagnosticsTests() {
     freshDB();
     const { ctx, counts } = countingCtx([DISPATCH_TODO_READ, GROCERY_OK, MED_OK]);
     const { result, diags } = await captureDispatchDiags(() =>
-      routeIntent('how was your weekend', baseDeps(ctx)));
+      routeIntent('We need to clean the garage.', baseDeps(ctx)));
     assert('TODO.READ diagnostic finalOutcome read_admit', diags[0]?.finalOutcome, (v) => v === 'read_admit', 'read_admit');
     assert('TODO.READ diagnostic specialistInvoked none', diags[0]?.specialistInvoked, (v) => v === 'none', 'none');
     assert('TODO.READ diagnostic selectedCapability todo.read', diags[0]?.selectedCapability, (v) => v === 'todo.read', 'todo.read');
@@ -273,7 +270,7 @@ export async function runSemanticDispatchDiagnosticsTests() {
     freshDB();
     const { ctx } = countingCtx([DISPATCH_TODO_READ_LOW, GROCERY_OK, MED_OK]);
     const { result, diags } = await captureDispatchDiags(() =>
-      routeIntent('how was your weekend', baseDeps(ctx)));
+      routeIntent('We need to clean the garage.', baseDeps(ctx)));
     assert('TODO.READ low diagnostic finalOutcome fallback', diags[0]?.finalOutcome, (v) => v === 'fallback', 'fallback');
     assert('TODO.READ low is not device_read', result.kind, (v) => v !== 'device_read', 'not device_read');
   }
@@ -282,7 +279,7 @@ export async function runSemanticDispatchDiagnosticsTests() {
     freshDB();
     const { ctx } = countingCtx([DISPATCH_LIST_READ_LOW, GROCERY_OK, MED_OK]);
     const { result, diags } = await captureDispatchDiags(() =>
-      routeIntent('how was your weekend', baseDeps(ctx)));
+      routeIntent('We need to clean the garage.', baseDeps(ctx)));
     assert('LIST.READ low diagnostic finalOutcome fallback', diags[0]?.finalOutcome, (v) => v === 'fallback', 'fallback');
     assert('LIST.READ low diagnostic specialist none', diags[0]?.specialistInvoked, (v) => v === 'none', 'none');
     assert('LIST.READ low is not device_read', result.kind, (v) => v !== 'device_read', 'not device_read');
@@ -292,7 +289,7 @@ export async function runSemanticDispatchDiagnosticsTests() {
     freshDB();
     const { ctx } = countingCtx([DISPATCH_UNCERTAIN, GROCERY_OK, MED_OK]);
     const { diags } = await captureDispatchDiags(() =>
-      routeIntent('maybe that thing we talked about', baseDeps(ctx)));
+      routeIntent('We need to clean the garage.', baseDeps(ctx)));
     assert('UNCERTAIN specialist none', diags[0]?.specialistInvoked, (v) => v === 'none', 'none');
     assert('UNCERTAIN proposedCapability uncertain', diags[0]?.proposedCapability, (v) => v === 'uncertain', 'uncertain');
   }
@@ -317,7 +314,7 @@ export async function runSemanticDispatchDiagnosticsTests() {
       missing.status === 'unavailable' && (missing as { reason?: string }).reason === 'ctx_missing',
       (v) => v === true, 'unavailable/ctx_missing');
     const { diags } = await captureDispatchDiags(() =>
-      routeIntent('how was your weekend', baseDeps(null)));
+      routeIntent('We need to clean the garage.', baseDeps(null)));
     assert('NULL CTX generationStatus unavailable', diags[0]?.generationStatus, (v) => v === 'unavailable', 'unavailable');
     assert('NULL CTX unavailableReason ctx_missing', diags[0]?.unavailableReason, (v) => v === 'ctx_missing', 'ctx_missing');
     assert('NULL CTX one diagnostic', diags.length, (v) => v === 1, '1');
@@ -327,7 +324,7 @@ export async function runSemanticDispatchDiagnosticsTests() {
     freshDB();
     const { ctx, counts } = countingCtx([DISPATCH_OTHER]);
     const held = await withLlamaContextExclusive('probe', 'wait', async () => {
-      return captureDispatchDiags(() => routeIntent('how was your weekend', baseDeps(ctx)));
+      return captureDispatchDiags(() => routeIntent('We need to clean the garage.', baseDeps(ctx)));
     });
     const { diags } = held.ok ? held.value : { diags: [] as SemanticDispatchDiag[] };
     assert('BUSY CTX unavailableReason ctx_busy', diags[0]?.unavailableReason, (v) => v === 'ctx_busy', 'ctx_busy');

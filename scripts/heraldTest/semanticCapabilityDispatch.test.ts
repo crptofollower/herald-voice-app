@@ -216,11 +216,11 @@ export async function runSemanticCapabilityDispatchTests() {
   {
     freshDB();
     const { ctx, counts } = countingCtx([DISPATCH_OTHER, GROCERY_OK, MED_OK]);
-    const decision = await routeIntent('how was your weekend', baseDeps(ctx));
+    const decision = await routeIntent('The concert last night was louder than I expected.', baseDeps(ctx));
     assert('UNRELATED kind is not capture/read',
       decision.kind === 'needs_clarification' || decision.kind === 'not_ready',
       (v) => v === true, 'clarify/fallback');
-    assert('UNRELATED dispatch once', counts.dispatch, (v) => v === 1, '1');
+    assert('UNRELATED skips ineligible semantic dispatch', counts.dispatch, (v) => v === 0, '0');
     assert('UNRELATED zero medication interpreter', counts.medication, (v) => v === 0, '0');
     assert('UNRELATED zero grocery interpreter', counts.grocery, (v) => v === 0, '0');
     assert('UNRELATED at most one domain interpreter', counts.medication + counts.grocery, (v) => v === 0, '0');
@@ -332,15 +332,15 @@ export async function runSemanticCapabilityDispatchTests() {
   {
     freshDB();
     const { ctx, counts } = countingCtx([DISPATCH_OTHER, GROCERY_OK, MED_OK]);
-    await routeIntent('tell me a joke', baseDeps(ctx));
+    await routeIntent('The concert last night was louder than I expected.', baseDeps(ctx));
     assert('OTHER zero domain interpreters', counts.medication + counts.grocery, (v) => v === 0, '0');
-    assert('OTHER dispatch once', counts.dispatch, (v) => v === 1, '1');
+    assert('OTHER skips ineligible semantic dispatch', counts.dispatch, (v) => v === 0, '0');
   }
 
   {
     freshDB();
     const { ctx, counts } = countingCtx([DISPATCH_UNCERTAIN, GROCERY_OK, MED_OK]);
-    const decision = await routeIntent('maybe that thing we talked about', baseDeps(ctx));
+    const decision = await routeIntent('We need to clean the garage.', baseDeps(ctx));
     assert('UNCERTAIN is not capture', decision.kind, (v) => v !== 'capture', 'not capture');
     assert('UNCERTAIN does not serial-probe domains', counts.medication + counts.grocery, (v) => v === 0, '0');
     assert('UNCERTAIN dispatch once', counts.dispatch, (v) => v === 1, '1');
@@ -349,7 +349,7 @@ export async function runSemanticCapabilityDispatchTests() {
   {
     freshDB();
     const { ctx, counts } = countingCtx([DISPATCH_LIST_READ, GROCERY_OK, MED_OK]);
-    const decision = await routeIntent('how was your weekend', baseDeps(ctx));
+    const decision = await routeIntent('We need to clean the garage.', baseDeps(ctx));
     assert('LIST.READ high is device_read', decision.kind, (v) => v === 'device_read', 'device_read');
     assert('LIST.READ high uses grocery list reader speech',
       (decision as any).response, (v) => v === 'Your grocery list is empty.', 'Your grocery list is empty.');
@@ -365,7 +365,7 @@ export async function runSemanticCapabilityDispatchTests() {
   {
     freshDB();
     const { ctx, counts } = countingCtx([DISPATCH_LIST_READ_MED, GROCERY_OK, MED_OK]);
-    const decision = await routeIntent('how was your weekend', baseDeps(ctx));
+    const decision = await routeIntent('We need to clean the garage.', baseDeps(ctx));
     assert('LIST.READ medium is device_read', decision.kind, (v) => v === 'device_read', 'device_read');
     assert('LIST.READ medium does not invoke write interpreters',
       counts.medication + counts.grocery, (v) => v === 0, '0');
@@ -374,7 +374,7 @@ export async function runSemanticCapabilityDispatchTests() {
   {
     freshDB();
     const { ctx, counts } = countingCtx([DISPATCH_LIST_READ_LOW, GROCERY_OK, MED_OK]);
-    const decision = await routeIntent('how was your weekend', baseDeps(ctx));
+    const decision = await routeIntent('We need to clean the garage.', baseDeps(ctx));
     assert('LIST.READ low is fallback not device_read',
       decision.kind !== 'device_read' && decision.kind !== 'capture',
       (v) => v === true, 'fallback');
@@ -396,7 +396,7 @@ export async function runSemanticCapabilityDispatchTests() {
   {
     freshDB();
     const { ctx, counts } = countingCtx([DISPATCH_TODO_READ, GROCERY_OK, MED_OK]);
-    const decision = await routeIntent('how was your weekend', baseDeps(ctx));
+    const decision = await routeIntent('We need to clean the garage.', baseDeps(ctx));
     assert('TODO.READ high is device_read', decision.kind, (v) => v === 'device_read', 'device_read');
     assert('TODO.READ high uses authoritative todo reader speech',
       (decision as any).response, (v) => v === "You're all clear — nothing on your to-do list.",
@@ -413,7 +413,7 @@ export async function runSemanticCapabilityDispatchTests() {
   {
     freshDB();
     const { ctx, counts } = countingCtx([DISPATCH_TODO_READ_MED, GROCERY_OK, MED_OK]);
-    const decision = await routeIntent('how was your weekend', baseDeps(ctx));
+    const decision = await routeIntent('We need to clean the garage.', baseDeps(ctx));
     assert('TODO.READ medium is device_read', decision.kind, (v) => v === 'device_read', 'device_read');
     assert('TODO.READ medium uses authoritative todo reader speech',
       (decision as any).response, (v) => v === "You're all clear — nothing on your to-do list.",
@@ -425,7 +425,7 @@ export async function runSemanticCapabilityDispatchTests() {
   {
     freshDB();
     const { ctx, counts } = countingCtx([DISPATCH_TODO_READ_LOW, GROCERY_OK, MED_OK]);
-    const decision = await routeIntent('how was your weekend', baseDeps(ctx));
+    const decision = await routeIntent('We need to clean the garage.', baseDeps(ctx));
     assert('TODO.READ low is fallback not device_read',
       decision.kind !== 'device_read' && decision.kind !== 'capture',
       (v) => v === true, 'fallback');

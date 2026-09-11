@@ -21,13 +21,14 @@ import {
   todoSemanticProposalFromDispatchWrite,
 } from './todoSemanticCapture';
 import { generateCapabilityProposal, admitCapabilityProposal, WIRED_READ_CAPABILITY, CAPABILITY_RISK_CLASS, type CapabilityId, type CapabilityProposal, logSemanticDispatchDiag, type SemanticDispatchDiag } from './capabilityRouting';
+import { evaluateSemanticDispatchEligibility } from './semanticDispatchEligibility';
 import { detectFamilyCapture } from '../utils/familyCapture';
 import { getDB } from '../db/schema';
 import { capturePerson } from '../db/capturePerson';
 import { findContactByName, setEmergencyContact, getEmergencyContact, retireRelationshipHolder, RELATIONSHIP_WORDS, resolvePersonIdentity, contactHasCapability, resolvePersonCapability, attachPhoneToContactById } from '../db/contactsDB';
 import { normalizePersonTarget, liftRelationshipName } from '../utils/personReference';
 import { osNameQuery, refineOsNameQuery, osNameFullyCovered } from '../utils/osContactDestination';
-import { getActiveTurnId, log as latLog, mono as latMono } from '../utils/latencyInstrument';
+import { getActiveTurnId, log as latLog, logSemanticDispatchEligibility, mono as latMono } from '../utils/latencyInstrument';
 import { normalizePhone } from '../utils/phone';
 import { buildPhoneConfirmPending, formatPhoneForSpeech } from '../utils/phoneConfirm';
 import { matchCandidateToken } from './conversationSession';
@@ -2524,8 +2525,16 @@ export async function routeIntent(
 
   if (eligibleDefaultFallthrough && dispatchOn) {
     dispatchSeamRan = true;
-    const capGen = await generateCapabilityProposal(text, getSemanticCtx);
-    if (capGen.status === 'ok') {
+    const eligibility = evaluateSemanticDispatchEligibility(text);
+    logSemanticDispatchEligibility({
+      eligible: eligibility.eligible,
+      reason: eligibility.reason,
+      tier: decision.tier,
+      routeReason: decision.reason,
+    });
+    if (eligibility.eligible) {
+      const capGen = await generateCapabilityProposal(text, getSemanticCtx);
+      if (capGen.status === 'ok') {
       dispatchSelected = capGen.proposal.capability;
       dispatchProposal = capGen.proposal;
       dispatchDiag = {
@@ -2599,6 +2608,7 @@ export async function routeIntent(
         specialistInvoked: 'none',
         specialistResult: 'not_run',
       };
+    }
     }
   } else if (capabilityReadOn && eligibleDefaultFallthrough) {
     const capGen = await generateCapabilityProposal(text, getSemanticCtx);

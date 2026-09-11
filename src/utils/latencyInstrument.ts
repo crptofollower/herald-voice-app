@@ -186,6 +186,16 @@ function safeSemanticLog(event: string, fields: Record<string, unknown> = {}): v
   }
 }
 
+export function logSemanticDispatchEligibility(fields: {
+  eligible: boolean;
+  reason: string;
+  tier: number;
+  routeReason: string;
+}): void {
+  markSemanticTurnPendingRealization();
+  safeSemanticLog('SEMANTIC_DISPATCH_ELIGIBILITY', fields);
+}
+
 export function logSemanticDispatchInferenceStart(): void {
   markSemanticTurnPendingRealization();
   safeSemanticLog('SEMANTIC_DISPATCH_INFERENCE_START');

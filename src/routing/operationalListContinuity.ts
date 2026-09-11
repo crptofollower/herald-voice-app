@@ -6,6 +6,10 @@ import { detectMedicalEvent } from '../utils/detectMedicalEvent';
 import { boundCapturedTail, LIST_ADD_SIGNALS } from '../utils/instructionSignals';
 
 /** Same acquisition family as the existing grocery-marker grocery path. */
+/** Modal/obligation family already embedded in OPERATIONAL_ACQUISITION_SHAPE. */
+export const OBLIGATION_MODAL_FAMILY =
+  /\b(?:need\s+to|have\s+to|gotta|got\s+to|going\s+to|gonna|want\s+to|wanna)\b/i;
+
 export const OPERATIONAL_ACQUISITION_SHAPE =
   /\b(?:need\s+to|have\s+to|gotta|got\s+to|going\s+to|gonna|want\s+to|wanna)\s+(?:go\s+(?:to\s+(?:the\s+)?(?:grocery\s+store|supermarket|grocery|store|shop|market)\s+(?:and\s+)?)?)?(?:pick(?:\s+\w+)?\s+up|get|buy|grab)\b/i;
 
