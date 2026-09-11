@@ -59,6 +59,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { PersonaBackground } from "../components/PersonaBackground";
 import { MessageBubble } from "../components/MessageBubble";
 import { GroceryListSurface } from "../components/GroceryListSurface";
+import { TodoListSurface } from "../components/TodoListSurface";
 import { CapabilitySurface } from "../components/CapabilitySurface";
 import { fetchNwsTomorrowForecast, isNwsTomorrowAtDeviceEligible, type NwsForecastResult } from "../capabilities/nwsWeather";
 import { ProactiveCard } from "../components/ProactiveCard";
@@ -127,7 +128,9 @@ import { ConversationalSubjectHolder } from '../routing/conversationalSubject';
 import { MedicationPresentationHolder } from '../routing/medicationPresentation';
 import { OrderedPresentationHolder } from '../routing/orderedPresentation';
 import { projectGroceryVisualFromPresentedIds, type GroceryVisualRow } from '../routing/groceryVisualPresentation';
+import { projectTodoVisualFromPresentedIds, TodoPresentationHolder, type TodoVisualRow } from '../routing/todoVisualPresentation';
 import { isGroceryListReadSummarySpeech } from '../conversation/groceryListReadRealization';
+import { isTodoOpenListSpeech } from '../db/listRead';
 import { CalendarContinuationHolder } from '../routing/calendarContinuation';
 import { DiscourseContinuityHolder } from '../routing/discourseContinuity';
 import { formatOperationalListClarification } from '../routing/operationalListContinuity';
@@ -494,6 +497,7 @@ export default function ChatScreen() {
   const [pendingAction, setPendingAction] = useState<IntentAction | null>(null);
   const [actionStatus, setActionStatus] = useState<ActionStatus>("confirming");
   const [groceryVisualRows, setGroceryVisualRows] = useState<GroceryVisualRow[] | null>(null);
+  const [todoVisualRows, setTodoVisualRows] = useState<TodoVisualRow[] | null>(null);
 
   const [streamingContent, setStreamingContent] = useState("");
   const [isWaiting, setIsWaiting] = useState(false);
@@ -530,6 +534,7 @@ export default function ChatScreen() {
   const subjectRef = useRef<ConversationalSubjectHolder>(new ConversationalSubjectHolder());
   const medicationPresentationRef = useRef<MedicationPresentationHolder>(new MedicationPresentationHolder());
   const orderedPresentationRef = useRef<OrderedPresentationHolder>(new OrderedPresentationHolder());
+  const todoPresentationRef = useRef<TodoPresentationHolder>(new TodoPresentationHolder());
   const calendarPresentationRef = useRef<CalendarPresentationHolder>(new CalendarPresentationHolder());
   const calendarContinuationRef = useRef<CalendarContinuationHolder>(new CalendarContinuationHolder());
   const discourseRef = useRef<DiscourseContinuityHolder>(new DiscourseContinuityHolder());
@@ -550,6 +555,45 @@ export default function ChatScreen() {
     const rows = projectGroceryVisualFromPresentedIds(live.presentedIds);
     setGroceryVisualRows(rows && rows.length > 0 ? rows : null);
   }, []);
+
+  const refreshTodoVisual = useCallback(() => {
+    const presentedIds = todoPresentationRef.current.peek();
+    if (!presentedIds || presentedIds.length === 0) {
+      setTodoVisualRows(null);
+      return;
+    }
+    const rows = projectTodoVisualFromPresentedIds(presentedIds);
+    setTodoVisualRows(rows.length > 0 ? rows : null);
+  }, []);
+
+  const syncSituationalListVisuals = useCallback((outcome: {
+    handled: boolean;
+    source?: string;
+    routeDecision?: { kind: string; presentedTodoIds?: string[] };
+  }) => {
+    if (outcome.handled && outcome.source === 'emergency') {
+      todoPresentationRef.current.clear();
+    } else if (!outcome.handled && outcome.routeDecision?.kind === 'device_read') {
+      const presentedTodoIds = outcome.routeDecision.presentedTodoIds;
+      if (presentedTodoIds !== undefined) {
+        if (presentedTodoIds.length === 0) {
+          todoPresentationRef.current.clear();
+        } else {
+          todoPresentationRef.current.establish(presentedTodoIds);
+          orderedPresentationRef.current.clear();
+        }
+      } else {
+        todoPresentationRef.current.clear();
+      }
+    } else {
+      const groceryLive = orderedPresentationRef.current.peek();
+      if (groceryLive?.owner === 'grocery' && groceryLive.presentedIds.length > 0) {
+        todoPresentationRef.current.clear();
+      }
+    }
+    refreshGroceryVisual();
+    refreshTodoVisual();
+  }, [refreshGroceryVisual, refreshTodoVisual]);
 
   // Step 5a: bounded HOT narrative ring — RAM-only, peek semantics, written ONLY
   // from the three authorized Step 4 sites (ephemeral success ×2, chit_chat read).
@@ -1290,10 +1334,13 @@ export default function ChatScreen() {
       subjectRef.current.clear();
       medicationPresentationRef.current.clear();
       orderedPresentationRef.current.clear();
+      todoPresentationRef.current.clear();
       calendarPresentationRef.current.clear();
       calendarContinuationRef.current.clear();
       discourseRef.current.clear();
       hotRingRef.current.clear();
+      refreshGroceryVisual();
+      refreshTodoVisual();
       await dispatchEmergency(text);
       setInputText('');
       return;
@@ -1334,8 +1381,11 @@ export default function ChatScreen() {
       subjectRef.current.clear();
       medicationPresentationRef.current.clear();
       orderedPresentationRef.current.clear();
+      todoPresentationRef.current.clear();
       calendarPresentationRef.current.clear();
       calendarContinuationRef.current.clear();
+      refreshGroceryVisual();
+      refreshTodoVisual();
       const pending = pendingContactCollectRef.current;
       const phoneMatch = text.match(/([\d\s\-\(\)\+\.]{7,})/);
       const isLikelyAddress = text.length > 8 && /\d/.test(text) && /\b(st|ave|blvd|rd|dr|ln|way|ct|pl|circle|drive|street|road|court|lane|avenue)\b/i.test(text);
@@ -1613,7 +1663,7 @@ export default function ChatScreen() {
       resolveContact: resolveContactPhoneRef.current ?? undefined,
       getMedicationSemanticInterpreterCtx,
     }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current, calendarPresentationRef.current, calendarContinuationRef.current, discourseRef.current, conversationLedgerRef.current);
-    refreshGroceryVisual();
+    syncSituationalListVisuals(outcome);
     const continuityFocus = !outcome.handled
       ? continuityLedgerFocus(outcome.continuityFocus, outcome.continuityReferenceOnly === true)
       : [];
@@ -2807,7 +2857,7 @@ export default function ChatScreen() {
         resolveContact: resolveContactPhoneRef.current ?? undefined,
         getMedicationSemanticInterpreterCtx,
       }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current, calendarPresentationRef.current, calendarContinuationRef.current, discourseRef.current, conversationLedgerRef.current);
-      refreshGroceryVisual();
+      syncSituationalListVisuals(outcome);
       if (outcome.handled && outcome.source === 'pending_resume' && outcome.responseText) {
         addMessage({ id: generateId('msg'), role: 'assistant', content: outcome.responseText, timestamp: Date.now() });
         speak(outcome.responseText);
@@ -3384,16 +3434,21 @@ export default function ChatScreen() {
         hideProse={
           index >= currentExchangeStart
           && item.role === "assistant"
-          && !!groceryVisualRows
-          && groceryVisualRows.length > 0
-          && isGroceryListReadSummarySpeech(item.content)
+          && (
+            (!!groceryVisualRows
+              && groceryVisualRows.length > 0
+              && isGroceryListReadSummarySpeech(item.content))
+            || (!!todoVisualRows
+              && todoVisualRows.length > 0
+              && isTodoOpenListSpeech(item.content))
+          )
         }
         onRecoveryChoice={
           index >= currentExchangeStart ? handleRecoveryChoice : undefined
         }
       />
     ),
-    [persona, currentExchangeStart, handleRecoveryChoice, groceryVisualRows]
+    [persona, currentExchangeStart, handleRecoveryChoice, groceryVisualRows, todoVisualRows]
   );
 
   const buildDispatchDeps = useCallback((): DispatchDeps => ({
@@ -3627,6 +3682,9 @@ export default function ChatScreen() {
                   ) : null}
                   {groceryVisualRows && groceryVisualRows.length > 0 ? (
                     <GroceryListSurface rows={groceryVisualRows} />
+                  ) : null}
+                  {todoVisualRows && todoVisualRows.length > 0 ? (
+                    <TodoListSurface rows={todoVisualRows} />
                   ) : null}
                   {isWaiting && (
                     <View style={styles.typingRow}>

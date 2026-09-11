@@ -42,6 +42,11 @@ export function composeTodoOpenSpeech(items: PresentedListItem[]): string {
     : `You've got ${items.length} open: ${items.map((i) => i.body).join(', ')}.`;
 }
 
+/** Transcript hide when the todo card is live. TTS still speaks this copy. */
+export function isTodoOpenListSpeech(text: string): boolean {
+  return /^You've got \d+ open: /.test(text.trim());
+}
+
 // Historic ChatScreen todo_complete scorer. Highest score wins; ties keep the
 // first item in iteration order (`score > bestScore` only). Do not "improve".
 const TODO_COMPLETE_STOP_WORDS = new Set([

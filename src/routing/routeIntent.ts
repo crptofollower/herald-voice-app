@@ -48,7 +48,7 @@ import {
 type ActionIntent = NonNullable<TierDecision['actionIntent']>;
 
 export type RouteDecision =
-  | { kind: 'device_read'; tier: 1; response: string; isMedical?: boolean; reason: string; presentedMedicationIds?: string[]; presentedGroceryIds?: string[]; presentedCalendarEventIds?: string[] }
+  | { kind: 'device_read'; tier: 1; response: string; isMedical?: boolean; reason: string; presentedMedicationIds?: string[]; presentedGroceryIds?: string[]; presentedTodoIds?: string[]; presentedCalendarEventIds?: string[] }
   | { kind: 'device_action'; tier: 1; actionIntent: ActionIntent; reason: string }
   | { kind: 'capture'; intents: IntentRecord[]; source: 'deterministic' | 'llm'; reason: string }
   | { kind: 'phone_repair_needed'; pending: Extract<CommitResult, { status: 'pending' }>; reason: string }
@@ -2297,6 +2297,7 @@ export async function routeIntent(
         tier: 1,
         response: composeTodoOpenSpeech(items),
         reason: decision.reason,
+        presentedTodoIds: items.map((i) => i.id),
       };
     }
     if (actionType === 'todo_complete') {
@@ -2550,6 +2551,7 @@ export async function routeIntent(
           tier: 1,
           response: composeTodoOpenSpeech(items),
           reason: 'action:todo_read',
+          presentedTodoIds: items.map((i) => i.id),
         };
       }
     } else if (capGen.status === 'parse_fail') {

@@ -83,10 +83,10 @@ export async function runGroceryVisualPresentationTests() {
     assert('ChatScreen renders GroceryListSurface',
       /GroceryListSurface/.test(chatSrc) && /refreshGroceryVisual/.test(chatSrc),
       (v) => v === true, 'surface + refresh');
-    assert('ChatScreen does not add a todo presentation surface',
-      /TodoListSurface/.test(chatSrc),
-      (v) => v === false, 'false');
     const surfaceSrc = fs.readFileSync(path.join(root, 'src/components/GroceryListSurface.tsx'), 'utf8');
+    assert('grocery surface file stays independent of TodoListSurface',
+      /TodoListSurface/.test(surfaceSrc),
+      (v) => v === false, 'false');
     assert('surface keeps GROCERY LIST heading and numbered rows',
       /GROCERY LIST/.test(surfaceSrc) && /row\.position/.test(surfaceSrc) && /countLabel/.test(surfaceSrc),
       (v) => v === true, 'heading + count + numbered rows');
