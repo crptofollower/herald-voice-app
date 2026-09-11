@@ -221,6 +221,18 @@ export function logSemanticSpecialistInferenceStart(specialist: SemanticSpeciali
   safeSemanticLog('SEMANTIC_SPECIALIST_INFERENCE_START', { specialist });
 }
 
+/** Leftover serial medication probe was not eligible (non-default owner). No utterance text. */
+export function logSemanticMedicationSerialSkip(fields: {
+  reason: 'non_default_route';
+  tier: number;
+  routeReason: string;
+}): void {
+  safeSemanticLog('SEMANTIC_MEDICATION_SERIAL_SKIP', {
+    specialist: 'medication',
+    ...fields,
+  });
+}
+
 export function logSemanticSpecialistInferenceEnd(
   specialist: SemanticSpecialistName,
   durationMs: number,

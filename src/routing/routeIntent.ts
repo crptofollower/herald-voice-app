@@ -28,7 +28,7 @@ import { capturePerson } from '../db/capturePerson';
 import { findContactByName, setEmergencyContact, getEmergencyContact, retireRelationshipHolder, RELATIONSHIP_WORDS, resolvePersonIdentity, contactHasCapability, resolvePersonCapability, attachPhoneToContactById } from '../db/contactsDB';
 import { normalizePersonTarget, liftRelationshipName } from '../utils/personReference';
 import { osNameQuery, refineOsNameQuery, osNameFullyCovered } from '../utils/osContactDestination';
-import { getActiveTurnId, log as latLog, logSemanticDispatchEligibility, mono as latMono } from '../utils/latencyInstrument';
+import { getActiveTurnId, log as latLog, logSemanticDispatchEligibility, logSemanticMedicationSerialSkip, mono as latMono } from '../utils/latencyInstrument';
 import { normalizePhone } from '../utils/phone';
 import { buildPhoneConfirmPending, formatPhoneForSpeech } from '../utils/phoneConfirm';
 import { matchCandidateToken } from './conversationSession';
@@ -2757,9 +2757,22 @@ export async function routeIntent(
       }
     }
   } else {
-    if (medicationSemanticOn) {
+    // Serial medication probe is dispatch-OFF fallback only: same 3/default
+    // ownership as grocery P2 in this branch. live:data and other non-default
+    // owners must not pay a medication specialist completion.
+    if (
+      medicationSemanticOn
+      && decision.tier === 3
+      && decision.reason === 'default'
+    ) {
       const medDecision = await tryMedicationSemanticCaptureRoute(text, getSemanticCtx);
       if (medDecision) return medDecision;
+    } else if (medicationSemanticOn) {
+      logSemanticMedicationSerialSkip({
+        reason: 'non_default_route',
+        tier: decision.tier,
+        routeReason: decision.reason,
+      });
     }
     if (
       grocerySemanticOn
