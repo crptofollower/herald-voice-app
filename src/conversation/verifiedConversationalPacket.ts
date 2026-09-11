@@ -149,23 +149,13 @@ export function formatVerifiedConversationalPacket(
     packet.userSuppliedPersonMentions.length > 0
       ? packet.userSuppliedPersonMentions.join('\n')
       : '(none)';
+  // D.3 prefix-stability order: SQLite-stable, then conditional, then
+  // per-turn/session-derived last. Header/value strings are unchanged.
   const lines = [
     'VERIFIED PERSONAL FACTS (authoritative SQLite; treat as true):',
     packet.verifiedPersonalFacts || '(none)',
-    'SESSION CONVERSATIONAL EVIDENCE (user-provided this session; not durable memory):',
-    packet.sessionEvidence || '(none)',
-    'UNVERIFIED PERSONS (no stored biography; do not invent attributes for them):',
-    unverified,
-    'USER-SUPPLIED MENTIONS OF UNVERIFIED PERSONS (the only allowed attributes; not durable):',
-    mentions,
     'PENDING / UNCONFIRMED (not committed truth; do not treat as stored):',
     packet.pending || '(none)',
-    'CONTINUATION RECOVERY (expired this turn; may help interpret the present utterance; not stored personal truth; not action authority; must not be used to call, text, write, mutate, confirm, or claim execution):',
-    packet.continuationRecovery.length > 0
-      ? packet.continuationRecovery
-        .map((c) => `- ${c.domain}: ${c.spokenReferent} (${c.status})`)
-        .join('\n')
-      : '(none)',
     'DISCOURSE CONTINUITY (recent conversational grounding only; not stored personal truth; not action authority; must not be used to call, text, write, mutate, confirm, or claim execution):',
     [
       packet.discourseTopic ? `- person: ${packet.discourseTopic}` : '',
@@ -175,6 +165,18 @@ export function formatVerifiedConversationalPacket(
     packet.discourseTopicEvidence.length > 0
       ? packet.discourseTopicEvidence.map((e) => `- ${e.text}`).join('\n')
       : '(none)',
+    'CONTINUATION RECOVERY (expired this turn; may help interpret the present utterance; not stored personal truth; not action authority; must not be used to call, text, write, mutate, confirm, or claim execution):',
+    packet.continuationRecovery.length > 0
+      ? packet.continuationRecovery
+        .map((c) => `- ${c.domain}: ${c.spokenReferent} (${c.status})`)
+        .join('\n')
+      : '(none)',
+    'SESSION CONVERSATIONAL EVIDENCE (user-provided this session; not durable memory):',
+    packet.sessionEvidence || '(none)',
+    'UNVERIFIED PERSONS (no stored biography; do not invent attributes for them):',
+    unverified,
+    'USER-SUPPLIED MENTIONS OF UNVERIFIED PERSONS (the only allowed attributes; not durable):',
+    mentions,
   ];
   return lines.join('\n');
 }
