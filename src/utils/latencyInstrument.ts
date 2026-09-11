@@ -323,6 +323,32 @@ export function logActiveSubjectInferenceEnd(
   });
 }
 
+/** Idle experimental Qwen conversation prefill. No turn id, no user text. */
+export function logQwenWarmupStart(): void {
+  try {
+    log('QWEN_WARMUP_START', { model: 'experimental-qwen' });
+  } catch {
+    // instrumentation must never alter completion behavior
+  }
+}
+
+export function logQwenWarmupEnd(
+  durationMs: number,
+  result: unknown,
+  outcome: 'ok' | 'error',
+): void {
+  try {
+    log('QWEN_WARMUP_END', {
+      durationMs: Math.round(durationMs * 100) / 100,
+      outcome,
+      model: 'experimental-qwen',
+      ...extractCompletionTimingFields(result),
+    });
+  } catch {
+    // instrumentation must never alter completion behavior
+  }
+}
+
 export function logConversationInferenceStart(worker: string): void {
   safeSemanticLog('CONVERSATION_INFERENCE_START', { worker, model: worker });
 }

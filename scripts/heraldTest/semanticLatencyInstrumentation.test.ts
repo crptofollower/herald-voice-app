@@ -283,6 +283,29 @@ export async function runSemanticLatencyInstrumentationTests() {
       (v) => v === false, 'no start');
   }
 
+  {
+    const { logQwenWarmupStart, logQwenWarmupEnd } = await import('../../src/utils/latencyInstrument.ts');
+    const { lines } = await captureLatencyLines(async () => {
+      logQwenWarmupStart();
+      logQwenWarmupEnd(123.456, {
+        timings: { prompt_ms: 9, predicted_ms: 1, cache_n: 2, prompt_n: 8 },
+      }, 'ok');
+      return null;
+    });
+    const joined = lines.join('\n');
+    assert('qwen warmup instrumentation emits START before END',
+      joined.indexOf('QWEN_WARMUP_START') < joined.indexOf('QWEN_WARMUP_END')
+        && joined.indexOf('QWEN_WARMUP_START') >= 0,
+      (v) => v === true, 'start then end');
+    assert('qwen warmup END carries duration and llama timing fields',
+      /"durationMs":123.46/.test(joined)
+        && /"outcome":"ok"/.test(joined)
+        && /"prompt_ms":9/.test(joined)
+        && /"cache_n":2/.test(joined)
+        && !/hello/.test(joined),
+      (v) => v === true, 'bounded fields');
+  }
+
   const total = passed + failures.length;
   console.log(
     `\n${BOLD}SemanticLatencyInstrumentation: ${passed}/${total} passed` +

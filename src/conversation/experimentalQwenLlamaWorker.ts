@@ -13,6 +13,11 @@ import type {
 } from './conversationalWorker';
 import { sanitizeConversationalPresentation } from './conversationalPresentation';
 import { formatVerifiedConversationalPacket } from './verifiedConversationalPacket';
+import {
+  logQwenWarmupEnd,
+  logQwenWarmupStart,
+  mono as latMono,
+} from '../utils/latencyInstrument';
 
 /** Snapshot of Herald ephemeral persona — copied, not imported, so this
  *  adapter cannot drag production generation into the engine. */
@@ -43,7 +48,16 @@ export const EXPERIMENTAL_QWEN_INIT = {
   n_gpu_layers: 0,
 };
 
-function buildMessages(
+/** Neutral synthetic user line for idle prefill. Not a real utterance. */
+export const EXPERIMENTAL_QWEN_WARMUP_USER_TEXT = 'ok';
+
+/**
+ * Prefill-only bound. llama.rn evaluates the prompt then stops sampling
+ * when n_predict is 0 (rn-completion.cpp). Production generate stays at 128.
+ */
+export const EXPERIMENTAL_QWEN_WARMUP_N_PREDICT = 0;
+
+export function buildExperimentalQwenMessages(
   userText: string,
   hotEntries: HotRingEntry[],
   packetText?: string,
@@ -62,6 +76,35 @@ function buildMessages(
   }
   messages.push({ role: 'user', content: userText });
   return messages;
+}
+
+export async function warmupExperimentalQwenConversation(ctx: {
+  completion: LlamaContext['completion'];
+}): Promise<{ outcome: 'ok' | 'error' }> {
+  const t0 = latMono();
+  logQwenWarmupStart();
+  try {
+    const result = await ctx.completion({
+      messages: buildExperimentalQwenMessages(EXPERIMENTAL_QWEN_WARMUP_USER_TEXT, []),
+      ...EXPERIMENTAL_QWEN_GENERATION,
+      n_predict: EXPERIMENTAL_QWEN_WARMUP_N_PREDICT,
+    });
+    logQwenWarmupEnd(latMono() - t0, result, 'ok');
+    return { outcome: 'ok' };
+  } catch {
+    logQwenWarmupEnd(latMono() - t0, undefined, 'error');
+    return { outcome: 'error' };
+  }
+}
+
+/** After successful initLlama: one warmup, then publish only if still mounted. */
+export async function completeExperimentalQwenConversationInit(
+  ctx: { completion: LlamaContext['completion'] },
+  isCancelled: () => boolean,
+): Promise<'publish' | 'cancelled'> {
+  await warmupExperimentalQwenConversation(ctx);
+  if (isCancelled()) return 'cancelled';
+  return 'publish';
 }
 
 export function createExperimentalQwenLlamaWorker(deps: {
@@ -84,7 +127,7 @@ export function createExperimentalQwenLlamaWorker(deps: {
       try {
         const result = await ctx.completion(
           {
-            messages: buildMessages(
+            messages: buildExperimentalQwenMessages(
               request.userText,
               request.hotEntries,
               request.packet ? formatVerifiedConversationalPacket(request.packet) : undefined,

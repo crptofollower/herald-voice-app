@@ -1,10 +1,14 @@
 // Independent Qwen conversational engine. Independent of useLocalLLM
 // and the retired classifier flag. Never warms or runs the retired classifier.
+// After successful initLlama, one discarded prefill runs on this ctx before ready.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { initLlama, type LlamaContext } from 'llama.rn';
 import { CONVERSATIONAL_WORKER_EXPERIMENT_ENABLED } from '../constants/features';
-import { EXPERIMENTAL_QWEN_INIT } from './experimentalQwenLlamaWorker';
+import {
+  completeExperimentalQwenConversationInit,
+  EXPERIMENTAL_QWEN_INIT,
+} from './experimentalQwenLlamaWorker';
 import { ensureExperimentalQwenModelPath } from './experimentalQwenModel';
 
 export type ExperimentalConversationStatus =
@@ -44,6 +48,11 @@ export function useExperimentalConversationalEngine(): {
           ...EXPERIMENTAL_QWEN_INIT,
         });
         if (cancelled) {
+          await ctx.release().catch(() => {});
+          return;
+        }
+        const decision = await completeExperimentalQwenConversationInit(ctx, () => cancelled);
+        if (decision === 'cancelled') {
           await ctx.release().catch(() => {});
           return;
         }
