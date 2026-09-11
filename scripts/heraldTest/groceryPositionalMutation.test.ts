@@ -406,6 +406,115 @@ export async function runGroceryPositionalMutationTests() {
   }
 
   {
+    const { db, say, ordered, subject, medication } = fresh();
+    for (let i = 1; i <= 12; i++) {
+      insertItem(db, `g${i}`, `item${i}`, `2026-01-${String(i).padStart(2, '0')}T00:00:00.000Z`);
+    }
+    insertItem(db, 'g_decoy', 'decoy-row', '2025-01-01T00:00:00.000Z', 1);
+    presentGrocery(ordered, subject, medication);
+    const presented = ordered.peek()?.presentedIds ?? [];
+    assert('GPM63 presented slot 12 is g12 not decoy', presented[11], v => v === 'g12', 'g12');
+    const t = await say('remove 12');
+    assert('GPM63 bare remove 12 uses presented ID', t,
+      v => v.handled === true && v.responseText.startsWith('Done — item12 is off.'),
+      'Done — item12');
+    assert('GPM64 presented #12 removed', rowState(db, 'g12').checked, v => v === 1, '1');
+    assert('GPM65 decoy sqlite row not used', rowState(db, 'g_decoy').checked, v => v === 1, '1');
+    assert('GPM66 slot 11 not removed', rowState(db, 'g11').checked, v => v === 0, '0');
+  }
+
+  {
+    const { db, say, ordered, subject, medication } = fresh();
+    for (let i = 1; i <= 12; i++) {
+      insertItem(db, `g${i}`, `item${i}`, `2026-01-${String(i).padStart(2, '0')}T00:00:00.000Z`);
+    }
+    const ids = getPresentedOpenListItems('grocery').map((x) => x.id);
+    subject.clear();
+    medication.clear();
+    ordered.establish('grocery', [...ids.slice(0, 11), 'g12']);
+    const t = await say('Can you remove 12');
+    assert('GPM67 Can you remove 12 uses live slot 12', t,
+      v => v.handled === true && v.responseText.startsWith('Done — item12 is off.'),
+      'Done — item12');
+    assert('GPM68 g12 checked after polite remove', rowState(db, 'g12').checked, v => v === 1, '1');
+  }
+
+  {
+    const { db, say, ordered, subject, medication } = fresh();
+    for (let i = 1; i <= 12; i++) {
+      insertItem(db, `g${i}`, `item${i}`, `2026-01-${String(i).padStart(2, '0')}T00:00:00.000Z`);
+    }
+    presentGrocery(ordered, subject, medication);
+    const t = await say('Take off number 12.');
+    assert('GPM69 take off number 12 remains', t,
+      v => v.handled === true && v.responseText.startsWith('Done — item12 is off.'),
+      'Done — item12');
+  }
+
+  {
+    const { db, say, ordered, subject, medication } = fresh();
+    stockFour(db);
+    presentGrocery(ordered, subject, medication);
+    const t = await say('Delete the third one.');
+    assert('GPM70 delete the third one remains bananas', t,
+      v => v.handled === true && v.responseText.startsWith('Done — bananas is off.'),
+      'Done — bananas');
+  }
+
+  {
+    const { db, say, ordered, subject, medication } = fresh();
+    for (let i = 1; i <= 12; i++) {
+      insertItem(db, `g${i}`, `item${i}`, `2026-01-${String(i).padStart(2, '0')}T00:00:00.000Z`);
+    }
+    presentGrocery(ordered, subject, medication);
+    const t = await say('remove 12 mg');
+    assert('GPM71 dose is not grocery position', rowState(db, 'g12').checked, v => v === 0, '0');
+    assert('GPM71b dose not positional mutation', t,
+      v => !(v.handled === true && typeof v.responseText === 'string' && /item12/.test(v.responseText)),
+      'no item12 removal');
+  }
+
+  {
+    const { db, say, ordered, subject, medication } = fresh();
+    for (let i = 1; i <= 12; i++) {
+      insertItem(db, `g${i}`, `item${i}`, `2026-01-${String(i).padStart(2, '0')}T00:00:00.000Z`);
+    }
+    presentGrocery(ordered, subject, medication);
+    const t = await say('remove 99');
+    assert('GPM72 out of range confuses', t, v => v.responseText === ORDERED_PRESENTATION_CONFUSION, 'confusion');
+    assert('GPM73 out of range no write', rowState(db, 'g12').checked, v => v === 0, '0');
+    assert('GPM74 out of range keeps live grocery', ordered.hasLive() && ordered.peek()?.owner === 'grocery',
+      v => v === true, 'live grocery');
+  }
+
+  {
+    const { db, say, ordered } = fresh();
+    for (let i = 1; i <= 12; i++) {
+      insertItem(db, `g${i}`, `item${i}`, `2026-01-${String(i).padStart(2, '0')}T00:00:00.000Z`);
+    }
+    const t = await say('remove 12');
+    assert('GPM75 no live grocery OPR does not write', rowState(db, 'g12').checked, v => v === 0, '0');
+    assert('GPM75b no live grocery is not positional remove', t,
+      v => !(v.handled === true && typeof v.responseText === 'string' && /item12/.test(v.responseText ?? '')),
+      'no item12 ack');
+    assert('GPM76 no live grocery holder', ordered.hasLive(), v => v === false, 'false');
+  }
+
+  {
+    const { db, say, ordered, medication } = fresh();
+    for (let i = 1; i <= 12; i++) {
+      insertItem(db, `g${i}`, `item${i}`, `2026-01-${String(i).padStart(2, '0')}T00:00:00.000Z`);
+    }
+    medication.establish(['med-1']);
+    const t = await say('remove 12');
+    assert('GPM77 live medication does not grocery-steal', rowState(db, 'g12').checked, v => v === 0, '0');
+    assert('GPM77b live medication not grocery positional ack', t,
+      v => !(v.handled === true && typeof v.responseText === 'string' && /item12/.test(v.responseText ?? '')),
+      'no item12 ack');
+    assert('GPM78 grocery OPR not invented', ordered.hasLive(), v => v === false, 'false');
+  }
+
+  {
     const { say } = fresh();
     const t = await say('Delete number four on my grocery list.');
     assert('GPM62 named empty list', t, v => v.responseText === 'Your grocery list is empty.', 'empty');

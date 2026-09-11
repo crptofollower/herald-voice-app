@@ -83,6 +83,22 @@ export function hasBoundedPositionEvidence(text: string): boolean {
   return false;
 }
 
+/**
+ * Mutation-only: a single bare cardinal (not "number 12", not "the third one").
+ * Callers must also require a live grocery Ordered Presentation grant.
+ * Dose/time shapes are refused. Competing digits are not a position.
+ */
+export function extractBareMutationPresentedCardinal(text: string): number | null {
+  const raw = text.trim();
+  if (!raw) return null;
+  if (!isPositionMutationLanguage(raw)) return null;
+  if (DOSE_RE.test(raw) || TIME_RE.test(raw)) return null;
+  const t = collapseEquivalentPositionTokens(stripFiller(raw));
+  const digits = [...t.matchAll(/\b(\d+)\b/g)];
+  if (digits.length !== 1) return null;
+  return positiveInt(digits[0][1]);
+}
+
 type Hit = {
   n: number;
   surface: PositionSurface;

@@ -51,7 +51,7 @@ import {
   markOpenListItemRemovedById,
 } from '../db/listRead';
 import { parseGroceryNamedCollectionRead } from './groceryNamedCollectionReentry';
-import { interpretPositionReference, isPositionMutationLanguage, hasBoundedPositionEvidence } from './positionReference';
+import { interpretPositionReference, isPositionMutationLanguage, hasBoundedPositionEvidence, extractBareMutationPresentedCardinal } from './positionReference';
 import {
   parseGroceryPositionalMutation,
   hasGroceryNamedMutationCue,
@@ -643,11 +643,21 @@ export async function processUtterance(
   }
   // 1a4) Grocery positional mutation — after reads, before unused-clear / routeIntent.
   {
-    const parsed = parseGroceryPositionalMutation(text);
+    const live = orderedPresentation?.peek();
+    const liveGrocery = live?.owner === 'grocery' ? live : null;
+    let parsed = parseGroceryPositionalMutation(text);
+    if (
+      parsed.kind === 'not_this_act'
+      && liveGrocery
+      && !isGroceryMutationDomainBlocked(text)
+    ) {
+      const n = extractBareMutationPresentedCardinal(text);
+      if (n != null) {
+        parsed = { kind: 'position', n };
+      }
+    }
     if (parsed.kind !== 'not_this_act') {
       const named = hasGroceryNamedMutationCue(text);
-      const live = orderedPresentation?.peek();
-      const liveGrocery = live?.owner === 'grocery' ? live : null;
 
       if (parsed.kind === 'ambiguous' || parsed.kind === 'unresolved') {
         if (named || liveGrocery) {
