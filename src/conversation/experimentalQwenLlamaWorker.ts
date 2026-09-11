@@ -108,8 +108,8 @@ export function createExperimentalQwenLlamaWorker(deps: {
         );
         const raw = (result?.content || result?.text || '').trim();
         const presented = sanitizeConversationalPresentation(raw);
-        if (!presented.text) return { status: 'unavailable', reason: 'empty-output' };
-        return { status: 'ok', replyText: presented.text };
+        if (!presented.text) return { status: 'unavailable', reason: 'empty-output', completionResult: result };
+        return { status: 'ok', replyText: presented.text, completionResult: result };
       } catch {
         return { status: 'unavailable', reason: 'error' };
       }

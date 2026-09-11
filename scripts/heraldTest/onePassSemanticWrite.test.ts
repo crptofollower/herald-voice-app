@@ -12,10 +12,25 @@ import { normalizeInput } from '../../src/utils/normalizeInput.ts';
 import {
   parseCapabilityProposal,
   CAPABILITY_PROPOSAL_SYSTEM_PROMPT,
+  CAPABILITY_PROPOSAL_RESPONSE_FORMAT,
 } from '../../src/routing/capabilityRouting.ts';
-import { todoSemanticProposalFromDispatchWrite } from '../../src/routing/todoSemanticCapture.ts';
-import { grocerySemanticProposalFromDispatchWrite } from '../../src/routing/grocerySemanticDecomposition.ts';
-import { medicationSemanticProposalFromDispatchWrite } from '../../src/routing/medicationSemanticInterpretation.ts';
+import {
+  admitTodoSemanticP2,
+  diagnoseTodoDispatchWriteLift,
+  groundTodoCandidates,
+  todoSemanticProposalFromDispatchWrite,
+} from '../../src/routing/todoSemanticCapture.ts';
+import {
+  admitGrocerySemanticP2,
+  diagnoseGroceryDispatchWriteLift,
+  grocerySemanticProposalFromDispatchWrite,
+  groundGroceryCandidates,
+} from '../../src/routing/grocerySemanticDecomposition.ts';
+import {
+  admitMedicationSemanticProposal,
+  diagnoseMedicationDispatchWriteLift,
+  medicationSemanticProposalFromDispatchWrite,
+} from '../../src/routing/medicationSemanticInterpretation.ts';
 import { MEDICATION_SEMANTIC_PROPOSAL_SYSTEM_PROMPT } from '../../src/routing/medicationSemanticInterpretation.ts';
 import { GROCERY_SEMANTIC_PROPOSAL_SYSTEM_PROMPT } from '../../src/routing/grocerySemanticDecomposition.ts';
 import { TODO_SEMANTIC_PROPOSAL_SYSTEM_PROMPT } from '../../src/routing/todoSemanticCapture.ts';
@@ -160,7 +175,48 @@ export async function runOnePassSemanticWriteTests() {
     }
   }
 
-  console.log(`\n${BOLD}-- One-pass semantic write (Slice B) --${RESET}\n`);
+  console.log(`\n${BOLD}-- One-pass semantic write (Slice B / B.1) --${RESET}\n`);
+
+  {
+    const schema = (CAPABILITY_PROPOSAL_RESPONSE_FORMAT.json_schema as { schema: { oneOf: Array<{
+      required?: string[];
+      properties?: { capability?: { enum?: string[] } };
+    }> } }).schema;
+    assert('dispatch schema uses oneOf write vs read branches',
+      Array.isArray(schema.oneOf) && schema.oneOf.length === 4,
+      (v) => v === true, '4 branches');
+    assert('read/off-ramp branch requires only capability+confidence',
+      schema.oneOf[0]?.required,
+      (v) => Array.isArray(v) && v.length === 2 && v.includes('capability') && v.includes('confidence'),
+      'capability confidence');
+    assert('todo.capture schema requires op+candidates+score',
+      schema.oneOf[1]?.required,
+      (v) => Array.isArray(v) && v.includes('op') && v.includes('candidates') && v.includes('score'),
+      'todo write required');
+    assert('grocery.capture schema requires op+candidates+score',
+      schema.oneOf[2]?.required,
+      (v) => Array.isArray(v) && v.includes('op') && v.includes('candidates') && v.includes('score'),
+      'grocery write required');
+    assert('medication.capture schema requires mentions+predicate+focus+score',
+      schema.oneOf[3]?.required,
+      (v) => Array.isArray(v) && v.includes('mentions') && v.includes('predicate') && v.includes('focus') && v.includes('score'),
+      'medication write required');
+    assert('read/off-ramp enum excludes write capabilities',
+      schema.oneOf[0]?.properties?.capability?.enum,
+      (v) => Array.isArray(v) && !v.includes('todo.capture') && !v.includes('grocery.capture') && !v.includes('medication.capture'),
+      'no writes in read enum');
+  }
+
+  {
+    assert('dispatch prompt requires verbatim write spans',
+      /exact contiguous span/.test(CAPABILITY_PROPOSAL_SYSTEM_PROMPT)
+      && /Do not paraphrase/.test(CAPABILITY_PROPOSAL_SYSTEM_PROMPT)
+      && /multi-word/.test(CAPABILITY_PROPOSAL_SYSTEM_PROMPT),
+      (v) => v === true, 'verbatim contract');
+    assert('dispatch prompt does not encode device-proof write sentences',
+      /paper towels|water the plants|\bPaul\b/.test(CAPABILITY_PROPOSAL_SYSTEM_PROMPT),
+      (v) => v === false, 'no device sentences');
+  }
 
   {
     const p = parseCapabilityProposal(ONE_PASS_TODO);
@@ -349,6 +405,242 @@ export async function runOnePassSemanticWriteTests() {
       decision.kind === 'capture' && (decision as { source?: string }).source === 'deterministic',
       (v) => v === true, 'deterministic capture');
     assert('deterministic todo_add does not run dispatch', counts.total, (v) => v === 0, '0');
+  }
+
+  {
+    const json = JSON.stringify({
+      capability: 'todo.capture',
+      confidence: 'high',
+      op: 'todo_capture',
+      candidates: ['feed the cat'],
+      score: 0.91,
+    });
+    const p = parseCapabilityProposal(json);
+    const lifted = p ? todoSemanticProposalFromDispatchWrite(p) : null;
+    assert('todo one-pass lifts verbatim task span',
+      lifted?.capability === 'todo_capture' && lifted.candidates[0] === 'feed the cat' && lifted.confidence === 0.91,
+      (v) => v === true, 'feed the cat');
+    assert('todo lift success diagnostic is ok',
+      p ? diagnoseTodoDispatchWriteLift(p).reason : 'no-parse',
+      (v) => v === 'ok', 'ok');
+  }
+
+  {
+    const json = JSON.stringify({
+      capability: 'grocery.capture',
+      confidence: 'high',
+      op: 'grocery_capture',
+      candidates: ['almond milk'],
+      score: 0.93,
+    });
+    const p = parseCapabilityProposal(json);
+    const lifted = p ? grocerySemanticProposalFromDispatchWrite(p) : null;
+    assert('grocery one-pass lifts verbatim multi-word item',
+      lifted?.capability === 'grocery_capture' && lifted.candidates[0] === 'almond milk',
+      (v) => v === true, 'almond milk');
+    const grounded = groundGroceryCandidates('We need almond milk.', lifted?.candidates ?? []);
+    assert('existing grocery grounding accepts the verbatim multi-word span',
+      grounded?.[0], (v) => v === 'almond milk', 'almond milk');
+    const paraphrased = groundGroceryCandidates('We need almond milk.', ['almond milks']);
+    assert('existing grocery grounding still rejects a non-verbatim candidate',
+      paraphrased, (v) => v === null, 'null');
+  }
+
+  {
+    const json = JSON.stringify({
+      capability: 'medication.capture',
+      confidence: 'high',
+      mentions: ['Lisinopril'],
+      predicate: 'is',
+      focus: 'Lisinopril',
+      score: 0.88,
+    });
+    const p = parseCapabilityProposal(json);
+    const lifted = p ? medicationSemanticProposalFromDispatchWrite(p) : null;
+    assert('medication one-pass still lifts mentions/predicate/focus/score',
+      lifted?.focus === 'Lisinopril' && lifted.mentions[0] === 'Lisinopril' && lifted.predicate === 'is' && lifted.confidence === 0.88,
+      (v) => v === true, 'Lisinopril');
+  }
+
+  {
+    const p = parseCapabilityProposal(DISPATCH_TODO_BARE);
+    assert('missing write payload diagnostic is missing_write',
+      p ? diagnoseTodoDispatchWriteLift(p).reason : 'no-parse',
+      (v) => v === 'missing_write', 'missing_write');
+  }
+
+  {
+    const p = parseCapabilityProposal(JSON.stringify({
+      capability: 'todo.capture',
+      confidence: 'high',
+      op: 'grocery_capture',
+      candidates: ['feed the cat'],
+      score: 0.9,
+    }));
+    assert('wrong-family op diagnostic is wrong_family_op',
+      p ? diagnoseTodoDispatchWriteLift(p).reason : 'no-parse',
+      (v) => v === 'wrong_family_op', 'wrong_family_op');
+  }
+
+  {
+    const p = parseCapabilityProposal(JSON.stringify({
+      capability: 'todo.capture',
+      confidence: 'high',
+      op: 'todo_capture',
+      score: 0.9,
+    }));
+    assert('missing candidates diagnostic is missing_candidates',
+      p ? diagnoseTodoDispatchWriteLift(p).reason : 'no-parse',
+      (v) => v === 'missing_candidates', 'missing_candidates');
+  }
+
+  {
+    const p = parseCapabilityProposal(JSON.stringify({
+      capability: 'grocery.capture',
+      confidence: 'high',
+      op: 'grocery_capture',
+      candidates: ['almond milk'],
+    }));
+    assert('missing score diagnostic is missing_score',
+      p ? diagnoseGroceryDispatchWriteLift(p).reason : 'no-parse',
+      (v) => v === 'missing_score', 'missing_score');
+  }
+
+  {
+    const p = parseCapabilityProposal(JSON.stringify({
+      capability: 'todo.capture',
+      confidence: 'high',
+      op: 'todo_capture',
+      candidates: [],
+      score: 0.9,
+    }));
+    const diag = p ? diagnoseTodoDispatchWriteLift(p) : null;
+    assert('empty candidates still lifts for admission to refuse',
+      diag?.lifted?.candidates.length === 0 && diag.reason === 'empty_candidates',
+      (v) => v === true, 'empty_candidates');
+    const admitted = diag?.lifted
+      ? admitTodoSemanticP2('We need to feed the cat.', diag.lifted, { hasPending: false })
+      : null;
+    assert('empty todo candidates do not admit',
+      admitted?.decision, (v) => v === 'CLARIFY', 'CLARIFY');
+  }
+
+  {
+    const p = parseCapabilityProposal(JSON.stringify({
+      capability: 'grocery.capture',
+      confidence: 'high',
+      op: 'grocery_capture',
+      candidates: [],
+      score: 0.9,
+    }));
+    const lifted = p ? grocerySemanticProposalFromDispatchWrite(p) : null;
+    const admitted = lifted
+      ? admitGrocerySemanticP2('We need almond milk.', lifted, { hasPending: false })
+      : null;
+    assert('empty grocery candidates do not admit',
+      admitted?.decision, (v) => v === 'REJECT', 'REJECT');
+  }
+
+  {
+    const p = parseCapabilityProposal(JSON.stringify({
+      capability: 'medication.capture',
+      confidence: 'high',
+      predicate: 'is',
+      focus: 'Lisinopril',
+      score: 0.9,
+    }));
+    assert('missing mentions diagnostic is missing_mentions',
+      p ? diagnoseMedicationDispatchWriteLift(p).reason : 'no-parse',
+      (v) => v === 'missing_mentions', 'missing_mentions');
+  }
+
+  {
+    const p = parseCapabilityProposal(DISPATCH_READ);
+    assert('semantic read parse does not require a write payload',
+      p?.capability === 'medication.read_summary' && p.write === undefined,
+      (v) => v === true, 'read_summary no write');
+  }
+
+  {
+    assert('todo grounding remains verbatim-span only',
+      groundTodoCandidates('We need to feed the cat.', ['feed the cat'])?.[0] === 'feed the cat'
+      && groundTodoCandidates('We need to feed the cat.', ['feeding cats']) === null,
+      (v) => v === true, 'verbatim only');
+  }
+
+  {
+    const d = admitTodoSemanticP2(
+      'We need to feed the cat.',
+      { capability: 'todo_capture', candidates: ['feed the cat'], confidence: 0.91 },
+      { hasPending: false },
+    );
+    assert('todo P2 admission is unchanged for a grounded one-pass shape',
+      d.decision === 'ADMIT' && d.decision === 'ADMIT' && d.candidates[0] === 'feed the cat',
+      (v) => v === true, 'ADMIT');
+  }
+
+  {
+    const d = admitGrocerySemanticP2(
+      'We need almond milk.',
+      { capability: 'grocery_capture', candidates: ['almond milk'], confidence: 0.93 },
+      { hasPending: false },
+    );
+    assert('grocery P2 admission is unchanged for a grounded multi-word item',
+      d.decision === 'ADMIT' && d.decision === 'ADMIT' && d.candidates[0] === 'almond milk',
+      (v) => v === true, 'ADMIT');
+  }
+
+  {
+    const d = admitMedicationSemanticProposal(
+      'Lisinopril is my blood pressure prescription.',
+      { mentions: ['Lisinopril'], predicate: 'is', focus: 'Lisinopril', confidence: 0.88 },
+      { hasPending: false },
+    );
+    assert('medication admission is unchanged for a lifted one-pass shape',
+      d.decision === 'ADMIT' && (d as { drug?: string }).drug === 'Lisinopril',
+      (v) => v === true, 'ADMIT Lisinopril');
+  }
+
+  {
+    freshDB();
+    const json = JSON.stringify({
+      capability: 'grocery.capture',
+      confidence: 'high',
+      op: 'grocery_capture',
+      candidates: ['almond milk'],
+      score: 0.93,
+    });
+    const { ctx, counts } = countingCtx([json]);
+    const { result, lines } = await captureLatencyLines(() =>
+      routeIntent('We need almond milk.', baseDeps(ctx)));
+    const joined = lines.join('\n');
+    assert('multi-word grocery one-pass admits without specialist inference',
+      result.kind === 'capture' && counts.grocery === 0 && counts.dispatch === 1,
+      (v) => v === true, 'capture dispatch-only');
+    assert('grounding failure/success logs remain on the one-pass path',
+      /SEMANTIC_GROUNDING_DONE/.test(joined) && /SEMANTIC_ADMISSION_DONE/.test(joined)
+      && !/SEMANTIC_SPECIALIST_INFERENCE_START/.test(joined),
+      (v) => v === true, 'grounding+admission no specialist');
+  }
+
+  {
+    freshDB();
+    const ungrounded = JSON.stringify({
+      capability: 'grocery.capture',
+      confidence: 'high',
+      op: 'grocery_capture',
+      candidates: ['saffron extract'],
+      score: 0.99,
+    });
+    const { ctx } = countingCtx([ungrounded]);
+    const { result, lines } = await captureLatencyLines(() =>
+      routeIntent('We need almond milk.', baseDeps(ctx)));
+    const joined = lines.join('\n');
+    assert('ungrounded grocery candidate still fails closed',
+      result.kind, (v) => v !== 'capture', 'not capture');
+    assert('grounding failure logs the candidate string',
+      /saffron extract/.test(joined) && /ungrounded_candidate/.test(joined),
+      (v) => v === true, 'candidate string');
   }
 
   const total = passed + failures.length;

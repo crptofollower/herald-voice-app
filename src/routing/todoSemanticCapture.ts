@@ -12,10 +12,13 @@ import type { LlamaContext } from 'llama.rn';
 import { findStandardSpan } from '../hooks/llmLayers';
 import { isLlamaContextBusy } from '../utils/llamaContextExclusive';
 import {
+  boundDiagnosticStrings,
   logSemanticAdmissionDone,
   logSemanticGroundingDone,
   logSemanticSpecialistInferenceEnd,
   logSemanticSpecialistInferenceStart,
+  logSemanticWriteLift,
+  type SemanticWriteLiftReason,
   mono as latMono,
 } from '../utils/latencyInstrument';
 import { isReadShapedUtterance } from '../utils/detectMedicalEvent';
@@ -77,22 +80,59 @@ export function parseTodoSemanticProposal(rawModelOutput: string): TodoSemanticP
   };
 }
 
-/** Lift a one-pass dispatch write payload into the specialist proposal shape. No inference. */
-export function todoSemanticProposalFromDispatchWrite(
+export type TodoDispatchWriteLiftDiag = {
+  lifted: TodoSemanticProposal | null;
+  selectedCapability: string;
+  outcome: 'ok' | 'fail';
+  reason: SemanticWriteLiftReason;
+};
+
+export function diagnoseTodoDispatchWriteLift(
   proposal: CapabilityProposal,
-): TodoSemanticProposal | null {
-  if (proposal.capability !== 'todo.capture') return null;
-  const write = proposal.write;
-  if (!write) return null;
-  if (write.op !== 'todo_capture' && write.op !== 'not_todo_capture' && write.op !== 'uncertain') {
-    return null;
+): TodoDispatchWriteLiftDiag {
+  const selectedCapability = proposal.capability;
+  if (proposal.capability !== 'todo.capture') {
+    return { lifted: null, selectedCapability, outcome: 'fail', reason: 'wrong_capability' };
   }
-  if (!write.candidates || write.score === undefined) return null;
-  return {
+  const write = proposal.write;
+  if (!write) {
+    return { lifted: null, selectedCapability, outcome: 'fail', reason: 'missing_write' };
+  }
+  if (write.op === undefined) {
+    return { lifted: null, selectedCapability, outcome: 'fail', reason: 'missing_op' };
+  }
+  if (write.op !== 'todo_capture' && write.op !== 'not_todo_capture' && write.op !== 'uncertain') {
+    return { lifted: null, selectedCapability, outcome: 'fail', reason: 'wrong_family_op' };
+  }
+  if (write.candidates === undefined) {
+    return { lifted: null, selectedCapability, outcome: 'fail', reason: 'missing_candidates' };
+  }
+  if (write.score === undefined) {
+    return { lifted: null, selectedCapability, outcome: 'fail', reason: 'missing_score' };
+  }
+  const lifted: TodoSemanticProposal = {
     capability: write.op,
     candidates: write.candidates,
     confidence: write.score,
   };
+  if (write.candidates.length === 0) {
+    return { lifted, selectedCapability, outcome: 'ok', reason: 'empty_candidates' };
+  }
+  return { lifted, selectedCapability, outcome: 'ok', reason: 'ok' };
+}
+
+/** Lift a one-pass dispatch write payload into the specialist proposal shape. No inference. */
+export function todoSemanticProposalFromDispatchWrite(
+  proposal: CapabilityProposal,
+): TodoSemanticProposal | null {
+  const diag = diagnoseTodoDispatchWriteLift(proposal);
+  logSemanticWriteLift({
+    specialist: 'todo',
+    selectedCapability: diag.selectedCapability,
+    outcome: diag.outcome,
+    reason: diag.reason,
+  });
+  return diag.lifted;
 }
 
 /** Every candidate must be a verbatim utterance span. One miss rejects the set. */
@@ -167,6 +207,7 @@ export function admitTodoSemanticP2(
       capability: 'todo.capture',
       result: 'failed',
       reason: 'ungrounded_candidate',
+      candidates: boundDiagnosticStrings(proposal.candidates),
     });
     return logAdmission({ decision: 'REJECT', reason: 'ungrounded_candidate' });
   }

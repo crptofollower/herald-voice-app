@@ -50,10 +50,13 @@ import {
 } from '../utils/detectMedicalEvent';
 import { isLlamaContextBusy } from '../utils/llamaContextExclusive';
 import {
+  boundDiagnosticStrings,
   logSemanticAdmissionDone,
   logSemanticGroundingDone,
   logSemanticSpecialistInferenceEnd,
   logSemanticSpecialistInferenceStart,
+  logSemanticWriteLift,
+  type SemanticWriteLiftReason,
   mono as latMono,
 } from '../utils/latencyInstrument';
 import type { CapabilityProposal } from './capabilityRouting';
@@ -105,22 +108,60 @@ export function parseSemanticProposal(rawModelOutput: string): SemanticProposal 
   };
 }
 
-/** Lift a one-pass dispatch write payload into the specialist proposal shape. No inference. */
-export function medicationSemanticProposalFromDispatchWrite(
+export type MedicationDispatchWriteLiftDiag = {
+  lifted: SemanticProposal | null;
+  selectedCapability: string;
+  outcome: 'ok' | 'fail';
+  reason: SemanticWriteLiftReason;
+};
+
+export function diagnoseMedicationDispatchWriteLift(
   proposal: CapabilityProposal,
-): SemanticProposal | null {
-  if (proposal.capability !== 'medication.capture') return null;
-  const write = proposal.write;
-  if (!write) return null;
-  if (!write.mentions || write.predicate === undefined || write.focus === undefined || write.score === undefined) {
-    return null;
+): MedicationDispatchWriteLiftDiag {
+  const selectedCapability = proposal.capability;
+  if (proposal.capability !== 'medication.capture') {
+    return { lifted: null, selectedCapability, outcome: 'fail', reason: 'wrong_capability' };
   }
-  return {
+  const write = proposal.write;
+  if (!write) {
+    return { lifted: null, selectedCapability, outcome: 'fail', reason: 'missing_write' };
+  }
+  if (write.mentions === undefined) {
+    return { lifted: null, selectedCapability, outcome: 'fail', reason: 'missing_mentions' };
+  }
+  if (write.predicate === undefined) {
+    return { lifted: null, selectedCapability, outcome: 'fail', reason: 'missing_predicate' };
+  }
+  if (write.focus === undefined) {
+    return { lifted: null, selectedCapability, outcome: 'fail', reason: 'missing_focus' };
+  }
+  if (write.score === undefined) {
+    return { lifted: null, selectedCapability, outcome: 'fail', reason: 'missing_score' };
+  }
+  const lifted: SemanticProposal = {
     mentions: write.mentions,
     predicate: write.predicate,
     focus: write.focus,
     confidence: write.score,
   };
+  if (write.mentions.length === 0) {
+    return { lifted, selectedCapability, outcome: 'ok', reason: 'empty_mentions' };
+  }
+  return { lifted, selectedCapability, outcome: 'ok', reason: 'ok' };
+}
+
+/** Lift a one-pass dispatch write payload into the specialist proposal shape. No inference. */
+export function medicationSemanticProposalFromDispatchWrite(
+  proposal: CapabilityProposal,
+): SemanticProposal | null {
+  const diag = diagnoseMedicationDispatchWriteLift(proposal);
+  logSemanticWriteLift({
+    specialist: 'medication',
+    selectedCapability: diag.selectedCapability,
+    outcome: diag.outcome,
+    reason: diag.reason,
+  });
+  return diag.lifted;
 }
 
 // ─── Provenance verification (Invariant 3) ─────────────────────────────────
@@ -230,6 +271,7 @@ export function admitMedicationSemanticProposal(
         capability: 'medication.capture',
         result: 'failed',
         reason: 'unverified_mention',
+        candidates: boundDiagnosticStrings(proposal.mentions),
       });
       return finishMedicationAdmission({ decision: 'REJECT', reason: 'unverified_mention' });
     }
@@ -239,6 +281,7 @@ export function admitMedicationSemanticProposal(
       capability: 'medication.capture',
       result: 'failed',
       reason: 'unverified_focus',
+      candidates: boundDiagnosticStrings([proposal.focus]),
     });
     return finishMedicationAdmission({ decision: 'REJECT', reason: 'unverified_focus' });
   }

@@ -6,6 +6,11 @@
 import type { HotRingEntry } from '../utils/hotNarrativeRing';
 import type { EphemeralResult } from '../utils/ephemeralConversation';
 import type { VerifiedConversationalPacket } from './verifiedConversationalPacket';
+import {
+  logConversationInferenceEnd,
+  logConversationInferenceStart,
+  mono as latMono,
+} from '../utils/latencyInstrument';
 
 export type ConversationUnavailableReason =
   | 'no-ctx'
@@ -22,8 +27,8 @@ export type ConversationRequest = {
 };
 
 export type ConversationResponse =
-  | { status: 'ok'; replyText: string }
-  | { status: 'unavailable'; reason: ConversationUnavailableReason };
+  | { status: 'ok'; replyText: string; completionResult?: unknown }
+  | { status: 'unavailable'; reason: ConversationUnavailableReason; completionResult?: unknown };
 
 export type ConversationalWorker = {
   /** Stable engine-neutral capability id — not a vendor/runtime name. */
@@ -56,5 +61,19 @@ export async function generateViaSelectedWorker(
   request: ConversationRequest,
 ): Promise<EphemeralResult> {
   if (!worker) return { status: 'unavailable', reason: 'no-ctx' };
-  return workerResponseToEphemeralResult(await worker.generate(request));
+  const t0 = latMono();
+  logConversationInferenceStart(worker.id);
+  try {
+    const response = await worker.generate(request);
+    logConversationInferenceEnd(
+      latMono() - t0,
+      response.completionResult,
+      response.status === 'ok' ? 'ok' : 'unavailable',
+      worker.id,
+    );
+    return workerResponseToEphemeralResult(response);
+  } catch (e) {
+    logConversationInferenceEnd(latMono() - t0, undefined, 'error', worker.id);
+    throw e;
+  }
 }

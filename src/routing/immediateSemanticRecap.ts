@@ -31,6 +31,11 @@
 
 import type { LlamaContext } from 'llama.rn';
 import type { ConversationTurnFocusEntry, ConversationTurnRecord } from './conversationTurnLedger';
+import {
+  logSemanticRecapInferenceEnd,
+  logSemanticRecapInferenceStart,
+  mono as latMono,
+} from '../utils/latencyInstrument';
 
 // ─── Diagnostics only (2026-09-xx, device acceptance gate) ────────────────
 // Pure observability: one compact event per answerImmediateSemanticRecap()
@@ -289,6 +294,8 @@ export async function generateRecapInterpretationProposal(
   if (!ctx) return { status: 'unavailable' };
   if (interpreterInFlight) return { status: 'unavailable' };
   interpreterInFlight = true;
+  const t0 = latMono();
+  logSemanticRecapInferenceStart();
   try {
     const result = await ctx.completion({
       messages: [
@@ -303,8 +310,10 @@ export async function generateRecapInterpretationProposal(
     } as any);
     const text = String((result as any)?.content || (result as any)?.text || '').trim();
     const proposal = parseRecapInterpretationProposal(text, candidates.length);
+    logSemanticRecapInferenceEnd(latMono() - t0, result, proposal ? 'ok' : 'parse_fail');
     return proposal ? { status: 'ok', proposal } : { status: 'parse_fail' };
   } catch {
+    logSemanticRecapInferenceEnd(latMono() - t0, undefined, 'error');
     return { status: 'unavailable' };
   } finally {
     interpreterInFlight = false;

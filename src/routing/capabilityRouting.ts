@@ -59,12 +59,19 @@ export type CapabilityId = typeof CAPABILITY_IDS[number];
 
 export type CapabilityConfidence = 'high' | 'medium' | 'low';
 
+export const SEMANTIC_WRITE_CAPABILITIES = [
+  'todo.capture',
+  'grocery.capture',
+  'medication.capture',
+] as const;
+export type SemanticWriteCapability = typeof SEMANTIC_WRITE_CAPABILITIES[number];
+
+export const TODO_WRITE_OPS = ['todo_capture', 'not_todo_capture', 'uncertain'] as const;
+export const GROCERY_WRITE_OPS = ['grocery_capture', 'not_grocery_capture', 'uncertain'] as const;
 export const SEMANTIC_WRITE_OPS = [
-  'todo_capture',
-  'not_todo_capture',
+  ...TODO_WRITE_OPS,
   'grocery_capture',
   'not_grocery_capture',
-  'uncertain',
 ] as const;
 export type SemanticWriteOp = typeof SEMANTIC_WRITE_OPS[number];
 
@@ -277,6 +284,76 @@ export function logSemanticDispatchDiag(diag: SemanticDispatchDiag): void {
 // interpreter determining meaning — the exact job the deterministic layer must
 // not do. Off-ramps (list.read / calendar.read / contact.call / other) give an
 // unrelated utterance a home so medication is never a forced choice.
+const CAPABILITY_NON_WRITE_IDS = CAPABILITY_IDS.filter(
+  (id) => !(SEMANTIC_WRITE_CAPABILITIES as readonly string[]).includes(id),
+);
+
+const CONFIDENCE_SCHEMA = { type: 'string', enum: ['high', 'medium', 'low'] } as const;
+const STRING_ARRAY_SCHEMA = { type: 'array', items: { type: 'string' } } as const;
+const SCORE_SCHEMA = { type: 'number' } as const;
+
+// Constrained structured output (llama.rn json_schema response_format, runtime
+// 0.12.x). oneOf matches CLASSIFIER_RESPONSE_FORMAT: writes require the
+// specialist payload; reads/off-ramps remain capability + confidence only.
+// The validator (parseCapabilityProposal) still runs — grammar guarantees
+// shape, not that the runtime honored it.
+export const CAPABILITY_PROPOSAL_RESPONSE_FORMAT = {
+  type: 'json_schema' as const,
+  json_schema: {
+    strict: true,
+    schema: {
+      oneOf: [
+        {
+          type: 'object',
+          additionalProperties: false,
+          required: ['capability', 'confidence'],
+          properties: {
+            capability: { type: 'string', enum: [...CAPABILITY_NON_WRITE_IDS] },
+            confidence: CONFIDENCE_SCHEMA,
+          },
+        },
+        {
+          type: 'object',
+          additionalProperties: false,
+          required: ['capability', 'confidence', 'op', 'candidates', 'score'],
+          properties: {
+            capability: { type: 'string', enum: ['todo.capture'] },
+            confidence: CONFIDENCE_SCHEMA,
+            op: { type: 'string', enum: [...TODO_WRITE_OPS] },
+            candidates: STRING_ARRAY_SCHEMA,
+            score: SCORE_SCHEMA,
+          },
+        },
+        {
+          type: 'object',
+          additionalProperties: false,
+          required: ['capability', 'confidence', 'op', 'candidates', 'score'],
+          properties: {
+            capability: { type: 'string', enum: ['grocery.capture'] },
+            confidence: CONFIDENCE_SCHEMA,
+            op: { type: 'string', enum: [...GROCERY_WRITE_OPS] },
+            candidates: STRING_ARRAY_SCHEMA,
+            score: SCORE_SCHEMA,
+          },
+        },
+        {
+          type: 'object',
+          additionalProperties: false,
+          required: ['capability', 'confidence', 'mentions', 'predicate', 'focus', 'score'],
+          properties: {
+            capability: { type: 'string', enum: ['medication.capture'] },
+            confidence: CONFIDENCE_SCHEMA,
+            mentions: STRING_ARRAY_SCHEMA,
+            predicate: { type: 'string' },
+            focus: { type: 'string' },
+            score: SCORE_SCHEMA,
+          },
+        },
+      ],
+    },
+  },
+};
+
 export const CAPABILITY_PROPOSAL_SYSTEM_PROMPT = `You label what a single spoken request is asking a memory assistant to do.
 Pick exactly one capability. If none clearly fits, pick "other". If the request is too unclear to assign a capability, pick "uncertain".
 
@@ -294,39 +371,13 @@ capability — one of:
 
 confidence — high, medium, or low: how sure you are of the capability.
 
-Write payloads (verbatim spans only; omit on reads/off-ramps):
+Write payloads are required for todo.capture, grocery.capture, and medication.capture. Omit them on reads and off-ramps.
+Copy every candidate, mention, and focus as an exact contiguous span from the user sentence. Do not paraphrase. Do not singularize or pluralize. Do not invent descriptors. If the sentence treats a multi-word item or task as one thing, emit it as one array element. Empty array only when there is no such span.
   todo.capture: op (todo_capture|not_todo_capture|uncertain), candidates[], score 0-1
   grocery.capture: op (grocery_capture|not_grocery_capture|uncertain), candidates[], score 0-1
-  medication.capture: mentions[], predicate, focus (or ""), score 0-1
+  medication.capture: mentions[], predicate, focus (verbatim span or empty string), score 0-1
 
 Return ONLY JSON. Do not add any other text.`;
-
-// Constrained structured output (llama.rn json_schema response_format, runtime
-// 0.12.x). The grammar restricts `capability` to the closed vocabulary and
-// `confidence` to the three buckets, so the model cannot emit an out-of-set
-// capability or a free-text field. The validator (parseCapabilityProposal)
-// still runs — grammar guarantees shape, not that the runtime honored it.
-export const CAPABILITY_PROPOSAL_RESPONSE_FORMAT = {
-  type: 'json_schema' as const,
-  json_schema: {
-    strict: true,
-    schema: {
-      type: 'object',
-      additionalProperties: false,
-      required: ['capability', 'confidence'],
-      properties: {
-        capability: { type: 'string', enum: [...CAPABILITY_IDS] },
-        confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
-        op: { type: 'string', enum: [...SEMANTIC_WRITE_OPS] },
-        candidates: { type: 'array', items: { type: 'string' } },
-        mentions: { type: 'array', items: { type: 'string' } },
-        predicate: { type: 'string' },
-        focus: { type: 'string' },
-        score: { type: 'number' },
-      },
-    },
-  },
-};
 
 // Concurrency guard — same rationale as the write seam's interpreterInFlight:
 // one call site, one dedicated context; reject a re-entrant call to myself

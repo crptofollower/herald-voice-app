@@ -63,6 +63,11 @@
 import type { LlamaContext } from 'llama.rn';
 import type { ConversationTurnFocusEntry, ConversationTurnRecord } from './conversationTurnLedger';
 import { buildRecapCandidates, type RecapCandidate } from './immediateSemanticRecap';
+import {
+  logActiveSubjectInferenceEnd,
+  logActiveSubjectInferenceStart,
+  mono as latMono,
+} from '../utils/latencyInstrument';
 import { buildFocusEntry } from './conversationTurnLedgerWrite';
 import { THIRD_PERSON_REFERENT_RE } from '../utils/instructionSignals';
 import { matchCandidateToken, type MatchableCandidate } from './conversationSession';
@@ -284,6 +289,8 @@ export async function generateActiveSubjectSelectionProposal(
   if (!ctx) return { status: 'unavailable' };
   if (activeSubjectInterpreterInFlight) return { status: 'unavailable' };
   activeSubjectInterpreterInFlight = true;
+  const t0 = latMono();
+  logActiveSubjectInferenceStart();
   try {
     const result = await ctx.completion({
       messages: [
@@ -298,8 +305,10 @@ export async function generateActiveSubjectSelectionProposal(
     } as any);
     const text = String((result as any)?.content || (result as any)?.text || '').trim();
     const proposal = parseActiveSubjectSelectionProposal(text, candidates.length);
+    logActiveSubjectInferenceEnd(latMono() - t0, result, proposal ? 'ok' : 'parse_fail');
     return proposal ? { status: 'ok', proposal } : { status: 'parse_fail' };
   } catch {
+    logActiveSubjectInferenceEnd(latMono() - t0, undefined, 'error');
     return { status: 'unavailable' };
   } finally {
     activeSubjectInterpreterInFlight = false;

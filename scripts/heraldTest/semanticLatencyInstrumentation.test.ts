@@ -19,6 +19,10 @@ import {
   admitMedicationSemanticProposal,
   generateMedicationSemanticProposal,
 } from '../../src/routing/medicationSemanticInterpretation.ts';
+import { generateRecapInterpretationProposal } from '../../src/routing/immediateSemanticRecap.ts';
+import { generateActiveSubjectSelectionProposal } from '../../src/routing/activeSubjectReference.ts';
+import { generateViaSelectedWorker } from '../../src/conversation/conversationalWorker.ts';
+import type { RecapCandidate } from '../../src/routing/immediateSemanticRecap.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
 
@@ -26,10 +30,57 @@ function mockCtx(content: string) {
   return {
     completion: async () => ({
       content,
-      timings: { prompt_ms: 1, predicted_ms: 2, prompt_n: 3 },
+      timings: { prompt_ms: 1, predicted_ms: 2, prompt_n: 3, cache_n: 4 },
       tokens_predicted: 4,
+      tokens_cached: 5,
+      tokens_evaluated: 6,
     }),
   } as any;
+}
+
+function captureLatencyLines<T>(fn: () => Promise<T>): Promise<{ result: T; lines: string[] }> {
+  const lines: string[] = [];
+  const orig = console.log;
+  console.log = (...args: unknown[]) => {
+    const line = String(args[0] ?? '');
+    if (line.includes('[LATENCY-INSTRUMENT]')) lines.push(line);
+    orig.apply(console, args as []);
+  };
+  return fn().then((result) => {
+    console.log = orig;
+    return { result, lines };
+  }, (err) => {
+    console.log = orig;
+    throw err;
+  });
+}
+
+function recapCandidate(): RecapCandidate {
+  const focus = {
+    kind: 'thing' as const,
+    displayValue: 'oatmeal',
+    resolverKey: 'item:oatmeal',
+    referable: true,
+    tier: 'authoritative' as const,
+  };
+  return {
+    index: 0,
+    kind: 'thing',
+    displayValue: 'oatmeal',
+    record: {
+      turnIndex: 1,
+      establishedAt: 1,
+      utterance: 'please add oatmeal',
+      intentType: 'list_add',
+      operation: 'capture',
+      outcome: 'committed',
+      authorityTier: 'deterministic',
+      assistantReplySummary: null,
+      focus: [focus],
+    },
+    focus,
+    intentType: 'list_add',
+  };
 }
 
 export async function runSemanticLatencyInstrumentationTests() {
@@ -158,6 +209,78 @@ export async function runSemanticLatencyInstrumentationTests() {
       /logRealizationDoneIfSemanticTurn\(\);[\s\S]{0,80}speak\(outcome\.responseText\)/.test(chat)
       && /logRealizationDoneIfSemanticTurn\(\);[\s\S]{0,80}speak\(response\)/.test(dispatch),
       (v) => v === true, 'before speak');
+  }
+
+  {
+    const recapJson = '{"isImmediateRecap":false,"selectedIndex":null,"confidence":0.4}';
+    const { result, lines } = await captureLatencyLines(() =>
+      generateRecapInterpretationProposal('what was that again', [recapCandidate()], () => mockCtx(recapJson)));
+    const joined = lines.join('\n');
+    assert('recap Stage B result is unchanged',
+      result.status === 'ok' && result.status === 'ok' && result.proposal.isImmediateRecap === false,
+      (v) => v === true, 'ok not recap');
+    assert('recap Stage B emits start/end timing with llama fields',
+      /SEMANTIC_RECAP_INFERENCE_START/.test(joined)
+      && /SEMANTIC_RECAP_INFERENCE_END/.test(joined)
+      && /"prompt_ms":1/.test(joined)
+      && /"model":"semantic-3b"/.test(joined),
+      (v) => v === true, 'recap start/end');
+  }
+
+  {
+    const subjJson = '{"applicable":false,"selectedIndex":null,"ambiguous":false,"confidence":0.2}';
+    const { result, lines } = await captureLatencyLines(() =>
+      generateActiveSubjectSelectionProposal('how is the weather', [recapCandidate()], () => mockCtx(subjJson)));
+    const joined = lines.join('\n');
+    assert('active-subject Stage B result is unchanged',
+      result.status === 'ok' && result.status === 'ok' && result.proposal.applicable === false,
+      (v) => v === true, 'ok not applicable');
+    assert('active-subject Stage B emits start/end timing with llama fields',
+      /ACTIVE_SUBJECT_INFERENCE_START/.test(joined)
+      && /ACTIVE_SUBJECT_INFERENCE_END/.test(joined)
+      && /"predicted_ms":2/.test(joined),
+      (v) => v === true, 'active-subject start/end');
+  }
+
+  {
+    const worker = {
+      id: 'experimental-on-device-conversation',
+      isAvailable: () => true,
+      generate: async () => ({
+        status: 'ok' as const,
+        replyText: 'Glad it went well.',
+        completionResult: {
+          timings: { prompt_ms: 9, predicted_ms: 11, cache_n: 2, prompt_n: 8 },
+          tokens_cached: 2,
+          tokens_evaluated: 8,
+          tokens_predicted: 12,
+        },
+      }),
+    };
+    const { result, lines } = await captureLatencyLines(() =>
+      generateViaSelectedWorker(worker, { userText: 'I had a nice morning.', hotEntries: [] }));
+    const joined = lines.join('\n');
+    assert('conversation worker result is unchanged',
+      result.status === 'ok' && result.status === 'ok' && result.text === 'Glad it went well.',
+      (v) => v === true, 'ok reply');
+    assert('conversation worker emits start/end timing with worker id',
+      /CONVERSATION_INFERENCE_START/.test(joined)
+      && /CONVERSATION_INFERENCE_END/.test(joined)
+      && /experimental-on-device-conversation/.test(joined)
+      && /"tokens_predicted":12/.test(joined),
+      (v) => v === true, 'conversation start/end');
+  }
+
+  {
+    const { result, lines } = await captureLatencyLines(() =>
+      generateViaSelectedWorker(null, { userText: 'hello', hotEntries: [] }));
+    const joined = lines.join('\n');
+    assert('null conversational worker still returns no-ctx',
+      result.status === 'unavailable' && result.status === 'unavailable' && result.reason === 'no-ctx',
+      (v) => v === true, 'no-ctx');
+    assert('null conversational worker does not emit conversation inference',
+      /CONVERSATION_INFERENCE_START/.test(joined),
+      (v) => v === false, 'no start');
   }
 
   const total = passed + failures.length;

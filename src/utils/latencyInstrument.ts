@@ -233,6 +233,93 @@ export function logSemanticAdmissionDone(fields: Record<string, unknown>): void 
   safeSemanticLog('SEMANTIC_ADMISSION_DONE', fields);
 }
 
+export function boundDiagnosticStrings(values: string[], maxItems = 8, maxChars = 80): string[] {
+  return values.slice(0, maxItems).map((v) => (v.length > maxChars ? v.slice(0, maxChars) : v));
+}
+
+export type SemanticWriteLiftSpecialist = 'todo' | 'grocery' | 'medication';
+export type SemanticWriteLiftReason =
+  | 'ok'
+  | 'wrong_capability'
+  | 'missing_write'
+  | 'missing_op'
+  | 'wrong_family_op'
+  | 'missing_candidates'
+  | 'empty_candidates'
+  | 'missing_mentions'
+  | 'empty_mentions'
+  | 'missing_predicate'
+  | 'missing_focus'
+  | 'missing_score'
+  | 'malformed_payload';
+
+export function logSemanticWriteLift(fields: {
+  specialist: SemanticWriteLiftSpecialist;
+  selectedCapability: string;
+  outcome: 'ok' | 'fail';
+  reason: SemanticWriteLiftReason;
+}): void {
+  safeSemanticLog('SEMANTIC_WRITE_LIFT', fields);
+  try {
+    console.warn(`[HERALD_SEMANTIC_WRITE_LIFT_DIAG] ${JSON.stringify(fields)}`);
+  } catch {
+    // instrumentation must never alter completion behavior
+  }
+}
+
+export function logSemanticRecapInferenceStart(): void {
+  safeSemanticLog('SEMANTIC_RECAP_INFERENCE_START', { model: 'semantic-3b' });
+}
+
+export function logSemanticRecapInferenceEnd(
+  durationMs: number,
+  result: unknown,
+  outcome: 'ok' | 'parse_fail' | 'error',
+): void {
+  safeSemanticLog('SEMANTIC_RECAP_INFERENCE_END', {
+    durationMs: Math.round(durationMs * 100) / 100,
+    outcome,
+    model: 'semantic-3b',
+    ...extractCompletionTimingFields(result),
+  });
+}
+
+export function logActiveSubjectInferenceStart(): void {
+  safeSemanticLog('ACTIVE_SUBJECT_INFERENCE_START', { model: 'semantic-3b' });
+}
+
+export function logActiveSubjectInferenceEnd(
+  durationMs: number,
+  result: unknown,
+  outcome: 'ok' | 'parse_fail' | 'error',
+): void {
+  safeSemanticLog('ACTIVE_SUBJECT_INFERENCE_END', {
+    durationMs: Math.round(durationMs * 100) / 100,
+    outcome,
+    model: 'semantic-3b',
+    ...extractCompletionTimingFields(result),
+  });
+}
+
+export function logConversationInferenceStart(worker: string): void {
+  safeSemanticLog('CONVERSATION_INFERENCE_START', { worker, model: worker });
+}
+
+export function logConversationInferenceEnd(
+  durationMs: number,
+  result: unknown,
+  outcome: 'ok' | 'unavailable' | 'error',
+  worker: string,
+): void {
+  safeSemanticLog('CONVERSATION_INFERENCE_END', {
+    durationMs: Math.round(durationMs * 100) / 100,
+    outcome,
+    worker,
+    model: worker,
+    ...extractCompletionTimingFields(result),
+  });
+}
+
 /** Immediately before speak/dispatchRead on a turn that ran semantic 3B. */
 export function logRealizationDoneIfSemanticTurn(): void {
   if (!semanticTurnPendingRealization) return;

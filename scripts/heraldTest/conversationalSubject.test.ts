@@ -134,6 +134,16 @@ function futureMs(daysAhead: number, hour = 11): number {
   return d.getTime();
 }
 
+function futureYmd(daysAhead: number): string {
+  const d = new Date();
+  d.setHours(12, 0, 0, 0);
+  d.setDate(d.getDate() + daysAhead);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 // Android Calendar Range V1: expo-calendar has no native bridge inside the
 // Node/tsx test runner, so queryCalendarEvidence's device fetch is swapped
 // for a fake one via calendarCacheDB's setCalendarEventFetcher (mirrors this
@@ -842,7 +852,8 @@ export async function runConversationalSubjectTests() {
   {
     const { say, subject } = freshFlow();
     seedTwoDoctorOutcomes();
-    seedUpcomingAppointment('Dr. Smith', '2026-09-10');
+    const smithUpcoming = futureYmd(14);
+    seedUpcomingAppointment('Dr. Smith', smithUpcoming);
     await say('Who was the last doctor I saw?');
     await say('When did I see him?');
     await say('What did he tell me?');
@@ -852,7 +863,7 @@ export async function runConversationalSubjectTests() {
     assert('CHAIN-B3 turn 4 resolves Smith upcoming visit via referent_resume', t4,
       v => v.handled === true && v.source === 'referent_resume'
         && v.responseText.includes('Dr. Smith')
-        && v.responseText.includes(formatSpokenDate('2026-09-10')),
+        && v.responseText.includes(formatSpokenDate(smithUpcoming)),
       'referent_resume, Smith upcoming visit');
   }
 

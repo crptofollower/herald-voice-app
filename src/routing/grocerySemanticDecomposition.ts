@@ -11,10 +11,13 @@ import type { LlamaContext } from 'llama.rn';
 import { findStandardSpan } from '../hooks/llmLayers';
 import { isLlamaContextBusy } from '../utils/llamaContextExclusive';
 import {
+  boundDiagnosticStrings,
   logSemanticAdmissionDone,
   logSemanticGroundingDone,
   logSemanticSpecialistInferenceEnd,
   logSemanticSpecialistInferenceStart,
+  logSemanticWriteLift,
+  type SemanticWriteLiftReason,
   mono as latMono,
 } from '../utils/latencyInstrument';
 import { isReadShapedUtterance } from '../utils/detectMedicalEvent';
@@ -77,22 +80,59 @@ export function parseGrocerySemanticProposal(rawModelOutput: string): GrocerySem
   };
 }
 
-/** Lift a one-pass dispatch write payload into the specialist proposal shape. No inference. */
-export function grocerySemanticProposalFromDispatchWrite(
+export type GroceryDispatchWriteLiftDiag = {
+  lifted: GrocerySemanticProposal | null;
+  selectedCapability: string;
+  outcome: 'ok' | 'fail';
+  reason: SemanticWriteLiftReason;
+};
+
+export function diagnoseGroceryDispatchWriteLift(
   proposal: CapabilityProposal,
-): GrocerySemanticProposal | null {
-  if (proposal.capability !== 'grocery.capture') return null;
-  const write = proposal.write;
-  if (!write) return null;
-  if (write.op !== 'grocery_capture' && write.op !== 'not_grocery_capture' && write.op !== 'uncertain') {
-    return null;
+): GroceryDispatchWriteLiftDiag {
+  const selectedCapability = proposal.capability;
+  if (proposal.capability !== 'grocery.capture') {
+    return { lifted: null, selectedCapability, outcome: 'fail', reason: 'wrong_capability' };
   }
-  if (!write.candidates || write.score === undefined) return null;
-  return {
+  const write = proposal.write;
+  if (!write) {
+    return { lifted: null, selectedCapability, outcome: 'fail', reason: 'missing_write' };
+  }
+  if (write.op === undefined) {
+    return { lifted: null, selectedCapability, outcome: 'fail', reason: 'missing_op' };
+  }
+  if (write.op !== 'grocery_capture' && write.op !== 'not_grocery_capture' && write.op !== 'uncertain') {
+    return { lifted: null, selectedCapability, outcome: 'fail', reason: 'wrong_family_op' };
+  }
+  if (write.candidates === undefined) {
+    return { lifted: null, selectedCapability, outcome: 'fail', reason: 'missing_candidates' };
+  }
+  if (write.score === undefined) {
+    return { lifted: null, selectedCapability, outcome: 'fail', reason: 'missing_score' };
+  }
+  const lifted: GrocerySemanticProposal = {
     capability: write.op,
     candidates: write.candidates,
     confidence: write.score,
   };
+  if (write.candidates.length === 0) {
+    return { lifted, selectedCapability, outcome: 'ok', reason: 'empty_candidates' };
+  }
+  return { lifted, selectedCapability, outcome: 'ok', reason: 'ok' };
+}
+
+/** Lift a one-pass dispatch write payload into the specialist proposal shape. No inference. */
+export function grocerySemanticProposalFromDispatchWrite(
+  proposal: CapabilityProposal,
+): GrocerySemanticProposal | null {
+  const diag = diagnoseGroceryDispatchWriteLift(proposal);
+  logSemanticWriteLift({
+    specialist: 'grocery',
+    selectedCapability: diag.selectedCapability,
+    outcome: diag.outcome,
+    reason: diag.reason,
+  });
+  return diag.lifted;
 }
 
 /** Every candidate must be a verbatim utterance span. One miss rejects the set. */
@@ -147,6 +187,7 @@ export function admitGrocerySemanticP1(
       admissionClass: 'P1',
       result: 'failed',
       reason: 'ungrounded_candidate',
+      candidates: boundDiagnosticStrings(proposal.candidates),
     });
     logSemanticAdmissionDone({ capability: 'grocery.capture', decision: 'REJECT', reason: 'ungrounded_candidate' });
     return { decision: 'REJECT', reason: 'ungrounded_candidate' };
@@ -195,6 +236,7 @@ export function admitGrocerySemanticP2(
       admissionClass: 'P2',
       result: 'failed',
       reason: 'ungrounded_candidate',
+      candidates: boundDiagnosticStrings(proposal.candidates),
     });
     logSemanticAdmissionDone({ capability: 'grocery.capture', decision: 'REJECT', reason: 'ungrounded_candidate' });
     return { decision: 'REJECT', reason: 'ungrounded_candidate' };
