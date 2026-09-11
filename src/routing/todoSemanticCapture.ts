@@ -11,6 +11,13 @@
 import type { LlamaContext } from 'llama.rn';
 import { findStandardSpan } from '../hooks/llmLayers';
 import { isLlamaContextBusy } from '../utils/llamaContextExclusive';
+import {
+  logSemanticAdmissionDone,
+  logSemanticGroundingDone,
+  logSemanticSpecialistInferenceEnd,
+  logSemanticSpecialistInferenceStart,
+  mono as latMono,
+} from '../utils/latencyInstrument';
 import { isReadShapedUtterance } from '../utils/detectMedicalEvent';
 import { shouldRefuseLlmCaptureProposal } from './speechActAuthority';
 
@@ -106,6 +113,11 @@ function logAdmission(decision: TodoAdmissionDecision): TodoAdmissionDecision {
   if (decision.decision !== 'ADMIT') extra.reason = decision.reason;
   else extra.admissionClass = decision.admissionClass;
   logTodoSemantic('admission', extra);
+  logSemanticAdmissionDone({
+    capability: 'todo.capture',
+    decision: decision.decision,
+    ...(decision.decision !== 'ADMIT' ? { reason: decision.reason } : { admissionClass: decision.admissionClass }),
+  });
   return decision;
 }
 
@@ -132,8 +144,18 @@ export function admitTodoSemanticP2(
   const grounded = groundTodoCandidates(raw, proposal.candidates);
   if (!grounded) {
     logTodoSemantic('grounding_failed', { admissionClass: 'P2', candidateCount: proposal.candidates.length });
+    logSemanticGroundingDone({
+      capability: 'todo.capture',
+      result: 'failed',
+      reason: 'ungrounded_candidate',
+    });
     return logAdmission({ decision: 'REJECT', reason: 'ungrounded_candidate' });
   }
+  logSemanticGroundingDone({
+    capability: 'todo.capture',
+    result: 'ok',
+    candidateCount: grounded.length,
+  });
   if (shouldRefuseLlmCaptureProposal(raw, grounded.map((body) => ({ type: 'todo_add' as const, body })))) {
     return logAdmission({ decision: 'REJECT', reason: 'speech_act_refuse' });
   }
@@ -172,6 +194,8 @@ export async function generateTodoSemanticProposal(
     return { status: 'unavailable', reason: 'busy' };
   }
   interpreterInFlight = true;
+  const t0 = latMono();
+  logSemanticSpecialistInferenceStart('todo');
   try {
     const completion = ctx.completion({
       messages: [
@@ -192,6 +216,7 @@ export async function generateTodoSemanticProposal(
     const proposal = parseTodoSemanticProposal(text);
     if (!proposal) {
       logTodoSemantic('parse_fail');
+      logSemanticSpecialistInferenceEnd('todo', latMono() - t0, result, 'parse_fail');
       return { status: 'parse_fail', raw: text };
     }
     logTodoSemantic('proposal', {
@@ -199,10 +224,12 @@ export async function generateTodoSemanticProposal(
       candidateCount: proposal.candidates.length,
       confidence: proposal.confidence,
     });
+    logSemanticSpecialistInferenceEnd('todo', latMono() - t0, result, 'ok');
     return { status: 'ok', proposal };
   } catch (e) {
     const reason = String(e).includes('timeout') ? 'timeout' : 'error';
     logTodoSemantic('interpreter_unavailable', { reason });
+    logSemanticSpecialistInferenceEnd('todo', latMono() - t0, undefined, reason);
     return { status: 'unavailable', reason };
   } finally {
     interpreterInFlight = false;

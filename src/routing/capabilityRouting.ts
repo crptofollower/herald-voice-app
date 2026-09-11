@@ -30,6 +30,11 @@
 
 import type { LlamaContext } from 'llama.rn';
 import { isLlamaContextBusy } from '../utils/llamaContextExclusive';
+import {
+  logSemanticDispatchInferenceEnd,
+  logSemanticDispatchInferenceStart,
+  mono as latMono,
+} from '../utils/latencyInstrument';
 
 // ─── Closed capability vocabulary ───────────────────────────────────────────
 // One id per real Herald capability. Named for what Herald DOES, never for
@@ -272,6 +277,8 @@ export async function generateCapabilityProposal(
   if (capabilityInterpreterInFlight) return { status: 'unavailable', reason: 'in_flight' };
   if (isLlamaContextBusy()) return { status: 'unavailable', reason: 'ctx_busy' };
   capabilityInterpreterInFlight = true;
+  const t0 = latMono();
+  logSemanticDispatchInferenceStart();
   try {
     const result = await ctx.completion({
       messages: [
@@ -287,8 +294,14 @@ export async function generateCapabilityProposal(
     } as any);
     const text = String((result as any)?.content || (result as any)?.text || '').trim();
     const proposal = parseCapabilityProposal(text);
+    logSemanticDispatchInferenceEnd(
+      latMono() - t0,
+      result,
+      proposal ? 'ok' : 'parse_fail',
+    );
     return proposal ? { status: 'ok', proposal } : { status: 'parse_fail', raw: text };
   } catch {
+    logSemanticDispatchInferenceEnd(latMono() - t0, undefined, 'error');
     return { status: 'unavailable', reason: 'error' };
   } finally {
     capabilityInterpreterInFlight = false;

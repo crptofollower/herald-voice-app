@@ -145,6 +145,7 @@ import {
   getActiveTurnId,
   getChatScreenMountSeq,
   log as latLog,
+  logRealizationDoneIfSemanticTurn,
 } from '../utils/latencyInstrument';
 import { detectEmergency } from '../routing/emergencySignals';
 import type { IntentRecord } from '../hooks/llmLayers';
@@ -1703,6 +1704,7 @@ export default function ChatScreen() {
         timestamp: Date.now(),
         recoveryChoices,
       });
+      logRealizationDoneIfSemanticTurn();
       speak(outcome.responseText);
       await runCommitEffects(outcome.commits, {
         openURL: (url) => Linking.openURL(url),
@@ -1907,6 +1909,7 @@ export default function ChatScreen() {
       });
       addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
       addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+      logRealizationDoneIfSemanticTurn();
       speak(reply);
       sendingRef.current = false;
       setInputText('');

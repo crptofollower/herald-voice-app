@@ -49,6 +49,13 @@ import {
   isMedicationQuestionShape,
 } from '../utils/detectMedicalEvent';
 import { isLlamaContextBusy } from '../utils/llamaContextExclusive';
+import {
+  logSemanticAdmissionDone,
+  logSemanticGroundingDone,
+  logSemanticSpecialistInferenceEnd,
+  logSemanticSpecialistInferenceStart,
+  mono as latMono,
+} from '../utils/latencyInstrument';
 
 // ─── SemanticProposal (corrected shape) ────────────────────────────────────
 
@@ -149,20 +156,29 @@ const MEDICATION_SEMANTIC_CONFIDENCE_THRESHOLD = 0.6; // tunable; not a safety b
  * added here (V1 compound-utterance boundary, unchanged from the approved
  * design).
  */
+function finishMedicationAdmission(decision: MedicationAdmissionDecision): MedicationAdmissionDecision {
+  logSemanticAdmissionDone({
+    capability: 'medication.capture',
+    decision: decision.decision,
+    ...(decision.decision !== 'ADMIT' ? { reason: decision.reason } : {}),
+  });
+  return decision;
+}
+
 export function admitMedicationSemanticProposal(
   raw: string,
   proposal: SemanticProposal,
   ctx: MedicationAdmissionContext,
 ): MedicationAdmissionDecision {
   // Invariant 1 — pending state owns the turn.
-  if (ctx.hasPending) return { decision: 'DEFER', reason: 'pending_owns_turn' };
+  if (ctx.hasPending) return finishMedicationAdmission({ decision: 'DEFER', reason: 'pending_owns_turn' });
 
   // Invariant 2 — existing deterministic medication detection owns the turn
   // first. Re-checks the exact, unmodified detectMedicalEvent the deterministic
   // floor already runs (belt-and-suspenders against a future call-site
   // regression; the approved insertion point in routeIntent.ts already
   // guarantees this by construction/ordering).
-  if (detectMedicalEvent(raw)) return { decision: 'DEFER', reason: 'deterministic_floor_already_claims' };
+  if (detectMedicalEvent(raw)) return finishMedicationAdmission({ decision: 'DEFER', reason: 'deterministic_floor_already_claims' });
 
   // Speech-act gate (contract correction, 2026-09-07) — replaces the former
   // model-self-reported `act === 'assert'` check. The safety property is
@@ -180,36 +196,47 @@ export function admitMedicationSemanticProposal(
   // floor's narrower callers, unsafe at the seam's wider evaluation surface.
   // Not medication-name knowledge, not a drug list — pure sentence shape.
   if (isReadShapedUtterance(raw) || isMedicationQuestionShape(raw)) {
-    return { decision: 'REJECT', reason: 'read_shaped_utterance' };
+    return finishMedicationAdmission({ decision: 'REJECT', reason: 'read_shaped_utterance' });
   }
 
   const focus = proposal.focus.trim();
-  if (!focus) return { decision: 'REJECT', reason: 'empty_focus' };
+  if (!focus) return finishMedicationAdmission({ decision: 'REJECT', reason: 'empty_focus' });
 
   // Invariant 3 — every trust-critical span provenance-verified against raw.
   // A single unverified mention rejects the whole proposal — a hallucinated
   // span is never merely dropped and silently proceeded with.
   for (const mention of proposal.mentions) {
     if (!isProvenanceVerified(mention, raw)) {
-      return { decision: 'REJECT', reason: 'unverified_mention' };
+      logSemanticGroundingDone({
+        capability: 'medication.capture',
+        result: 'failed',
+        reason: 'unverified_mention',
+      });
+      return finishMedicationAdmission({ decision: 'REJECT', reason: 'unverified_mention' });
     }
   }
   if (!isProvenanceVerified(focus, raw)) {
-    return { decision: 'REJECT', reason: 'unverified_focus' };
+    logSemanticGroundingDone({
+      capability: 'medication.capture',
+      result: 'failed',
+      reason: 'unverified_focus',
+    });
+    return finishMedicationAdmission({ decision: 'REJECT', reason: 'unverified_focus' });
   }
+  logSemanticGroundingDone({ capability: 'medication.capture', result: 'ok' });
 
   // Invariant 6 — confidence may cause clarification; it never grants
   // admission by itself. Checked only AFTER provenance, never as a substitute
   // for it.
   if (proposal.confidence < MEDICATION_SEMANTIC_CONFIDENCE_THRESHOLD) {
-    return { decision: 'CLARIFY', reason: 'low_confidence' };
+    return finishMedicationAdmission({ decision: 'CLARIFY', reason: 'low_confidence' });
   }
 
   // Invariant 5 & 7 — hasIndependentMedicationEvidence (never
   // hasMedicationDomainEvidence) supplies domain evidence, and itself refuses
   // a filler/category focus ("medicine", "pill", "prescription") as a name.
   if (!hasIndependentMedicationEvidence(raw, focus)) {
-    return { decision: 'CLARIFY', reason: 'insufficient_domain_evidence' };
+    return finishMedicationAdmission({ decision: 'CLARIFY', reason: 'insufficient_domain_evidence' });
   }
 
   // Invariant 4 — dosage/frequency are NEVER taken from the model's proposal
@@ -220,7 +247,7 @@ export function admitMedicationSemanticProposal(
   const dosage = extractDosage(raw);
   const frequency = extractFrequency(raw);
 
-  return { decision: 'ADMIT', drug: focus, dosage, frequency };
+  return finishMedicationAdmission({ decision: 'ADMIT', drug: focus, dosage, frequency });
 }
 
 // ─── Proposal generation (interpreter I/O boundary) ────────────────────────
@@ -276,6 +303,8 @@ export async function generateMedicationSemanticProposal(
   if (interpreterInFlight) return { status: 'unavailable' };
   if (isLlamaContextBusy()) return { status: 'unavailable' };
   interpreterInFlight = true;
+  const t0 = latMono();
+  logSemanticSpecialistInferenceStart('medication');
   try {
     const result = await ctx.completion({
       messages: [
@@ -290,8 +319,15 @@ export async function generateMedicationSemanticProposal(
     } as any);
     const text = String((result as any)?.content || (result as any)?.text || '').trim();
     const proposal = parseSemanticProposal(text);
+    logSemanticSpecialistInferenceEnd(
+      'medication',
+      latMono() - t0,
+      result,
+      proposal ? 'ok' : 'parse_fail',
+    );
     return proposal ? { status: 'ok', proposal } : { status: 'parse_fail', raw: text };
   } catch {
+    logSemanticSpecialistInferenceEnd('medication', latMono() - t0, undefined, 'error');
     return { status: 'unavailable' };
   } finally {
     interpreterInFlight = false;

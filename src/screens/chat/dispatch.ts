@@ -42,6 +42,7 @@ import { guessMedicationName, deactivateMedicationByName } from '../../db/medica
 import { isMedicationCorroborated } from '../../db/factDB';
 import type { CommitResult } from '../../routing/routeIntent';
 import { matchCandidateToken } from '../../routing/conversationSession';
+import { logRealizationDoneIfSemanticTurn } from '../../utils/latencyInstrument';
 import {
   bindCallTextRecovery,
   bindOsFiniteSmsDisambiguate,
@@ -153,6 +154,7 @@ export async function dispatchRead(
   addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
 
   addMessage({ id: generateId('msg'), role: 'assistant', content: response, timestamp: Date.now() });
+  logRealizationDoneIfSemanticTurn();
   speak(response);
 }
 

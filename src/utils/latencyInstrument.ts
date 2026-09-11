@@ -10,6 +10,8 @@ let appBaselineMs: number | null = null;
 let chatScreenMountSeq = 0;
 let turnSeq = 0;
 let activeTurnId: number | null = null;
+/** True after a semantic 3B completion this turn until REALIZATION_DONE. */
+let semanticTurnPendingRealization = false;
 
 /** Monotonic seq for Herald-owned ctx.completion() calls (in-memory only). */
 let ctxCompletionSeq = 0;
@@ -59,6 +61,7 @@ export function getChatScreenMountSeq(): number {
 export function beginTurn(): number {
   turnSeq += 1;
   activeTurnId = turnSeq;
+  semanticTurnPendingRealization = false;
   return turnSeq;
 }
 
@@ -169,4 +172,70 @@ export function classifyModelPathKind(path: string): 'small' | 'large' | 'unknow
 
 export function mono(): number {
   return monoNow();
+}
+
+function markSemanticTurnPendingRealization(): void {
+  semanticTurnPendingRealization = true;
+}
+
+function safeSemanticLog(event: string, fields: Record<string, unknown> = {}): void {
+  try {
+    log(event, { turnId: getActiveTurnId(), ...fields });
+  } catch {
+    // instrumentation must never alter completion behavior
+  }
+}
+
+export function logSemanticDispatchInferenceStart(): void {
+  markSemanticTurnPendingRealization();
+  safeSemanticLog('SEMANTIC_DISPATCH_INFERENCE_START');
+}
+
+export function logSemanticDispatchInferenceEnd(
+  durationMs: number,
+  result: unknown,
+  outcome: 'ok' | 'parse_fail' | 'error',
+): void {
+  safeSemanticLog('SEMANTIC_DISPATCH_INFERENCE_END', {
+    durationMs: Math.round(durationMs * 100) / 100,
+    outcome,
+    ...extractCompletionTimingFields(result),
+  });
+}
+
+export type SemanticSpecialistName = 'todo' | 'grocery' | 'medication';
+export type SemanticSpecialistOutcome = 'ok' | 'parse_fail' | 'timeout' | 'error';
+
+export function logSemanticSpecialistInferenceStart(specialist: SemanticSpecialistName): void {
+  markSemanticTurnPendingRealization();
+  safeSemanticLog('SEMANTIC_SPECIALIST_INFERENCE_START', { specialist });
+}
+
+export function logSemanticSpecialistInferenceEnd(
+  specialist: SemanticSpecialistName,
+  durationMs: number,
+  result: unknown,
+  outcome: SemanticSpecialistOutcome,
+): void {
+  safeSemanticLog('SEMANTIC_SPECIALIST_INFERENCE_END', {
+    specialist,
+    durationMs: Math.round(durationMs * 100) / 100,
+    outcome,
+    ...extractCompletionTimingFields(result),
+  });
+}
+
+export function logSemanticGroundingDone(fields: Record<string, unknown>): void {
+  safeSemanticLog('SEMANTIC_GROUNDING_DONE', fields);
+}
+
+export function logSemanticAdmissionDone(fields: Record<string, unknown>): void {
+  safeSemanticLog('SEMANTIC_ADMISSION_DONE', fields);
+}
+
+/** Immediately before speak/dispatchRead on a turn that ran semantic 3B. */
+export function logRealizationDoneIfSemanticTurn(): void {
+  if (!semanticTurnPendingRealization) return;
+  semanticTurnPendingRealization = false;
+  safeSemanticLog('REALIZATION_DONE');
 }

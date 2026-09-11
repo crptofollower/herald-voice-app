@@ -10,6 +10,13 @@
 import type { LlamaContext } from 'llama.rn';
 import { findStandardSpan } from '../hooks/llmLayers';
 import { isLlamaContextBusy } from '../utils/llamaContextExclusive';
+import {
+  logSemanticAdmissionDone,
+  logSemanticGroundingDone,
+  logSemanticSpecialistInferenceEnd,
+  logSemanticSpecialistInferenceStart,
+  mono as latMono,
+} from '../utils/latencyInstrument';
 import { isReadShapedUtterance } from '../utils/detectMedicalEvent';
 import { shouldRefuseLlmCaptureProposal } from './speechActAuthority';
 
@@ -106,17 +113,33 @@ export function admitGrocerySemanticP1(
   proposal: GrocerySemanticProposal,
 ): GroceryAdmissionDecision {
   if (proposal.capability !== 'grocery_capture') {
+    logSemanticAdmissionDone({ capability: 'grocery.capture', decision: 'DEFER', reason: 'p1_capability_not_grocery_capture' });
     return { decision: 'DEFER', reason: 'p1_capability_not_grocery_capture' };
   }
   if (proposal.confidence < GROCERY_SEMANTIC_CONFIDENCE_THRESHOLD) {
+    logSemanticAdmissionDone({ capability: 'grocery.capture', decision: 'CLARIFY', reason: 'low_confidence' });
     return { decision: 'CLARIFY', reason: 'low_confidence' };
   }
   const grounded = groundGroceryCandidates(raw, proposal.candidates);
   if (!grounded) {
     logGrocerySemantic('grounding_failed', { admissionClass: 'P1', candidateCount: proposal.candidates.length });
+    logSemanticGroundingDone({
+      capability: 'grocery.capture',
+      admissionClass: 'P1',
+      result: 'failed',
+      reason: 'ungrounded_candidate',
+    });
+    logSemanticAdmissionDone({ capability: 'grocery.capture', decision: 'REJECT', reason: 'ungrounded_candidate' });
     return { decision: 'REJECT', reason: 'ungrounded_candidate' };
   }
   logGrocerySemantic('grounding_ok', { admissionClass: 'P1', candidateCount: grounded.length });
+  logSemanticGroundingDone({
+    capability: 'grocery.capture',
+    admissionClass: 'P1',
+    result: 'ok',
+    candidateCount: grounded.length,
+  });
+  logSemanticAdmissionDone({ capability: 'grocery.capture', decision: 'ADMIT', admissionClass: 'P1' });
   return { decision: 'ADMIT', candidates: grounded, admissionClass: 'P1' };
 }
 
@@ -125,28 +148,50 @@ export function admitGrocerySemanticP2(
   proposal: GrocerySemanticProposal,
   ctx: { hasPending: boolean },
 ): GroceryAdmissionDecision {
-  if (ctx.hasPending) return { decision: 'DEFER', reason: 'pending_owns_turn' };
+  if (ctx.hasPending) {
+    logSemanticAdmissionDone({ capability: 'grocery.capture', decision: 'DEFER', reason: 'pending_owns_turn' });
+    return { decision: 'DEFER', reason: 'pending_owns_turn' };
+  }
   if (speechActBlocksGroceryCapture(raw)) {
+    logSemanticAdmissionDone({ capability: 'grocery.capture', decision: 'REJECT', reason: 'speech_act_refuse' });
     return { decision: 'REJECT', reason: 'speech_act_refuse' };
   }
   if (proposal.capability === 'uncertain' || proposal.capability === 'not_grocery_capture') {
+    logSemanticAdmissionDone({ capability: 'grocery.capture', decision: 'REJECT', reason: `capability_${proposal.capability}` });
     return { decision: 'REJECT', reason: `capability_${proposal.capability}` };
   }
   if (proposal.capability !== 'grocery_capture') {
+    logSemanticAdmissionDone({ capability: 'grocery.capture', decision: 'REJECT', reason: 'capability_unknown' });
     return { decision: 'REJECT', reason: 'capability_unknown' };
   }
   if (proposal.confidence < GROCERY_SEMANTIC_CONFIDENCE_THRESHOLD) {
+    logSemanticAdmissionDone({ capability: 'grocery.capture', decision: 'CLARIFY', reason: 'low_confidence' });
     return { decision: 'CLARIFY', reason: 'low_confidence' };
   }
   const grounded = groundGroceryCandidates(raw, proposal.candidates);
   if (!grounded) {
     logGrocerySemantic('grounding_failed', { admissionClass: 'P2', candidateCount: proposal.candidates.length });
+    logSemanticGroundingDone({
+      capability: 'grocery.capture',
+      admissionClass: 'P2',
+      result: 'failed',
+      reason: 'ungrounded_candidate',
+    });
+    logSemanticAdmissionDone({ capability: 'grocery.capture', decision: 'REJECT', reason: 'ungrounded_candidate' });
     return { decision: 'REJECT', reason: 'ungrounded_candidate' };
   }
   if (shouldRefuseLlmCaptureProposal(raw, [{ type: 'list_add', items: grounded, listName: 'grocery' }])) {
+    logSemanticAdmissionDone({ capability: 'grocery.capture', decision: 'REJECT', reason: 'speech_act_refuse' });
     return { decision: 'REJECT', reason: 'speech_act_refuse' };
   }
   logGrocerySemantic('grounding_ok', { admissionClass: 'P2', candidateCount: grounded.length });
+  logSemanticGroundingDone({
+    capability: 'grocery.capture',
+    admissionClass: 'P2',
+    result: 'ok',
+    candidateCount: grounded.length,
+  });
+  logSemanticAdmissionDone({ capability: 'grocery.capture', decision: 'ADMIT', admissionClass: 'P2' });
   return { decision: 'ADMIT', candidates: grounded, admissionClass: 'P2' };
 }
 
@@ -180,6 +225,8 @@ export async function generateGrocerySemanticProposal(
     return { status: 'unavailable', reason: 'busy' };
   }
   interpreterInFlight = true;
+  const t0 = latMono();
+  logSemanticSpecialistInferenceStart('grocery');
   try {
     const completion = ctx.completion({
       messages: [
@@ -200,6 +247,7 @@ export async function generateGrocerySemanticProposal(
     const proposal = parseGrocerySemanticProposal(text);
     if (!proposal) {
       logGrocerySemantic('parse_fail');
+      logSemanticSpecialistInferenceEnd('grocery', latMono() - t0, result, 'parse_fail');
       return { status: 'parse_fail', raw: text };
     }
     logGrocerySemantic('proposal', {
@@ -207,10 +255,12 @@ export async function generateGrocerySemanticProposal(
       candidateCount: proposal.candidates.length,
       confidence: proposal.confidence,
     });
+    logSemanticSpecialistInferenceEnd('grocery', latMono() - t0, result, 'ok');
     return { status: 'ok', proposal };
   } catch (e) {
     const reason = String(e).includes('timeout') ? 'timeout' : 'error';
     logGrocerySemantic('interpreter_unavailable', { reason });
+    logSemanticSpecialistInferenceEnd('grocery', latMono() - t0, undefined, reason);
     return { status: 'unavailable', reason };
   } finally {
     interpreterInFlight = false;
