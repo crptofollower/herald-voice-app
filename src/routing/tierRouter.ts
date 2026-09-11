@@ -38,6 +38,7 @@ import { isReferentVisitOutcomeQuestion, isReferentUpcomingVisitQuestion, isRefe
 import {
   GROCERY_CONTEXT_MARKER,
   isAmbiguousOperationalListAcquisition,
+  isUnmarkedAcquisitionShape,
   OPERATIONAL_ACQUISITION_SHAPE,
 } from "./operationalListContinuity";
 
@@ -844,6 +845,10 @@ const LIST_ADD_CONTEXTUAL_SIGNALS = [
 
 function extractContextualGroceryItem(msg: string): string | null {
   if (isReadShapedUtterance(msg)) return null;
+  // Same unmarked get/buy/grab/pick-up family as the todo-add skip above.
+  // Person-marking must not decide domain, and "We need to get X" must not
+  // silently grocery-write while "I need to get X" does something else.
+  if (isUnmarkedAcquisitionShape(msg)) return null;
   if (
     !LIST_ADD_CONTEXTUAL_SIGNALS.some((p) => p.test(msg)) ||
     LIST_ADD_SIGNALS.some((p) => p.test(msg)) ||
@@ -1353,7 +1358,16 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   // Device: todo add — trigger phrases WITHOUT a resolvable date (date = reminder, not todo).
   // extractTodoAdd refuses when the remainder is already an explicit named-list
   // add (LIST_ADD_SIGNALS); those turns fall through to list_add below.
-  if (TODO_ADD_SIGNALS.some((p) => p.test(msg)) && !TODO_DATE_SIGNALS.test(msg) && !detectMedicalEvent(msg)) {
+  // Unmarked get/buy/grab/pick-up is not todo ownership: person-marking
+  // ("I need to") must not decide grocery vs todo. 2+ NP unmarked already
+  // returned ambiguous_operational_list above; single-object unmarked falls
+  // through so interpretation/confirm can run instead of a silent todo write.
+  if (
+    TODO_ADD_SIGNALS.some((p) => p.test(msg))
+    && !TODO_DATE_SIGNALS.test(msg)
+    && !detectMedicalEvent(msg)
+    && !isUnmarkedAcquisitionShape(msg)
+  ) {
     const extracted = extractTodoAdd(msg);
     if (extracted?.kind === 'clarify') {
       return {

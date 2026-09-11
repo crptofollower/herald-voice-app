@@ -281,25 +281,85 @@ export async function runTodoCompleteSignalsTests() {
   {
     freshDB();
     const d = await classifyQuery('We need to get milk');
-    assert('declarative we-need-to-get remains contextual grocery',
-      { type: actionType(d), items: (d.actionIntent as { items?: string[] } | undefined)?.items, listName: (d.actionIntent as { listName?: string } | undefined)?.listName },
+    assert('unmarked we-need-to-get is not person-dependent grocery write',
+      { type: actionType(d), reason: d.reason },
       (v) => {
-        const x = v as { type?: string; items?: string[]; listName?: string };
-        return x.type === 'list_add' && x.listName === 'grocery' && x.items?.length === 1 && x.items[0] === 'milk';
+        const x = v as { type?: string; reason?: string };
+        return x.type !== 'todo_add' && x.type !== 'list_add' && x.reason === 'default';
       },
-      'list_add [milk]');
+      '3:default');
   }
   {
     freshDB();
     const d = await classifyQuery('I need to get milk');
-    assert('declarative I-need-to-get milk is not a read-shaped grocery steal',
-      actionType(d), (v) => v === 'list_add' || v === 'todo_add', 'list_add or todo_add');
+    assert('unmarked I-need-to-get milk is not immediate todo_add',
+      { type: actionType(d), body: (d.actionIntent as { body?: string } | undefined)?.body, reason: d.reason },
+      (v) => {
+        const x = v as { type?: string; body?: string; reason?: string };
+        return x.type !== 'todo_add' && x.body !== 'get milk' && x.type !== 'list_add' && x.reason === 'default';
+      },
+      '3:default not get milk');
+  }
+  {
+    freshDB();
+    const d = await classifyQuery('I need to call the dentist');
+    assert('task-shaped I-need-to-call remains todo_add',
+      { type: actionType(d), body: (d.actionIntent as { body?: string } | undefined)?.body },
+      (v) => {
+        const x = v as { type?: string; body?: string };
+        return x.type === 'todo_add' && /^call the dentist/.test(x.body ?? '');
+      },
+      'todo_add call the dentist');
+  }
+  {
+    freshDB();
+    const d = await classifyQuery('I need to water the plants');
+    assert('task-shaped I-need-to-water remains todo_add',
+      actionType(d), (v) => v === 'todo_add', 'todo_add');
+  }
+  {
+    freshDB();
+    const d = await classifyQuery('I need to get my car inspected');
+    assert('I-need-to-get car inspected is not grocery list_add',
+      { type: actionType(d), reason: d.reason },
+      (v) => {
+        const x = v as { type?: string; reason?: string };
+        return x.type !== 'list_add' && x.reason !== 'action:list_add:contextual';
+      },
+      'not grocery');
+  }
+  {
+    freshDB();
+    const d = await classifyQuery('We need to get bread');
+    assert('unmarked we-need-to-get bread matches I-need-to-get path',
+      { type: actionType(d), reason: d.reason },
+      (v) => {
+        const x = v as { type?: string; reason?: string };
+        return x.type !== 'todo_add' && x.type !== 'list_add' && x.reason === 'default';
+      },
+      '3:default');
   }
   {
     freshDB();
     const d = await classifyQuery('I need to pick up eggs');
-    assert('declarative I-need-to-pick-up eggs is not a read-shaped grocery steal',
-      actionType(d), (v) => v === 'list_add' || v === 'todo_add', 'list_add or todo_add');
+    assert('unmarked I-need-to-pick-up is not person-dependent todo write',
+      { type: actionType(d), reason: d.reason },
+      (v) => {
+        const x = v as { type?: string; reason?: string };
+        return x.type !== 'todo_add' && x.type !== 'list_add' && x.reason === 'default';
+      },
+      '3:default');
+  }
+  {
+    freshDB();
+    const d = await classifyQuery('I need to get milk from the grocery store');
+    assert('store-marked acquisition remains grocery',
+      { type: actionType(d), reason: d.reason, listName: (d.actionIntent as { listName?: string } | undefined)?.listName },
+      (v) => {
+        const x = v as { type?: string; reason?: string; listName?: string };
+        return x.type === 'list_add' && x.listName === 'grocery' && x.reason === 'action:list_add:acquisition_grocery';
+      },
+      'acquisition_grocery');
   }
   {
     freshDB();

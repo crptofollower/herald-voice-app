@@ -316,13 +316,13 @@ export async function runConversationFoundationSmoothMvpTests() {
     ));
   }
 
-  const SINGLE_ITEM_TODO = [
+  const SINGLE_ITEM_UNMARKED = [
     'I need to go pick up my dry cleaning.',
     'I need to get my car inspected.',
   ];
-  for (const phrase of SINGLE_ITEM_TODO) {
+  for (const phrase of SINGLE_ITEM_UNMARKED) {
     const d = await classifyQuery(phrase);
-    const { say, getClassifyLlmCalls } = fresh({
+    const { db, say } = fresh({
       llmReady: true,
       classifyLLM: async () => ({
         status: 'ok',
@@ -330,13 +330,17 @@ export async function runConversationFoundationSmoothMvpTests() {
       }),
     });
     const out = await say(phrase);
-    assert(`single-item unmarked acquisition is deterministic todo with zero classifyLLM (${phrase.slice(0, 28)})`, (
-      !isAmbiguousOperationalListAcquisition(phrase)
-      && d.actionIntent?.type === 'todo_add'
-      && d.reason === 'action:todo_add'
-      && out.handled === true
-      && out.source === 'capture'
-      && getClassifyLlmCalls() === 0
+    const groceryBodies = (db.prepare(
+      `SELECT lower(li.body) as body FROM list_items li JOIN lists l ON l.id = li.list_id WHERE l.name = 'grocery' AND li.checked = 0`,
+    ).all() as { body: string }[]).map((r) => r.body);
+    assert(`unmarked single acquisition is not silent grocery or todo write (${phrase.slice(0, 28)})`, (
+      isUnmarkedAcquisitionShape(phrase)
+      && !isAmbiguousOperationalListAcquisition(phrase)
+      && d.actionIntent?.type !== 'todo_add'
+      && d.actionIntent?.type !== 'list_add'
+      && d.reason === 'default'
+      && groceryBodies.length === 0
+      && !(out.handled === true && out.source === 'capture' && !out.commits?.some((c) => c.status === 'pending'))
     ));
   }
 
