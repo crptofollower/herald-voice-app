@@ -20,6 +20,13 @@ export const LOCAL_LLM_ENABLED = false;
 //   retired classifier, App.tsx Llama-3.2 downloads, or useLocalLLM.
 export const CONVERSATIONAL_WORKER_EXPERIMENT_ENABLED = true;
 
+// QWEN_RUNTIME_DIAGNOSTIC_BENCHMARK_ENABLED:
+//   TEMP — Latency V1 / Slice E.2. One-shot init/bench logs on the
+//   experimental Qwen ctx after D.1 warmup. Does not change production
+//   n_threads, n_batch, n_gpu_layers, generation, or conversation text.
+//   Remove when the runtime-latency question is closed.
+export const QWEN_RUNTIME_DIAGNOSTIC_BENCHMARK_ENABLED = true;
+
 // LIST_REMOVE_INTERPRETATION_SHADOW_ENABLED:
 //   Bounded diagnostic: independent Qwen ctx proposes list_remove semantics;
 //   deterministic code grounds against a pre-mutation grocery snapshot and

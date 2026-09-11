@@ -306,6 +306,27 @@ export async function runSemanticLatencyInstrumentationTests() {
       (v) => v === true, 'bounded fields');
   }
 
+  {
+    const {
+      logQwenRuntimeInitDiag,
+      logQwenRuntimeBenchBaseline,
+      logQwenRuntimeThreadProbeOmitted,
+    } = await import('../../src/utils/latencyInstrument.ts');
+    const { lines } = await captureLatencyLines(async () => {
+      logQwenRuntimeInitDiag({ n_ctx: 2048, modelFile: 'Qwen3-1.7B-Q4_K_M.gguf' });
+      logQwenRuntimeBenchBaseline({ outcome: 'ok', nThreads: 4 });
+      logQwenRuntimeThreadProbeOmitted({ outcome: 'omitted' });
+      return null;
+    });
+    const joined = lines.join('\n');
+    assert('qwen runtime diagnostic events are bounded technical logs',
+      /QWEN_RUNTIME_INIT_DIAG/.test(joined)
+      && /QWEN_RUNTIME_BENCH_BASELINE/.test(joined)
+      && /QWEN_RUNTIME_THREAD_PROBE_OMITTED/.test(joined)
+      && !/hello/.test(joined),
+      (v) => v === true, 'init/bench/omitted');
+  }
+
   const total = passed + failures.length;
   console.log(
     `\n${BOLD}SemanticLatencyInstrumentation: ${passed}/${total} passed` +

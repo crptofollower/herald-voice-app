@@ -349,6 +349,30 @@ export function logQwenWarmupEnd(
   }
 }
 
+export function logQwenRuntimeInitDiag(fields: Record<string, unknown>): void {
+  try {
+    log('QWEN_RUNTIME_INIT_DIAG', { model: 'experimental-qwen', ...fields });
+  } catch {
+    // instrumentation must never alter completion behavior
+  }
+}
+
+export function logQwenRuntimeBenchBaseline(fields: Record<string, unknown>): void {
+  try {
+    log('QWEN_RUNTIME_BENCH_BASELINE', { model: 'experimental-qwen', ...fields });
+  } catch {
+    // instrumentation must never alter completion behavior
+  }
+}
+
+export function logQwenRuntimeThreadProbeOmitted(fields: Record<string, unknown>): void {
+  try {
+    log('QWEN_RUNTIME_THREAD_PROBE_OMITTED', { model: 'experimental-qwen', ...fields });
+  } catch {
+    // instrumentation must never alter completion behavior
+  }
+}
+
 export function logConversationInferenceStart(worker: string): void {
   safeSemanticLog('CONVERSATION_INFERENCE_START', { worker, model: worker });
 }

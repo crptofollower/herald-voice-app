@@ -9,7 +9,8 @@ import {
   completeExperimentalQwenConversationInit,
   EXPERIMENTAL_QWEN_INIT,
 } from './experimentalQwenLlamaWorker';
-import { ensureExperimentalQwenModelPath } from './experimentalQwenModel';
+import { EXPERIMENTAL_QWEN_ARTIFACT, ensureExperimentalQwenModelPath } from './experimentalQwenModel';
+import { emitQwenRuntimeInitDiag } from './qwenRuntimeDiagnostic';
 
 export type ExperimentalConversationStatus =
   | 'unavailable'
@@ -51,6 +52,11 @@ export function useExperimentalConversationalEngine(): {
           await ctx.release().catch(() => {});
           return;
         }
+        emitQwenRuntimeInitDiag(ctx, {
+          n_ctx: EXPERIMENTAL_QWEN_INIT.n_ctx,
+          n_gpu_layers: EXPERIMENTAL_QWEN_INIT.n_gpu_layers,
+          model: EXPERIMENTAL_QWEN_ARTIFACT.filename,
+        });
         const decision = await completeExperimentalQwenConversationInit(ctx, () => cancelled);
         if (decision === 'cancelled') {
           await ctx.release().catch(() => {});

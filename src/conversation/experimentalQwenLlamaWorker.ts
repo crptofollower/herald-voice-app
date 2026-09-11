@@ -4,7 +4,7 @@
 // Zero memory/write/action API. Presentation sanitation stays in this adapter.
 
 import type { LlamaContext } from 'llama.rn';
-import { CONVERSATIONAL_WORKER_EXPERIMENT_ENABLED } from '../constants/features';
+import { CONVERSATIONAL_WORKER_EXPERIMENT_ENABLED, QWEN_RUNTIME_DIAGNOSTIC_BENCHMARK_ENABLED } from '../constants/features';
 import type { HotRingEntry } from '../utils/hotNarrativeRing';
 import type {
   ConversationalWorker,
@@ -18,6 +18,7 @@ import {
   logQwenWarmupStart,
   mono as latMono,
 } from '../utils/latencyInstrument';
+import { runQwenRuntimeDiagnosticAfterWarmup } from './qwenRuntimeDiagnostic';
 
 /** Snapshot of Herald ephemeral persona — copied, not imported, so this
  *  adapter cannot drag production generation into the engine. */
@@ -97,12 +98,25 @@ export async function warmupExperimentalQwenConversation(ctx: {
   }
 }
 
-/** After successful initLlama: one warmup, then publish only if still mounted. */
+/** After successful initLlama: one warmup, optional E.2 bench, then publish. */
 export async function completeExperimentalQwenConversationInit(
-  ctx: { completion: LlamaContext['completion'] },
+  ctx: {
+    completion: LlamaContext['completion'];
+    bench?: LlamaContext['bench'];
+  },
   isCancelled: () => boolean,
 ): Promise<'publish' | 'cancelled'> {
   await warmupExperimentalQwenConversation(ctx);
+  if (isCancelled()) return 'cancelled';
+  try {
+    await runQwenRuntimeDiagnosticAfterWarmup(ctx, {
+      isCancelled,
+      enabled: QWEN_RUNTIME_DIAGNOSTIC_BENCHMARK_ENABLED,
+      restoreWarmupKv: () => warmupExperimentalQwenConversation(ctx),
+    });
+  } catch {
+    // Diagnostic must never block conversation readiness.
+  }
   if (isCancelled()) return 'cancelled';
   return 'publish';
 }
