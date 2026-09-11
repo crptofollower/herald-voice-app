@@ -15,20 +15,29 @@ export function GroceryListSurface({ rows }: Props) {
   const countLabel = count === 1 ? '1 item' : `${count} items`;
   return (
     <View style={styles.surface} accessibilityRole="summary">
-      <Text style={styles.cue} allowFontScaling>
-        GROCERY
-      </Text>
-      <Text style={styles.title} allowFontScaling>
-        GROCERY LIST
-      </Text>
-      <Text style={styles.count} allowFontScaling>
-        {countLabel}
-      </Text>
-      {rows.map((row) => (
-        <View key={row.id} style={styles.row}>
-          <Text style={styles.number} allowFontScaling>
-            {row.position}
+      <View style={styles.header}>
+        <View style={styles.headerLeft}>
+          <Text style={styles.cue} allowFontScaling>
+            {'\uD83D\uDED2'}
           </Text>
+          <Text style={styles.title} allowFontScaling>
+            GROCERY LIST
+          </Text>
+        </View>
+        <Text style={styles.count} allowFontScaling>
+          {countLabel}
+        </Text>
+      </View>
+      {rows.map((row, index) => (
+        <View
+          key={row.id}
+          style={[styles.row, index < rows.length - 1 ? styles.rowDivider : null]}
+        >
+          <View style={styles.badge}>
+            <Text style={styles.number} allowFontScaling numberOfLines={1}>
+              {row.position}
+            </Text>
+          </View>
           <Text style={styles.body} allowFontScaling>
             {row.body}
           </Text>
@@ -43,48 +52,74 @@ const styles = StyleSheet.create({
     marginHorizontal: 16,
     marginTop: 8,
     marginBottom: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderRadius: 14,
-    backgroundColor: 'rgba(12, 28, 22, 0.62)',
-    borderLeftWidth: 3,
-    borderLeftColor: 'rgba(110, 210, 160, 0.85)',
+    paddingHorizontal: 14,
+    paddingTop: 12,
+    paddingBottom: 6,
+    borderRadius: 16,
+    backgroundColor: 'rgba(12, 28, 22, 0.72)',
+    borderWidth: 1,
+    borderColor: 'rgba(110, 210, 160, 0.22)',
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+    paddingBottom: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(255,255,255,0.12)',
+  },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexShrink: 1,
   },
   cue: {
-    fontSize: 11,
-    fontWeight: '600',
-    letterSpacing: 1.2,
-    color: 'rgba(110, 210, 160, 0.9)',
-    marginBottom: 1,
+    fontSize: 16,
+    lineHeight: 20,
+    marginRight: 6,
   },
   title: {
-    fontSize: 16,
+    fontSize: 12,
     fontWeight: '700',
-    color: 'rgba(255,255,255, 0.94)',
-    marginBottom: 2,
+    letterSpacing: 1.1,
+    color: 'rgba(200, 230, 214, 0.88)',
   },
   count: {
-    fontSize: 13,
-    color: 'rgba(255,255,255,0.72)',
-    marginBottom: 6,
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.55)',
+    marginLeft: 8,
   },
   row: {
     flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingVertical: 8,
+  },
+  rowDivider: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(255,255,255,0.08)',
+  },
+  badge: {
+    minWidth: 28,
+    paddingHorizontal: 4,
+    marginRight: 10,
     alignItems: 'center',
-    paddingVertical: 3,
+    justifyContent: 'flex-start',
+    flexShrink: 0,
   },
   number: {
-    width: 22,
-    fontSize: 16,
-    lineHeight: 22,
+    minWidth: 20,
+    fontSize: 13,
+    lineHeight: 18,
     fontWeight: '700',
-    color: 'rgba(255,255,255,0.92)',
+    textAlign: 'center',
+    color: 'rgba(150, 210, 180, 0.92)',
   },
   body: {
     flex: 1,
-    fontSize: 16,
-    lineHeight: 22,
+    fontSize: 15,
+    lineHeight: 20,
     fontWeight: '500',
-    color: 'rgba(255,255,255,0.94)',
+    color: 'rgba(235, 240, 238, 0.88)',
   },
 });

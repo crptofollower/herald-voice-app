@@ -90,6 +90,14 @@ export async function runGroceryVisualPresentationTests() {
     assert('surface keeps GROCERY LIST heading and numbered rows',
       /GROCERY LIST/.test(surfaceSrc) && /row\.position/.test(surfaceSrc) && /countLabel/.test(surfaceSrc),
       (v) => v === true, 'heading + count + numbered rows');
+    assert('surface keeps grocery cart cue',
+      /\\uD83D\\uDED2/.test(surfaceSrc) || /🛒/.test(surfaceSrc),
+      (v) => v === true, 'cart cue');
+    assert('ordinal container is single-line and non-shrinking for multi-digit values',
+      /numberOfLines=\{1\}/.test(surfaceSrc)
+      && /minWidth:\s*28/.test(surfaceSrc)
+      && /flexShrink:\s*0/.test(surfaceSrc),
+      (v) => v === true, 'badge minWidth + no wrap');
     assert('surface item text stays compact relative to prior oversized rows',
       !/fontSize:\s*24/.test(surfaceSrc) && !/fontSize:\s*28/.test(surfaceSrc),
       (v) => v === true, 'no 24/28 item type');
