@@ -28,6 +28,7 @@ export async function runCapabilitySurfaceTests() {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
   const chatSrc = fs.readFileSync(path.join(root, 'src/screens/ChatScreen.tsx'), 'utf8');
   const surfaceSrc = fs.readFileSync(path.join(root, 'src/components/CapabilitySurface.tsx'), 'utf8');
+  const frameSrc = fs.readFileSync(path.join(root, 'src/components/CapabilitySurfaceFrame.tsx'), 'utf8');
   const nwsSrc = fs.readFileSync(path.join(root, 'src/capabilities/nwsWeather.ts'), 'utf8');
 
   assert(
@@ -75,20 +76,21 @@ export async function runCapabilitySurfaceTests() {
   );
 
   assert(
-    'CS-5 ChatScreen weatherSurface state typed from NWS result',
+    'CS-5 ChatScreen weather occupies the shared activeSurface slot',
     chatSrc,
     (src) => typeof src === 'string'
-      && /\[weatherSurface,\s*setWeatherSurface\]/.test(src)
-      && /NwsForecastResult/.test(src),
-    'weatherSurface state with NwsForecastResult',
+      && /kind: 'weather'/.test(src)
+      && /NwsForecastResult/.test(src)
+      && /activeSurface/.test(src),
+    'activeSurface weather kind with NwsForecastResult',
   );
 
   assert(
-    'CS-6 sendMessage clears weatherSurface at entry',
+    'CS-6 sendMessage clears weather slot at entry without clearing grocery',
     chatSrc,
     (src) => typeof src === 'string'
-      && /latLog\('sendMessage entry'[\s\S]*?setWeatherSurface\(null\)/.test(src),
-    'setWeatherSurface(null) after sendMessage entry log',
+      && /latLog\('sendMessage entry'[\s\S]*?setActiveSurface\(\(prev\) => \(prev\?\.kind === 'weather' \? null : prev\)\)/.test(src),
+    'weather-only slot clear after sendMessage entry log',
   );
 
   assert(
@@ -100,11 +102,11 @@ export async function runCapabilitySurfaceTests() {
   );
 
   assert(
-    'CS-8 NWS success early exit — speak + setWeatherSurface',
+    'CS-8 NWS success early exit — speak + set weather activeSurface',
     chatSrc,
     (src) => typeof src === 'string'
-      && /if \(nwsResult\) \{[\s\S]*?speak\(reply\)[\s\S]*?setWeatherSurface\(nwsResult\)[\s\S]*?sendingRef\.current = false/.test(src),
-    'success path speaks, sets surface, resets sendingRef',
+      && /if \(nwsResult\) \{[\s\S]*?speak\(reply\)[\s\S]*?setActiveSurface\(\{ kind: 'weather', weather: nwsResult \}\)[\s\S]*?sendingRef\.current = false/.test(src),
+    'success path speaks, sets weather slot, resets sendingRef',
   );
 
   assert(
@@ -112,17 +114,17 @@ export async function runCapabilitySurfaceTests() {
     chatSrc,
     (src) => typeof src === 'string'
       && /ListFooterComponent=\{[\s\S]*?<CapabilitySurface/.test(src)
-      && /weatherSurface \?/.test(src),
-    'CapabilitySurface in ListFooter when weatherSurface set',
+      && /activeSurface\?\.kind === 'weather'/.test(src),
+    'CapabilitySurface in ListFooter when weather occupies the slot',
   );
 
   assert(
     'CS-10 View forecast opens source URL via Linking',
     chatSrc,
     (src) => typeof src === 'string'
-      && /sourceLinkLabel=\{weatherSurface\.sourceLinkLabel\}/.test(src)
-      && /onViewForecast=\{\(\) => Linking\.openURL\(weatherSurface\.sourceUrl\)\}/.test(src),
-    'Linking.openURL(weatherSurface.sourceUrl) + sourceLinkLabel prop',
+      && /sourceLinkLabel=\{activeSurface\.weather\.sourceLinkLabel\}/.test(src)
+      && /onViewForecast=\{\(\) => Linking\.openURL\(activeSurface\.weather\.sourceUrl\)\}/.test(src),
+    'Linking.openURL(activeSurface.weather.sourceUrl) + sourceLinkLabel prop',
   );
 
   assert(
@@ -205,14 +207,15 @@ export async function runCapabilitySurfaceTests() {
 
   assert(
     'CS-17 inset grammar — no heavy boxed modal treatment',
-    surfaceSrc,
+    surfaceSrc + '\n' + frameSrc,
     (src) => typeof src === 'string'
+      && /variant="inset"/.test(src)
       && /borderLeftWidth:\s*2/.test(src)
       && !/borderWidth:\s*[2-9]/.test(src)
       && !/numberOfLines=\{3\}/.test(src)
       && !/textTransform:\s*'uppercase'/.test(src)
       && /styles\.inset/.test(src),
-    'left-edge inset; forecast height unconstrained; no uppercase brand header',
+    'left-edge inset via shared frame; forecast height unconstrained; no uppercase brand header',
   );
 
   const total = passed + failures.length;

@@ -3,7 +3,8 @@
 // Secondary to Kit's spoken/text answer. Not a modal or provider-app card.
 
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { CapabilitySurfaceFrame } from './CapabilitySurfaceFrame';
 
 interface Props {
   providerLabel: string;
@@ -25,16 +26,7 @@ export function CapabilitySurface({
   accent = '#4dd4d6',
 }: Props) {
   return (
-    <View
-      style={[
-        styles.inset,
-        {
-          backgroundColor: surfaceTint,
-          borderLeftColor: `${accent}99`,
-        },
-      ]}
-      accessibilityRole="summary"
-    >
+    <CapabilitySurfaceFrame variant="inset" surfaceTint={surfaceTint} accent={accent}>
       <Text style={[styles.provider, { color: `${accent}aa` }]} allowFontScaling>
         {providerLabel}
       </Text>
@@ -54,21 +46,11 @@ export function CapabilitySurface({
           {sourceLinkLabel}
         </Text>
       </TouchableOpacity>
-    </View>
+    </CapabilitySurfaceFrame>
   );
 }
 
 const styles = StyleSheet.create({
-  inset: {
-    marginHorizontal: 16,
-    marginTop: 4,
-    marginBottom: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 14,
-    borderLeftWidth: 2,
-    minWidth: 0,
-  },
   provider: {
     fontSize: 12,
     fontWeight: '500',

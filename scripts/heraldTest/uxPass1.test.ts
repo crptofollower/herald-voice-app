@@ -91,13 +91,14 @@ export async function runUxPass1Tests() {
   );
 
   assert(
-    'UX1-7 renderMessage assigns latest exchange without slicing displayMessages',
+    'UX1-7 renderMessage assigns latest exchange; grocery workspace may strip history',
     chatSrc,
     (src) => typeof src === 'string'
-      && /currentExchangeStart = Math\.max\(0, displayMessages\.length - 2\)/.test(src)
+      && /Math\.max\(0, displayMessages\.length - 2\)/.test(src)
       && /visualWeight=\{index >= currentExchangeStart \? "current" : "prior"\}/.test(src)
-      && !/displayMessages\.slice\(/.test(src),
-    'last-two index weighting; no displayMessages slice',
+      && /groceryWorkspaceActive[\s\S]*displayMessages\.slice\(-2\)[\s\S]*:[\s\S]*displayMessages/.test(src)
+      && /data=\{transcriptMessages\}/.test(src),
+    'last-two weighting; slice only while grocery workspace is active',
   );
 
   assert(

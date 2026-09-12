@@ -50,11 +50,11 @@ export async function runGroceryVisualPresentationTests() {
     const presented = getPresentedOpenListItems('grocery');
     const rows = projectGroceryVisualFromPresentedIds(presented.map((i) => i.id));
     assert('visual rows follow presented ID order',
-      rows?.map((r) => `${r.position}:${r.id}:${r.body}`).join('|'),
-      (v) => v === '1:g1:Bananas|2:g2:Dates|3:g3:Milk',
-      '1 Bananas, 2 Dates, 3 Milk');
-    assert('visual numbering is 1-based contiguous',
-      rows?.every((r, i) => r.position === i + 1),
+      rows?.map((r) => `${r.id}:${r.body}`).join('|'),
+      (v) => v === 'g1:Bananas|g2:Dates|g3:Milk',
+      'g1 Bananas, g2 Dates, g3 Milk');
+    assert('visual projection carries no row numbers',
+      rows?.every((r) => !('position' in r)),
       (v) => v === true, 'true');
   }
 
@@ -80,24 +80,19 @@ export async function runGroceryVisualPresentationTests() {
   {
     const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
     const chatSrc = fs.readFileSync(path.join(root, 'src/screens/ChatScreen.tsx'), 'utf8');
-    assert('ChatScreen renders GroceryListSurface',
-      /GroceryListSurface/.test(chatSrc) && /refreshGroceryVisual/.test(chatSrc),
+    assert('ChatScreen renders GrocerySurface in the active slot',
+      /GrocerySurface/.test(chatSrc) && /refreshGroceryCapabilitySurface/.test(chatSrc),
       (v) => v === true, 'surface + refresh');
-    const surfaceSrc = fs.readFileSync(path.join(root, 'src/components/GroceryListSurface.tsx'), 'utf8');
+    const surfaceSrc = fs.readFileSync(path.join(root, 'src/components/GrocerySurface.tsx'), 'utf8');
     assert('grocery surface file stays independent of TodoListSurface',
       /TodoListSurface/.test(surfaceSrc),
       (v) => v === false, 'false');
-    assert('surface keeps GROCERY LIST heading and numbered rows',
-      /GROCERY LIST/.test(surfaceSrc) && /row\.position/.test(surfaceSrc) && /countLabel/.test(surfaceSrc),
-      (v) => v === true, 'heading + count + numbered rows');
+    assert('surface keeps grocery identity, remaining count, and no numbered rows',
+      /GROCERY/.test(surfaceSrc) && /remainingCount/.test(surfaceSrc) && !/row\.position/.test(surfaceSrc),
+      (v) => v === true, 'heading + remaining + no numbers');
     assert('surface keeps grocery cart cue',
       /\\uD83D\\uDED2/.test(surfaceSrc) || /🛒/.test(surfaceSrc),
       (v) => v === true, 'cart cue');
-    assert('ordinal container is single-line and non-shrinking for multi-digit values',
-      /numberOfLines=\{1\}/.test(surfaceSrc)
-      && /minWidth:\s*28/.test(surfaceSrc)
-      && /flexShrink:\s*0/.test(surfaceSrc),
-      (v) => v === true, 'badge minWidth + no wrap');
     assert('surface item text stays compact relative to prior oversized rows',
       !/fontSize:\s*24/.test(surfaceSrc) && !/fontSize:\s*28/.test(surfaceSrc),
       (v) => v === true, 'no 24/28 item type');

@@ -48,7 +48,6 @@ import {
   getPresentedOpenListItems,
   composeOpenListSpeech,
   formatGroceryItemReadback,
-  markOpenListItemRemovedById,
 } from '../db/listRead';
 import { parseGroceryNamedCollectionRead } from './groceryNamedCollectionReentry';
 import { interpretPositionReference, isPositionMutationLanguage, hasBoundedPositionEvidence, extractBareMutationPresentedCardinal } from './positionReference';
@@ -58,6 +57,7 @@ import {
   formatGroceryRemovalAck,
   isGroceryMutationDomainBlocked,
 } from './groceryPositionalMutation';
+import { completeOpenGroceryItemByExactId } from './groceryAuthoritativeCompletion';
 import {
   CalendarContinuationHolder,
   parseCalendarTemporalFollowUp,
@@ -92,7 +92,14 @@ import {
 export type RouteDeps = Parameters<typeof routeIntent>[1];
 
 export type UtteranceOutcome =
-  | { handled: true; source: 'pending_resume' | 'capture' | 'referent_resume'; responseText: string; commits: CommitResult[] }
+  | {
+      handled: true;
+      source: 'pending_resume' | 'capture' | 'referent_resume';
+      responseText: string;
+      commits: CommitResult[];
+      /** Presentation hint only. Never speech-parsed. Never a conversational machine. */
+      capabilitySurface?: 'grocery';
+    }
   | { handled: true; source: 'emergency' }
   | {
       handled: false;
@@ -102,6 +109,27 @@ export type UtteranceOutcome =
       continuityFocus?: DomainFocusEnvelope;
       continuityReferenceOnly?: boolean;
     };
+
+function groceryHandled(
+  source: 'pending_resume' | 'capture' | 'referent_resume',
+  responseText: string,
+  commits: CommitResult[] = [],
+): Extract<UtteranceOutcome, { handled: true; source: 'pending_resume' | 'capture' | 'referent_resume' }> {
+  return { handled: true, source, responseText, commits, capabilitySurface: 'grocery' };
+}
+
+function captureWithOptionalGrocerySurface(
+  responseText: string,
+  commits: CommitResult[],
+  intents: IntentRecord[],
+): Extract<UtteranceOutcome, { handled: true; source: 'capture' }> {
+  const groceryAdd = intents.some(
+    (intent) => intent.type === 'list_add' && (intent.listName ?? 'grocery').toLowerCase() === 'grocery',
+  );
+  const wrote = commits.some((commit) => commit.status === 'committed' || commit.status === 'noop');
+  if (groceryAdd && wrote) return groceryHandled('capture', responseText, commits);
+  return { handled: true, source: 'capture', responseText, commits };
+}
 
 /** Narrative reference-only focus is admitted only on the conversational
  *  path (needs_clarification / backend without a classified read). A
@@ -458,7 +486,17 @@ export async function processUtterance(
       // this is a no-op for them (undefined, same as before).
       focus: buildFocusEntry(result.focus, { status: result.status, source: 'deterministic', referenceOnly: result.referenceOnly }),
     });
-    return { handled: true, source: 'pending_resume', responseText: composeAck([result]), commits: [result] };
+    const pendingResume = {
+      handled: true as const,
+      source: 'pending_resume' as const,
+      responseText: composeAck([result]),
+      commits: [result] as CommitResult[],
+    };
+    const groceryPending =
+      (result.status === 'committed' || result.status === 'noop')
+      && result.focus?.kind === 'collection'
+      && result.focus.displayValue === 'grocery list';
+    return groceryPending ? groceryHandled('pending_resume', pendingResume.responseText, pendingResume.commits) : pendingResume;
   }
   const exactlyOneNarrativePerson = discourse
     ? discourse.noteNarrativeUtterance(text).exactlyOneNarrativePerson
@@ -554,12 +592,7 @@ export async function processUtterance(
       const items = getPresentedOpenListItems('grocery');
       if (items.length === 0) {
         orderedPresentation?.clear();
-        return {
-          handled: true,
-          source: 'referent_resume',
-          responseText: composeOpenListSpeech('grocery', items),
-          commits: [],
-        };
+        return groceryHandled('referent_resume', composeOpenListSpeech('grocery', items));
       }
       const presentedIds = items.map((i) => i.id);
       subject?.clear();
@@ -584,12 +617,7 @@ export async function processUtterance(
         };
       }
       orderedPresentation?.renew();
-      return {
-        handled: true,
-        source: 'referent_resume',
-        responseText: formatGroceryItemReadback(row.body),
-        commits: [],
-      };
+      return groceryHandled('referent_resume', formatGroceryItemReadback(row.body));
     }
   }
   // 1a3) Live grocery ordered-presentation READ — interpret BEFORE unused-clear.
@@ -618,12 +646,7 @@ export async function processUtterance(
           };
         }
         orderedPresentation.renew();
-        return {
-          handled: true,
-          source: 'referent_resume',
-          responseText: formatGroceryItemReadback(row.body),
-          commits: [],
-        };
+        return groceryHandled('referent_resume', formatGroceryItemReadback(row.body));
       }
       if (interpreted.kind === 'ambiguous') {
         return { handled: true, source: 'referent_resume', responseText: ORDERED_PRESENTATION_CONFUSION, commits: [] };
@@ -674,12 +697,7 @@ export async function processUtterance(
           const items = getPresentedOpenListItems('grocery');
           if (items.length === 0) {
             orderedPresentation?.clear();
-            return {
-              handled: true,
-              source: 'referent_resume',
-              responseText: composeOpenListSpeech('grocery', items),
-              commits: [],
-            };
+            return groceryHandled('referent_resume', composeOpenListSpeech('grocery', items));
           }
           presentedIds = items.map((i) => i.id);
           subject?.clear();
@@ -713,8 +731,12 @@ export async function processUtterance(
             commits: [],
           };
         }
-        const removed = markOpenListItemRemovedById(row.id, 'grocery');
-        if (!removed) {
+        const completed = completeOpenGroceryItemByExactId(row.id, {
+          orderedPresentation,
+          subject,
+          medicationPresentation,
+        });
+        if (!completed.ok) {
           return {
             handled: true,
             source: 'referent_resume',
@@ -722,20 +744,10 @@ export async function processUtterance(
             commits: [],
           };
         }
-        const remaining = getPresentedOpenListItems('grocery');
-        if (remaining.length === 0) {
-          orderedPresentation?.clear();
-        } else {
-          subject?.clear();
-          medicationPresentation?.clear();
-          orderedPresentation?.establish('grocery', remaining.map((i) => i.id));
-        }
-        return {
-          handled: true,
-          source: 'referent_resume',
-          responseText: formatGroceryRemovalAck(removed.body, remaining),
-          commits: [],
-        };
+        return groceryHandled(
+          'referent_resume',
+          formatGroceryRemovalAck(completed.removed.body, completed.remaining),
+        );
       }
     }
     if (isPositionMutationLanguage(text) && orderedPresentation?.hasLive()) {
@@ -862,7 +874,7 @@ export async function processUtterance(
       if (commits.some((c) => c.status === 'committed')) {
         discourse.establishDomain(liveDomain.domain);
       }
-      return { handled: true, source: 'capture', responseText, commits };
+      return captureWithOptionalGrocerySurface(responseText, commits, [intent]);
     }
     const liveSet = discourse.peekCandidateSet();
     const demo = interpretCandidateSetDemonstrative(text, liveSet);
@@ -883,7 +895,7 @@ export async function processUtterance(
       if (commits.some((c) => c.status === 'committed')) {
         discourse.establishDomain(domain === 'todo' ? 'todo' : 'grocery');
       }
-      return { handled: true, source: 'capture', responseText, commits };
+      return captureWithOptionalGrocerySurface(responseText, commits, [intent]);
     }
   }
   // 2) The single routing authority — called exactly once per utterance.
@@ -979,7 +991,7 @@ export async function processUtterance(
         }
       }
     }
-    return { handled: true, source: 'capture', responseText, commits };
+    return captureWithOptionalGrocerySurface(responseText, commits, routeDecision.intents);
   }
   if (
     routeDecision.kind === 'needs_clarification'

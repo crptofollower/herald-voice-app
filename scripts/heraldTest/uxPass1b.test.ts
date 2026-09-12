@@ -92,8 +92,8 @@ export async function runUxPass1bTests() {
       && /\bisAtBottomRef\b/.test(src)
       && /\bfollowTranscriptRef\b/.test(src)
       && /\bscrollTranscriptToEnd\b/.test(src)
-      && !/displayMessages\.slice\(/.test(src),
-    'isAtBottomRef/followTranscriptRef/scrollTranscriptToEnd present',
+      && /groceryWorkspaceActive[\s\S]*displayMessages\.slice\(-2\)/.test(src),
+    'isAtBottomRef/followTranscriptRef/scrollTranscriptToEnd present; grocery strip is gated',
   );
 
   assert(

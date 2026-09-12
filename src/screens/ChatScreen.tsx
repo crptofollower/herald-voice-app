@@ -58,7 +58,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import { PersonaBackground } from "../components/PersonaBackground";
 import { MessageBubble } from "../components/MessageBubble";
-import { GroceryListSurface } from "../components/GroceryListSurface";
+import { GrocerySurface } from "../components/GrocerySurface";
 import { TodoListSurface } from "../components/TodoListSurface";
 import { CapabilitySurface } from "../components/CapabilitySurface";
 import { fetchNwsTomorrowForecast, isNwsTomorrowAtDeviceEligible, type NwsForecastResult } from "../capabilities/nwsWeather";
@@ -127,7 +127,16 @@ import { classifyEmergencyCallReply } from '../utils/emergencyCallConfirm';
 import { ConversationalSubjectHolder } from '../routing/conversationalSubject';
 import { MedicationPresentationHolder } from '../routing/medicationPresentation';
 import { OrderedPresentationHolder } from '../routing/orderedPresentation';
-import { projectGroceryVisualFromPresentedIds, type GroceryVisualRow } from '../routing/groceryVisualPresentation';
+import { completeOpenGroceryItemByExactId } from '../routing/groceryAuthoritativeCompletion';
+import { formatGroceryRemovalAck } from '../routing/groceryPositionalMutation';
+import {
+  groceryOutcomeIdentifiesSurface,
+  mergeGrocerySurfaceRows,
+  overlayAfterSuccessfulOpenDepartures,
+  projectGroceryOpenRowsFromSqlite,
+  type GroceryCompletedOverlayRow,
+  type GrocerySurfaceOpenRow,
+} from '../routing/grocerySurfacePresentation';
 import { projectTodoVisualFromPresentedIds, TodoPresentationHolder, type TodoVisualRow } from '../routing/todoVisualPresentation';
 import { isGroceryListReadSummarySpeech } from '../conversation/groceryListReadRealization';
 import { isTodoOpenListSpeech } from '../db/listRead';
@@ -135,7 +144,7 @@ import { CalendarContinuationHolder } from '../routing/calendarContinuation';
 import { DiscourseContinuityHolder } from '../routing/discourseContinuity';
 import { formatOperationalListClarification } from '../routing/operationalListContinuity';
 import { CalendarPresentationHolder } from '../routing/calendarPresentation';
-import { processUtterance, applyIntents } from '../routing/processUtterance';
+import { processUtterance, applyIntents, type UtteranceOutcome } from '../routing/processUtterance';
 import { continuityLedgerFocus } from '../routing/conversationTurnLedgerWrite';
 import { alreadyClassifiedByRouteIntent, mayInvokeBackendStream } from '../utils/llmClassificationOwnership';
 import {
@@ -497,7 +506,6 @@ export default function ChatScreen() {
   const [showProactive, setShowProactive] = useState(false);
   const [pendingAction, setPendingAction] = useState<IntentAction | null>(null);
   const [actionStatus, setActionStatus] = useState<ActionStatus>("confirming");
-  const [groceryVisualRows, setGroceryVisualRows] = useState<GroceryVisualRow[] | null>(null);
   const [todoVisualRows, setTodoVisualRows] = useState<TodoVisualRow[] | null>(null);
 
   const [streamingContent, setStreamingContent] = useState("");
@@ -506,7 +514,16 @@ export default function ChatScreen() {
   const [thinkingPhrase, setThinkingPhrase] = useState(THINKING_PHRASES[0]);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [dbReady, setDbReady] = useState(false);
-  const [weatherSurface, setWeatherSurface] = useState<NwsForecastResult | null>(null);
+  type ActiveCapabilitySurface =
+    | { kind: 'weather'; weather: NwsForecastResult }
+    | {
+        kind: 'grocery';
+        openRows: GrocerySurfaceOpenRow[];
+        overlay: GroceryCompletedOverlayRow[];
+        orderIds: string[];
+      };
+  const [activeSurface, setActiveSurface] = useState<ActiveCapabilitySurface | null>(null);
+  const groceryCompletingIdsRef = useRef<Set<string>>(new Set());
 
   // ── Ambient mode state ────────────────────────────────────────────────────
   // sessionStart filters which messages are shown in the current session.
@@ -547,14 +564,26 @@ export default function ChatScreen() {
   // behavior. See conversationTurnLedger.ts / conversationTurnLedgerWrite.ts.
   const conversationLedgerRef = useRef<ConversationTurnLedger>(createConversationTurnLedger());
 
-  const refreshGroceryVisual = useCallback(() => {
-    const live = orderedPresentationRef.current.peek();
-    if (!live || live.owner !== 'grocery' || live.presentedIds.length === 0) {
-      setGroceryVisualRows(null);
+  const refreshGroceryCapabilitySurface = useCallback((opts?: { resetOverlay?: boolean; dismiss?: boolean }) => {
+    if (opts?.dismiss) {
+      setActiveSurface((prev) => (prev?.kind === 'grocery' ? null : prev));
       return;
     }
-    const rows = projectGroceryVisualFromPresentedIds(live.presentedIds);
-    setGroceryVisualRows(rows && rows.length > 0 ? rows : null);
+    setActiveSurface((prev) => {
+      const openRows = projectGroceryOpenRowsFromSqlite();
+      const keepContext = prev?.kind === 'grocery' && !opts?.resetOverlay;
+      const overlay = keepContext
+        ? overlayAfterSuccessfulOpenDepartures(prev.openRows, openRows, prev.overlay)
+        : [];
+      const previousOrderIds = keepContext ? prev.orderIds : openRows.map((row) => row.id);
+      const merged = mergeGrocerySurfaceRows(openRows, overlay, previousOrderIds);
+      return {
+        kind: 'grocery',
+        openRows,
+        overlay,
+        orderIds: merged.orderIds,
+      };
+    });
   }, []);
 
   const refreshTodoVisual = useCallback(() => {
@@ -567,13 +596,10 @@ export default function ChatScreen() {
     setTodoVisualRows(rows.length > 0 ? rows : null);
   }, []);
 
-  const syncSituationalListVisuals = useCallback((outcome: {
-    handled: boolean;
-    source?: string;
-    routeDecision?: { kind: string; presentedTodoIds?: string[] };
-  }) => {
+  const syncSituationalListVisuals = useCallback((outcome: UtteranceOutcome) => {
     if (outcome.handled && outcome.source === 'emergency') {
       todoPresentationRef.current.clear();
+      setActiveSurface(null);
     } else if (!outcome.handled && outcome.routeDecision?.kind === 'device_read') {
       const presentedTodoIds = outcome.routeDecision.presentedTodoIds;
       if (presentedTodoIds !== undefined) {
@@ -582,6 +608,7 @@ export default function ChatScreen() {
         } else {
           todoPresentationRef.current.establish(presentedTodoIds);
           orderedPresentationRef.current.clear();
+          setActiveSurface(null);
         }
       } else {
         todoPresentationRef.current.clear();
@@ -592,9 +619,12 @@ export default function ChatScreen() {
         todoPresentationRef.current.clear();
       }
     }
-    refreshGroceryVisual();
+    if (groceryOutcomeIdentifiesSurface(outcome)) {
+      todoPresentationRef.current.clear();
+      refreshGroceryCapabilitySurface({ resetOverlay: false });
+    }
     refreshTodoVisual();
-  }, [refreshGroceryVisual, refreshTodoVisual]);
+  }, [refreshGroceryCapabilitySurface, refreshTodoVisual]);
 
   // Step 5a: bounded HOT narrative ring — RAM-only, peek semantics, written ONLY
   // from the three authorized Step 4 sites (ephemeral success ×2, chit_chat read).
@@ -669,6 +699,7 @@ export default function ChatScreen() {
       // Scroll back to bottom for fresh session
       isAtBottomRef.current = true;
       followTranscriptRef.current = true;
+      setActiveSurface(null);
       if (!userId) return;
       const local_time = new Date().toLocaleTimeString("en-US", {
         hour: "numeric",
@@ -1278,7 +1309,7 @@ export default function ChatScreen() {
 
     const turnId = getActiveTurnId() ?? beginTurn();
     latLog('sendMessage entry', { turnId, inputSource: 'app' });
-    setWeatherSurface(null);
+    setActiveSurface((prev) => (prev?.kind === 'weather' ? null : prev));
 
     let ephemeralGenerateWorkerId: string | null = null;
     const runEphemeralGenerate = (
@@ -1340,8 +1371,8 @@ export default function ChatScreen() {
       calendarContinuationRef.current.clear();
       discourseRef.current.clear();
       hotRingRef.current.clear();
-      refreshGroceryVisual();
-      refreshTodoVisual();
+      setActiveSurface(null);
+      setTodoVisualRows(null);
       await dispatchEmergency(text);
       setInputText('');
       return;
@@ -1385,7 +1416,6 @@ export default function ChatScreen() {
       todoPresentationRef.current.clear();
       calendarPresentationRef.current.clear();
       calendarContinuationRef.current.clear();
-      refreshGroceryVisual();
       refreshTodoVisual();
       const pending = pendingContactCollectRef.current;
       const phoneMatch = text.match(/([\d\s\-\(\)\+\.]{7,})/);
@@ -2578,7 +2608,7 @@ export default function ChatScreen() {
         addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: now });
         addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: now + 1 });
         speak(reply);
-        setWeatherSurface(nwsResult);
+        setActiveSurface({ kind: 'weather', weather: nwsResult });
         sendingRef.current = false;
         setInputText('');
         return;
@@ -3426,7 +3456,39 @@ export default function ChatScreen() {
     [markRead, userId]
   );
 
-  const currentExchangeStart = Math.max(0, displayMessages.length - 2);
+  const handleGroceryCompleteOpenRow = useCallback((id: string) => {
+    if (groceryCompletingIdsRef.current.has(id)) return;
+    groceryCompletingIdsRef.current.add(id);
+    try {
+      const completed = completeOpenGroceryItemByExactId(id, {
+        orderedPresentation: orderedPresentationRef.current,
+        subject: subjectRef.current,
+        medicationPresentation: medicationPresentationRef.current,
+      });
+      if (!completed.ok) return;
+      refreshGroceryCapabilitySurface({ resetOverlay: false });
+      speak(formatGroceryRemovalAck(completed.removed.body, completed.remaining));
+    } finally {
+      groceryCompletingIdsRef.current.delete(id);
+    }
+  }, [refreshGroceryCapabilitySurface, speak]);
+
+  const groceryMergedRows = useMemo(() => {
+    if (activeSurface?.kind !== 'grocery') return [];
+    return mergeGrocerySurfaceRows(
+      activeSurface.openRows,
+      activeSurface.overlay,
+      activeSurface.orderIds,
+    ).rows;
+  }, [activeSurface]);
+
+  const groceryWorkspaceActive = activeSurface?.kind === 'grocery';
+  const transcriptMessages = groceryWorkspaceActive
+    ? displayMessages.slice(-2)
+    : displayMessages;
+  const currentExchangeStart = groceryWorkspaceActive
+    ? 0
+    : Math.max(0, displayMessages.length - 2);
 
   const renderMessage = useCallback(
     ({ item, index }: { item: Message; index: number }) => (
@@ -3438,8 +3500,8 @@ export default function ChatScreen() {
           index >= currentExchangeStart
           && item.role === "assistant"
           && (
-            (!!groceryVisualRows
-              && groceryVisualRows.length > 0
+            (!!activeSurface
+              && activeSurface.kind === 'grocery'
               && isGroceryListReadSummarySpeech(item.content))
             || (!!todoVisualRows
               && todoVisualRows.length > 0
@@ -3451,7 +3513,7 @@ export default function ChatScreen() {
         }
       />
     ),
-    [persona, currentExchangeStart, handleRecoveryChoice, groceryVisualRows, todoVisualRows]
+    [persona, currentExchangeStart, handleRecoveryChoice, activeSurface, todoVisualRows]
   );
 
   const buildDispatchDeps = useCallback((): DispatchDeps => ({
@@ -3604,7 +3666,7 @@ export default function ChatScreen() {
             </View>
           )}
 
-          {displayMessages.length === 0 && !isStreaming ? (
+          {displayMessages.length === 0 && !isStreaming && !groceryWorkspaceActive ? (
             <View style={styles.emptyState}>
               <Text style={[styles.emptyGreeting, { color: persona.colors.text }]}>
                 {name ? `Good to see you, ${name}.` : "Good to see you."}
@@ -3614,9 +3676,11 @@ export default function ChatScreen() {
               </Text>
             </View>
           ) : (
+            <View style={groceryWorkspaceActive ? styles.groceryWorkspace : styles.flex}>
             <FlatList
               ref={flatListRef}
-              data={displayMessages}
+              style={groceryWorkspaceActive ? styles.groceryTranscriptStrip : undefined}
+              data={transcriptMessages}
               renderItem={renderMessage}
               keyExtractor={(item) => item.id}
               keyboardShouldPersistTaps="handled"
@@ -3672,21 +3736,18 @@ export default function ChatScreen() {
                       isEphemeral
                     />
                   ) : null}
-                  {weatherSurface ? (
+                  {activeSurface?.kind === 'weather' ? (
                     <CapabilitySurface
-                      providerLabel={weatherSurface.providerLabel}
-                      periodTitle={weatherSurface.periodTitle}
-                      forecastText={weatherSurface.forecastText}
-                      sourceLinkLabel={weatherSurface.sourceLinkLabel}
-                      onViewForecast={() => Linking.openURL(weatherSurface.sourceUrl)}
+                      providerLabel={activeSurface.weather.providerLabel}
+                      periodTitle={activeSurface.weather.periodTitle}
+                      forecastText={activeSurface.weather.forecastText}
+                      sourceLinkLabel={activeSurface.weather.sourceLinkLabel}
+                      onViewForecast={() => Linking.openURL(activeSurface.weather.sourceUrl)}
                       surfaceTint={persona.surfaceTint}
                       accent={persona.colors.accent}
                     />
                   ) : null}
-                  {groceryVisualRows && groceryVisualRows.length > 0 ? (
-                    <GroceryListSurface rows={groceryVisualRows} />
-                  ) : null}
-                  {todoVisualRows && todoVisualRows.length > 0 ? (
+                  {todoVisualRows && todoVisualRows.length > 0 && activeSurface == null ? (
                     <TodoListSurface rows={todoVisualRows} />
                   ) : null}
                   {isWaiting && (
@@ -3718,6 +3779,18 @@ export default function ChatScreen() {
                 </>
               }
             />
+            {activeSurface?.kind === 'grocery' ? (
+              <View style={styles.groceryWorkspaceSurface}>
+                <GrocerySurface
+                  rows={groceryMergedRows}
+                  remainingCount={activeSurface.openRows.length}
+                  surfaceTint={persona.surfaceTint}
+                  accent={persona.colors.accent}
+                  onCompleteOpenRow={handleGroceryCompleteOpenRow}
+                />
+              </View>
+            ) : null}
+            </View>
           )}
 
           {error && <Text style={styles.errorText}>{error}</Text>}
@@ -3959,6 +4032,18 @@ const styles = StyleSheet.create({
   },
 
   messageList: { paddingTop: 8, paddingBottom: 16 },
+  groceryWorkspace: {
+    flex: 1,
+    minHeight: 0,
+  },
+  groceryTranscriptStrip: {
+    flexGrow: 0,
+    maxHeight: 120,
+  },
+  groceryWorkspaceSurface: {
+    flex: 1,
+    minHeight: 0,
+  },
   emptyState: {
     flex: 1,
     justifyContent: "center",
