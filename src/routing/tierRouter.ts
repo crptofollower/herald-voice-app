@@ -26,6 +26,7 @@ import {
   TODO_ADD_SIGNALS,
   hasObligationPrefixSentence,
   extractNarrativeTodoAdd,
+  splitNarrativeSentences,
   extractResidualTodoAdd,
   boundCapturedTail,
   boundMutationObject,
@@ -40,7 +41,9 @@ import {
   isAmbiguousOperationalListAcquisition,
   isUnmarkedAcquisitionShape,
   OPERATIONAL_ACQUISITION_SHAPE,
+  extractNarrativeOperationalCandidates,
 } from "./operationalListContinuity";
+import { utteranceHasThirdPartyFiniteAction } from "./directAddress";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -2208,6 +2211,57 @@ export async function scanResidualIntent(
           tier: 1,
           actionIntent: { type: 'todo_add', body: extracted.body },
           reason: 'residual:todo_add',
+        };
+      }
+      // Multi-Candidate V1 (Conversation Reliability), sentence-scoped
+      // fallback: extractResidualTodoAdd above is clause-scoped
+      // (splitResidualClauses, which deliberately does not split on
+      // periods). A genuine second-candidate obligation sentence separated
+      // from the primary by ordinary sentence punctuation -- exactly the
+      // class this whole repair targets -- would not be found by it.
+      // extractNarrativeTodoAdd is already sentence-scoped and reuses the
+      // identical admission standard the primary tier-1 todo_add branch
+      // uses (same TODO_ADD_PREFIX, same body-bound, same named-list
+      // refusal) -- this does not lower any bar, it only widens where a
+      // second, independent, sentence-initial match is allowed to be found.
+      const sentenceScoped = extractNarrativeTodoAdd(msg);
+      if (sentenceScoped?.kind === 'add' && sentenceScoped.body.length > 2) {
+        return {
+          tier: 1,
+          actionIntent: { type: 'todo_add', body: sentenceScoped.body },
+          reason: 'residual:todo_add:sentence',
+        };
+      }
+    }
+  }
+
+  // Multi-Candidate V1 (Conversation Reliability), sentence-scoped grocery
+  // residual: only reached if nothing above matched. extractResidualContextualGroceryItem
+  // is clause-scoped and only ever attempts one item; this instead reuses
+  // extractNarrativeOperationalCandidates (the SAME function Lane B already
+  // uses for the identical purpose) against each individually-segmented
+  // sentence, so a genuinely separate multi-item grocery mention in its own
+  // sentence gets the SAME admission standard it would get if that sentence
+  // had been spoken alone -- unmarked single-item mentions (Herald's
+  // existing, deliberate acquisition-ambiguity boundary) still correctly do
+  // not resolve here, exactly as they would not resolve spoken alone.
+  if (primaryType !== 'list_add') {
+    for (const sentence of splitNarrativeSentences(msg)) {
+      // extractNarrativeOperationalCandidates has no first-person-only
+      // vocabulary the way TODO_ADD_PREFIX does (confirmed during testing:
+      // "Paul also needs wine and cheese for his party" was extracted as a
+      // grocery candidate). utteranceHasThirdPartyFiniteAction is the
+      // existing, already-proven shared predicate (directAddress.ts, also
+      // used by emergency admission and LLM capture-proposal refusal) --
+      // reused here, not duplicated, to exclude a third party's own stated
+      // need from becoming Mike's grocery write.
+      if (utteranceHasThirdPartyFiniteAction(sentence)) continue;
+      const items = extractNarrativeOperationalCandidates(sentence);
+      if (items) {
+        return {
+          tier: 1,
+          actionIntent: { type: 'list_add', items, listName: 'grocery' },
+          reason: 'residual:list_add:sentence',
         };
       }
     }

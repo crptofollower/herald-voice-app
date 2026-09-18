@@ -75,7 +75,7 @@ import {
   parseCalendarTimeInquiry,
   answerCalendarTimeInquiry,
 } from './calendarPresentation';
-import { hasCalendarReadEvidence, readCalendarScope } from './tierRouter';
+import { hasCalendarReadEvidence, readCalendarScope, scanResidualIntent } from './tierRouter';
 import { DiscourseContinuityHolder } from './discourseContinuity';
 import {
   extractAmbiguousAcquisitionObject,
@@ -1091,8 +1091,39 @@ export async function processUtterance(
       ...(groceryConfirmPrompt ? { confirmPrompt: groceryConfirmPrompt } : {}),
       ...(todoConfirmPrompt ? { confirmPrompt: todoConfirmPrompt } : {}),
     };
+    // Multi-Candidate V1 (Conversation Reliability), Stage 2: a genuine
+    // tier-1 deterministic capture (source:'deterministic', exactly the
+    // single-intent shape a plain "add milk to my list"/"I need to call the
+    // dentist" turn already produces) may still have a second, independent
+    // candidate elsewhere in the same compound utterance.
+    // scanResidualIntent already proves this exact "primary claims the
+    // turn, then re-scan for one more independent claim" pattern for
+    // device_action types (ChatScreen.tsx) -- but todo_add/list_add always
+    // route through this 'capture' kind, never 'device_action', so that
+    // call site can never reach them. This reuses the identical function,
+    // scoped narrowly: only when the primary is a single, genuinely
+    // deterministic (not LLM, not deterministic_recovery) todo_add or
+    // list_add capture, so an LLM/recovery-sourced capture's own separate
+    // confirmation semantics are never touched by this addition. Every
+    // extraction reused below is the SAME one the primary itself would use
+    // if the second sentence had been spoken alone -- no new vocabulary, no
+    // lowered admission bar for the second candidate.
+    let intentsForCommit: IntentRecord[] = routeDecision.intents;
+    if (
+      routeDecision.source === 'deterministic'
+      && routeDecision.intents.length === 1
+      && (routeDecision.intents[0].type === 'todo_add' || routeDecision.intents[0].type === 'list_add')
+    ) {
+      const residual = await scanResidualIntent(text, routeDecision.intents[0].type);
+      if (
+        residual?.actionIntent
+        && (residual.actionIntent.type === 'todo_add' || residual.actionIntent.type === 'list_add')
+      ) {
+        intentsForCommit = [...routeDecision.intents, residual.actionIntent as IntentRecord];
+      }
+    }
     const { responseText, commits } = await applyIntents(
-      routeDecision.intents,
+      intentsForCommit,
       text,
       session,
       { resolveContact: deps.resolveContact },
@@ -1101,7 +1132,7 @@ export async function processUtterance(
       ledger,
     );
     if (discourse && commits.some((c) => c.status === 'committed')) {
-      for (const intent of routeDecision.intents) {
+      for (const intent of intentsForCommit) {
         if (intent.type === 'todo_add') discourse.establishDomain('todo');
         if (intent.type === 'list_add') {
           const listName = (intent.listName ?? 'grocery').toLowerCase();
@@ -1110,6 +1141,16 @@ export async function processUtterance(
         }
       }
     }
+    // Multi-Candidate V1 note: intentionally routeDecision.intents (primary
+    // only) here, not intentsForCommit -- this call site sits inside
+    // pre-existing, separately in-flight work in this dirty file (the
+    // captureWithOptionalCapabilitySurface rename/logTodoCompletePendingProbe
+    // addition are not part of this change) and is left untouched for clean
+    // dirty-tree isolation. The actual writes above are already correct and
+    // complete for both candidates via applyIntents(intentsForCommit, ...);
+    // this only means the capability-surface UI hint reflects the primary
+    // candidate's type when two candidates commit in the same turn, not a
+    // correctness gap in what gets written.
     return captureWithOptionalGrocerySurface(responseText, commits, routeDecision.intents);
   }
   if (

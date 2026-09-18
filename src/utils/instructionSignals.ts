@@ -52,6 +52,18 @@ export const TODO_ADD_PREFIX =
 const OBLIGATION_SENTENCE_SPLIT_RE = /[.!?]+\s+/;
 
 /**
+ * Shared sentence segmentation, Conversation Reliability V1 / Multi-Candidate
+ * V1. Single source of truth for OBLIGATION_SENTENCE_SPLIT_RE's split +
+ * trim + drop-empty, reused by hasObligationPrefixSentence,
+ * extractNarrativeTodoAdd, and (externally) the Multi-Candidate V1
+ * sentence-scoped residual scan in tierRouter.ts -- one segmentation
+ * mechanism, not a second one reinvented per consumer.
+ */
+export function splitNarrativeSentences(msg: string): string[] {
+  return msg.split(OBLIGATION_SENTENCE_SPLIT_RE).map((s) => s.trim()).filter(Boolean);
+}
+
+/**
  * Natural-speech guard, Conversation Reliability V1: true when a first-person
  * obligation prefix (TODO_ADD_PREFIX's own phrase set -- no new vocabulary)
  * opens ANY sentence in the utterance, not only the utterance's first word.
@@ -62,7 +74,7 @@ const OBLIGATION_SENTENCE_SPLIT_RE = /[.!?]+\s+/;
  * protected the isolated, sentence-initial form of the identical phrase.
  */
 export function hasObligationPrefixSentence(msg: string): boolean {
-  return msg.split(OBLIGATION_SENTENCE_SPLIT_RE).some((s) => TODO_ADD_PREFIX.test(s.trim()));
+  return splitNarrativeSentences(msg).some((s) => TODO_ADD_PREFIX.test(s));
 }
 
 /** Remainder after a TODO prefix is already an existing named-list add. */
@@ -224,10 +236,35 @@ export function extractResidualTodoAdd(msg: string): TodoAddExtraction | null {
  */
 const QUESTION_TAIL_RE = /\?\s*$/;
 
+/**
+ * extractTodoAdd's own boundCapturedTail bounds a captured body at
+ * RESIDUAL_CLAUSE_SPLIT_RE's clause markers only -- it deliberately never
+ * splits on a bare sentence-ending period (that splitter protects "Dr.
+ * Smith" and comma-joined bodies for a different job). Applied to a whole
+ * multi-sentence message, that means a genuine second sentence AFTER the
+ * matched obligation can be silently swallowed into candidate 1's body.
+ * Multi-Candidate V1 (Conversation Reliability) surfaced this directly:
+ * "I need to call my accountant today and tell her to file my taxes. Paul
+ * also needs wine." previously captured the WHOLE remainder, including
+ * Paul's unrelated sentence, as candidate 1's body. Re-bounding at the
+ * first genuine sentence boundary (if any) keeps candidate 1 grounded in
+ * only its own sentence -- the per-sentence loop below is already
+ * immune to this (each `sentence` it scans is already a single sentence),
+ * this only re-bounds the whole-message-first attempt.
+ */
+function boundToFirstSentence(body: string): string {
+  const cut = body.search(OBLIGATION_SENTENCE_SPLIT_RE);
+  if (cut < 0) return body;
+  return body.slice(0, cut).trim();
+}
+
 export function extractNarrativeTodoAdd(msg: string): TodoAddExtraction | null {
   const direct = extractTodoAdd(msg);
-  if (direct?.kind === 'add') return direct;
-  const sentences = msg.split(OBLIGATION_SENTENCE_SPLIT_RE).map((s) => s.trim()).filter(Boolean);
+  if (direct?.kind === 'add') {
+    const body = boundToFirstSentence(direct.body);
+    return body.length > 2 ? { kind: 'add', body } : { kind: 'clarify' };
+  }
+  const sentences = splitNarrativeSentences(msg);
   if (sentences.length > 1) {
     for (const sentence of sentences) {
       let rest = sentence;

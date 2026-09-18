@@ -49,7 +49,8 @@ import {
   parseOperationalDomainResolution,
   extractNarrativeOperationalCandidates,
 } from './operationalListContinuity';
-import { extractNarrativeTodoAdd } from '../utils/instructionSignals';
+import { extractNarrativeTodoAdd, splitNarrativeSentences } from '../utils/instructionSignals';
+import { utteranceHasThirdPartyFiniteAction } from './directAddress';
 
 type ActionIntent = NonNullable<TierDecision['actionIntent']>;
 
@@ -2652,18 +2653,51 @@ export async function routeIntent(
           const todoBody = todoExtraction?.kind === 'add' ? todoExtraction.body : null;
           if (domain === 'grocery' && groceryItems) {
             if (dispatchDiag) dispatchDiag.finalOutcome = 'specialist_admit';
+            // Multi-Candidate V1 (Conversation Reliability), Stage 2: this
+            // recovery path already resolved one candidate (grocery); a
+            // second, independent candidate (todo) may still exist in a
+            // different sentence of the same compound utterance.
+            // extractNarrativeTodoAdd applies the identical admission
+            // standard a lone todo utterance would get -- no lowered bar,
+            // no new vocabulary. Both candidates share this turn's single
+            // 'deterministic_recovery' source, so both go through Build C's
+            // existing confirm gate; Multi-Candidate V1 Stage 1 preserves
+            // the second candidate's confirmation instead of losing it.
+            const residualTodo = extractNarrativeTodoAdd(text);
+            const intents: IntentRecord[] = [{ type: 'list_add', items: groceryItems, listName: 'grocery' }];
+            if (residualTodo?.kind === 'add' && residualTodo.body.length > 2) {
+              intents.push({ type: 'todo_add', body: residualTodo.body });
+            }
             return {
               kind: 'capture',
-              intents: [{ type: 'list_add', items: groceryItems, listName: 'grocery' }],
+              intents,
               source: 'deterministic_recovery',
               reason: 'semantic_proposal:grocery_recovery',
             };
           }
           if (domain === 'todo' && todoBody) {
             if (dispatchDiag) dispatchDiag.finalOutcome = 'specialist_admit';
+            // Multi-Candidate V1 (Conversation Reliability), Stage 2: same
+            // reasoning as the grocery branch above, mirrored -- a second,
+            // independent grocery candidate may exist in another sentence.
+            // Reuses extractNarrativeOperationalCandidates per sentence,
+            // the SAME function/standard the grocery branch itself uses.
+            const sentences = splitNarrativeSentences(text);
+            let residualGrocery: string[] | null = null;
+            for (const sentence of sentences) {
+              // Same third-party exclusion as the tier-1 mirror of this
+              // scan (tierRouter.ts) -- see that call site's comment.
+              if (utteranceHasThirdPartyFiniteAction(sentence)) continue;
+              const items = extractNarrativeOperationalCandidates(sentence);
+              if (items) { residualGrocery = items; break; }
+            }
+            const intents: IntentRecord[] = [{ type: 'todo_add', body: todoBody }];
+            if (residualGrocery) {
+              intents.push({ type: 'list_add', items: residualGrocery, listName: 'grocery' });
+            }
             return {
               kind: 'capture',
-              intents: [{ type: 'todo_add', body: todoBody }],
+              intents,
               source: 'deterministic_recovery',
               reason: 'semantic_proposal:todo_recovery',
             };
