@@ -7,7 +7,9 @@ import {
   mayRunGenerativeEphemeralPersonalProse,
   resolveEphemeralSeam,
 } from '../../src/utils/ephemeralSeam.ts';
-import { isEligibleForEphemeralConversation } from '../../src/utils/ephemeralConversation.ts';
+import { isEligibleForEphemeralConversation, buildEphemeralPromptMessages, canRunEphemeralConversation } from '../../src/utils/ephemeralConversation.ts';
+import { EPHEMERAL_NO_MUTATION_AUTHORITY } from '../../src/conversation/ephemeralMutationAuthority.ts';
+import { EXPERIMENTAL_QWEN_SYSTEM_PROMPT } from '../../src/conversation/experimentalQwenLlamaWorker.ts';
 import { isHeraldSelfReferentConversationalShape } from '../../src/utils/ephemeralSelfReferent.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
@@ -271,6 +273,32 @@ export async function runEphemeralConversationalTrustBoundaryTests() {
     });
     assert('B5a correction to Paul recovers', outcome.kind, 'generative');
     assertTrue('B5b correction to Paul reaches generate', generateCalled);
+  }
+
+  {
+    const system = buildEphemeralPromptMessages('hello', [])[0]?.content ?? '';
+    assertTrue(
+      'ephemeral system forbids in-progress mutation claims',
+      system.includes(EPHEMERAL_NO_MUTATION_AUTHORITY)
+      && /about to perform/.test(EPHEMERAL_NO_MUTATION_AUTHORITY)
+      && /no write or action authority/.test(EPHEMERAL_NO_MUTATION_AUTHORITY),
+    );
+    assertTrue(
+      'Qwen conversational prompt shares the same mutation-authority fence',
+      EXPERIMENTAL_QWEN_SYSTEM_PROMPT.includes(EPHEMERAL_NO_MUTATION_AUTHORITY),
+    );
+    assertTrue(
+      'ephemeral generation remains eligible when routing has already declined',
+      canRunEphemeralConversation({
+        rdTier: 3,
+        hasStructuredCaptures: false,
+        isPersonalCaptureRisk: false,
+        hasPending: false,
+        llmStatus: 'ready',
+        classifierBusy: false,
+        ephemeralBusy: false,
+      }),
+    );
   }
 
   const total = passed + failures.length;

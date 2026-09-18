@@ -59,7 +59,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { PersonaBackground } from "../components/PersonaBackground";
 import { MessageBubble } from "../components/MessageBubble";
 import { GrocerySurface } from "../components/GrocerySurface";
-import { TodoListSurface } from "../components/TodoListSurface";
+import { TodoSurface } from "../components/TodoSurface";
+import { ScheduleSurface } from "../components/ScheduleSurface";
 import { CapabilitySurface } from "../components/CapabilitySurface";
 import { fetchNwsTomorrowForecast, isNwsTomorrowAtDeviceEligible, type NwsForecastResult } from "../capabilities/nwsWeather";
 import { ProactiveCard } from "../components/ProactiveCard";
@@ -128,6 +129,7 @@ import { ConversationalSubjectHolder } from '../routing/conversationalSubject';
 import { MedicationPresentationHolder } from '../routing/medicationPresentation';
 import { OrderedPresentationHolder } from '../routing/orderedPresentation';
 import { completeOpenGroceryItemByExactId } from '../routing/groceryAuthoritativeCompletion';
+import { completeOpenTodoItemByExactId } from '../routing/todoAuthoritativeCompletion';
 import { formatGroceryRemovalAck } from '../routing/groceryPositionalMutation';
 import {
   groceryOutcomeIdentifiesSurface,
@@ -137,9 +139,25 @@ import {
   type GroceryCompletedOverlayRow,
   type GrocerySurfaceOpenRow,
 } from '../routing/grocerySurfacePresentation';
-import { projectTodoVisualFromPresentedIds, TodoPresentationHolder, type TodoVisualRow } from '../routing/todoVisualPresentation';
+import { TodoPresentationHolder } from '../routing/todoVisualPresentation';
+import {
+  mergeTodoSurfaceRows,
+  overlayTodoAfterSuccessfulOpenDepartures,
+  projectTodoOpenRowsFromSqlite,
+  todoOutcomeIdentifiesSurface,
+  type TodoCompletedOverlayRow,
+  type TodoSurfaceOpenRow,
+} from '../routing/todoSurfacePresentation';
+import {
+  calendarCacheIsUnloaded,
+  projectScheduleRowsFromPresentedIds,
+  scheduleOutcomeIdentifiesSurface,
+  scheduleScopeFromReason,
+  type ScheduleScope,
+} from '../routing/scheduleSurfacePresentation';
 import { isGroceryListReadSummarySpeech } from '../conversation/groceryListReadRealization';
 import { isTodoOpenListSpeech } from '../db/listRead';
+import { isCalendarAgendaSpeech } from '../db/calendarCacheDB';
 import { CalendarContinuationHolder } from '../routing/calendarContinuation';
 import { DiscourseContinuityHolder } from '../routing/discourseContinuity';
 import { formatOperationalListClarification } from '../routing/operationalListContinuity';
@@ -507,8 +525,6 @@ export default function ChatScreen() {
   const [showProactive, setShowProactive] = useState(false);
   const [pendingAction, setPendingAction] = useState<IntentAction | null>(null);
   const [actionStatus, setActionStatus] = useState<ActionStatus>("confirming");
-  const [todoVisualRows, setTodoVisualRows] = useState<TodoVisualRow[] | null>(null);
-
   const [streamingContent, setStreamingContent] = useState("");
   const [isWaiting, setIsWaiting] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -522,9 +538,22 @@ export default function ChatScreen() {
         openRows: GrocerySurfaceOpenRow[];
         overlay: GroceryCompletedOverlayRow[];
         orderIds: string[];
+      }
+    | {
+        kind: 'todo';
+        openRows: TodoSurfaceOpenRow[];
+        overlay: TodoCompletedOverlayRow[];
+        orderIds: string[];
+      }
+    | {
+        kind: 'schedule';
+        presentedIds: string[];
+        scope: ScheduleScope;
+        cacheUnloaded: boolean;
       };
   const [activeSurface, setActiveSurface] = useState<ActiveCapabilitySurface | null>(null);
   const groceryCompletingIdsRef = useRef<Set<string>>(new Set());
+  const todoCompletingIdsRef = useRef<Set<string>>(new Set());
 
   // ── Ambient mode state ────────────────────────────────────────────────────
   // sessionStart filters which messages are shown in the current session.
@@ -587,14 +616,26 @@ export default function ChatScreen() {
     });
   }, []);
 
-  const refreshTodoVisual = useCallback(() => {
-    const presentedIds = todoPresentationRef.current.peek();
-    if (!presentedIds || presentedIds.length === 0) {
-      setTodoVisualRows(null);
+  const refreshTodoCapabilitySurface = useCallback((opts?: { resetOverlay?: boolean; dismiss?: boolean }) => {
+    if (opts?.dismiss) {
+      setActiveSurface((prev) => (prev?.kind === 'todo' ? null : prev));
       return;
     }
-    const rows = projectTodoVisualFromPresentedIds(presentedIds);
-    setTodoVisualRows(rows.length > 0 ? rows : null);
+    setActiveSurface((prev) => {
+      const openRows = projectTodoOpenRowsFromSqlite();
+      const keepContext = prev?.kind === 'todo' && !opts?.resetOverlay;
+      const overlay = keepContext
+        ? overlayTodoAfterSuccessfulOpenDepartures(prev.openRows, openRows, prev.overlay)
+        : [];
+      const previousOrderIds = keepContext ? prev.orderIds : openRows.map((row) => row.id);
+      const merged = mergeTodoSurfaceRows(openRows, overlay, previousOrderIds);
+      return {
+        kind: 'todo',
+        openRows,
+        overlay,
+        orderIds: merged.orderIds,
+      };
+    });
   }, []);
 
   const syncSituationalListVisuals = useCallback((outcome: UtteranceOutcome) => {
@@ -609,10 +650,7 @@ export default function ChatScreen() {
         } else {
           todoPresentationRef.current.establish(presentedTodoIds);
           orderedPresentationRef.current.clear();
-          setActiveSurface(null);
         }
-      } else {
-        todoPresentationRef.current.clear();
       }
     } else {
       const groceryLive = orderedPresentationRef.current.peek();
@@ -623,9 +661,34 @@ export default function ChatScreen() {
     if (groceryOutcomeIdentifiesSurface(outcome)) {
       todoPresentationRef.current.clear();
       refreshGroceryCapabilitySurface({ resetOverlay: false });
+      return;
     }
-    refreshTodoVisual();
-  }, [refreshGroceryCapabilitySurface, refreshTodoVisual]);
+    if (todoOutcomeIdentifiesSurface(outcome)) {
+      orderedPresentationRef.current.clear();
+      refreshTodoCapabilitySurface({ resetOverlay: false });
+      return;
+    }
+    if (scheduleOutcomeIdentifiesSurface(outcome)) {
+      todoPresentationRef.current.clear();
+      orderedPresentationRef.current.clear();
+      const presentedIds = outcome.handled
+        ? (outcome.presentedCalendarEventIds ?? [])
+        : (outcome.routeDecision.kind === 'device_read'
+          ? (outcome.routeDecision.presentedCalendarEventIds ?? [])
+          : []);
+      const reason = outcome.handled
+        ? (outcome.calendarReadReason ?? 'calendar:today')
+        : (outcome.routeDecision.kind === 'device_read'
+          ? outcome.routeDecision.reason
+          : 'calendar:today');
+      setActiveSurface({
+        kind: 'schedule',
+        presentedIds,
+        scope: scheduleScopeFromReason(reason),
+        cacheUnloaded: calendarCacheIsUnloaded(),
+      });
+    }
+  }, [refreshGroceryCapabilitySurface, refreshTodoCapabilitySurface]);
 
   // Step 5a: bounded HOT narrative ring — RAM-only, peek semantics, written ONLY
   // from the three authorized Step 4 sites (ephemeral success ×2, chit_chat read).
@@ -1373,7 +1436,6 @@ export default function ChatScreen() {
       discourseRef.current.clear();
       hotRingRef.current.clear();
       setActiveSurface(null);
-      setTodoVisualRows(null);
       await dispatchEmergency(text);
       setInputText('');
       return;
@@ -1417,7 +1479,6 @@ export default function ChatScreen() {
       todoPresentationRef.current.clear();
       calendarPresentationRef.current.clear();
       calendarContinuationRef.current.clear();
-      refreshTodoVisual();
       const pending = pendingContactCollectRef.current;
       const phoneMatch = text.match(/([\d\s\-\(\)\+\.]{7,})/);
       const isLikelyAddress = text.length > 8 && /\d/.test(text) && /\b(st|ave|blvd|rd|dr|ln|way|ct|pl|circle|drive|street|road|court|lane|avenue)\b/i.test(text);
@@ -3488,6 +3549,19 @@ export default function ChatScreen() {
     }
   }, [refreshGroceryCapabilitySurface, speak]);
 
+  const handleTodoCompleteOpenRow = useCallback((id: string) => {
+    if (todoCompletingIdsRef.current.has(id)) return;
+    todoCompletingIdsRef.current.add(id);
+    try {
+      const completed = completeOpenTodoItemByExactId(id);
+      if (!completed.ok) return;
+      refreshTodoCapabilitySurface({ resetOverlay: false });
+      speak(`Done — crossed off '${completed.removed.body}'.`);
+    } finally {
+      todoCompletingIdsRef.current.delete(id);
+    }
+  }, [refreshTodoCapabilitySurface, speak]);
+
   const groceryMergedRows = useMemo(() => {
     if (activeSurface?.kind !== 'grocery') return [];
     return mergeGrocerySurfaceRows(
@@ -3497,7 +3571,24 @@ export default function ChatScreen() {
     ).rows;
   }, [activeSurface]);
 
-  const groceryWorkspaceActive = activeSurface?.kind === 'grocery';
+  const todoMergedRows = useMemo(() => {
+    if (activeSurface?.kind !== 'todo') return [];
+    return mergeTodoSurfaceRows(
+      activeSurface.openRows,
+      activeSurface.overlay,
+      activeSurface.orderIds,
+    ).rows;
+  }, [activeSurface]);
+
+  const scheduleRows = useMemo(() => {
+    if (activeSurface?.kind !== 'schedule') return [];
+    return projectScheduleRowsFromPresentedIds(activeSurface.presentedIds);
+  }, [activeSurface]);
+
+  const groceryWorkspaceActive =
+    activeSurface?.kind === 'grocery'
+    || activeSurface?.kind === 'todo'
+    || activeSurface?.kind === 'schedule';
   const transcriptMessages = groceryWorkspaceActive
     ? displayMessages.slice(-2)
     : displayMessages;
@@ -3518,9 +3609,12 @@ export default function ChatScreen() {
             (!!activeSurface
               && activeSurface.kind === 'grocery'
               && isGroceryListReadSummarySpeech(item.content))
-            || (!!todoVisualRows
-              && todoVisualRows.length > 0
+            || (!!activeSurface
+              && activeSurface.kind === 'todo'
               && isTodoOpenListSpeech(item.content))
+            || (!!activeSurface
+              && activeSurface.kind === 'schedule'
+              && isCalendarAgendaSpeech(item.content))
           )
         }
         onRecoveryChoice={
@@ -3528,7 +3622,7 @@ export default function ChatScreen() {
         }
       />
     ),
-    [persona, currentExchangeStart, handleRecoveryChoice, activeSurface, todoVisualRows]
+    [persona, currentExchangeStart, handleRecoveryChoice, activeSurface]
   );
 
   const buildDispatchDeps = useCallback((): DispatchDeps => ({
@@ -3762,9 +3856,6 @@ export default function ChatScreen() {
                       accent={persona.colors.accent}
                     />
                   ) : null}
-                  {todoVisualRows && todoVisualRows.length > 0 && activeSurface == null ? (
-                    <TodoListSurface rows={todoVisualRows} />
-                  ) : null}
                   {isWaiting && (
                     <View style={styles.typingRow}>
                       <BouncingDots color={persona.colors.accent} />
@@ -3802,6 +3893,26 @@ export default function ChatScreen() {
                   surfaceTint={persona.surfaceTint}
                   accent={persona.colors.accent}
                   onCompleteOpenRow={handleGroceryCompleteOpenRow}
+                />
+              </View>
+            ) : activeSurface?.kind === 'todo' ? (
+              <View style={styles.groceryWorkspaceSurface}>
+                <TodoSurface
+                  rows={todoMergedRows}
+                  remainingCount={activeSurface.openRows.length}
+                  surfaceTint={persona.surfaceTint}
+                  accent={persona.colors.accent}
+                  onCompleteOpenRow={handleTodoCompleteOpenRow}
+                />
+              </View>
+            ) : activeSurface?.kind === 'schedule' ? (
+              <View style={styles.groceryWorkspaceSurface}>
+                <ScheduleSurface
+                  rows={scheduleRows}
+                  scope={activeSurface.scope}
+                  cacheUnloaded={activeSurface.cacheUnloaded}
+                  surfaceTint={persona.surfaceTint}
+                  accent={persona.colors.accent}
                 />
               </View>
             ) : null}

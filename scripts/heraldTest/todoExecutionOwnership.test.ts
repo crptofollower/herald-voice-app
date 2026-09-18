@@ -94,6 +94,34 @@ export async function runTodoExecutionOwnershipTests() {
     'device_read action:todo_read with dentist',
   );
 
+  const polite = await processUtterance(
+    'Hey Martin, can you remove call the dentist from my to-do list?',
+    session,
+    deps,
+  );
+  const afterPolite = rows(db);
+  assert(
+    'polite to-do remove arms todo_complete pending without write',
+    polite.handled === true
+      && session.peekPendingKey() === 'todo_complete'
+      && afterPolite[0]?.checked === 0
+      && /Just to make sure/.test(polite.handled ? polite.responseText : ''),
+    (v) => v === true,
+    'pending confirmation, still open',
+  );
+  const politeNo = await processUtterance('No', session, deps);
+  const afterNo = rows(db);
+  assert(
+    'NO leaves the task unchanged',
+    politeNo.handled === true
+      && afterNo[0]?.checked === 0
+      && !afterNo[0]?.removed_at
+      && !session.hasPending()
+      && /leaving/.test(politeNo.handled ? politeNo.responseText : ''),
+    (v) => v === true,
+    'still open, pending released',
+  );
+
   const complete = await processUtterance('I called the dentist.', session, deps);
   const afterMatch = rows(db);
   assert(
@@ -126,6 +154,64 @@ export async function runTodoExecutionOwnershipTests() {
       && read2.routeDecision.response === `You're all clear — nothing on your to-do list.`,
     (v) => v === true,
     'empty todo_read speech',
+  );
+
+  const recapture = await processUtterance('I need to wash the car.', session, deps);
+  const afterRecapture = rows(db);
+  const washId = afterRecapture.find((r) => /wash the car/i.test(r.body) && r.checked === 0)?.id;
+  assert(
+    'second capture arms an open wash-the-car row',
+    recapture.handled === true && !!washId,
+    (v) => v === true,
+    'open wash the car',
+  );
+
+  const offOf = await processUtterance(
+    'remove wash the car off of my to-do list',
+    session,
+    deps,
+  );
+  const afterOffOf = rows(db);
+  assert(
+    'off-of to-do remove arms todo_complete pending without write',
+    offOf.handled === true
+      && session.peekPendingKey() === 'todo_complete'
+      && afterOffOf.some((r) => r.id === washId && r.checked === 0 && !r.removed_at)
+      && /Just to make sure/.test(offOf.handled ? offOf.responseText : ''),
+    (v) => v === true,
+    'pending confirmation, still open',
+  );
+  const offOfNo = await processUtterance('No', session, deps);
+  const afterOffOfNo = rows(db);
+  assert(
+    'NO after off-of leaves SQLite unchanged',
+    offOfNo.handled === true
+      && afterOffOfNo.some((r) => r.id === washId && r.checked === 0 && !r.removed_at)
+      && !session.hasPending(),
+    (v) => v === true,
+    'still open, pending released',
+  );
+
+  const goAhead = await processUtterance(
+    'can you go ahead and remove wash the car from my to-do list',
+    session,
+    deps,
+  );
+  assert(
+    'go-ahead wrapper establishes todo_complete pending',
+    goAhead.handled === true && session.peekPendingKey() === 'todo_complete',
+    (v) => v === true,
+    'pending todo_complete',
+  );
+  const goAheadYes = await processUtterance('Yes', session, deps);
+  const afterGoAheadYes = rows(db);
+  assert(
+    'YES uses existing writer on the same durable id',
+    goAheadYes.handled === true && goAheadYes.source === 'pending_resume'
+      && afterGoAheadYes.some((r) => r.id === washId && r.checked === 1 && !!r.removed_at)
+      && !session.hasPending(),
+    (v) => v === true,
+    'same id checked+removed_at',
   );
 
   const total = passed + failures.length;

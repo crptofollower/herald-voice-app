@@ -365,6 +365,97 @@ export function extractListRemoveAcquisitionItem(_msg: string): string | null {
   return null;
 }
 
+/** Spoken list names that mean the canonical To-do list (`todos`). */
+export function isCanonicalTodoListName(name: string): boolean {
+  const n = name.trim().toLowerCase().replace(/-/g, ' ').replace(/\s+/g, ' ');
+  return n === 'todo' || n === 'todos' || n === 'to do' || n === 'to dos';
+}
+
+const TODO_INSTRUCTION_OPENER =
+  /^(?:hey|okay|ok|yeah|so|um|uh|please|alright|like)[,:]?\s+/i;
+
+const TODO_COMPLETE_TRAILING_TAIL =
+  /\s+(?:please|thanks|thank you|for me)(?:\s*[?!.]*)?$/i;
+
+const TODO_COMPLETE_GO_AHEAD =
+  /^(?:just\s+)?(?:go\s+ahead\s+and\s+)/i;
+
+function stripTodoInstructionTails(msg: string): string {
+  let rest = msg.trim();
+  for (let i = 0; i < 3; i++) {
+    const next = rest.replace(/[?!.]+$/g, '').replace(TODO_COMPLETE_TRAILING_TAIL, '').trim();
+    if (next === rest) break;
+    rest = next;
+  }
+  return rest.replace(/[?!.]+$/g, '').trim();
+}
+
+function stripTodoInstructionWrappers(msg: string): string {
+  let rest = stripTodoInstructionTails(msg);
+  for (let i = 0; i < 3; i++) {
+    const opener = rest.match(TODO_INSTRUCTION_OPENER);
+    if (!opener) break;
+    rest = rest.slice(opener[0].length).trim();
+  }
+  const vocative = rest.match(/^(?!I\b)([A-Za-z]{2,16})[,:]?\s+/);
+  const vocativeName = vocative?.[1] ?? '';
+  if (
+    vocative
+    && !/^(can|could|would|will|please|you|we|they|remove|delete|cross|take|mark|get|knock|pull|scratch)$/i.test(vocativeName)
+  ) {
+    rest = rest.slice(vocative[0].length).trim();
+  }
+  const polite = rest.match(/^(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?/i);
+  if (polite?.[0]) rest = rest.slice(polite[0].length).trim();
+  rest = rest.replace(TODO_COMPLETE_GO_AHEAD, '').trim();
+  return stripTodoInstructionTails(rest);
+}
+
+const TODO_LIST_DEST = String.raw`(?:my\s+|the\s+)?(?:to[\s-]*dos?|todos?)(?:\s+lists?)?`;
+const TODO_LIST_FROM_OFF = String.raw`(?:from|off(?:\s+of)?)`;
+
+const TODO_LIST_COMPLETE_PATTERNS = [
+  new RegExp(
+    String.raw`^(?:remove|delete|cross\s+off|take\s+off)\s+(.+?)\s+${TODO_LIST_FROM_OFF}\s+${TODO_LIST_DEST}$`,
+    'i',
+  ),
+  new RegExp(
+    String.raw`^(?:take|get|knock|pull|cross|scratch)\s+(.+?)\s+off(?:\s+of)?\s+${TODO_LIST_DEST}$`,
+    'i',
+  ),
+  new RegExp(
+    String.raw`^mark\s+(.+?)\s+(?:as\s+)?(?:complete|completed|done)\s+(?:on|from|off(?:\s+of)?)\s+${TODO_LIST_DEST}$`,
+    'i',
+  ),
+];
+
+/** Temporary device evidence for To-do operator admission. Not product UI. */
+const TODO_COMPLETE_ADMIT_PROBE =
+  /\b(?:remove|delete|cross\s+off|take\s+off|take\b.+\boff)\b/i;
+
+export function logTodoCompleteAdmit(fields: Record<string, unknown>): void {
+  console.log('[HERALD_TODO_COMPLETE_ADMIT]', JSON.stringify(fields));
+}
+
+export function shouldLogTodoCompleteAdmit(msg: string): boolean {
+  return TODO_COMPLETE_ADMIT_PROBE.test(msg);
+}
+
+/**
+ * Instructional To-do completion aimed at the todo list identity.
+ * Vocative / polite wrappers are stripped; grocery list_remove is not this act.
+ */
+export function extractTodoListCompleteOperator(msg: string): { raw: string } | null {
+  const rest = stripTodoInstructionWrappers(msg);
+  if (!rest) return null;
+  for (const re of TODO_LIST_COMPLETE_PATTERNS) {
+    const m = rest.match(re);
+    const item = boundMutationObject(m?.[1] ?? '');
+    if (item) return { raw: item };
+  }
+  return null;
+}
+
 // Third-person singular referent set. Single owner, shared by Flow C's referent
 // speech acts (conversationalSubject.ts) and the visit-history fail-closed guard
 // (tierRouter.ts). Pronoun form is ELIGIBILITY ONLY — never a selector. Herald

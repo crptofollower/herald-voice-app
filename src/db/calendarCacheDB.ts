@@ -214,6 +214,16 @@ export function formatCachedEventsForSpeech(
   return `${dayLabel.charAt(0).toUpperCase() + dayLabel.slice(1)} you have: ${lines.join(", ")}, and ${last}.`;
 }
 
+/** Presentation-only: transcript hide when the Schedule card is live. TTS still speaks. */
+export function isCalendarAgendaSpeech(text: string): boolean {
+  const t = text.trim();
+  if (t.startsWith("I don't have your calendar loaded yet.")) return true;
+  if (t.startsWith('Your calendar is clear ')) return true;
+  if (/^(Today|Tomorrow|This week|Next week) you have: /.test(t)) return true;
+  if (/^You have .+ (today|tomorrow|this week|next week)\.$/.test(t)) return true;
+  return false;
+}
+
 // ─── getCacheAge ──────────────────────────────────────────────────────────────
 //
 // Returns how many minutes ago the cache was last refreshed.

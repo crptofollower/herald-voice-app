@@ -84,6 +84,138 @@ export async function runTodoCompleteSignalsTests() {
     assert(`neg "${phrase}" ≠ todo_complete`, actionType(d), (v) => v !== 'todo_complete', 'not todo_complete');
   }
 
+  {
+    freshDB();
+    const d = await classifyQuery(
+      'can you remove call the dentist from my to-do list',
+    );
+    assert('polite remove from to-do list → todo_complete',
+      { type: actionType(d), raw: (d.actionIntent as { raw?: string } | undefined)?.raw },
+      (v) => {
+        const x = v as { type?: string; raw?: string };
+        return x.type === 'todo_complete' && x.raw === 'call the dentist';
+      },
+      'todo_complete / call the dentist');
+  }
+  {
+    freshDB();
+    const d = await classifyQuery(
+      'Hey Martin, can you remove call the dentist from my to-do list?',
+    );
+    assert('vocative + polite remove from to-do list → todo_complete',
+      actionType(d), (v) => v === 'todo_complete', 'todo_complete');
+  }
+  {
+    freshDB();
+    const d = await classifyQuery(
+      'Hey Martin, can you remove add cashews, pizza, bread, and cottage cheese from my to-do list?',
+    );
+    assert('polite remove of a stored task paraphrase is todo_complete not list_remove',
+      { type: actionType(d), raw: (d.actionIntent as { raw?: string } | undefined)?.raw },
+      (v) => {
+        const x = v as { type?: string; raw?: string };
+        return x.type === 'todo_complete'
+          && x.raw === 'add cashews, pizza, bread, and cottage cheese'
+          && x.type !== 'list_remove';
+      },
+      'todo_complete, not list_remove');
+  }
+  for (const phrase of [
+    'remove call the dentist from my todo list',
+    'remove call the dentist from my todos',
+    'delete call the dentist from my to-do list',
+    'cross off call the dentist from my to-do list',
+    'mark call the dentist complete on my todo list',
+    'take call the dentist off my to-do list',
+  ]) {
+    freshDB();
+    const d = await classifyQuery(phrase);
+    assert(`identity/operator "${phrase}" → todo_complete`,
+      actionType(d), (v) => v === 'todo_complete', 'todo_complete');
+  }
+  {
+    freshDB();
+    const d = await classifyQuery('Remove eggs from my grocery list.');
+    assert('grocery remove remains list_remove',
+      { type: actionType(d), item: (d.actionIntent as { item?: string; listName?: string } | undefined)?.item,
+        listName: (d.actionIntent as { listName?: string } | undefined)?.listName },
+      (v) => {
+        const x = v as { type?: string; item?: string; listName?: string };
+        return x.type === 'list_remove' && x.item === 'eggs' && x.listName === 'grocery';
+      },
+      'list_remove grocery eggs');
+  }
+  {
+    freshDB();
+    const d = await classifyQuery('take milk off the list');
+    assert('unmarked take-off-the-list remains list_remove',
+      actionType(d), (v) => v === 'list_remove', 'list_remove');
+  }
+
+  console.log(`\n${BOLD}-- Explicit To-do operator family (bounded widen) --------${RESET}`);
+
+  for (const { phrase, raw } of [
+    { phrase: 'remove call the dentist off of my to-do list', raw: 'call the dentist' },
+    { phrase: 'remove call the dentist from my to-do list please', raw: 'call the dentist' },
+    { phrase: 'remove call the dentist from my to-do list for me', raw: 'call the dentist' },
+    { phrase: 'can you go ahead and remove call the dentist from my to-do list', raw: 'call the dentist' },
+    {
+      phrase: 'Hey Martin, can you go ahead and remove call the dentist from my to-do list please',
+      raw: 'call the dentist',
+    },
+    { phrase: 'remove call the dentist from my to do list', raw: 'call the dentist' },
+  ]) {
+    freshDB();
+    const d = await classifyQuery(phrase);
+    assert(`widen "${phrase}" → todo_complete`,
+      { type: actionType(d), raw: (d.actionIntent as { raw?: string } | undefined)?.raw, reason: d.reason },
+      (v) => {
+        const x = v as { type?: string; raw?: string; reason?: string };
+        return x.type === 'todo_complete' && x.raw === raw && x.reason === 'action:todo_complete';
+      },
+      `todo_complete / ${raw}`);
+  }
+  for (const phrase of [
+    'remove that',
+    'delete it',
+    'take that off',
+    'remove those',
+  ]) {
+    freshDB();
+    const d = await classifyQuery(phrase);
+    assert(`anaphor "${phrase}" is not newly authorized as todo_complete`,
+      actionType(d), (v) => v !== 'todo_complete', 'not todo_complete');
+  }
+
+  {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '../..');
+    const fence = fs.readFileSync(path.join(root, 'src/conversation/ephemeralMutationAuthority.ts'), 'utf8');
+    const ephemeral = fs.readFileSync(path.join(root, 'src/utils/ephemeralConversation.ts'), 'utf8');
+    const qwen = fs.readFileSync(path.join(root, 'src/conversation/experimentalQwenLlamaWorker.ts'), 'utf8');
+    assert(
+      'EPHEMERAL_NO_MUTATION_AUTHORITY fence text remains',
+      fence,
+      (v) => typeof v === 'string'
+        && v.includes('EPHEMERAL_NO_MUTATION_AUTHORITY')
+        && /no write or action authority/i.test(v)
+        && /about to perform/i.test(v),
+      'fence constant present',
+    );
+    assert(
+      'ephemeral and Qwen prompts still import the mutation fence',
+      { ephemeral, qwen },
+      (v) => {
+        const x = v as { ephemeral: string; qwen: string };
+        return x.ephemeral.includes('EPHEMERAL_NO_MUTATION_AUTHORITY')
+          && x.qwen.includes('EPHEMERAL_NO_MUTATION_AUTHORITY');
+      },
+      'both prompts import fence',
+    );
+  }
+
   const regressions = [
     'I called the doctor',
     'I finished that',

@@ -114,16 +114,17 @@ export async function runTodoVisualPresentationTests() {
   {
     const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
     const chatSrc = fs.readFileSync(path.join(root, 'src/screens/ChatScreen.tsx'), 'utf8');
-    const surfaceSrc = fs.readFileSync(path.join(root, 'src/components/TodoListSurface.tsx'), 'utf8');
+    const surfaceSrc = fs.readFileSync(path.join(root, 'src/components/TodoSurface.tsx'), 'utf8');
     const modelSrc = fs.readFileSync(path.join(root, 'src/routing/todoVisualPresentation.ts'), 'utf8');
     const routeSrc = fs.readFileSync(path.join(root, 'src/routing/routeIntent.ts'), 'utf8');
-    assert('ChatScreen renders TodoListSurface',
-      /TodoListSurface/.test(chatSrc) && /refreshTodoVisual/.test(chatSrc),
+    assert('ChatScreen renders TodoSurface on the shared slot',
+      /TodoSurface/.test(chatSrc) && /refreshTodoCapabilitySurface/.test(chatSrc),
       (v) => v === true, 'surface + refresh');
-    assert('ChatScreen projects from presented todo IDs, not a second list query',
-      /projectTodoVisualFromPresentedIds/.test(chatSrc)
-      && !/getPresentedOpenListItems\('todos'\)/.test(chatSrc),
-      (v) => v === true, 'grant IDs only');
+    assert('ChatScreen projects todo rows via presentation helper, not a second writer',
+      /projectTodoOpenRowsFromSqlite/.test(chatSrc)
+      && !/TodoListSurface/.test(chatSrc)
+      && !/refreshTodoVisual/.test(chatSrc),
+      (v) => v === true, 'open projection helper');
     assert('surface heading, clipboard cue, and item count',
       /TO-DO/.test(surfaceSrc)
       && (/\\uD83D\\uDCCB/.test(surfaceSrc) || /📋/.test(surfaceSrc))

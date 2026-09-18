@@ -435,6 +435,60 @@ export async function runCalendarUnresolvableDateTests() {
       'reason: calendar:today',
     );
   }
+  {
+    const d = await classifyQuery("What's on my schedule?");
+    assert(
+      'CUD34b "What\'s on my schedule?" → calendar:today (today-default)',
+      d,
+      (v) => (v as { reason?: string }).reason === 'calendar:today',
+      'reason: calendar:today',
+    );
+  }
+  {
+    const d = await classifyQuery("What's my schedule?");
+    assert(
+      'CUD34c "What\'s my schedule?" → calendar:today (today-default)',
+      d,
+      (v) => (v as { reason?: string }).reason === 'calendar:today',
+      'reason: calendar:today',
+    );
+  }
+  {
+    const d = await classifyQuery("What's on my schedule today?");
+    assert(
+      'CUD34d "What\'s on my schedule today?" → calendar:today',
+      d,
+      (v) => (v as { reason?: string }).reason === 'calendar:today',
+      'reason: calendar:today',
+    );
+  }
+  {
+    const d = await classifyQuery("What's on my schedule this week?");
+    assert(
+      'CUD34e "What\'s on my schedule this week?" → calendar:week',
+      d,
+      (v) => (v as { reason?: string }).reason === 'calendar:week',
+      'reason: calendar:week',
+    );
+  }
+  {
+    const d = await classifyQuery("What's on my schedule next week?");
+    assert(
+      'CUD34f "What\'s on my schedule next week?" → calendar:next_week',
+      d,
+      (v) => (v as { reason?: string }).reason === 'calendar:next_week',
+      'reason: calendar:next_week',
+    );
+  }
+  {
+    const d = await classifyQuery("What do I have this week?");
+    assert(
+      'CUD34g "What do I have this week?" → calendar:week',
+      d,
+      (v) => (v as { reason?: string }).reason === 'calendar:week',
+      'reason: calendar:week',
+    );
+  }
 
   // CUD35–37: strong/generic fragments must not authorize when embedded in narratives
   const noCalendarDispatch = (v: unknown) => {

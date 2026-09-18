@@ -7,6 +7,10 @@ import { ConversationSession, CONFIRM_YES_RE, CONFIRM_NO_RE } from './conversati
 import { CALL_TEXT_RECOVERY_KEY, shouldPreemptCallTextRecovery } from './callTextReadiness';
 import { detectEmergency } from './emergencySignals';
 import {
+  logTodoCompleteAdmit,
+  shouldLogTodoCompleteAdmit,
+} from '../utils/instructionSignals';
+import {
   ConversationalSubjectHolder,
   isReferentPhoneQuestion,
   answerReferentPhone,
@@ -106,7 +110,9 @@ export type UtteranceOutcome =
       responseText: string;
       commits: CommitResult[];
       /** Presentation hint only. Never speech-parsed. Never a conversational machine. */
-      capabilitySurface?: 'grocery';
+      capabilitySurface?: 'grocery' | 'todo' | 'schedule';
+      presentedCalendarEventIds?: string[];
+      calendarReadReason?: string;
     }
   | { handled: true; source: 'emergency' }
   | {
@@ -126,7 +132,15 @@ function groceryHandled(
   return { handled: true, source, responseText, commits, capabilitySurface: 'grocery' };
 }
 
-function captureWithOptionalGrocerySurface(
+function todoHandled(
+  source: 'pending_resume' | 'capture' | 'referent_resume',
+  responseText: string,
+  commits: CommitResult[] = [],
+): Extract<UtteranceOutcome, { handled: true; source: 'pending_resume' | 'capture' | 'referent_resume' }> {
+  return { handled: true, source, responseText, commits, capabilitySurface: 'todo' };
+}
+
+function captureWithOptionalCapabilitySurface(
   responseText: string,
   commits: CommitResult[],
   intents: IntentRecord[],
@@ -134,9 +148,29 @@ function captureWithOptionalGrocerySurface(
   const groceryAdd = intents.some(
     (intent) => intent.type === 'list_add' && (intent.listName ?? 'grocery').toLowerCase() === 'grocery',
   );
+  const todoAdd = intents.some((intent) => intent.type === 'todo_add');
+  const todoComplete = intents.some((intent) => intent.type === 'todo_complete');
   const wrote = commits.some((commit) => commit.status === 'committed' || commit.status === 'noop');
+  const pendingTodoComplete = commits.some(
+    (commit) => commit.status === 'pending' && commit.pendingKey === 'todo_complete',
+  );
   if (groceryAdd && wrote) return groceryHandled('capture', responseText, commits);
+  if (todoAdd && wrote) return todoHandled('capture', responseText, commits);
+  if (todoComplete && (pendingTodoComplete || wrote)) {
+    return todoHandled('capture', responseText, commits);
+  }
   return { handled: true, source: 'capture', responseText, commits };
+}
+
+function logTodoCompletePendingProbe(text: string, session: ConversationSession): void {
+  if (!shouldLogTodoCompleteAdmit(text)) return;
+  const pendingKey = session.peekPendingKey();
+  logTodoCompleteAdmit({
+    stage: 'pending',
+    transcript: text,
+    pendingEstablished: pendingKey === 'todo_complete',
+    pendingKey,
+  });
 }
 
 /** Narrative reference-only focus is admitted only on the conversational
@@ -559,6 +593,7 @@ export async function processUtterance(
     orderedPresentation?.clear();
     calendarPresentation?.clear();
     calendarContinuation?.clear();
+    const pendingKey = session.peekPendingKey();
     const result = await session.resolvePending(text);
     // Generic pending-resume hook: covers every resume closure uniformly
     // (both applyIntents' own LLM-confirm closure, already separately
@@ -607,6 +642,11 @@ export async function processUtterance(
       (result.status === 'committed' || result.status === 'noop')
       && result.focus?.kind === 'collection'
       && result.focus.displayValue === 'grocery list';
+    const todoPending =
+      pendingKey === 'todo_complete' || pendingKey === 'llm_confirm:todo_add';
+    if (todoPending) {
+      return todoHandled('pending_resume', pendingResume.responseText, pendingResume.commits);
+    }
     return groceryPending ? groceryHandled('pending_resume', pendingResume.responseText, pendingResume.commits) : pendingResume;
   }
   const exactlyOneNarrativePerson = discourse
@@ -626,8 +666,16 @@ export async function processUtterance(
       if (scope) {
         calendarContinuation.clear();
         calendarPresentation?.clear();
-        const { response } = await readCalendarScope(scope);
-        return { handled: true, source: 'referent_resume', responseText: response, commits: [] };
+        const { response, presentedCalendarEventIds, reason } = await readCalendarScope(scope);
+        return {
+          handled: true,
+          source: 'referent_resume',
+          responseText: response,
+          commits: [],
+          capabilitySurface: 'schedule',
+          presentedCalendarEventIds,
+          calendarReadReason: reason,
+        };
       }
       recordContinuationRecoveryCandidate(
         continuationRecoveryCandidates,
@@ -985,7 +1033,7 @@ export async function processUtterance(
       if (commits.some((c) => c.status === 'committed')) {
         discourse.establishDomain(liveDomain.domain);
       }
-      return captureWithOptionalGrocerySurface(responseText, commits, [intent]);
+      return captureWithOptionalCapabilitySurface(responseText, commits, [intent]);
     }
     const liveSet = discourse.peekCandidateSet();
     const demo = interpretCandidateSetDemonstrative(text, liveSet);
@@ -1006,7 +1054,7 @@ export async function processUtterance(
       if (commits.some((c) => c.status === 'committed')) {
         discourse.establishDomain(domain === 'todo' ? 'todo' : 'grocery');
       }
-      return captureWithOptionalGrocerySurface(responseText, commits, [intent]);
+      return captureWithOptionalCapabilitySurface(responseText, commits, [intent]);
     }
   }
   // 2) The single routing authority — called exactly once per utterance.
@@ -1151,7 +1199,9 @@ export async function processUtterance(
     // this only means the capability-surface UI hint reflects the primary
     // candidate's type when two candidates commit in the same turn, not a
     // correctness gap in what gets written.
-    return captureWithOptionalGrocerySurface(responseText, commits, routeDecision.intents);
+    const outcome = captureWithOptionalCapabilitySurface(responseText, commits, routeDecision.intents);
+    logTodoCompletePendingProbe(text, session);
+    return outcome;
   }
   if (
     routeDecision.kind === 'needs_clarification'
@@ -1283,6 +1333,7 @@ export async function processUtterance(
     };
     continuityReferenceOnly = true;
   }
+  logTodoCompletePendingProbe(text, session);
   return {
     handled: false,
     routeDecision,

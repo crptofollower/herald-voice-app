@@ -209,8 +209,10 @@ export async function runEverydayCapabilitySurfacesV1Tests() {
     && /displayMessages\.slice\(-2\)/.test(chatSrc)
     && /groceryWorkspaceSurface/.test(chatSrc),
     (v) => v === true, 'true');
-  assert('pre-existing To-do visual cannot compete with Grocery or Weather',
-    /todoVisualRows && todoVisualRows\.length > 0 && activeSurface == null/.test(chatSrc),
+  assert('To-do leftover inset cannot compete with Grocery or Weather',
+    !/todoVisualRows && todoVisualRows\.length > 0 && activeSurface == null/.test(chatSrc)
+    && !/TodoListSurface/.test(chatSrc)
+    && /kind: 'todo'/.test(chatSrc),
     (v) => v === true, 'true');
   assert('ChatScreen tap routes to existing ID completion helper',
     /onCompleteOpenRow=\{handleGroceryCompleteOpenRow\}/.test(chatSrc)
@@ -222,10 +224,13 @@ export async function runEverydayCapabilitySurfacesV1Tests() {
   assert('one activeSurface slot; weather and grocery are exclusive kinds',
     /kind: 'weather'/.test(chatSrc)
     && /kind: 'grocery'/.test(chatSrc)
+    && /kind: 'todo'/.test(chatSrc)
+    && /kind: 'schedule'/.test(chatSrc)
     && /activeSurface\?\.kind === 'weather'/.test(chatSrc)
     && /activeSurface\?\.kind === 'grocery'/.test(chatSrc)
     && !/weatherSurface \?/.test(chatSrc)
-    && !/groceryVisualRows && groceryVisualRows\.length/.test(chatSrc),
+    && !/groceryVisualRows && groceryVisualRows\.length/.test(chatSrc)
+    && !/todoVisualRows/.test(chatSrc),
     (v) => v === true, 'true');
   assert('sendMessage clears weather slot only, not grocery',
     /latLog\('sendMessage entry'[\s\S]*?setActiveSurface\(\(prev\) => \(prev\?\.kind === 'weather' \? null : prev\)\)/.test(chatSrc),

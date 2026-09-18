@@ -32,7 +32,11 @@ import {
   boundMutationObject,
   splitResidualClauses,
   extractTodoCompleteMutation,
+  extractTodoListCompleteOperator,
+  isCanonicalTodoListName,
   extractListRemoveAcquisitionItem,
+  logTodoCompleteAdmit,
+  shouldLogTodoCompleteAdmit,
   THIRD_PERSON_REFERENT_RE,
 } from "../utils/instructionSignals";
 import { isReferentVisitOutcomeQuestion, isReferentUpcomingVisitQuestion, isReferentYearBoundedVisitQuestion, answerUpcomingCalendarEvidence, answerUpcomingGenericDoctorCalendarEvidence } from "./conversationalSubject";
@@ -269,6 +273,8 @@ const CALENDAR_TRAVEL_READ: RegExp[] = [
 /** Phrases that default to the today window when no other temporal scope is present. */
 const CALENDAR_TODAY_DEFAULT_READ: RegExp[] = [
   /\bwhat(?:'s| is) on my calendar\b/i,
+  /\bwhat(?:'s| is) on my schedule\b/i,
+  /\bwhat(?:'s| is) my schedule\b/i,
   /\banything on my calendar\b/i,
   /\bdo i have anything scheduled\b/i,
 ];
@@ -927,11 +933,12 @@ const CALENDAR_SCOPE_REASON: Record<CalendarScopeWindow, string> = {
 /** Fresh authoritative calendar read for a fixed window — no cached answer text. */
 export async function readCalendarScope(
   window: CalendarScopeWindow,
-): Promise<{ response: string; reason: string }> {
+): Promise<{ response: string; reason: string; presentedCalendarEventIds: string[] }> {
   const events = await getTier1CalendarEvents(window);
   return {
     response: calendarSpeech(window, events),
     reason: CALENDAR_SCOPE_REASON[window],
+    presentedCalendarEventIds: events.map((e) => e.id),
   };
 }
 
@@ -1098,7 +1105,7 @@ function getDoctorSummary(): string {
   return `You've mentioned ${names.join(', ')}, and ${last}.`;
 }
 
-export async function classifyQuery(message: string): Promise<TierDecision> {
+async function classifyQueryCore(message: string): Promise<TierDecision> {
   const msg = normalizeInput(message);
 
   // Device action: timer — duration-based, separate from alarm
@@ -1235,6 +1242,20 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     }
   }
 
+  // Device: instructional To-do completion targeting the todo list identity.
+  // Runs before CALL so a task body that contains "call" is not stolen, and
+  // before grocery list_remove so To-do destinations never LIKE-match grocery.
+  {
+    const todoListComplete = extractTodoListCompleteOperator(msg);
+    if (todoListComplete) {
+      return {
+        tier: 1,
+        actionIntent: { type: 'todo_complete', raw: todoListComplete.raw },
+        reason: 'action:todo_complete',
+      };
+    }
+  }
+
   // Device: call — resolves contact on device, fires tel: intent
   // Conversation Reliability V1: TODO_ADD_PREFIX itself is `^`-anchored and
   // only ever protected the isolated, sentence-initial form of "I need to
@@ -1293,6 +1314,13 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     const item = boundMutationObject(m?.[1] ?? '');
     const listName = (m?.[2] ?? 'grocery').toLowerCase();
     if (item) {
+      if (isCanonicalTodoListName(listName)) {
+        return {
+          tier: 1,
+          actionIntent: { type: 'todo_complete', raw: item },
+          reason: 'action:todo_complete',
+        };
+      }
       return {
         tier: 1,
         actionIntent: { type: 'list_remove', item, listName },
@@ -2165,6 +2193,23 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   }
 
   return { tier: 3, reason: "default" };
+}
+
+export async function classifyQuery(message: string): Promise<TierDecision> {
+  const decision = await classifyQueryCore(message);
+  if (shouldLogTodoCompleteAdmit(message)) {
+    const normalized = normalizeInput(message);
+    const extractor = extractTodoListCompleteOperator(normalized);
+    logTodoCompleteAdmit({
+      stage: 'classify',
+      transcript: message,
+      normalized,
+      extractor: extractor ? { raw: extractor.raw } : null,
+      action: decision.actionIntent?.type ?? null,
+      reason: decision.reason,
+    });
+  }
+  return decision;
 }
 
 export async function scanResidualIntent(
