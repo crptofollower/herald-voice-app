@@ -28,6 +28,7 @@ import { setDB } from '../../src/db/schema.ts';
 import { writeMedicalContact, writeMedication, writeMedicalRecord, attachVisitOutcome, getMedicalSummary, getMedicalRecords } from '../../src/db/medicalDB.ts';
 import { classifyQuery } from '../../src/routing/tierRouter.ts';
 import { setCalendarEventFetcher, resetCalendarEventFetcher } from '../../src/db/calendarCacheDB.ts';
+import { setNow, resetNow } from '../../src/utils/heraldClock.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
 
@@ -272,34 +273,39 @@ export async function runDoctorReadTests() {
   // upcoming appointment together, without touching any new authority.
   {
     freshDB();
-    writeMedicalContact({ name: 'Dr. Alvarez', specialty: 'Cardiologist', is_primary: 1 });
-    const visitId = writeMedicalRecord({
-      doctor_name: 'Dr. Alvarez',
-      visit_date: '2026-07-20',
-      reason: 'annual checkup',
-      diagnosis: 'mild hypertension',
-      follow_up: 'recheck blood pressure in three months',
-      status: 'noted',
-    });
-    attachVisitOutcome(visitId, 'Blood pressure was a little high');
-    writeMedicalRecord({ doctor_name: 'Dr. Alvarez', visit_date: '2026-09-15', status: 'upcoming' });
+    setNow(new Date(2026, 7, 10, 12, 0, 0)); // local noon 2026-08-10, before fixture 2026-09-15
+    try {
+      writeMedicalContact({ name: 'Dr. Alvarez', specialty: 'Cardiologist', is_primary: 1 });
+      const visitId = writeMedicalRecord({
+        doctor_name: 'Dr. Alvarez',
+        visit_date: '2026-07-20',
+        reason: 'annual checkup',
+        diagnosis: 'mild hypertension',
+        follow_up: 'recheck blood pressure in three months',
+        status: 'noted',
+      });
+      attachVisitOutcome(visitId, 'Blood pressure was a little high');
+      writeMedicalRecord({ doctor_name: 'Dr. Alvarez', visit_date: '2026-09-15', status: 'upcoming' });
 
-    const d = await classifyQuery('Tell me about Dr Alvarez');
-    assert('DR12a routes medical:doctor_summary', d.reason,
-      (v) => v === 'medical:doctor_summary', 'medical:doctor_summary');
-    assert('DR12b includes specialty', d.tier1Response,
-      (v) => typeof v === 'string' && v.includes('Cardiologist'), 'includes "Cardiologist"');
-    assert('DR12c includes reason, diagnosis, and follow_up verbatim', d.tier1Response,
-      (v) => typeof v === 'string'
-        && v.includes('annual checkup')
-        && v.includes('mild hypertension')
-        && v.includes('recheck blood pressure in three months'),
-      'includes reason, diagnosis, follow_up');
-    assert('DR12d includes matching-date outcome verbatim', d.tier1Response,
-      (v) => typeof v === 'string' && v.includes('Blood pressure was a little high'),
-      'includes stored outcome');
-    assert('DR12e includes upcoming appointment section', d.tier1Response,
-      (v) => typeof v === 'string' && v.includes('You see'), 'includes upcoming phrasing');
+      const d = await classifyQuery('Tell me about Dr Alvarez');
+      assert('DR12a routes medical:doctor_summary', d.reason,
+        (v) => v === 'medical:doctor_summary', 'medical:doctor_summary');
+      assert('DR12b includes specialty', d.tier1Response,
+        (v) => typeof v === 'string' && v.includes('Cardiologist'), 'includes "Cardiologist"');
+      assert('DR12c includes reason, diagnosis, and follow_up verbatim', d.tier1Response,
+        (v) => typeof v === 'string'
+          && v.includes('annual checkup')
+          && v.includes('mild hypertension')
+          && v.includes('recheck blood pressure in three months'),
+        'includes reason, diagnosis, follow_up');
+      assert('DR12d includes matching-date outcome verbatim', d.tier1Response,
+        (v) => typeof v === 'string' && v.includes('Blood pressure was a little high'),
+        'includes stored outcome');
+      assert('DR12e includes upcoming appointment section', d.tier1Response,
+        (v) => typeof v === 'string' && v.includes('You see'), 'includes upcoming phrasing');
+    } finally {
+      resetNow();
+    }
   }
 
   // ── DR13: no medical_contacts row — specialty line omitted, not fabricated,

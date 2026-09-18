@@ -13,6 +13,7 @@
 
 import { getDB } from "./schema";
 import { extractDrugName, extractDosage } from "../utils/detectMedicalEvent";
+import { todayLocalISO } from "../utils/heraldClock";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -245,8 +246,9 @@ export function getUpcomingAppointments(): { doctorName?: string; visitDate: str
     `SELECT doctor_name, visit_date FROM medical_records
      WHERE status = 'upcoming' AND removed_at IS NULL
        AND visit_date IS NOT NULL
-       AND date(visit_date) >= date('now', 'localtime')
-     ORDER BY date(visit_date) ASC, created_at ASC;`
+       AND date(visit_date) >= date(?)
+     ORDER BY date(visit_date) ASC, created_at ASC;`,
+    [todayLocalISO()]
   );
   return rows.map((r) => ({
     doctorName: r.doctor_name ?? undefined,
@@ -282,8 +284,8 @@ export function supersedeStaleUpcomingAppointments(): void {
   db.runSync(
     `UPDATE medical_records SET status = 'noted', surfaced_at = COALESCE(surfaced_at, ?)
      WHERE status = 'upcoming' AND removed_at IS NULL
-       AND date(visit_date) < date('now', 'localtime');`,
-    [now]
+       AND date(visit_date) < date(?);`,
+    [now, todayLocalISO()]
   );
 }
 
@@ -297,8 +299,9 @@ export function getTodaysUpcomingAppointment(): { id: string; doctorName?: strin
   const row = db.getFirstSync<{ id: string; doctor_name: string | null }>(
     `SELECT id, doctor_name FROM medical_records
      WHERE status = 'upcoming' AND removed_at IS NULL AND surfaced_at IS NULL
-       AND date(visit_date) = date('now', 'localtime')
-     LIMIT 1;`
+       AND date(visit_date) = date(?)
+     LIMIT 1;`,
+    [todayLocalISO()]
   );
   if (!row) return null;
   return { id: row.id, doctorName: row.doctor_name ?? undefined };
@@ -335,8 +338,9 @@ export function getVisitAwaitingOutcome(): {
         AND visit_outcome IS NULL
         AND outcome_asked_at IS NULL
         AND visit_date IS NOT NULL
-        AND date(visit_date) < date('now','localtime')
-      ORDER BY visit_date DESC LIMIT 1;`
+        AND date(visit_date) < date(?)
+      ORDER BY visit_date DESC LIMIT 1;`,
+    [todayLocalISO()]
   );
   if (!row) return null;
   return {
