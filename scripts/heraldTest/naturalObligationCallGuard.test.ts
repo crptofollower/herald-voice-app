@@ -22,7 +22,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setDB } from '../../src/db/schema.ts';
 import { classifyQuery } from '../../src/routing/tierRouter.ts';
-import { hasObligationPrefixSentence } from '../../src/utils/instructionSignals.ts';
+import { hasObligationPrefixSentence, extractNarrativeTodoAdd } from '../../src/utils/instructionSignals.ts';
 import { routeIntent } from '../../src/routing/routeIntent.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
@@ -61,6 +61,7 @@ function freshDb() {
 }
 
 const tierRouterPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src/routing/tierRouter.ts');
+const routeIntentPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src/routing/routeIntent.ts');
 
 export async function runNaturalObligationCallGuardTests() {
   const failures: { label: string; got: unknown; expected: string }[] = [];
@@ -149,6 +150,93 @@ export async function runNaturalObligationCallGuardTests() {
     assertTrue(
       'CALL branch condition calls hasObligationPrefixSentence(msg), not the old TODO_ADD_PREFIX.test(msg)',
       /CALL_SIGNALS\.some[\s\S]{0,220}!hasObligationPrefixSentence\(msg\)/.test(src),
+    );
+  }
+
+  console.log(`\n${BOLD}-- (8) extractNarrativeTodoAdd: target class is captured --${RESET}`);
+  {
+    assert(
+      'narrative + embedded obligation (no date word) captures the obligation sentence',
+      extractNarrativeTodoAdd("I went to a trade show. It was great. I need to call my accountant and tell her to file my taxes. Anyway, David had a suggestion."),
+      { kind: 'add', body: 'call my accountant and tell her to file my taxes' },
+    );
+    assert(
+      'discourse-filler-prefixed obligation sentence ("So I need to...") still captures',
+      extractNarrativeTodoAdd("The show was great. So I need to call my accountant and tell her to file my taxes."),
+      { kind: 'add', body: 'call my accountant and tell her to file my taxes.' },
+    );
+    assert(
+      'byte-identical to existing behavior when the whole message already worked (isolated clause)',
+      extractNarrativeTodoAdd("I need to call the dentist for my to-do list."),
+      { kind: 'add', body: 'call the dentist for my to-do list.' },
+    );
+  }
+
+  console.log(`\n${BOLD}-- (9) extractNarrativeTodoAdd: aggressive false-positive coverage (must NOT become Mike's to-do) --${RESET}`);
+  {
+    assertTrue(
+      'past obligation already completed is not captured',
+      extractNarrativeTodoAdd("I already called my accountant yesterday and told her to file my taxes.") === null,
+    );
+    assertTrue(
+      'completed-action past tense report is not captured',
+      extractNarrativeTodoAdd("I finished calling my accountant and telling her to file my taxes.") === null,
+    );
+    assertTrue(
+      'third-person obligation about someone else is not captured',
+      extractNarrativeTodoAdd("Paul told me he needs to call his accountant today.") === null,
+    );
+    assertTrue(
+      'narrative entirely about another person is not captured',
+      extractNarrativeTodoAdd("My sister said she needs to call her accountant this week.") === null,
+    );
+    assertTrue(
+      'multi-sentence quoted speech attributed to someone else does not fabricate an add (matches pre-existing whole-message clarify, never a new "add")',
+      extractNarrativeTodoAdd('I went to a trade show. David said, "I need to call my accountant." That was surprising.')?.kind !== 'add',
+    );
+    assertTrue(
+      'multi-sentence hypothetical/conditional does not fabricate an add',
+      extractNarrativeTodoAdd("I went to a trade show. If I need to call my accountant, I will do it tomorrow.")?.kind !== 'add',
+    );
+    assertTrue(
+      'legitimate CALL utterance with no obligation-prefix sentence is untouched (null, not misread as a todo)',
+      extractNarrativeTodoAdd("So I was at the trade show and it was great. By the way, can you call David?") === null,
+    );
+  }
+
+  console.log(`\n${BOLD}-- (10) routeIntent-level: the acceptance-example-class narrative (no date word) reaches a real todo capture --${RESET}`);
+  {
+    // Deliberately avoids opening with "I went to" -- confirmed independently
+    // (not caused by anything in this lane) to collide with a pre-existing,
+    // unrelated extractTodoCompleteMutation over-match that consumes the
+    // entire utterance as a false todo_complete "raw". Flagged to the CTO
+    // as its own finding, out of scope here.
+    freshDb();
+    const text = "The trade show was something else. I need to call my accountant and tell her to file my taxes. Anyway, David had a great idea.";
+    const decision = await routeIntent(text, {
+      classifyQuery,
+      classifyLLM: null,
+      llmReady: false,
+      captureContext: { contacts: [], lists: [] },
+    });
+    assertTrue(
+      'decision is a capture of the todo_add intent, not needs_clarification/fallback',
+      decision.kind === 'capture' && decision.intents.some((i: any) => i.type === 'todo_add'),
+    );
+    console.log(`${DIM}       (informational) decision.kind=${decision.kind}${RESET}`);
+  }
+
+  console.log(`\n${BOLD}-- (11) source-lock: extractNarrativeTodoAdd wired into both call sites --${RESET}`);
+  {
+    const tierSrc = fs.readFileSync(tierRouterPath, 'utf8');
+    assertTrue(
+      'tier-1 todo_add branch calls extractNarrativeTodoAdd(msg), not the old extractTodoAdd(msg)',
+      /const extracted = extractNarrativeTodoAdd\(msg\);/.test(tierSrc),
+    );
+    const routeSrc = fs.readFileSync(routeIntentPath, 'utf8');
+    assertTrue(
+      'Lane B recovery calls extractNarrativeTodoAdd(text), not the old extractTodoAdd(text)',
+      /const todoExtraction = extractNarrativeTodoAdd\(text\);/.test(routeSrc),
     );
   }
 

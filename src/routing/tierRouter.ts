@@ -25,7 +25,7 @@ import {
   LIST_ADD_SIGNALS,
   TODO_ADD_SIGNALS,
   hasObligationPrefixSentence,
-  extractTodoAdd,
+  extractNarrativeTodoAdd,
   extractResidualTodoAdd,
   boundCapturedTail,
   boundMutationObject,
@@ -1375,7 +1375,7 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     && !detectMedicalEvent(msg)
     && !isUnmarkedAcquisitionShape(msg)
   ) {
-    const extracted = extractTodoAdd(msg);
+    const extracted = extractNarrativeTodoAdd(msg);
     if (extracted?.kind === 'clarify') {
       return {
         tier: 1,

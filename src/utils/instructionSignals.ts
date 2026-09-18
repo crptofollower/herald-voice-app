@@ -163,6 +163,55 @@ export function extractResidualTodoAdd(msg: string): TodoAddExtraction | null {
   return null;
 }
 
+/**
+ * Sentence-scoped TODO_ADD extraction, Conversation Reliability V1.
+ * extractTodoAdd's own body-bound and named-list refusal are reused
+ * verbatim, unchanged -- this only widens WHERE in the utterance a direct
+ * TODO_ADD_PREFIX match is allowed to be found, using the same
+ * OBLIGATION_SENTENCE_SPLIT_RE segmentation hasObligationPrefixSentence
+ * uses. A narrative preamble must not hide an embedded obligation sentence
+ * from capture, the same reason it must not let one hijack tier-1 CALL.
+ *
+ * Deliberately does NOT call extractTodoAdd's own vocative-address fallback
+ * per sentence: extractTodoAdd's `/^(?!I\b)([A-Za-z]{2,16})[,:]?\s+(.+)$/`
+ * reinterpretation exists for genuine address ("Herald, I need to...") and
+ * is already applied once, correctly, to the whole message below. Reapplying
+ * it per sentence would let an ordinary discourse opener ("If", "So", "But")
+ * that happens to precede "I need to..." be misread as addressing Herald by
+ * name -- confirmed as a real false positive during testing (pre-existing in
+ * extractTodoAdd itself, not introduced here, but this function must not
+ * widen its exposure). Only a direct, sentence-initial TODO_ADD_PREFIX match
+ * is accepted per sentence.
+ *
+ * The whole-message result wins first (byte-identical to today's behavior
+ * whenever it already succeeds); only when that yields no body does each
+ * sentence get this narrower, independent attempt. A sentence that doesn't
+ * itself open with the prefix is skipped, never coerced into a match -- this
+ * cannot silently promote narrative into a task; it can only find a sentence
+ * that was already, on its own, a complete valid to-do statement.
+ */
+export function extractNarrativeTodoAdd(msg: string): TodoAddExtraction | null {
+  const direct = extractTodoAdd(msg);
+  if (direct?.kind === 'add') return direct;
+  const sentences = msg.split(OBLIGATION_SENTENCE_SPLIT_RE).map((s) => s.trim()).filter(Boolean);
+  if (sentences.length <= 1) return direct;
+  for (const sentence of sentences) {
+    let rest = sentence;
+    for (let i = 0; i < 3; i++) {
+      const opener = rest.match(TODO_ADD_DISCOURSE_OPENER);
+      if (!opener) break;
+      rest = rest.slice(opener[0].length);
+    }
+    const prefixAtStart = rest.match(TODO_ADD_PREFIX);
+    if (!prefixAtStart) continue;
+    const body = boundCapturedTail(rest.slice(prefixAtStart[0].length));
+    if (body.length <= 2) continue;
+    if (namedListAddOwnsRemainder(body)) continue;
+    return { kind: 'add', body };
+  }
+  return direct;
+}
+
 // Union of tierRouter TODO_COMPLETE first-person verb patterns (672, 676, 677).
 export const COMPLETED_PAST_FIRST_PERSON_RE =
   /\bI\s+(?:already\s+)?(?:called|finished|completed|did|done|took care of|handled|picked up|dropped off|returned|sent|submitted|paid|filed|bought|got|grabbed|went to|made it to|got to|stopped by)\b/i;

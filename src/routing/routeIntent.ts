@@ -49,7 +49,7 @@ import {
   parseOperationalDomainResolution,
   extractNarrativeOperationalCandidates,
 } from './operationalListContinuity';
-import { extractTodoAdd } from '../utils/instructionSignals';
+import { extractNarrativeTodoAdd } from '../utils/instructionSignals';
 
 type ActionIntent = NonNullable<TierDecision['actionIntent']>;
 
@@ -2632,16 +2632,23 @@ export async function routeIntent(
         // groceryTodoCapabilityOwnershipRecovery.test.ts). Still safely
         // bounded: 'instruction' also covers alarms/reminders/notes, but
         // this block only ever activates when parseOperationalDomainResolution
-        // AND extractNarrativeOperationalCandidates/extractTodoAdd
+        // AND extractNarrativeOperationalCandidates/extractNarrativeTodoAdd
         // independently succeed too -- those, not this reason set, are the
-        // real gate.
+        // real gate. extractNarrativeTodoAdd (Conversation Reliability V1,
+        // sentence-segmentation pass) tries the whole message first
+        // (unchanged behavior), then each sentence independently, so a
+        // narrative preamble cannot hide an embedded obligation sentence --
+        // but domain resolution below still requires an explicit "to-do"/
+        // "task" marker word, which the class example this repair targets
+        // does not always contain; see naturalObligationCallGuard follow-up
+        // notes for the acceptance-example-specific residual gap.
         const recoveryEligibleReasons = new Set([
           'list_add', 'todo_obligation', 'acquisition', 'obligation_family', 'bare_need', 'grocery_context', 'instruction',
         ]);
         if (recoveryEligibleReasons.has(eligibility.reason)) {
           const domain = parseOperationalDomainResolution(text);
           const groceryItems = extractNarrativeOperationalCandidates(text);
-          const todoExtraction = extractTodoAdd(text);
+          const todoExtraction = extractNarrativeTodoAdd(text);
           const todoBody = todoExtraction?.kind === 'add' ? todoExtraction.body : null;
           if (domain === 'grocery' && groceryItems) {
             if (dispatchDiag) dispatchDiag.finalOutcome = 'specialist_admit';
