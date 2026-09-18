@@ -3,10 +3,13 @@
 
 import { getDB } from './schema';
 import { realizeGroceryListReadAct } from '../conversation/groceryListReadRealization';
+import { mono, logSqliteReadOpStart, logSqliteReadOpEnd } from '../utils/latencyInstrument';
 
 export type PresentedListItem = { id: string; body: string };
 
 export function getPresentedOpenListItems(listName: string): PresentedListItem[] {
+  logSqliteReadOpStart(listName, 'read');
+  const t0 = mono();
   const db = getDB();
   const items = db.getAllSync<{ id: string; body: string }>(
     `SELECT li.id, li.body FROM list_items li
@@ -16,12 +19,14 @@ export function getPresentedOpenListItems(listName: string): PresentedListItem[]
     [listName],
   );
   const seen = new Set<string>();
-  return items.filter((i) => {
+  const out = items.filter((i) => {
     const key = i.body.trim().toLowerCase();
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
+  logSqliteReadOpEnd(listName, 'read', mono() - t0, 'ok', out.length);
+  return out;
 }
 
 export function composeOpenListSpeech(listName: string, items: PresentedListItem[]): string {
@@ -80,14 +85,18 @@ export function getOpenListItemById(
   listName: string,
 ): PresentedListItem | null {
   if (!id) return null;
+  logSqliteReadOpStart(listName, 'read');
+  const t0 = mono();
   const db = getDB();
-  return db.getFirstSync<PresentedListItem>(
+  const row = db.getFirstSync<PresentedListItem>(
     `SELECT li.id, li.body FROM list_items li
      JOIN lists l ON l.id = li.list_id
      WHERE li.id = ? AND l.name = ? AND li.checked = 0
      LIMIT 1;`,
     [id, listName],
   ) ?? null;
+  logSqliteReadOpEnd(listName, 'read', mono() - t0, 'ok', row ? 1 : 0);
+  return row;
 }
 
 export function formatGroceryItemReadback(body: string): string {
@@ -99,12 +108,18 @@ export function markOpenListItemRemovedById(
   id: string,
   listName: string,
 ): PresentedListItem | null {
+  logSqliteReadOpStart(listName, 'remove');
+  const t0 = mono();
   const row = getOpenListItemById(id, listName);
-  if (!row) return null;
+  if (!row) {
+    logSqliteReadOpEnd(listName, 'remove', mono() - t0, 'failed', 0);
+    return null;
+  }
   const db = getDB();
   db.runSync(
     `UPDATE list_items SET checked = 1, removed_at = ? WHERE id = ? AND checked = 0;`,
     [new Date().toISOString(), id],
   );
+  logSqliteReadOpEnd(listName, 'remove', mono() - t0, 'ok', 1);
   return row;
 }

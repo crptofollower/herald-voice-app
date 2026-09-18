@@ -155,6 +155,7 @@ import {
   getChatScreenMountSeq,
   log as latLog,
   logRealizationDoneIfSemanticTurn,
+  logFinalResponsePath,
 } from '../utils/latencyInstrument';
 import { detectEmergency } from '../routing/emergencySignals';
 import type { IntentRecord } from '../hooks/llmLayers';
@@ -1734,6 +1735,10 @@ export default function ChatScreen() {
         timestamp: Date.now(),
         recoveryChoices,
       });
+      logFinalResponsePath({
+        pathKind: outcome.source === 'capture' ? 'device_action_capture' : outcome.source,
+        source: outcome.source,
+      });
       logRealizationDoneIfSemanticTurn();
       speak(outcome.responseText);
       await runCommitEffects(outcome.commits, {
@@ -1939,6 +1944,16 @@ export default function ChatScreen() {
       });
       addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
       addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+      logFinalResponsePath({
+        pathKind: recapOutcome.handled
+          ? 'needs_clarification_recap'
+          : activeSubjectOutcome.handled
+          ? 'needs_clarification_active_subject'
+          : ledgerOutcome === 'generated'
+          ? 'needs_clarification_qwen'
+          : 'needs_clarification_canned',
+        routeReason: outcome.routeDecision.reason,
+      });
       logRealizationDoneIfSemanticTurn();
       speak(reply);
       sendingRef.current = false;

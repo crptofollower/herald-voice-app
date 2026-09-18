@@ -398,3 +398,72 @@ export function logRealizationDoneIfSemanticTurn(): void {
   semanticTurnPendingRealization = false;
   safeSemanticLog('REALIZATION_DONE');
 }
+
+// ─── Route-Level Latency Diagnostic Instrumentation V1 ───────────────────────
+// See HERALD_ROUTE_LEVEL_LATENCY_DIAGNOSTIC_INSTRUMENTATION_V1_DESIGN_2026-09-12.md.
+// Four new pure logging functions, same try/log/catch shape as the semantic
+// logs above. No control-flow branching. No raw utterance text, item body,
+// ack string, or contact/name field is ever logged here -- only lengths,
+// counts, ids, and existing enum-like type/status/reason tags.
+
+/** Normalized routing result -- covers both deterministic and semantic-admitted turns. */
+export function logRouteDecision(fields: {
+  kind: string;
+  reason?: string;
+  tier?: number;
+  source?: string;
+  intentTypes?: string[];
+  actionType?: string;
+}): void {
+  safeSemanticLog('ROUTE_DECISION', fields);
+}
+
+/** Deterministic writer commit boundary (list_add/todo_add/medical_capture/...). */
+export function logWriterOpStart(domain: string): void {
+  safeSemanticLog('WRITER_OP START', { domain, opKind: 'write' });
+}
+
+export function logWriterOpEnd(domain: string, durationMs: number, status: string): void {
+  safeSemanticLog('WRITER_OP END', {
+    domain,
+    opKind: 'write',
+    durationMs: Math.round(durationMs * 100) / 100,
+    status,
+  });
+}
+
+/** Authoritative write outcome -- the direct answer to "did a write actually occur." */
+export function logCommitResult(domain: string, status: string, hasFocus: boolean): void {
+  safeSemanticLog('COMMIT_RESULT', { domain, status, hasFocus });
+}
+
+/** SQLite read/remove boundary (list/todo presented-open-items reads, item removal). */
+export function logSqliteReadOpStart(listName: string, opKind: 'read' | 'remove'): void {
+  safeSemanticLog('SQLITE_READ_OP START', { listName, opKind });
+}
+
+export function logSqliteReadOpEnd(
+  listName: string,
+  opKind: 'read' | 'remove',
+  durationMs: number,
+  status: 'ok' | 'failed',
+  resultCount?: number,
+): void {
+  safeSemanticLog('SQLITE_READ_OP END', {
+    listName,
+    opKind,
+    durationMs: Math.round(durationMs * 100) / 100,
+    status,
+    ...(resultCount !== undefined ? { resultCount } : {}),
+  });
+}
+
+/** Normalized final-response-path label -- ties outcome.source/routeDecision.kind/seamOutcome.kind together. */
+export function logFinalResponsePath(fields: {
+  pathKind: string;
+  source?: string;
+  routeReason?: string;
+  seamKind?: string;
+}): void {
+  safeSemanticLog('FINAL_RESPONSE_PATH', fields);
+}

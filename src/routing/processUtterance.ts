@@ -24,7 +24,15 @@ import { detectFamilyRead, resolveFamilyRead } from '../utils/familyRead';
 import { resolveHouseholdProvider } from '../utils/householdRead';
 import { getLastVisit } from '../db/medicalDB';
 import { extractDoctorName } from '../utils/detectMedicalEvent';
-import { getActiveTurnId, log as latLog } from '../utils/latencyInstrument';
+import {
+  getActiveTurnId,
+  log as latLog,
+  mono,
+  logRouteDecision,
+  logWriterOpStart,
+  logWriterOpEnd,
+  logCommitResult,
+} from '../utils/latencyInstrument';
 import {
   CONTINUATION_RECOVERY_SAFE_LABEL,
   recordContinuationRecoveryCandidate,
@@ -334,7 +342,12 @@ export async function applyIntents(
             for (const next of batch) {
               const nextWriter = DOMAIN_WRITERS[next.type];
               if (!nextWriter) continue;
-              written.push(await nextWriter.add(next, rawText, ctx));
+              logWriterOpStart(next.type);
+              const t0 = mono();
+              const nextResult = await nextWriter.add(next, rawText, ctx);
+              logWriterOpEnd(next.type, mono() - t0, nextResult.status);
+              logCommitResult(next.type, nextResult.status, !!nextResult.focus);
+              written.push(nextResult);
             }
             if (written.length === 1) return written[0];
             const anyCommitted = written.some((c) => c.status === 'committed');
@@ -364,7 +377,11 @@ export async function applyIntents(
       results.push(queuedPending);
       continue;
     }
+    logWriterOpStart(intent.type);
+    const writerT0 = mono();
     const added = await writer.add(intent, rawText, ctx);
+    logWriterOpEnd(intent.type, mono() - writerT0, added.status);
+    logCommitResult(intent.type, added.status, !!added.focus);
     ledger?.push({
       establishedAt: Date.now(),
       utterance: rawText,
@@ -907,6 +924,14 @@ export async function processUtterance(
   }
   // 2) The single routing authority — called exactly once per utterance.
   const routeDecision = await routeIntent(text, deps);
+  logRouteDecision({
+    kind: routeDecision.kind,
+    reason: (routeDecision as { reason?: string }).reason,
+    tier: (routeDecision as { tier?: number }).tier,
+    source: (routeDecision as { source?: string }).source,
+    intentTypes: routeDecision.kind === 'capture' ? routeDecision.intents.map((i) => i.type) : undefined,
+    actionType: routeDecision.kind === 'device_action' ? routeDecision.actionIntent.type : undefined,
+  });
   // D-phone-repair, 2026-08-13: processUtterance is the sole boundary that
   // may call session.setPending (Spine §3a / Law 2) -- routeIntent itself
   // never touches session. This mirrors applyIntents' existing pending-arm
@@ -1020,20 +1045,28 @@ export async function processUtterance(
         if (resolution === 'grocery') {
           const writer = DOMAIN_WRITERS.list_add;
           if (!writer) return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
+          logWriterOpStart('list_add');
+          const t0 = mono();
           const result = await writer.add(
             { type: 'list_add', items, listName: 'grocery' },
             userText,
           );
+          logWriterOpEnd('list_add', mono() - t0, result.status);
+          logCommitResult('list_add', result.status, !!result.focus);
           if (result.status === 'committed') discourse?.establishDomain('grocery');
           return result;
         }
         if (resolution === 'todo') {
           const writer = DOMAIN_WRITERS.todo_add;
           if (!writer) return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
+          logWriterOpStart('todo_add');
+          const t0 = mono();
           const result = await writer.add(
             { type: 'todo_add', body: items.join(' and ') },
             userText,
           );
+          logWriterOpEnd('todo_add', mono() - t0, result.status);
+          logCommitResult('todo_add', result.status, !!result.focus);
           if (result.status === 'committed') discourse?.establishDomain('todo');
           return result;
         }
