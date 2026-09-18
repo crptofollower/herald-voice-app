@@ -274,15 +274,22 @@ export async function applyIntents(
   rawText: string,
   session: ConversationSession,
   ctx: { resolveContact?: ResolveContactFn } | undefined,
-  source: 'deterministic' | 'llm',
+  source: 'deterministic' | 'llm' | 'deterministic_recovery',
   llmGate?: { declineAck?: string; domainConfirmOwnsCapture?: boolean; confirmPrompt?: string },
   ledger?: ConversationTurnLedger | null,
 ): Promise<{ responseText: string; commits: CommitResult[] }> {
   const results: CommitResult[] = [];
+  // Ledger/authority layer intentionally stays on the original 2-value union
+  // (Semantic Focus Contract V1 -- "authority has one owner" -- protects
+  // captureAuthorityTier/buildFocusEntry from casual widening). A collapsed,
+  // call-site-only mapping keeps 'deterministic_recovery' honestly out of
+  // 'llm' (it never produced an LLM proposal) while still recording as
+  // 'deterministic' pre-confirmation, same as any other non-llm source.
+  const ledgerSource: 'deterministic' | 'llm' = source === 'llm' ? 'llm' : 'deterministic';
   for (const intent of intents) {
     const writer = DOMAIN_WRITERS[intent.type];
     if (!writer) continue;
-    if (source === 'llm' && !llmGate?.domainConfirmOwnsCapture) {
+    if ((source === 'llm' || source === 'deterministic_recovery') && !llmGate?.domainConfirmOwnsCapture) {
       // Build C: do not call writer.add until the user confirms.
       // Homogeneous LLM batches (semantic multi-task todo.capture) share one
       // confirm; only the first pending is armed on the session.
@@ -350,9 +357,9 @@ export async function applyIntents(
         intentType: intent.type,
         operation: 'capture',
         outcome: commitResultOutcome(queuedPending.status),
-        authorityTier: captureAuthorityTier(source),
+        authorityTier: captureAuthorityTier(ledgerSource),
         assistantReplySummary: queuedPending.prompt,
-        focus: buildFocusEntry(undefined, { status: queuedPending.status, source }),
+        focus: buildFocusEntry(undefined, { status: queuedPending.status, source: ledgerSource }),
       });
       results.push(queuedPending);
       continue;
@@ -364,9 +371,9 @@ export async function applyIntents(
       intentType: intent.type,
       operation: 'capture',
       outcome: commitResultOutcome(added.status),
-      authorityTier: captureAuthorityTier(source),
+      authorityTier: captureAuthorityTier(ledgerSource),
       assistantReplySummary: added.status === 'committed' || added.status === 'noop' || added.status === 'failed' ? added.ack : null,
-      focus: buildFocusEntry(added.focus, { status: added.status, source }),
+      focus: buildFocusEntry(added.focus, { status: added.status, source: ledgerSource }),
     });
     results.push(added);
   }

@@ -46,14 +46,17 @@ import type { ReadIntentMeta } from './readIntent';
 import {
   extractAmbiguousAcquisitionObject,
   normalizeGroceryListItems,
+  parseOperationalDomainResolution,
+  extractNarrativeOperationalCandidates,
 } from './operationalListContinuity';
+import { extractTodoAdd } from '../utils/instructionSignals';
 
 type ActionIntent = NonNullable<TierDecision['actionIntent']>;
 
 export type RouteDecision =
   | { kind: 'device_read'; tier: 1; response: string; isMedical?: boolean; reason: string; presentedMedicationIds?: string[]; presentedGroceryIds?: string[]; presentedTodoIds?: string[]; presentedCalendarEventIds?: string[] }
   | { kind: 'device_action'; tier: 1; actionIntent: ActionIntent; reason: string }
-  | { kind: 'capture'; intents: IntentRecord[]; source: 'deterministic' | 'llm'; reason: string }
+  | { kind: 'capture'; intents: IntentRecord[]; source: 'deterministic' | 'llm' | 'deterministic_recovery'; reason: string }
   | { kind: 'phone_repair_needed'; pending: Extract<CommitResult, { status: 'pending' }>; reason: string }
   | { kind: 'medical_read_pending'; pending: Extract<CommitResult, { status: 'pending' }>; reason: string }
   | { kind: 'not_ready'; reason: string }
@@ -2609,6 +2612,80 @@ export async function routeIntent(
         specialistResult: 'not_run',
       };
     }
+      // Grocery/Todo capability-ownership repair (Conversation Reliability V1,
+      // Lane B). Eligibility already marked this turn grocery/todo-correlated
+      // before the model ran; a transport-level failure to answer
+      // (parse_fail/unavailable/error) must not silently drop that ownership
+      // into generic conversation. Every function reused below is existing
+      // and already tested -- no new regex, no new capability, no widened
+      // authority. A completed model REJECT/CLARIFY (capGen.status === 'ok')
+      // never reaches this block.
+      if (capGen.status !== 'ok') {
+        // 'instruction' included alongside the grocery/todo-correlated
+        // reasons: isExplicitInstructionToHerald (speechActAuthority.ts)
+        // checks TODO_ADD_PREFIX itself and is evaluated before
+        // evaluateSemanticDispatchEligibility ever reaches its own
+        // TODO_ADD_PREFIX/TODO_ADD_SIGNALS check -- so any utterance shaped
+        // to satisfy extractTodoAdd's own prefix requirement below is
+        // eligibility-classified 'instruction', never 'todo_obligation'.
+        // Confirmed via regression (test 2,
+        // groceryTodoCapabilityOwnershipRecovery.test.ts). Still safely
+        // bounded: 'instruction' also covers alarms/reminders/notes, but
+        // this block only ever activates when parseOperationalDomainResolution
+        // AND extractNarrativeOperationalCandidates/extractTodoAdd
+        // independently succeed too -- those, not this reason set, are the
+        // real gate.
+        const recoveryEligibleReasons = new Set([
+          'list_add', 'todo_obligation', 'acquisition', 'obligation_family', 'bare_need', 'grocery_context', 'instruction',
+        ]);
+        if (recoveryEligibleReasons.has(eligibility.reason)) {
+          const domain = parseOperationalDomainResolution(text);
+          const groceryItems = extractNarrativeOperationalCandidates(text);
+          const todoExtraction = extractTodoAdd(text);
+          const todoBody = todoExtraction?.kind === 'add' ? todoExtraction.body : null;
+          if (domain === 'grocery' && groceryItems) {
+            if (dispatchDiag) dispatchDiag.finalOutcome = 'specialist_admit';
+            return {
+              kind: 'capture',
+              intents: [{ type: 'list_add', items: groceryItems, listName: 'grocery' }],
+              source: 'deterministic_recovery',
+              reason: 'semantic_proposal:grocery_recovery',
+            };
+          }
+          if (domain === 'todo' && todoBody) {
+            if (dispatchDiag) dispatchDiag.finalOutcome = 'specialist_admit';
+            return {
+              kind: 'capture',
+              intents: [{ type: 'todo_add', body: todoBody }],
+              source: 'deterministic_recovery',
+              reason: 'semantic_proposal:todo_recovery',
+            };
+          }
+          if (domain === 'grocery' || domain === 'todo') {
+            return {
+              kind: 'needs_clarification',
+              reason: domain === 'grocery'
+                ? 'semantic_proposal:grocery_recovery_empty'
+                : 'semantic_proposal:todo_recovery_empty',
+            };
+          }
+          // Domain-unresolved-but-items-extracted (e.g. "we need bread, eggs,
+          // and bananas") is deliberately NOT intercepted here. Verified live:
+          // discourseContinuity.ts's noteNarrativeUtterance() already runs
+          // unconditionally earlier in this same turn (before routeIntent is
+          // even called) and independently establishes/refreshes the
+          // candidateSet from the identical extractNarrativeOperationalCandidates
+          // call. Returning an ambiguous_operational_list RouteDecision here
+          // too would additionally re-arm processUtterance.ts's own
+          // operational_list_ambiguity pending on every repeated occurrence
+          // (confirmed via regression: WCS B2/B4/C1 in
+          // conversationFoundationSmoothMvp.test.ts), corrupting later turns.
+          // Reconciling the two mechanisms is WCS candidate-continuity work,
+          // out of bounds tonight -- left as a follow-up, not silently patched.
+          // No bounded extraction possible, or domain-unresolved -- fall
+          // through unchanged to today's generic conversational fallback.
+        }
+      }
     }
   } else if (capabilityReadOn && eligibleDefaultFallthrough) {
     const capGen = await generateCapabilityProposal(text, getSemanticCtx);
