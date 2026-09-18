@@ -272,6 +272,85 @@ function maybeEstablishCalendarPresentation(
   holder.establish(ids);
 }
 
+/**
+ * Multi-Candidate V1 (Conversation Reliability). ConversationSession has
+ * exactly ONE authoritative pending slot (conversationSession.ts:132, Law
+ * 2) and this invariant is unchanged. When applyIntents produces more than
+ * one 'pending' result in the same turn (heterogeneous candidates -- e.g. a
+ * todo batch AND a grocery batch from one utterance), only the first can
+ * ever be armed as the live session pending, but the second must not be
+ * silently lost.
+ *
+ * The bounded fix: chain candidates through resume closures, not through a
+ * new session-level queue. The first candidate's resume is wrapped so that
+ * once it reaches a genuine terminal outcome (committed/failed/noop with a
+ * real ack -- never a mid-resolution re-ask), it returns a fresh
+ * {status:'pending', ...} for the NEXT candidate instead of its own
+ * terminal result. ConversationSession.resolvePending already has a
+ * built-in "domain resume advanced to a new pending stage" branch
+ * (conversationSession.ts:222-234 -- the same mechanism the correction
+ * ladder already uses) that transparently re-arms whatever pending is
+ * returned as the new, and only, live session.pending. No new field, no
+ * array, no queue primitive: there is only ever one live PendingSlot at any
+ * instant, unchanged; what changes is that resolving it can now produce a
+ * different one instead of terminating.
+ *
+ * Two paths are deliberately NOT chained through here, both pre-existing,
+ * unmodified ConversationSession mechanics documented and regression-tested
+ * as intentional V1 boundaries in naturalMultiCandidateV1.test.ts:
+ * - CANCEL_RE ("never mind"/"cancel"/"stop") is intercepted by
+ *   resolvePending BEFORE slot.resume() is ever called
+ *   (conversationSession.ts:175-178) -- saying it to candidate 1's prompt
+ *   ends the WHOLE sequence, including any queued candidate 2. This is an
+ *   accepted V1 boundary, not a silent loss: the user explicitly signaled
+ *   they want to stop, and immediately re-arming a second confirm would be
+ *   a worse trust outcome than honoring that.
+ * - Re-ask budget exhaustion (conversationSession.ts:207-211) is also
+ *   handled entirely inside resolvePending, without calling slot.resume()
+ *   again once exhausted -- same reasoning: if candidate 1's own confirm
+ *   couldn't be resolved after repeated unclear replies, silently pivoting
+ *   to ask about candidate 2 next is not an improvement.
+ */
+export function chainPendingCandidates(
+  pendings: Array<Extract<CommitResult, { status: 'pending' }>>,
+): Extract<CommitResult, { status: 'pending' }> {
+  const [first, ...rest] = pendings;
+  if (rest.length === 0) return first;
+  const wrappedResume = async (userText: string): Promise<CommitResult> => {
+    const result = await first.resume(userText);
+    // Mid-resolution (re-ask) or "didn't understand" -- candidate 1 is not
+    // yet settled. Defer to resolvePending's own re-ask/budget ladder;
+    // never advance to the next candidate early.
+    const stillResolvingFirst = result.status === 'pending' || (result.status === 'noop' && !result.ack);
+    if (stillResolvingFirst) return result;
+    const next = chainPendingCandidates(rest);
+    const settledAck =
+      result.status === 'committed' || result.status === 'noop' || result.status === 'failed'
+        ? result.ack
+        : '';
+    return {
+      status: 'pending',
+      prompt: settledAck ? `${settledAck} ${next.prompt}` : next.prompt,
+      pendingKey: next.pendingKey,
+      resume: next.resume,
+      kind: next.kind,
+      reaskPrompt: next.reaskPrompt,
+      releasePrompt: next.releasePrompt,
+      correctable: next.correctable,
+    };
+  };
+  return {
+    status: 'pending',
+    prompt: first.prompt,
+    pendingKey: first.pendingKey,
+    resume: wrappedResume,
+    kind: first.kind,
+    reaskPrompt: first.reaskPrompt,
+    releasePrompt: first.releasePrompt,
+    correctable: first.correctable,
+  };
+}
+
 /** The single commit loop: run intents through domain writers, arm the session
  *  if a writer returned pending. Returns the composed ACK and raw results.
  *  `source` is required — the RouteDecision's capture source for this whole
@@ -395,8 +474,16 @@ export async function applyIntents(
     results.push(added);
   }
   const responseText = composeAck(results);
-  const pending = results.find(r => r.status === 'pending');
-  if (pending && pending.status === 'pending') {
+  const pendings = results.filter(
+    (r): r is Extract<CommitResult, { status: 'pending' }> => r.status === 'pending',
+  );
+  if (pendings.length > 0) {
+    // Multi-Candidate V1: a single pending arms exactly as before (identical
+    // object, identical behavior). More than one heterogeneous pending is
+    // chained (see chainPendingCandidates above) so the second is preserved
+    // instead of silently dropped, while ConversationSession still only
+    // ever holds the one, single, authoritative pending slot Law 2 requires.
+    const pending = pendings.length === 1 ? pendings[0] : chainPendingCandidates(pendings);
     session.setPending({
       pendingKey: pending.pendingKey,
       resume: pending.resume,
