@@ -24,7 +24,7 @@ import {
   NOTE_CAPTURE_SIGNALS,
   LIST_ADD_SIGNALS,
   TODO_ADD_SIGNALS,
-  TODO_ADD_PREFIX,
+  hasObligationPrefixSentence,
   extractTodoAdd,
   extractResidualTodoAdd,
   boundCapturedTail,
@@ -1236,7 +1236,14 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
   }
 
   // Device: call — resolves contact on device, fires tel: intent
-  if (CALL_SIGNALS.some((p) => p.test(msg)) && !REMINDER_SIGNALS.some((p) => p.test(msg)) && !CALL_NUMBER_STATEMENT.test(msg) && !POSSESSIVE_CONTACT_STATEMENT.test(msg) && !TODO_ADD_PREFIX.test(msg) && !READ_QUERY_PREFIX.test(msg)) {
+  // Conversation Reliability V1: TODO_ADD_PREFIX itself is `^`-anchored and
+  // only ever protected the isolated, sentence-initial form of "I need to
+  // call X and do Y" from being stolen as a literal dial-now command. The
+  // identical obligation phrasing loses that protection the instant it is
+  // preceded by any narrative preamble (a real conversational shape, not an
+  // edge case) -- hasObligationPrefixSentence checks the same phrase set
+  // against every sentence in the utterance, not only its first word.
+  if (CALL_SIGNALS.some((p) => p.test(msg)) && !REMINDER_SIGNALS.some((p) => p.test(msg)) && !CALL_NUMBER_STATEMENT.test(msg) && !POSSESSIVE_CONTACT_STATEMENT.test(msg) && !hasObligationPrefixSentence(msg) && !READ_QUERY_PREFIX.test(msg)) {
     const CALL_EXCLUDE = /^(me|you|back|again|later|now|soon|ahead|us|them|it|that|this|these|those|done|help|ambulance|backup|someone|anyone|911|emergency)$/i;
     // Name token: letters + optional hyphen/apostrophe (O'Brien, Anne-Marie).
     const NAME = String.raw`(?:Dr\.?\s+|Mr\.?\s+|Mrs\.?\s+|Ms\.?\s+)?[A-Za-z][A-Za-z'-]*(?:\s+[A-Za-z][A-Za-z'-]*)?`;

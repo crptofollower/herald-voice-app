@@ -45,6 +45,26 @@ export const TODO_ADD_SIGNALS = [
 export const TODO_ADD_PREFIX =
   /^(I need to|I have to|I gotta|I've got to|don't let me forget|I should|I must)\s+/i;
 
+/** Sentence boundary for obligation-prefix detection only -- periods DO end a
+ *  sentence here, unlike RESIDUAL_CLAUSE_SPLIT_RE, which deliberately keeps
+ *  "Dr. Smith" and comma-joined bodies intact for a different job (bounding
+ *  a captured tail, not finding where a new sentence starts). */
+const OBLIGATION_SENTENCE_SPLIT_RE = /[.!?]+\s+/;
+
+/**
+ * Natural-speech guard, Conversation Reliability V1: true when a first-person
+ * obligation prefix (TODO_ADD_PREFIX's own phrase set -- no new vocabulary)
+ * opens ANY sentence in the utterance, not only the utterance's first word.
+ * A narrative preamble ("I went to a trade show... I need to call my
+ * accountant and tell her to file my taxes") must not defeat a guard whose
+ * whole purpose is recognizing this phrasing as an obligation statement
+ * rather than a direct command -- TODO_ADD_PREFIX's own `^` anchor only ever
+ * protected the isolated, sentence-initial form of the identical phrase.
+ */
+export function hasObligationPrefixSentence(msg: string): boolean {
+  return msg.split(OBLIGATION_SENTENCE_SPLIT_RE).some((s) => TODO_ADD_PREFIX.test(s.trim()));
+}
+
 /** Remainder after a TODO prefix is already an existing named-list add. */
 function namedListAddOwnsRemainder(body: string): boolean {
   const t = body.trim();
