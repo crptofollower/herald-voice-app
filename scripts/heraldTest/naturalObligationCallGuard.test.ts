@@ -240,6 +240,116 @@ export async function runNaturalObligationCallGuardTests() {
     );
   }
 
+  console.log(`\n${BOLD}-- (12) CTO product decision: temporal context alone must not cost TODO ownership --${RESET}`);
+  {
+    freshDb();
+    const d1 = await classifyQuery("I need to call my accountant today and tell her to file my taxes.");
+    assert('today: captured as todo_add, not lost to needs_clarification',
+      d1.tier === 1 && d1.actionIntent?.type === 'todo_add' ? (d1.actionIntent as any).body : null,
+      'call my accountant today and tell her to file my taxes.');
+
+    freshDb();
+    const d2 = await classifyQuery("I need to call my accountant tomorrow and tell her to file my taxes.");
+    assert('tomorrow: captured as todo_add',
+      d2.tier === 1 && d2.actionIntent?.type === 'todo_add' ? (d2.actionIntent as any).body : null,
+      'call my accountant tomorrow and tell her to file my taxes.');
+
+    freshDb();
+    const d3 = await classifyQuery("I need to call my accountant on Friday and tell her to file my taxes.");
+    assert('concrete day (Friday): captured as todo_add',
+      d3.tier === 1 && d3.actionIntent?.type === 'todo_add' ? (d3.actionIntent as any).body : null,
+      'call my accountant on Friday and tell her to file my taxes.');
+
+    freshDb();
+    const d4 = await classifyQuery("I need to submit my tax forms today.");
+    assert('plain single-clause temporal obligation, no narrative: still captured as todo_add',
+      d4.tier === 1 && d4.actionIntent?.type === 'todo_add' ? (d4.actionIntent as any).body : null,
+      'submit my tax forms today.');
+
+    freshDb();
+    const d5 = await classifyQuery("I already submitted my tax forms today.");
+    assertTrue('completed/past temporal obligation is NOT captured as a new todo_add',
+      !(d5.tier === 1 && d5.actionIntent?.type === 'todo_add'));
+
+    freshDb();
+    const d6 = await classifyQuery("Paul needs to submit his tax forms today.");
+    assertTrue('third-person temporal obligation is NOT captured as Mike\'s todo_add',
+      !(d6.tier === 1 && d6.actionIntent?.type === 'todo_add'));
+
+    freshDb();
+    const d7 = await classifyQuery("If I need to submit my tax forms today, I will do it after lunch.");
+    assertTrue('hypothetical/conditional temporal obligation is NOT captured as todo_add',
+      !(d7.tier === 1 && d7.actionIntent?.type === 'todo_add'));
+
+    freshDb();
+    const d8 = await classifyQuery("Remind me to call my accountant today.");
+    assertTrue('explicit "remind me" framing (day-only, no clock time -- parseReminderIntent correctly declines) is never reinterpreted as todo_add',
+      !(d8.tier === 1 && d8.actionIntent?.type === 'todo_add'));
+
+    freshDb();
+    const d8b = await classifyQuery("Remind me to call my accountant at 3pm today.");
+    assert('explicit reminder request with a full time keeps its own reminder ownership',
+      d8b.tier === 1 && d8b.actionIntent?.type === 'reminder' ? (d8b.actionIntent as any).time : null,
+      '15:00');
+
+    freshDb();
+    const d9 = await classifyQuery("Call David.");
+    assert('legitimate immediate CALL (no date word) is unaffected by the temporal relaxation',
+      d9.tier === 1 && d9.actionIntent?.type === 'call' ? (d9.actionIntent as any).contact : null,
+      'David');
+
+    // Full narrative + temporal obligation, WITHOUT a second embedded
+    // ambiguous acquisition clause: proves the temporal relaxation works
+    // end to end in genuine multi-sentence narrative, not only isolated
+    // single-clause utterances.
+    freshDb();
+    const singleClauseNarrative = "Hey Herald, I went to a trade show. You worked really great. Oh shoot, I forgot. I need to call my accountant today and tell her to file my taxes. Anyway, David had a great idea.";
+    const decisionSingle = await routeIntent(singleClauseNarrative, {
+      classifyQuery,
+      classifyLLM: null,
+      llmReady: false,
+      captureContext: { contacts: [], lists: [] },
+    });
+    assertTrue(
+      'full multi-sentence narrative + temporal obligation (no second embedded clause) reaches a real todo_add capture end to end',
+      decisionSingle.kind === 'capture' && decisionSingle.intents.some((i: any) => i.type === 'todo_add' && /call my accountant/.test(i.body)),
+    );
+    console.log(`${DIM}       (informational) decisionSingle.kind=${decisionSingle.kind}${RESET}`);
+
+    // The CTO's LITERAL full example additionally contains a second,
+    // separate embedded acquisition ("I also need to pick up some wine") --
+    // isUnmarkedAcquisitionShape (pre-existing, unrelated to temporal
+    // context) correctly treats the whole utterance as ambiguous when ANY
+    // unmarked acquisition is present, so this specific two-clause example
+    // still does not reach a deterministic capture. This is the same
+    // single-candidate-per-turn architecture boundary flagged in the first
+    // Conversation Reliability V1 report tonight, not a defect in the
+    // temporal fix -- documented here, not silently "fixed" by picking a
+    // different capability this turn.
+    freshDb();
+    const text = "Hey Herald, I went to a trade show. You worked really great. Oh shoot, I forgot. I need to call my accountant today and tell her to file my taxes. Anyway, while I was at the show, I was talking to David and he had this really great suggestion. Oh darn it, I also need to pick up some wine because I'm meeting Paul and Dina tonight for dinner at six o'clock.";
+    const decision = await routeIntent(text, {
+      classifyQuery,
+      classifyLLM: null,
+      llmReady: false,
+      captureContext: { contacts: [], lists: [] },
+    });
+    assertTrue(
+      'CTO\'s literal two-clause example is not a call action and not a crash -- known separate multi-clause limitation documented, not silently hidden',
+      !((decision as any).actionIntent?.type === 'call'),
+    );
+    console.log(`${DIM}       (informational) decision.kind=${decision.kind} (expected: not 'capture' -- wine clause ambiguity, documented limitation)${RESET}`);
+  }
+
+  console.log(`\n${BOLD}-- (13) source-lock: TODO_DATE_SIGNALS no longer vetoes todo_add ownership --${RESET}`);
+  {
+    const src = fs.readFileSync(tierRouterPath, 'utf8');
+    assertTrue(
+      'TODO_DATE_SIGNALS definition/usage is removed (a historical comment mentioning the old name is fine)',
+      !/const TODO_DATE_SIGNALS/.test(src) && !/!TODO_DATE_SIGNALS\.test/.test(src),
+    );
+  }
+
   const total = passed + failures.length;
   console.log(
     `\n${BOLD}NaturalObligationCallGuard: ${passed}/${total} passed` +

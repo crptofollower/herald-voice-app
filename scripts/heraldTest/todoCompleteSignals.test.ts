@@ -175,10 +175,20 @@ export async function runTodoCompleteSignalsTests() {
       'work out and start dinner');
   }
   {
+    // CTO product decision, Conversation Reliability V1 (temporal
+    // obligation, 2026-09-18): a date/time word alone must no longer cost
+    // a prospective personal obligation its deterministic todo_add
+    // ownership -- superseding the prior "dated contract" this test
+    // encoded. See tierRouter.ts's todo_add branch comment.
     freshDB();
     const d = await classifyQuery('I need to work out today');
-    assert('"I need to work out today" is not todo_add (dated contract)',
-      actionType(d), (v) => v !== 'todo_add', 'not todo_add');
+    assert('"I need to work out today" is captured as todo_add (temporal context no longer vetoes ownership)',
+      { type: actionType(d), body: (d.actionIntent as { body?: string } | undefined)?.body },
+      (v) => {
+        const x = v as { type?: string; body?: string };
+        return x.type === 'todo_add' && x.body === 'work out today';
+      },
+      'todo_add, body "work out today"');
   }
   {
     freshDB();

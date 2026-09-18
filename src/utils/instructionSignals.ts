@@ -107,6 +107,21 @@ export function boundMutationObject(text: string): string {
 const TODO_ADD_DISCOURSE_OPENER =
   /^(?:hey|okay|ok|yeah|so|um|uh|please|alright|like)[,:]?\s+/i;
 
+/**
+ * Grammatical function words (subordinating/coordinating conjunctions,
+ * common discourse fillers) that are never a plausible vocative address.
+ * extractTodoAdd's vocative fallback exists for genuine address ("Herald,
+ * I need to...") but its bare `[A-Za-z]{2,16}` name-token match cannot tell
+ * "Herald" from "If" on shape alone. Confirmed during Conversation
+ * Reliability V1 testing: without this exclusion, "If I need to call my
+ * accountant today, I will do it after lunch." is misread as addressing
+ * someone named "If", fabricating a task from a hypothetical. Mirrors the
+ * existing, separate exclusion list in stripTodoInstructionWrappers below
+ * (same shape of problem, same style of fix, not a new pattern).
+ */
+const VOCATIVE_NON_NAME_EXCLUDE =
+  /^(?:if|so|but|when|while|since|because|although|unless|though|whether|once|until|after|before)$/i;
+
 export type TodoAddExtraction =
   | { kind: 'add'; body: string }
   | { kind: 'clarify' };
@@ -134,7 +149,10 @@ export function extractTodoAdd(msg: string): TodoAddExtraction | null {
     return { kind: 'add', body };
   }
   const vocative = rest.match(/^(?!I\b)([A-Za-z]{2,16})[,:]?\s+(.+)$/s);
-  if (vocative) {
+  if (
+    vocative
+    && !VOCATIVE_NON_NAME_EXCLUDE.test(vocative[1])
+  ) {
     const afterName = vocative[2].trim();
     const namedPrefix = afterName.match(TODO_ADD_PREFIX);
     if (namedPrefix) {
@@ -190,25 +208,43 @@ export function extractResidualTodoAdd(msg: string): TodoAddExtraction | null {
  * cannot silently promote narrative into a task; it can only find a sentence
  * that was already, on its own, a complete valid to-do statement.
  */
+/**
+ * A genuine question ("What do you think I should focus on today?") is not
+ * an obligation statement even though it can contain a TODO_ADD_SIGNALS
+ * word ("I should") as a substring. extractTodoAdd's own 'clarify' verdict
+ * only means "TODO_ADD_SIGNALS matched somewhere, no clean body extracted"
+ * -- for a question that is meaningless, and used to be masked by
+ * TODO_DATE_SIGNALS rejecting most such utterances (they often mention
+ * "today"/"weekend") before extraction ever ran. Confirmed as a real
+ * regression during Conversation Reliability V1 temporal-obligation
+ * testing (CF-43). A trailing "?" is the general, non-phrase-specific
+ * signal used to withhold that verdict -- declarative compound instructions
+ * ("Remove that -- yeah, but I need to work out and start dinner.") are
+ * unaffected and keep the existing clarify prompt.
+ */
+const QUESTION_TAIL_RE = /\?\s*$/;
+
 export function extractNarrativeTodoAdd(msg: string): TodoAddExtraction | null {
   const direct = extractTodoAdd(msg);
   if (direct?.kind === 'add') return direct;
   const sentences = msg.split(OBLIGATION_SENTENCE_SPLIT_RE).map((s) => s.trim()).filter(Boolean);
-  if (sentences.length <= 1) return direct;
-  for (const sentence of sentences) {
-    let rest = sentence;
-    for (let i = 0; i < 3; i++) {
-      const opener = rest.match(TODO_ADD_DISCOURSE_OPENER);
-      if (!opener) break;
-      rest = rest.slice(opener[0].length);
+  if (sentences.length > 1) {
+    for (const sentence of sentences) {
+      let rest = sentence;
+      for (let i = 0; i < 3; i++) {
+        const opener = rest.match(TODO_ADD_DISCOURSE_OPENER);
+        if (!opener) break;
+        rest = rest.slice(opener[0].length);
+      }
+      const prefixAtStart = rest.match(TODO_ADD_PREFIX);
+      if (!prefixAtStart) continue;
+      const body = boundCapturedTail(rest.slice(prefixAtStart[0].length));
+      if (body.length <= 2) continue;
+      if (namedListAddOwnsRemainder(body)) continue;
+      return { kind: 'add', body };
     }
-    const prefixAtStart = rest.match(TODO_ADD_PREFIX);
-    if (!prefixAtStart) continue;
-    const body = boundCapturedTail(rest.slice(prefixAtStart[0].length));
-    if (body.length <= 2) continue;
-    if (namedListAddOwnsRemainder(body)) continue;
-    return { kind: 'add', body };
   }
+  if (direct?.kind === 'clarify' && QUESTION_TAIL_RE.test(msg.trim())) return null;
   return direct;
 }
 

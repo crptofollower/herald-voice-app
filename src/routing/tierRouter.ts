@@ -718,9 +718,6 @@ const LIST_READ_SIGNALS = [
   /\bdo i have a (grocery |shopping |to.?do )?\blist\b/i,
 ];
 
-// Dates that route to reminder/calendar instead of todo
-const TODO_DATE_SIGNALS = /\b(today|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|this week|at \d|by \d|\d+am|\d+pm|tonight|morning|afternoon|evening)\b/i;
-
 // ── Acquisition-shape disambiguation (todo vs grocery) ──────────────────────
 // "I need to pick up X" is ambiguous between an errand (todo) and a grocery item;
 // syntax ALONE cannot separate "pick up rib eyes" from "pick up my dry cleaning".
@@ -1362,16 +1359,36 @@ export async function classifyQuery(message: string): Promise<TierDecision> {
     return { tier: 3, reason: 'ambiguous_operational_list' };
   }
 
-  // Device: todo add — trigger phrases WITHOUT a resolvable date (date = reminder, not todo).
+  // Device: todo add — trigger phrases for a prospective personal obligation.
   // extractTodoAdd refuses when the remainder is already an explicit named-list
   // add (LIST_ADD_SIGNALS); those turns fall through to list_add below.
   // Unmarked get/buy/grab/pick-up is not todo ownership: person-marking
   // ("I need to") must not decide grocery vs todo. 2+ NP unmarked already
   // returned ambiguous_operational_list above; single-object unmarked falls
   // through so interpretation/confirm can run instead of a silent todo write.
+  //
+  // CTO product decision, Conversation Reliability V1 (temporal obligation):
+  // a date/time word ("today", "tomorrow", ...) must NOT by itself cost a
+  // prospective personal obligation its deterministic TODO ownership --
+  // previously TODO_DATE_SIGNALS vetoed this whole branch on any date word,
+  // reasoning "date = reminder, not todo", but there is no reminder fallback
+  // for an utterance without an explicit "remind me"-shaped trigger, so a
+  // trustworthy obligation like "I need to call my accountant today and
+  // tell her to file my taxes" fell through to generic conversation with no
+  // deterministic home at all. TODO_ADD_PREFIX's own first-person,
+  // prospective-only vocabulary (never past tense, never third person) plus
+  // extractNarrativeTodoAdd's sentence-scoped, no-vocative-fallback
+  // extraction already exclude completed/past, hypothetical, quoted/
+  // reported, and third-person obligations -- confirmed via regression.
+  // An explicit reminder trigger ("remind me to...") never reaches this
+  // branch in the first place: REMINDER_SIGNALS and TODO_ADD_SIGNALS match
+  // disjoint trigger phrasing, so that ownership is untouched.
+  // The date word itself is preserved verbatim inside the captured body
+  // text -- todo storage has no separate temporal-metadata column (see
+  // list_items schema, schema.ts), so temporal context is carried as plain
+  // language in the same body field, never fabricated as structured data.
   if (
     TODO_ADD_SIGNALS.some((p) => p.test(msg))
-    && !TODO_DATE_SIGNALS.test(msg)
     && !detectMedicalEvent(msg)
     && !isUnmarkedAcquisitionShape(msg)
   ) {
@@ -2177,11 +2194,12 @@ export async function scanResidualIntent(
     }
   }
 
-  // Todo add — only if primary wasn't todo_add
+  // Todo add — only if primary wasn't todo_add. Same temporal-obligation
+  // relaxation as the primary branch above -- a date word alone must not
+  // veto a residual/compound todo either.
   if (primaryType !== 'todo_add') {
     if (
       TODO_ADD_SIGNALS.some((p) => p.test(msg)) &&
-      !TODO_DATE_SIGNALS.test(msg) &&
       !detectMedicalEvent(msg)
     ) {
       const extracted = extractResidualTodoAdd(msg);
