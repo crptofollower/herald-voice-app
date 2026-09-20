@@ -146,6 +146,21 @@ export interface DomainWriter {
 export type CaptureContext = { contacts: string[]; lists: string[]; name?: string };
 export type DeterministicCapturer = (text: string, ctx: CaptureContext) => IntentRecord[];
 
+/** Unique live preference answer only. Does not invent, guess, or outrank identity reads. */
+function tryHoldContinuityPreferenceRead(
+  text: string,
+  peek?: () => InterpretationHoldSlot | null,
+): Extract<RouteDecision, { kind: 'device_read'; reason: string }> | null {
+  const response = answerHoldContinuityQa(text, peek?.() ?? null);
+  if (!response) return null;
+  return {
+    kind: 'device_read',
+    tier: 1,
+    response,
+    reason: 'hold_continuity:preference',
+  };
+}
+
 // Deterministic capture floor (tier-2). First non-empty result wins — capturers are
 // NEVER merged (merging is the parallel-island bug). The on-device LLM (tier-3) is
 // reached only when every capturer here returns []. One entry today; phone/list/todo
@@ -2281,6 +2296,14 @@ export async function routeIntent(
   }
 
   if (decision.tier === 1 && typeof decision.tier1Response === 'string') {
+    // Bounded semantic override: family:read matches "what's my <relation>…"
+    // including preference questions. A unique Hold Continuity preference
+    // answer owns those; identity questions still miss the reader and keep
+    // durable family:read. Other tier-1 reads are unchanged.
+    if (decision.reason === 'family:read') {
+      const continuity = tryHoldContinuityPreferenceRead(text, deps.peekInterpretationHold);
+      if (continuity) return continuity;
+    }
     return {
       kind: 'device_read',
       tier: 1,
@@ -2372,18 +2395,9 @@ export async function routeIntent(
   // Hold Continuity Q&A V1: after authoritative tier-1/2 reads, before the
   // deterministic capture floor can arm a new pending from this utterance.
   // Live pending is owned upstream in processUtterance and never reaches here.
-  const holdContinuityResponse = answerHoldContinuityQa(
-    text,
-    deps.peekInterpretationHold?.() ?? null,
-  );
-  if (holdContinuityResponse) {
-    return {
-      kind: 'device_read',
-      tier: 1,
-      response: holdContinuityResponse,
-      reason: 'hold_continuity:preference',
-    };
-  }
+  // family:read preference questions are already considered above.
+  const holdContinuity = tryHoldContinuityPreferenceRead(text, deps.peekInterpretationHold);
+  if (holdContinuity) return holdContinuity;
 
   // Tier-2 deterministic capture floor (spec §2.3 step 3). Reached only at tier 3
   // (tier-1/tier-2 already returned above), so the invariant holds: no LLM capture

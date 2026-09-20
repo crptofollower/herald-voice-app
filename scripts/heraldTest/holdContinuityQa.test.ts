@@ -12,6 +12,7 @@ import {
   answerHoldContinuityQa,
 } from '../../src/routing/holdContinuityQa.ts';
 import { inspectHolds, formatHoldRecall } from '../../src/routing/holdRecall.ts';
+import { classifyQuery } from '../../src/routing/tierRouter.ts';
 import type { AdmittedMultiFactCandidate } from '../../src/routing/naturalMultiFactInterpretation.ts';
 import type { CommitResult } from '../../src/routing/routeIntent.ts';
 
@@ -31,6 +32,11 @@ const UNRELATED =
 
 const WIFE_Q = 'What flowers does my wife like?';
 const SON_Q = 'What food does my son like?';
+const HUSBAND_JAZZ =
+  "My husband's favorite music is jazz. On the way home I'm going to pick up tickets.";
+const HUSBAND_FAVORITE_Q = "What's my husband's favorite music?";
+const WIFE_FAVORITE_Q = "What's my wife's favorite flower?";
+const WIFE_NAME_Q = "What's my wife's name?";
 const DURABLE_RE = /\b(remember(?:ed)?|saved|stored|i remember|i have stored|your profile says)\b/i;
 
 function medCounts(db: { prepare: (s: string) => { all: () => unknown[] } }) {
@@ -311,6 +317,155 @@ export async function runHoldContinuityQaV1Tests() {
       !(outcome.handled && outcome.source === 'hold_continuity'),
       (v) => v === true,
       'not hold_continuity',
+    );
+  }
+
+  {
+    const classified = await classifyQuery(HUSBAND_FAVORITE_Q);
+    assert(
+      'favorite-music still classifies as over-broad family:read',
+      classified.tier === 1 && classified.reason === 'family:read',
+      (v) => v === true,
+      'family:read',
+    );
+    const { db, session, deps } = openJourneyDb();
+    const discourse = new DiscourseContinuityHolder();
+    await processUtterance(normalizeInput(HUSBAND_JAZZ), session, deps, null, null, null, null, null, discourse);
+    const before = medCounts(db as never);
+    const refreshedBefore = discourse.peekInterpretationHold()?.refreshedAtTurn;
+    const outcome = await processUtterance(normalizeInput(HUSBAND_FAVORITE_Q), session, deps, null, null, null, null, null, discourse);
+    const after = medCounts(db as never);
+    const spoken = outcome.handled ? outcome.responseText : '';
+    assert('husband favorite is hold_continuity', outcome.handled && outcome.source === 'hold_continuity', (v) => v === true, 'hold_continuity');
+    assert('husband favorite answers jazz', /jazz/i.test(spoken), (v) => v === true, 'jazz');
+    assert('husband favorite is not durable miss', !/don'?t have your husband/i.test(spoken), (v) => v === true, 'not family miss');
+    assert('husband favorite commits empty', outcome.handled && outcome.commits.length === 0, (v) => v === true, '[]');
+    assert('husband favorite no pending', session.hasPending() === false, (v) => v === true, 'no pending');
+    assert('husband favorite zero sqlite', JSON.stringify(before) === JSON.stringify(after), (v) => v === true, 'unchanged');
+    assert(
+      'husband favorite does not refresh TTL',
+      refreshedBefore != null && discourse.peekInterpretationHold()?.refreshedAtTurn === refreshedBefore,
+      (v) => v === true,
+      'same refreshedAtTurn',
+    );
+  }
+
+  {
+    const { session, deps } = openJourneyDb();
+    const discourse = new DiscourseContinuityHolder();
+    await processUtterance(normalizeInput(GARDENIA_F1), session, deps, null, null, null, null, null, discourse);
+    const outcome = await processUtterance(normalizeInput(WIFE_FAVORITE_Q), session, deps, null, null, null, null, null, discourse);
+    assert(
+      'wife favorite flower is hold_continuity gardenias',
+      outcome.handled && outcome.source === 'hold_continuity' && /gardenias/i.test(outcome.responseText),
+      (v) => v === true,
+      'hold_continuity gardenias',
+    );
+  }
+
+  {
+    const cases: Array<{ subject: string; value: string; question: string }> = [
+      { subject: 'daughter', value: 'purple', question: "What's my daughter's favorite color?" },
+      { subject: 'mother', value: 'lasagna', question: "What's my mother's favorite food?" },
+      { subject: 'father', value: 'baseball', question: "What's my father's favorite sport?" },
+      { subject: 'sister', value: 'casablanca', question: "What's my sister's favorite movie?" },
+    ];
+    for (const c of cases) {
+      const { session, deps } = openJourneyDb();
+      const discourse = new DiscourseContinuityHolder();
+      discourse.beginUserTurn();
+      discourse.establishInterpretationHold('ep-rel', [
+        hold({ kind: 'preference', subject: c.subject, value: c.value, episodeId: 'ep-rel' }),
+        hold({ kind: 'event', value: 'companion hold', episodeId: 'ep-rel' }),
+      ]);
+      const outcome = await processUtterance(normalizeInput(c.question), session, deps, null, null, null, null, null, discourse);
+      assert(
+        `${c.subject} favorite is hold_continuity ${c.value}`,
+        outcome.handled && outcome.source === 'hold_continuity' && new RegExp(c.value, 'i').test(outcome.responseText),
+        (v) => v === true,
+        `hold_continuity ${c.value}`,
+      );
+    }
+  }
+
+  {
+    const { session, deps } = openJourneyDb();
+    const discourse = new DiscourseContinuityHolder();
+    writeContactRaw({ name: 'Shannon', relationship: 'wife', importance: 8 });
+    await processUtterance(normalizeInput(GARDENIA_F1), session, deps, null, null, null, null, null, discourse);
+    const outcome = await processUtterance(normalizeInput(WIFE_NAME_Q), session, deps, null, null, null, null, null, discourse);
+    const familyRead =
+      !outcome.handled
+      && outcome.routeDecision.kind === 'device_read'
+      && outcome.routeDecision.reason === 'family:read'
+      && /Shannon/i.test(outcome.routeDecision.response);
+    assert("what's my wife's name remains family:read", familyRead, (v) => v === true, 'family:read Shannon');
+  }
+
+  {
+    const { session, deps } = openJourneyDb();
+    const discourse = new DiscourseContinuityHolder();
+    const outcome = await processUtterance(normalizeInput(HUSBAND_FAVORITE_Q), session, deps, null, null, null, null, null, discourse);
+    assert(
+      'favorite question without hold does not fabricate hold_continuity',
+      !(outcome.handled && outcome.source === 'hold_continuity'),
+      (v) => v === true,
+      'not hold_continuity',
+    );
+  }
+
+  {
+    const discourse = new DiscourseContinuityHolder();
+    discourse.beginUserTurn();
+    discourse.establishInterpretationHold('ep-conflict-fav', [
+      hold({ kind: 'preference', subject: 'husband', value: 'jazz' }),
+      hold({ kind: 'preference', subject: 'husband', value: 'blues' }),
+    ]);
+    const { session, deps } = openJourneyDb();
+    const outcome = await processUtterance(normalizeInput(HUSBAND_FAVORITE_Q), session, deps, null, null, null, null, null, discourse);
+    assert(
+      'ambiguous favorite does not guess',
+      !(outcome.handled && outcome.source === 'hold_continuity'),
+      (v) => v === true,
+      'not hold_continuity',
+    );
+  }
+
+  {
+    const { session, deps } = openJourneyDb();
+    const discourse = new DiscourseContinuityHolder();
+    await processUtterance(normalizeInput(HUSBAND_JAZZ), session, deps, null, null, null, null, null, discourse);
+    for (let i = 0; i < DISCOURSE_TURN_TTL + 1; i++) discourse.beginUserTurn();
+    const outcome = await processUtterance(normalizeInput(HUSBAND_FAVORITE_Q), session, deps, null, null, null, null, null, discourse);
+    assert(
+      'expired favorite hold cannot answer',
+      !(outcome.handled && outcome.source === 'hold_continuity'),
+      (v) => v === true,
+      'fall through',
+    );
+  }
+
+  {
+    const { session, deps } = openJourneyDb();
+    const discourse = new DiscourseContinuityHolder();
+    await processUtterance(normalizeInput(HUSBAND_JAZZ), session, deps, null, null, null, null, null, discourse);
+    session.setPending({
+      pendingKey: 'medical_visit',
+      kind: 'standard',
+      budget: 2,
+      resume: async (): Promise<CommitResult> => ({
+        status: 'pending',
+        prompt: 'Want me to remember you saw Dr. Cather?',
+        pendingKey: 'medical_visit',
+        resume: async () => ({ status: 'noop', ack: '' }),
+      }),
+    });
+    const outcome = await processUtterance(normalizeInput(HUSBAND_FAVORITE_Q), session, deps, null, null, null, null, null, discourse);
+    assert(
+      'pending retains authority over favorite question',
+      outcome.handled && outcome.source === 'pending_resume',
+      (v) => v === true,
+      'pending_resume',
     );
   }
 
