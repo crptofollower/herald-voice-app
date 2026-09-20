@@ -17,6 +17,7 @@ const PACK_IDS = [
   'sequential_confirm_grocery_recovery',
   'call_unknown_contact_pending_no_launch',
   'unresolved_list_referent_zero_write',
+  'same_utterance_list_add_self_repair',
   'operational_list_clarify_resume_grocery',
 ] as const;
 
@@ -42,7 +43,7 @@ export async function runAndroidJourneyIsolationV1Tests() {
   };
   const ids = pack.scenarios.map((s) => s.id);
   assert('pack schema is herald.android.journey.v1', pack.schema, (v) => v === 'herald.android.journey.v1', 'herald.android.journey.v1');
-  assert('pack has exactly nine scenarios', pack.scenarios.length, (v) => v === 9, '9');
+  assert('pack has exactly ten scenarios', pack.scenarios.length, (v) => v === 10, '10');
   assert(
     'pack ids are the authorized V1 set',
     ids,

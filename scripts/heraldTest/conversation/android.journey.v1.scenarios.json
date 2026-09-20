@@ -327,6 +327,34 @@
       ]
     },
     {
+      "id": "same_utterance_list_add_self_repair",
+      "title": "Same-utterance grocery add supersedes milk with oat milk; ambiguous repair writes nothing",
+      "claimed_path": "list_add oat milk (not milk) -> unresolved_list_add_supersession zero write",
+      "turns": [
+        {
+          "input": "add milk to my grocery list actually make that oat milk",
+          "pending_key_after": null,
+          "route_source": "capture",
+          "commit_statuses": ["committed"],
+          "capability": "list_add",
+          "zero_delta": false,
+          "lists_added": ["grocery"],
+          "items_added": [{ "list_name": "grocery", "body": "oat milk" }],
+          "open_grocery": ["oat milk"],
+          "response_excludes": ["Added milk to your grocery list."]
+        },
+        {
+          "input": "add milk and bread to my grocery list actually oat milk",
+          "pending_key_after": null,
+          "route_source": "device_read",
+          "route_kind": "device_read",
+          "commit_statuses": [],
+          "zero_delta": true,
+          "open_grocery": ["oat milk"]
+        }
+      ]
+    },
+    {
       "id": "operational_list_clarify_resume_grocery",
       "title": "Unmarked grab list asks grocery-vs-todo, then grocery answer writes",
       "claimed_path": "clarify:operational_list pending -> pending_resume list_add commit",

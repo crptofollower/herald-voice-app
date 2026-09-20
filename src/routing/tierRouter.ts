@@ -50,6 +50,10 @@ import {
   unresolvedListReferentPrompt,
   UNRESOLVED_LIST_REFERENT_REASON,
 } from "./operationalListContinuity";
+import {
+  interpretSameUtteranceListAddSupersession,
+  UNRESOLVED_LIST_ADD_SUPERSESSION_REASON,
+} from "./sameUtteranceListAddRepair";
 import { utteranceHasThirdPartyFiniteAction } from "./directAddress";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -902,6 +906,30 @@ function listAddDecision(
   };
 }
 
+/** Resolve same-utterance supersession, then the existing listAddDecision/RWI path. */
+function listAddDecisionFromUtterance(
+  items: string[],
+  listName: string,
+  reason: string,
+  captureRaw: string,
+  remainder: string,
+): TierDecision | null {
+  const supersession = interpretSameUtteranceListAddSupersession({
+    captureRaw,
+    remainder,
+    provisionalItems: items,
+  });
+  if (supersession.kind === 'unresolved') {
+    return {
+      tier: 1,
+      reason: UNRESOLVED_LIST_ADD_SUPERSESSION_REASON,
+      tier1Response: unresolvedListReferentPrompt(listName),
+    };
+  }
+  const finalItems = supersession.kind === 'resolved' ? supersession.items : items;
+  return listAddDecision(finalItems, listName, reason);
+}
+
 const PROFILE_UPDATE_SIGNALS = [
   /\b(change|update|my\s+new)\s+(my\s+)?(insurance|doctor|pharmacy|dentist|specialist|provider)\s+(is\s+|to\s+)(.+)/i,
   /\bI\s+(changed|switched|updated)\s+my\s+(insurance|doctor|pharmacy|dentist)\s+(to\s+)?(.+)/i,
@@ -1400,7 +1428,13 @@ async function classifyQueryCore(message: string): Promise<TierDecision> {
       .split(/\s*,\s*|\s+and\s+/i)
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
-    const acquisition = listAddDecision(items, 'grocery', 'action:list_add:acquisition_grocery');
+    const acquisition = listAddDecisionFromUtterance(
+      items,
+      'grocery',
+      'action:list_add:acquisition_grocery',
+      raw,
+      '',
+    );
     if (acquisition) return acquisition;
   }
 
@@ -1469,7 +1503,8 @@ async function classifyQueryCore(message: string): Promise<TierDecision> {
         .split(/\s*,\s*|\s+and\s+/i)
         .map(s => s.trim())
         .filter(s => s.length > 0);
-      const added = listAddDecision(items, listName, 'action:list_add');
+      const remainder = msg.slice((addMatch.index ?? 0) + addMatch[0].length);
+      const added = listAddDecisionFromUtterance(items, listName, 'action:list_add', raw, remainder);
       if (added) return added;
     }
   }
@@ -1562,7 +1597,13 @@ async function classifyQueryCore(message: string): Promise<TierDecision> {
         .split(/\s*,\s*|\s+and\s+/i)
         .map((s) => s.trim())
         .filter((s) => s.length > 0);
-      const bare = listAddDecision(items, 'grocery', 'action:list_add:bare_need');
+      const bare = listAddDecisionFromUtterance(
+        items,
+        'grocery',
+        'action:list_add:bare_need',
+        needTail,
+        '',
+      );
       if (bare) return bare;
     }
   }
@@ -1571,7 +1612,13 @@ async function classifyQueryCore(message: string): Promise<TierDecision> {
   {
     const item = extractContextualGroceryItem(msg);
     if (item) {
-      const contextual = listAddDecision([item], 'grocery', 'action:list_add:contextual');
+      const contextual = listAddDecisionFromUtterance(
+        [item],
+        'grocery',
+        'action:list_add:contextual',
+        item,
+        '',
+      );
       if (contextual) return contextual;
     }
   }
@@ -2244,7 +2291,13 @@ export async function scanResidualIntent(
   if (primaryType !== 'list_add') {
     const item = extractResidualContextualGroceryItem(msg);
     if (item) {
-      const residual = listAddDecision([item], 'grocery', 'residual:list_add:contextual');
+      const residual = listAddDecisionFromUtterance(
+        [item],
+        'grocery',
+        'residual:list_add:contextual',
+        item,
+        '',
+      );
       if (residual) return residual;
     }
   }
@@ -2310,7 +2363,13 @@ export async function scanResidualIntent(
       if (utteranceHasThirdPartyFiniteAction(sentence)) continue;
       const items = extractNarrativeOperationalCandidates(sentence);
       if (items) {
-        const residual = listAddDecision(items, 'grocery', 'residual:list_add:sentence');
+        const residual = listAddDecisionFromUtterance(
+          items,
+          'grocery',
+          'residual:list_add:sentence',
+          items.join(' and '),
+          '',
+        );
         if (residual) return residual;
       }
     }
