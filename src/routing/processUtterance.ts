@@ -84,6 +84,8 @@ import { hasCalendarReadEvidence, readCalendarScope, scanResidualIntent } from '
 import { DiscourseContinuityHolder } from './discourseContinuity';
 import {
   CLARIFY_OPERATIONAL_LIST_KEY,
+  CLARIFY_LIST_ADD_ITEM_KEY,
+  admitListAddItemCandidates,
   extractAmbiguousAcquisitionObject,
   formatOperationalListClarification,
   interpretCandidateSetDemonstrative,
@@ -92,10 +94,13 @@ import {
   isClarificationPendingKey,
   isOperationalListItemShape,
   parseClarificationDomainAnswer,
+  parseListAddItemClarificationAnswer,
   parseOperationalListContinuationAdd,
   splitCapturedTailSegments,
   unresolvedListReferentPrompt,
+  UNRESOLVED_LIST_REFERENT_REASON,
 } from './operationalListContinuity';
+import { UNRESOLVED_LIST_ADD_SUPERSESSION_REASON } from './sameUtteranceListAddRepair';
 
 // D0 commit 2 (S54 addendum): the headless pipeline seam. UI (ChatScreen) calls
 // this and renders the result; P-tests call it directly. No React, no UI, no TTS.
@@ -1306,6 +1311,39 @@ export async function processUtterance(
       });
       return { handled: true, source: 'capture', responseText: prompt, commits: [pending] };
     }
+  }
+  if (
+    routeDecision.kind === 'device_read'
+    && (
+      routeDecision.reason === UNRESOLVED_LIST_REFERENT_REASON
+      || routeDecision.reason === UNRESOLVED_LIST_ADD_SUPERSESSION_REASON
+    )
+    && /grocery list/i.test(routeDecision.response)
+  ) {
+    const prompt = routeDecision.response;
+    session.setPending({
+      pendingKey: CLARIFY_LIST_ADD_ITEM_KEY,
+      reaskPrompt: prompt,
+      ownsReply: (userText: string) => parseListAddItemClarificationAnswer(userText) != null,
+      resume: async (userText: string): Promise<CommitResult> => {
+        const parsed = parseListAddItemClarificationAnswer(userText);
+        if (!parsed) return { status: 'noop', ack: '' };
+        const admitted = admitListAddItemCandidates(parsed);
+        if (admitted.kind !== 'grounded') return { status: 'noop', ack: '' };
+        const writer = DOMAIN_WRITERS.list_add;
+        if (!writer) return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
+        logWriterOpStart('list_add');
+        const t0 = mono();
+        const result = await writer.add(
+          { type: 'list_add', items: admitted.items, listName: 'grocery' },
+          userText,
+        );
+        logWriterOpEnd('list_add', mono() - t0, result.status);
+        logCommitResult('list_add', result.status, !!result.focus);
+        if (result.status === 'committed') discourse?.establishDomain('grocery');
+        return result;
+      },
+    });
   }
   // Flow C establishment — single owner. Immediately after routeIntent,
   // before returning the route decision to ChatScreen. ChatScreen must

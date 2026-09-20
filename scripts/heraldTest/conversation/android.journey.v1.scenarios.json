@@ -304,7 +304,7 @@
         },
         {
           "input": "add those to my grocery list",
-          "pending_key_after": null,
+          "pending_key_after": "clarify:list_add_item",
           "route_source": "device_read",
           "route_kind": "device_read",
           "commit_statuses": [],
@@ -345,7 +345,7 @@
         },
         {
           "input": "add milk and bread to my grocery list actually oat milk",
-          "pending_key_after": null,
+          "pending_key_after": "clarify:list_add_item",
           "route_source": "device_read",
           "route_kind": "device_read",
           "commit_statuses": [],
@@ -376,6 +376,38 @@
           "zero_delta": false,
           "lists_added": ["grocery"],
           "open_grocery_count": 2
+        }
+      ]
+    },
+    {
+      "id": "fail_closed_list_add_item_clarify_resume",
+      "title": "Fail-closed add those arms item clarification; the roses writes via ordinary list_add",
+      "claimed_path": "unresolved_list_referent zero write -> clarify:list_add_item -> pending_resume list_add roses",
+      "turns": [
+        {
+          "input": "add those to my grocery list",
+          "pending_key_after": "clarify:list_add_item",
+          "route_source": "device_read",
+          "route_kind": "device_read",
+          "route_reason": "unresolved_list_referent",
+          "commit_statuses": [],
+          "response_includes": ["What did you want to add"],
+          "response_excludes": ["those"],
+          "zero_delta": true,
+          "open_grocery_count": 0
+        },
+        {
+          "input": "the roses",
+          "pending_key_before": "clarify:list_add_item",
+          "pending_key_after": null,
+          "route_source": "pending_resume",
+          "commit_statuses": ["committed"],
+          "capability": "list_add",
+          "zero_delta": false,
+          "lists_added": ["grocery"],
+          "items_added": [{ "list_name": "grocery", "body": "roses" }],
+          "open_grocery": ["roses"],
+          "open_grocery_count": 1
         }
       ]
     }

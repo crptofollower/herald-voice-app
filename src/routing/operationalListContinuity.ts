@@ -21,6 +21,8 @@ const CAMERA_GRAB_RE = /\b(?:take|snap|grab)\s+a\s+(?:picture|photo|photograph|p
 
 /** Closed clarification pending key. Not confirmation (`llm_confirm:*`). */
 export const CLARIFY_OPERATIONAL_LIST_KEY = 'clarify:operational_list';
+/** Known list_add/grocery objective; missing item values. Mirror of operational-list. */
+export const CLARIFY_LIST_ADD_ITEM_KEY = 'clarify:list_add_item';
 
 export function isClarificationPendingKey(key: string | null | undefined): boolean {
   return typeof key === 'string' && key.startsWith('clarify:');
@@ -193,6 +195,31 @@ export function parseClarificationDomainAnswer(text: string): 'grocery' | 'todo'
   const resolution = parseOperationalDomainResolution(t);
   if (resolution === 'grocery' || resolution === 'todo') return resolution;
   return null;
+}
+
+const CONFIRMATION_REPLY_RE = /^(yes|yeah|yep|correct|right|10-4|no|nope|not yet|negative)[\s.,!]*$/i;
+/** Bounded resume framing only: leading the / just / just the. Not a general cleanup layer. */
+const LIST_ADD_ITEM_FRAMING_RE = /^(?:just\s+the\s+|just\s+|the\s+)/i;
+
+/**
+ * Explicit item fill for clarify:list_add_item.
+ * Does not reopen same-utterance self-repair. Full list-add utterances are not answers.
+ */
+export function parseListAddItemClarificationAnswer(text: string): string[] | null {
+  const t = text.trim().replace(/[.!?]+$/g, '').trim();
+  if (!t) return null;
+  if (LIST_ADD_SIGNALS.some((p) => p.test(t))) return null;
+  if (CLARIFICATION_QUESTION_OPEN_RE.test(t) || /[?]$/.test(t)) return null;
+  if (CONFIRMATION_REPLY_RE.test(t)) return null;
+  const stripped = t.replace(LIST_ADD_ITEM_FRAMING_RE, '').trim();
+  if (!stripped) return null;
+  const items = splitCapturedTailSegments(stripped)
+    .map((s) => s.replace(LIST_ADD_ITEM_FRAMING_RE, '').trim())
+    .filter((s) => s.length > 0);
+  if (items.length === 0) return null;
+  if (items.some(isBareUnresolvedListReferent)) return null;
+  if (!items.every(isOperationalListItemShape)) return null;
+  return items;
 }
 
 /** Structural trailing-addition: too / also / as well. Optional can-you / to-that. */
