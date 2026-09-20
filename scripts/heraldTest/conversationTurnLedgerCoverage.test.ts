@@ -216,7 +216,7 @@ export async function runConversationTurnLedgerCoverageTests() {
   // exact 2026-09-08 failure class (a meaningful outcome silently gaining
   // no continuity write) this contract exists to prevent.
   const KNOWN_ROUTE_DECISION_KINDS: RouteDecision['kind'][] = [
-    'device_read', 'device_action', 'capture', 'phone_repair_needed',
+    'device_read', 'device_action', 'capture', 'interpretation_hold', 'phone_repair_needed',
     'medical_read_pending', 'not_ready', 'memory_probe', 'backend', 'needs_clarification',
   ];
   for (const kind of KNOWN_ROUTE_DECISION_KINDS) {

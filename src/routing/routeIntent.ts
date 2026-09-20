@@ -7,7 +7,8 @@ import type { TierDecision, LocalContext } from './tierRouter';
 import { writeServiceProvider, detectServiceCapture, detectPhoneCapture, detectInsuranceCapture, captureHouseholdInsurance, normalizeCarrier } from '../utils/householdCapture';
 import { detectDiagnosisCapture, detectDoctorIntroCapture, detectMedicalEvent, isReadShapedUtterance, hasMedicationDomainEvidence, extractDrugName } from '../utils/detectMedicalEvent';
 import type { LlamaContext } from 'llama.rn';
-import { MEDICATION_SEMANTIC_INTERPRETATION_ENABLED, CAPABILITY_READ_ROUTER_ENABLED, GROCERY_SEMANTIC_DECOMPOSITION_ENABLED, SEMANTIC_CAPABILITY_DISPATCH_ENABLED } from '../constants/features';
+import { MEDICATION_SEMANTIC_INTERPRETATION_ENABLED, CAPABILITY_READ_ROUTER_ENABLED, GROCERY_SEMANTIC_DECOMPOSITION_ENABLED, SEMANTIC_CAPABILITY_DISPATCH_ENABLED, NATURAL_MULTI_FACT_INTERPRETATION_ENABLED } from '../constants/features';
+import { tryNaturalMultiFactHold, type MultiFactProposalGenerationResult } from './naturalMultiFactInterpretation';
 import { generateMedicationSemanticProposal, admitMedicationSemanticProposal, medicationSemanticProposalFromDispatchWrite } from './medicationSemanticInterpretation';
 import {
   generateGrocerySemanticProposal,
@@ -59,6 +60,7 @@ export type RouteDecision =
   | { kind: 'device_read'; tier: 1; response: string; isMedical?: boolean; reason: string; presentedMedicationIds?: string[]; presentedGroceryIds?: string[]; presentedTodoIds?: string[]; presentedCalendarEventIds?: string[] }
   | { kind: 'device_action'; tier: 1; actionIntent: ActionIntent; reason: string }
   | { kind: 'capture'; intents: IntentRecord[]; source: 'deterministic' | 'llm' | 'deterministic_recovery'; reason: string }
+  | { kind: 'interpretation_hold'; reason: 'natural_multi_fact_v1'; episodeId: string; candidates: import('./naturalMultiFactInterpretation').AdmittedMultiFactCandidate[] }
   | { kind: 'phone_repair_needed'; pending: Extract<CommitResult, { status: 'pending' }>; reason: string }
   | { kind: 'medical_read_pending'; pending: Extract<CommitResult, { status: 'pending' }>; reason: string }
   | { kind: 'not_ready'; reason: string }
@@ -2247,6 +2249,10 @@ export async function routeIntent(
     capabilityReadRouterEnabled?: boolean;
     /** Test/injection override. Omitted ⇒ features.ts MEDICATION_SEMANTIC_INTERPRETATION_ENABLED. */
     medicationSemanticInterpretationEnabled?: boolean;
+    /** Test/injection override. Omitted ⇒ features.ts NATURAL_MULTI_FACT_INTERPRETATION_ENABLED. */
+    naturalMultiFactInterpretationEnabled?: boolean;
+    /** Test-only proposer. Omitted ⇒ deterministic utterance proposer. */
+    proposeNaturalMultiFact?: (text: string) => MultiFactProposalGenerationResult;
   },
 ): Promise<RouteDecision> {
   const routeT0 = latMono();
@@ -2522,6 +2528,22 @@ export async function routeIntent(
     deps.capabilityReadRouterEnabled ?? CAPABILITY_READ_ROUTER_ENABLED;
   const medicationSemanticOn =
     deps.medicationSemanticInterpretationEnabled ?? MEDICATION_SEMANTIC_INTERPRETATION_ENABLED;
+  const multiFactOn =
+    deps.naturalMultiFactInterpretationEnabled ?? NATURAL_MULTI_FACT_INTERPRETATION_ENABLED;
+  const tryMultiFact = (intercept: 'visit' | 'fallthrough') => {
+    const hold = tryNaturalMultiFactHold(text, {
+      enabled: multiFactOn,
+      propose: deps.proposeNaturalMultiFact,
+      intercept,
+    });
+    if (!hold) return null;
+    return {
+      kind: 'interpretation_hold' as const,
+      reason: 'natural_multi_fact_v1' as const,
+      episodeId: hold.episodeId,
+      candidates: hold.candidates,
+    };
+  };
   const getSemanticCtx = deps.getMedicationSemanticInterpreterCtx ?? (() => null);
   const eligibleDefaultFallthrough = decision.tier === 3 && decision.reason === 'default';
   let dispatchSeamRan = false;
@@ -2790,6 +2812,8 @@ export async function routeIntent(
         reason: 'tier1:visit_upcoming_intercept',
       };
     }
+    const visitHold = tryMultiFact('visit');
+    if (visitHold) return visitHold;
     // visit | advice → medical_visit (heard "Dr. X" still confirms; nameless asks who).
     return {
       kind: 'capture',
@@ -2913,6 +2937,9 @@ export async function routeIntent(
   // intent type — see session investigation, 2026-08-18).
   let llmAlreadyClassified = false;
   let readMeta: ReadIntentMeta | undefined;
+
+  const fallthroughHold = tryMultiFact('fallthrough');
+  if (fallthroughHold) return fallthroughHold;
 
   if (deps.llmReady && deps.classifyLLM) {
     const out = await deps.classifyLLM(text);

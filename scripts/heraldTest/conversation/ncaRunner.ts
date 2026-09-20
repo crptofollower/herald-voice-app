@@ -26,6 +26,7 @@ import {
 } from '../journeyHarness.ts';
 import { countAuthoritativeDelta as countDelta, isExactZeroDelta as zeroDelta } from './delta.ts';
 import { NCA_V1_SCHEMA, NCA_V1_SCENARIOS, type NcaClass, type NcaScenario } from './nca.v1.scenarios.ts';
+import { DiscourseContinuityHolder } from '../../../src/routing/discourseContinuity.ts';
 
 const BOLD = '\x1b[1m';
 const RED = '\x1b[31m';
@@ -311,6 +312,7 @@ function classifyScenario(scenario: NcaScenario, turns: TurnObs[]): NcaClass {
 async function runScenario(scenario: NcaScenario) {
   const { db, session, deps, orderedPresentation } = openJourneyDb();
   seedDb(db, scenario);
+  const discourse = new DiscourseContinuityHolder();
   const turns: TurnObs[] = [];
   const openURLs: string[] = [];
   const spoken: string[] = [];
@@ -325,6 +327,9 @@ async function runScenario(scenario: NcaScenario) {
       null,
       null,
       orderedPresentation,
+      null,
+      null,
+      discourse,
     );
     let described = describeOutcome(outcome);
     let device_action: string | null = null;

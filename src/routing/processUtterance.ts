@@ -23,7 +23,7 @@ import {
   isReferentYearBoundedVisitQuestion,
   answerReferentYearBoundedVisit,
 } from './conversationalSubject';
-import { isClosedActiveSubjectIdentityLookup } from './activeSubjectReference';
+import { isClosedActiveSubjectIdentityLookup, ACTIVE_SUBJECT_GROUNDING_ACK } from './activeSubjectReference';
 import { detectFamilyRead, resolveFamilyRead } from '../utils/familyRead';
 import { resolveHouseholdProvider } from '../utils/householdRead';
 import { getLastVisit } from '../db/medicalDB';
@@ -106,7 +106,7 @@ export type RouteDeps = Parameters<typeof routeIntent>[1];
 export type UtteranceOutcome =
   | {
       handled: true;
-      source: 'pending_resume' | 'capture' | 'referent_resume';
+      source: 'pending_resume' | 'capture' | 'referent_resume' | 'interpretation';
       responseText: string;
       commits: CommitResult[];
       /** Presentation hint only. Never speech-parsed. Never a conversational machine. */
@@ -1101,6 +1101,20 @@ export async function processUtterance(
       correctable: routeDecision.pending.correctable,
     });
     return { handled: true, source: 'capture', responseText: routeDecision.pending.prompt, commits: [routeDecision.pending] };
+  }
+  if (routeDecision.kind === 'interpretation_hold') {
+    discourse?.establishInterpretationHold(routeDecision.episodeId, routeDecision.candidates);
+    // ACTIVE_SUBJECT_GROUNDING_ACK ("Okay.") is the existing handled-turn
+    // acknowledgment used when Herald followed a turn without committing
+    // domain facts (activeSubjectReference / medicalVisitOutcomeAsk). Required
+    // because UtteranceOutcome.handled must carry responseText for ChatScreen
+    // to speak; this copy does not claim memory, completion, or confirmation.
+    return {
+      handled: true,
+      source: 'interpretation',
+      responseText: ACTIVE_SUBJECT_GROUNDING_ACK,
+      commits: [],
+    };
   }
   // 3) Converted-domain capture → commit loop.
   if (routeDecision.kind === 'capture' && allConverted(routeDecision.intents)) {

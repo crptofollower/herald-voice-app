@@ -106,6 +106,13 @@ export const GROCERY_SEMANTIC_DECOMPOSITION_ENABLED = true;
 //   device-proof activation. Does not admit writes or reads by itself.
 export const SEMANTIC_CAPABILITY_DISPATCH_ENABLED = true;
 
+// NATURAL_MULTI_FACT_INTERPRETATION_ENABLED:
+//   Natural Multi-Fact Interpretation V1. Propose → deterministic admit →
+//   RAM WCS hold of >=2 grounded candidates. Never writes, never arms
+//   pending, never constructs IntentRecord / applyIntents / CALL-SMS-Maps.
+//   OFF ⇒ the seam is not entered; routing is unchanged. Default ON.
+export const NATURAL_MULTI_FACT_INTERPRETATION_ENABLED = true;
+
 // SPEECH_PROVIDER_AB_GOOGLE_TTS:
 //   Bounded diagnostic ONLY — a device-validation experiment to determine
 //   whether Herald speech recognition works when explicitly bound to the

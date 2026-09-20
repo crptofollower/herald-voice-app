@@ -70,6 +70,7 @@ export const ROUTE_OUTCOME_LEDGER_POLICY: Record<RouteDecision['kind'], RouteOut
   // the applyIntents/resolvePending hooks instead). Listed for completeness
   // of the RouteDecision['kind'] union so the coverage test is total.
   capture: { record: false, reason: 'absorbed into source:capture UtteranceOutcome before this dispatch; covered by the applyIntents/resolvePending hook instead' },
+  interpretation_hold: { record: false, reason: 'absorbed into source:interpretation UtteranceOutcome; RAM WCS hold only — no ledger write authority' },
   phone_repair_needed: { record: false, reason: 'absorbed into source:capture UtteranceOutcome (pending) before this dispatch; covered by the applyIntents/resolvePending hook instead' },
   medical_read_pending: { record: false, reason: 'absorbed into source:capture UtteranceOutcome (pending) before this dispatch; covered by the applyIntents/resolvePending hook instead' },
   not_ready: { record: false, reason: 'transient waking-up state, not turn evidence — explicitly exempted' },

@@ -10,6 +10,7 @@ import {
   TODO_ADD_SIGNALS,
 } from '../utils/instructionSignals';
 import { OPERATIONAL_ACQUISITION_SHAPE, extractNarrativeOperationalCandidates } from './operationalListContinuity';
+import type { AdmittedMultiFactCandidate } from './naturalMultiFactInterpretation';
 
 export const DISCOURSE_TURN_TTL = 4;
 export const DISCOURSE_WALL_MS = 10 * 60 * 1000;
@@ -39,6 +40,14 @@ export type DiscourseDomainSlot = {
 export type CandidateSetSlot = {
   domain: 'grocery' | 'todo' | null;
   items: string[];
+  sourceTurn: number;
+  refreshedAtTurn: number;
+};
+
+/** RAM-only Natural Multi-Fact V1 holds. Never write/Call/pending authority. */
+export type InterpretationHoldSlot = {
+  episodeId: string;
+  candidates: AdmittedMultiFactCandidate[];
   sourceTurn: number;
   refreshedAtTurn: number;
 };
@@ -145,6 +154,7 @@ export class WorkingConversationState {
   private topic: (DiscourseTopicSlot & { refreshedAtMs: number }) | null = null;
   private domain: (DiscourseDomainSlot & { refreshedAtMs: number }) | null = null;
   private candidateSet: (CandidateSetSlot & { refreshedAtMs: number }) | null = null;
+  private interpretationHold: (InterpretationHoldSlot & { refreshedAtMs: number }) | null = null;
   private turn = 0;
 
   constructor(private readonly now: () => number = () => Date.now()) {}
@@ -162,6 +172,7 @@ export class WorkingConversationState {
     this.topic = null;
     this.domain = null;
     this.candidateSet = null;
+    this.interpretationHold = null;
   }
 
   peekTopic(): DiscourseTopicSlot | null {
@@ -280,6 +291,32 @@ export class WorkingConversationState {
     this.candidateSet = null;
   }
 
+  peekInterpretationHold(): InterpretationHoldSlot | null {
+    this.expireStale();
+    if (!this.interpretationHold) return null;
+    const { refreshedAtMs: _ms, ...slot } = this.interpretationHold;
+    return { ...slot, candidates: slot.candidates.map((c) => ({ ...c })) };
+  }
+
+  establishInterpretationHold(
+    episodeId: string,
+    candidates: InterpretationHoldSlot['candidates'],
+  ): void {
+    if (!episodeId.trim() || candidates.length < 2) return;
+    const at = this.now();
+    this.interpretationHold = {
+      episodeId: episodeId.trim(),
+      candidates: candidates.map((c) => ({ ...c })),
+      sourceTurn: this.turn,
+      refreshedAtTurn: this.turn,
+      refreshedAtMs: at,
+    };
+  }
+
+  clearInterpretationHold(): void {
+    this.interpretationHold = null;
+  }
+
   snapshot(): WcsSnapshot {
     this.expireStale();
     const focus = this.topic
@@ -345,6 +382,9 @@ export class WorkingConversationState {
     }
     if (this.candidateSet && this.isExpired(this.candidateSet.refreshedAtTurn, this.candidateSet.refreshedAtMs, now)) {
       this.candidateSet = null;
+    }
+    if (this.interpretationHold && this.isExpired(this.interpretationHold.refreshedAtTurn, this.interpretationHold.refreshedAtMs, now)) {
+      this.interpretationHold = null;
     }
   }
 
