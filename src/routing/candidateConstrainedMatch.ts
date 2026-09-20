@@ -25,6 +25,27 @@ function tokens(raw: string): string[] {
   return normalizeKey(raw).split(' ').filter(t => t.length > 0);
 }
 
+/**
+ * Longest contiguous run of single alphabetic tokens (length >= 3).
+ * Structural spelling only — no name-specific patterns. Callers feed the
+ * concat through the same finite-set proposer; this never invents a name.
+ */
+export function structuralSpellingConcat(raw: string): string | null {
+  const toks = tokens(raw);
+  let best = '';
+  let run = '';
+  const flush = () => {
+    if (run.length >= 3 && run.length > best.length) best = run;
+    run = '';
+  };
+  for (const t of toks) {
+    if (t.length === 1 && /[a-z]/.test(t)) run += t;
+    else flush();
+  }
+  flush();
+  return best || null;
+}
+
 function lastName(full: string): string {
   const t = tokens(full);
   return t[t.length - 1] ?? '';
@@ -96,10 +117,12 @@ export function proposeConstrainedCandidate(
   candidates: string[],
 ): ConstrainedProposal {
   const names = unique(candidates.map(n => n.trim()).filter(Boolean));
-  if (names.length < 2 || !reply.trim()) return { kind: 'none' };
+  if (names.length < 1 || !reply.trim()) return { kind: 'none' };
 
-  const replyTokens = tokens(reply).filter(t => t.length >= 3);
-  const replyConcat = concatKey(reply);
+  const spelling = structuralSpellingConcat(reply);
+  const replyForMatch = spelling ?? reply;
+  const replyTokens = tokens(replyForMatch).filter(t => t.length >= 3);
+  const replyConcat = concatKey(replyForMatch);
   if (!replyConcat && replyTokens.length === 0) return { kind: 'none' };
 
   const last = (n: string) => concatKey(lastName(n));
@@ -159,7 +182,8 @@ export function proposeConstrainedCandidate(
 
   // Close unique edit to last name: distance <= 2, last name >= 4, runner-up
   // at least 2 farther (clear separation, not a score cutoff).
-  if (replyConcat.length >= 4) {
+  // A singleton set has no runner-up: do not treat "closest of one" as a signal.
+  if (replyConcat.length >= 4 && names.length >= 2) {
     const ranked = names
       .map(n => ({ n, d: levenshtein(replyConcat, last(n)) }))
       .sort((a, b) => a.d - b.d);

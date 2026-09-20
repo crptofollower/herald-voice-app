@@ -34,7 +34,8 @@ import { buildPhoneConfirmPending, formatPhoneForSpeech } from '../utils/phoneCo
 import { matchCandidateToken } from './conversationSession';
 import {
   advanceFiniteCandidateRecovery,
-  GRACEFUL_STOP_WHO,
+  CAPTURE_SECOND_MISS,
+  holdUnresolvedRecovery,
   RECOVERY_BUDGET,
   type CallTextTask,
 } from './callTextReadiness';
@@ -1640,12 +1641,12 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
         const resume = async (pick: string): Promise<CommitResult> => {
           const matched = matchCandidate(pick, liveRows(), contactLabel);
           if (matched) return onUnique(matched);
-          const r = advanceFiniteCandidateRecovery(task, pick, {
+          let r = advanceFiniteCandidateRecovery(task, pick, {
             fullSetTokenHit: 'retain',
             uniqueTokenHit: 'defer_miss',
           });
           if (r.kind === 'non_advance' || r.kind === 'stop') {
-            return { status: 'noop', ack: r.kind === 'stop' ? r.ack : GRACEFUL_STOP_WHO };
+            r = holdUnresolvedRecovery(task);
           }
           if (r.kind === 'pending') {
             task = r.task;
@@ -1656,7 +1657,7 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
               kind: 'standard',
               reaskPrompt: r.prompt,
               budget: RECOVERY_BUDGET,
-              releasePrompt: GRACEFUL_STOP_WHO,
+              releasePrompt: CAPTURE_SECOND_MISS,
               resume,
               recoveryChoices: r.recoveryChoices,
             };
@@ -1674,7 +1675,7 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
           kind: 'standard',
           reaskPrompt: initialPrompt,
           budget: RECOVERY_BUDGET,
-          releasePrompt: GRACEFUL_STOP_WHO,
+          releasePrompt: CAPTURE_SECOND_MISS,
           resume,
         };
       };

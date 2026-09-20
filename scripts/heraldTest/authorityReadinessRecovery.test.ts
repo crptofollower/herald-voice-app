@@ -9,13 +9,14 @@ import { processUtterance } from '../../src/routing/processUtterance.ts';
 import { classifyQuery } from '../../src/routing/tierRouter.ts';
 import {
   advanceCallTextTask,
+  advanceFiniteCandidateRecovery,
   CALL_TEXT_RECOVERY_KEY,
   CAPTURE_FIRST_MISS,
   CAPTURE_SECOND_MISS,
   GRACEFUL_STOP_WHO,
   SMS_OS_DISAMBIGUATE_KEY,
 } from '../../src/routing/callTextReadiness.ts';
-import { proposeConstrainedCandidate } from '../../src/routing/candidateConstrainedMatch.ts';
+import { proposeConstrainedCandidate, structuralSpellingConcat } from '../../src/routing/candidateConstrainedMatch.ts';
 import { dispatchAction, releaseOverlappingContactCollect } from '../../src/screens/chat/dispatch.ts';
 import type { DispatchDeps } from '../../src/screens/chat/dispatch.ts';
 import { resolvePersonIdentity } from '../../src/db/contactsDB.ts';
@@ -350,13 +351,16 @@ export async function runAuthorityReadinessRecoveryTests() {
     const messages: string[] = [];
     await dispatchAction({ type: 'sms', contact: 'him', message: '' }, 'Text him.', makeSmsDeps({ session, openURLs, messages }));
     const r1 = await session.resolvePending('that guy');
-    assert('ARR-NONADV non-advance stops immediately; does not guess Mickey',
-      { r1, openURLs, pending: session.hasPending() },
-      v => v.r1.status === 'noop'
-        && v.r1.ack === GRACEFUL_STOP_WHO
+    assert('ARR-NONADV non-advance holds the task; does not guess Mickey',
+      { r1, openURLs, pending: session.hasPending(), key: session.peekPendingKey() },
+      v => v.r1.status === 'pending'
+        && v.r1.ack !== GRACEFUL_STOP_WHO
+        && v.r1.prompt !== GRACEFUL_STOP_WHO
+        && !/start that one over/i.test(v.r1.prompt ?? '')
         && v.openURLs.length === 0
-        && v.pending === false,
-      'progress-or-stop; no sms');
+        && v.pending === true
+        && v.key === CALL_TEXT_RECOVERY_KEY,
+      'type-name hold; no sms; no start-over');
   }
 
   // Same candidate set is not progress — do not continue
@@ -371,13 +375,14 @@ export async function runAuthorityReadinessRecoveryTests() {
     await dispatchAction({ type: 'sms', contact: 'him', message: "I'll be home at 8." }, "Text him I'll be home at 8.", makeSmsDeps({ session, openURLs }));
     await session.resolvePending('Mickey.');
     const r = await session.resolvePending('Mickey');
-    assert('ARR-NO-PROGRESS repeating Mickey on a four-way set does not continue',
+    assert('ARR-NO-PROGRESS repeating Mickey on a four-way set holds type/tap escape',
       { r, openURLs, pending: session.hasPending() },
-      v => v.r.status === 'noop'
-        && v.r.ack === GRACEFUL_STOP_WHO
+      v => v.r.status === 'pending'
+        && v.r.prompt === CAPTURE_FIRST_MISS
+        && !/start that one over/i.test(v.r.prompt ?? '')
         && v.openURLs.length === 0
-        && v.pending === false,
-      'no monotonic shrink; graceful stop; payload not sent to a guessed Mickey');
+        && v.pending === true,
+      'no monotonic shrink; task kept; payload not sent to a guessed Mickey');
   }
 
   // Advancing 3-turn success: Text him → who → Mickey (four) → which → McCoy → content → SMS.
@@ -492,13 +497,14 @@ export async function runAuthorityReadinessRecoveryTests() {
     await session.resolvePending('Mickey.');
     await session.resolvePending('Mickey McCoy');
     const r = await session.resolvePending('him');
-    assert('ARR-THIRD-NONADVANCE non-advancing answer on the content question stops',
+    assert('ARR-THIRD-NONADVANCE non-advancing content answer holds the SMS task',
       { r, openURLs, pending: session.hasPending() },
-      v => v.r.status === 'noop'
-        && v.r.ack === GRACEFUL_STOP_WHO
+      v => v.r.status === 'pending'
+        && /tell Mickey McCoy/i.test(v.r.prompt ?? '')
+        && !/start that one over/i.test(v.r.prompt ?? '')
         && v.openURLs.length === 0
-        && v.pending === false,
-      'graceful stop; no content re-ask loop');
+        && v.pending === true,
+      'person retained; no content re-ask destruction; no sms');
   }
 
   // Topic change — recovery pending does not hijack timer
@@ -1294,13 +1300,15 @@ export async function runAuthorityReadinessRecoveryTests() {
     await session.resolvePending('Show Fray');
     await session.resolvePending('Show free');
     const third = await session.resolvePending('zzzz-not-a-person');
-    assert('CR-OS-THIRD-STOP third unresolved capture graceful-stops',
+    assert('CR-OS-THIRD-STOP third unresolved capture holds type/tap; does not destroy',
       { third, openURLs, pending: session.hasPending() },
-      v => v.third.status === 'noop'
-        && v.third.ack === GRACEFUL_STOP_WHO
+      v => v.third.status === 'pending'
+        && v.third.prompt === CAPTURE_SECOND_MISS
+        && Array.isArray(v.third.recoveryChoices)
+        && v.third.recoveryChoices.length > 0
         && v.openURLs.length === 0
-        && v.pending === false,
-      'not generic budget release; no guess');
+        && v.pending === true,
+      'resumable task; no guess; no start-over');
   }
 
   // DD-2: leftover collect-ref must not co-own Call/Text recovery or CALL.
@@ -1402,6 +1410,258 @@ export async function runAuthorityReadinessRecoveryTests() {
       { key: session.peekPendingKey(), leftover: leftover.current },
       v => v.key === CALL_TEXT_RECOVERY_KEY && v.leftover === null,
       'CALL missing-person recovery is ConversationSession');
+  }
+
+  {
+    const spelled = structuralSpellingConcat('the name is c i o f f r e');
+    const bare = structuralSpellingConcat('c i o f f r e');
+    const mixed = proposeConstrainedCandidate('the name is c i o f f r e', ['Paul Cioffre', 'Paul Smith', 'Paul Jones']);
+    const invent = proposeConstrainedCandidate('c i o f f r e', ['Paul Smith', 'Paul Jones']);
+    assert('CRC-SPELL-STRUCT structural letter-run concat feeds finite-set proposer',
+      { spelled, bare, mixed, invent },
+      v => v.spelled === 'cioffre'
+        && v.bare === 'cioffre'
+        && v.mixed.kind === 'one' && v.mixed.kind === 'one' && v.mixed.name === 'Paul Cioffre'
+        && v.invent.kind === 'none',
+      'no invented contact from a spelled unmatched name');
+  }
+
+  {
+    const one = proposeConstrainedCandidate('ciofre', ['Paul Cioffre']);
+    const weak = proposeConstrainedCandidate('zzzznotaname', ['Paul Cioffre']);
+    assert('CRC-SINGLE-PROPOSE singleton set may propose; weak input proposes nothing',
+      { one, weak },
+      v => v.one.kind === 'one' && v.one.name === 'Paul Cioffre' && v.weak.kind === 'none',
+      'n=1 does not auto-authorize garbage');
+  }
+
+  {
+    const db = freshDB();
+    insertContact(db, { id: 'c_a', name: 'Paul Cioffre', phone: '555-301-0001' });
+    insertContact(db, { id: 'c_b', name: 'Paul Smith', phone: '555-301-0002' });
+    const session = new ConversationSession();
+    const openURLs: string[] = [];
+    await dispatchAction(
+      { type: 'sms', contact: 'him', message: "I'll be home at 8." },
+      "Text him I'll be home at 8.",
+      makeSmsDeps({ session, openURLs }),
+    );
+    await session.resolvePending('Paul.');
+    const miss = await session.resolvePending('Show Fray');
+    assert('CRC-FIRST-MISS-HOLD unmatched name retains pending + original body',
+      { miss, openURLs, pending: session.hasPending() },
+      v => v.miss.status === 'pending'
+        && v.miss.prompt === CAPTURE_FIRST_MISS
+        && !/start that one over/i.test(v.miss.prompt ?? '')
+        && v.openURLs.length === 0
+        && v.pending === true,
+      'first miss is not GRACEFUL_STOP_WHO');
+    const frag = await session.resolvePending('Cioffre');
+    assert('CRC-FRAG-ADVANCE natural fragment completes original SMS body',
+      { frag, openURLs, body: openURLs[0] ? smsBody(openURLs[0]) : null, pending: session.hasPending() },
+      v => v.frag.status === 'committed'
+        && v.openURLs.length === 1
+        && v.openURLs[0].startsWith('sms:5553010001')
+        && v.body === "I'll be home at 8."
+        && v.pending === false,
+      'original body survives merge verbatim');
+  }
+
+  {
+    const session = new ConversationSession();
+    const openURLs: string[] = [];
+    const db = freshDB();
+    insertContact(db, { id: 'c_a', name: 'Paul Cioffre', phone: '555-301-0001' });
+    insertContact(db, { id: 'c_b', name: 'Paul Smith', phone: '555-301-0002' });
+    await dispatchAction(
+      { type: 'sms', contact: 'him', message: 'bring the wine' },
+      'Text him bring the wine',
+      makeSmsDeps({ session, openURLs }),
+    );
+    await session.resolvePending('Paul.');
+    const spelled = await session.resolvePending('c i o f f r e');
+    assert('CRC-SPELL-PROPOSE letter-run proposes; does not send',
+      { spelled, openURLs, pending: session.hasPending() },
+      v => v.spelled.status === 'pending'
+        && v.spelled.prompt === 'Did you mean Paul Cioffre?'
+        && v.openURLs.length === 0
+        && v.pending === true,
+      'proposal only');
+    const no = await session.resolvePending('no');
+    assert('CRC-SPELL-NO unresolved NO does not auto-dispatch',
+      { no, openURLs, pending: session.hasPending() },
+      v => v.no.status === 'pending'
+        && v.openURLs.length === 0
+        && v.pending === true
+        && !/sms:/i.test(JSON.stringify(v.openURLs)),
+      'NO clears proposal only');
+    const yesPath = await session.resolvePending('c i o f f r e');
+    const yes = yesPath.status === 'pending' ? await session.resolvePending('yes') : yesPath;
+    assert('CRC-SPELL-YES YES dispatches only the live proposal with original body',
+      { yes, openURLs, body: openURLs[0] ? smsBody(openURLs[0]) : null },
+      v => v.yes.status === 'committed'
+        && v.openURLs.length === 1
+        && v.openURLs[0].startsWith('sms:5553010001')
+        && v.body === 'bring the wine',
+      'yes authorizes current proposal only');
+  }
+
+  {
+    const r = advanceFiniteCandidateRecovery(
+      {
+        action: 'call',
+        contactName: '',
+        message: '',
+        candidateNames: ['Paul Cioffre'],
+        gap: 'ambiguous_person',
+        turnsAsked: 1,
+        failedMatchTurns: 0,
+      },
+      'ciofre',
+    );
+    assert('CRC-CALL-SINGLE-CONFIRM singleton CALL proposes and requires confirmation',
+      r,
+      v => v.kind === 'pending'
+        && v.kind === 'pending'
+        && v.prompt === 'Did you mean Paul Cioffre?'
+        && v.task.proposedNames?.[0] === 'Paul Cioffre'
+        && !v.task.contactName,
+      'no auto-dial');
+    const yes = advanceFiniteCandidateRecovery(
+      r.kind === 'pending' ? r.task : {
+        action: 'call', contactName: '', message: '', candidateNames: ['Paul Cioffre'],
+        proposedNames: ['Paul Cioffre'], gap: 'ambiguous_person', turnsAsked: 2, failedMatchTurns: 0,
+      },
+      'yes',
+    );
+    assert('CRC-CALL-SINGLE-YES YES binds only the live CALL proposal',
+      yes,
+      v => v.kind === 'ready' && v.kind === 'ready' && v.task.contactName === 'Paul Cioffre',
+      'yes → ready Paul Cioffre');
+    const no = advanceFiniteCandidateRecovery(
+      {
+        action: 'call',
+        contactName: '',
+        message: '',
+        candidateNames: ['Paul Cioffre'],
+        proposedNames: ['Paul Cioffre'],
+        gap: 'ambiguous_person',
+        turnsAsked: 2,
+        failedMatchTurns: 0,
+      },
+      'no',
+    );
+    assert('CRC-CALL-SINGLE-NO NO does not auto-dial the singleton',
+      no,
+      v => v.kind === 'pending' && v.kind === 'pending' && !v.task.contactName && !(v.task.proposedNames ?? []).length,
+      'proposal cleared');
+  }
+
+  {
+    const r1 = advanceFiniteCandidateRecovery(
+      {
+        action: 'sms',
+        contactName: '',
+        message: 'see you Saturday',
+        candidateNames: ['Paul Cioffre', 'Paul Smith'],
+        gap: 'ambiguous_person',
+        turnsAsked: 1,
+        failedMatchTurns: 0,
+      },
+      'zzzz-not-a-person',
+    );
+    const r2 = r1.kind === 'pending' ? advanceFiniteCandidateRecovery(r1.task, 'yyyy-also-wrong') : r1;
+    const r3 = r2.kind === 'pending' ? advanceFiniteCandidateRecovery(r2.task, 'xxxx-still-wrong') : r2;
+    assert('CRC-MONOTONE-HOLD repeated non-advance stays on type/tap; never start-over',
+      { r1, r2, r3 },
+      v => v.r1.kind === 'pending' && v.r1.kind === 'pending' && v.r1.prompt === CAPTURE_FIRST_MISS
+        && v.r2.kind === 'pending' && v.r2.prompt === CAPTURE_SECOND_MISS
+        && v.r3.kind === 'pending' && v.r3.prompt === CAPTURE_SECOND_MISS
+        && v.r3.kind === 'pending' && v.r3.task.message === 'see you Saturday'
+        && (v.r3.recoveryChoices ?? []).length === 2
+        && v.r3.kind === 'pending' && !/start that one over/i.test(v.r3.prompt),
+      'two miss states then hold; body kept');
+  }
+
+  {
+    const db = freshDB();
+    insertContact(db, { id: 'c_a', name: 'Paul Cioffre', phone: '555-301-0001' });
+    insertContact(db, { id: 'c_b', name: 'Paul Smith', phone: '555-301-0002' });
+    const session = new ConversationSession();
+    const openURLs: string[] = [];
+    await dispatchAction(
+      { type: 'sms', contact: 'him', message: 'see you Saturday' },
+      'Text him see you Saturday',
+      makeSmsDeps({ session, openURLs }),
+    );
+    await session.resolvePending('Paul.');
+    const em = await processUtterance('I need help', session, {
+      classifyQuery,
+      classifyLLM: async () => ({ status: 'ok' as const, intents: [] }),
+      llmReady: false,
+      captureContext: { contacts: [], lists: [] },
+    });
+    assert('CRC-LAW0 Emergency Law 0 clears pending mid-clarification',
+      { em, pending: session.hasPending(), openURLs },
+      v => v.em.handled === true
+        && v.em.source === 'emergency'
+        && v.pending === false
+        && v.openURLs.length === 0,
+      'pending released; no sms');
+  }
+
+  {
+    const db = freshDB();
+    insertContact(db, { id: 'c_a', name: 'Paul Cioffre', phone: '555-301-0001' });
+    insertContact(db, { id: 'c_b', name: 'Paul Smith', phone: '555-301-0002' });
+    const session = new ConversationSession();
+    const openURLs: string[] = [];
+    await dispatchAction(
+      { type: 'sms', contact: 'him', message: "I'll be home at 8." },
+      "Text him I'll be home at 8.",
+      makeSmsDeps({ session, openURLs }),
+    );
+    await session.resolvePending('Paul.');
+    const a = await processUtterance('Cioffre', session, {
+      classifyQuery,
+      classifyLLM: async () => ({ status: 'ok' as const, intents: [] }),
+      llmReady: false,
+      captureContext: { contacts: [], lists: [] },
+    });
+    assert('CRC-PROCESS-UTTERANCE speech and typed share processUtterance commit',
+      { a, openURLs, body: openURLs[0] ? smsBody(openURLs[0]) : null, pending: session.hasPending() },
+      v => v.a.handled === true
+        && v.openURLs.length === 1
+        && v.body === "I'll be home at 8."
+        && v.pending === false,
+      'typed fragment via processUtterance; ChatScreen speech uses the same function');
+  }
+
+  {
+    const fs = await import('node:fs');
+    const chat = fs.readFileSync(new URL('../../src/screens/ChatScreen.tsx', import.meta.url), 'utf8');
+    assert('CRC-SPEECH-TYPED-CONTRACT handleTranscript still sendMessage speech → processUtterance',
+      chat,
+      v => v.includes("sendMessage(trimmed, 'speech')") && v.includes('processUtterance('),
+      'speech and typed converge on processUtterance');
+  }
+
+  {
+    const db = freshDB();
+    insertContact(db, { id: 'c_a', name: 'Paul Cioffre', phone: '555-301-0001' });
+    insertContact(db, { id: 'c_b', name: 'Paul Smith', phone: '555-301-0002' });
+    const session = new ConversationSession();
+    await dispatchAction({ type: 'sms', contact: 'him', message: '' }, 'Text him.', makeSmsDeps({ session }));
+    const outcome = await processUtterance('set a timer for 20 minutes', session, {
+      classifyQuery,
+      classifyLLM: async () => ({ status: 'ok' as const, intents: [] }),
+      llmReady: false,
+      captureContext: { contacts: [], lists: [] },
+    });
+    assert('CRC-PREEMPT-REGRESS call_text_recovery still yields to timer',
+      { outcome, pending: session.hasPending() },
+      v => v.pending === false && v.outcome.handled === false,
+      'existing preemption intact');
   }
 
   return { passed, failed: failures.length, total: passed + failures.length, failures };

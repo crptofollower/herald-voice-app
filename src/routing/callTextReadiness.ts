@@ -19,9 +19,14 @@ export const CALL_TEXT_RECOVERY_KEY = 'call_text_recovery';
 export const SMS_OS_DISAMBIGUATE_KEY = 'sms_disambiguate';
 /** After first miss + chip offer, one more unresolved capture stops. OS path only. */
 const OS_CAPTURE_STOP_AFTER = 3;
-/** Clarification-turn counter on the retained task — metrics only, not a stop. */
+/**
+ * ConversationSession empty-noop re-ask budget for Call/Text pending slots.
+ * Not a clarification-turn cap and not the monotonic stop. Domain resume must
+ * return pending/ready/ack — empty noop would still release after this many
+ * unparsed turns. Keep at 1 so a true empty-noop cannot loop.
+ */
 export const RECOVERY_BUDGET = 1;
-/** Initial pending: a non-advancing answer stops immediately (progress-or-stop). */
+/** Initial pending: same session empty-noop budget as later recovery stages. */
 const DEFAULT_RECOVERY_ASK_BUDGET = 1;
 
 export type CallTextGap = 'missing_person' | 'ambiguous_person' | 'missing_content' | 'missing_phone';
@@ -99,6 +104,9 @@ export const CAPTURE_FIRST_MISS =
 
 export const CAPTURE_SECOND_MISS =
   "You can say it again, type the name, or tap the person below.";
+
+/** Type-the-name escape when the retained task has no chip set. */
+export const RECOVERY_TYPE_NAME_ESCAPE = 'You can type the name.';
 
 export function promptForGap(task: CallTextTask): string {
   const proposed = (task.proposedNames ?? []).map(n => n.trim()).filter(Boolean);
@@ -273,6 +281,51 @@ function proposeOrReask(task: CallTextTask, trimmed: string): AdvanceResult {
   return captureRepairMiss(task);
 }
 
+/**
+ * Genuine non-advance: keep the retained task and grounded fields.
+ * Offer type/tap (or type-the-name) instead of destroying the slot or
+ * asking the user to start over. Repeated holds stay on the same escape
+ * prompt — two miss states, not an unbounded new-question ladder.
+ */
+export function holdUnresolvedRecovery(task: CallTextTask): AdvanceResult {
+  const names = task.candidateNames.map(n => n.trim()).filter(Boolean);
+  if (names.length >= 1) {
+    return captureRepairMiss(task);
+  }
+  const fails = (task.failedMatchTurns ?? 0) + 1;
+  const next: CallTextTask = {
+    ...task,
+    proposedNames: [],
+    failedMatchTurns: fails,
+    turnsAsked: task.turnsAsked + 1,
+  };
+  if (task.gap === 'missing_content') {
+    return { kind: 'pending', task: next, prompt: promptForGap(next) };
+  }
+  return {
+    kind: 'pending',
+    task: next,
+    prompt: fails >= 2 ? RECOVERY_TYPE_NAME_ESCAPE : promptForGap(next),
+  };
+}
+
+function pendingHoldCommit(
+  held: Extract<AdvanceResult, { kind: 'pending' }>,
+  pendingKey: string,
+  resume: (userText: string) => Promise<CommitResult>,
+): CommitResult {
+  return {
+    status: 'pending',
+    prompt: held.prompt,
+    pendingKey,
+    resume,
+    reaskPrompt: held.prompt,
+    budget: RECOVERY_BUDGET,
+    releasePrompt: CAPTURE_SECOND_MISS,
+    recoveryChoices: held.recoveryChoices,
+  };
+}
+
 /** Capture Repair miss policy: keep the finite set, do not guess. */
 export function captureRepairMiss(
   task: Pick<CallTextTask, 'candidateNames' | 'failedMatchTurns' | 'turnsAsked'> & Partial<CallTextTask>,
@@ -290,16 +343,15 @@ export function captureRepairMiss(
     gap: task.gap ?? 'ambiguous_person',
     turnsAsked: task.turnsAsked + 1,
   };
-  if (stopAfter != null && fails >= stopAfter) {
-    return { kind: 'stop', ack: GRACEFUL_STOP_WHO };
-  }
-  if (fails >= 2) {
-    const recoveryChoices = next.candidateNames.map(n => n.trim()).filter(Boolean);
+  const recoveryChoices = next.candidateNames.map(n => n.trim()).filter(Boolean);
+  // stopAfter used to destroy the task (GRACEFUL_STOP_WHO). Continuity V1
+  // keeps the resumable task and offers type/tap once misses reach 2.
+  if (fails >= 2 || (stopAfter != null && fails >= stopAfter)) {
     return {
       kind: 'pending',
       task: next,
-      prompt: CAPTURE_SECOND_MISS,
-      recoveryChoices,
+      prompt: recoveryChoices.length ? CAPTURE_SECOND_MISS : CAPTURE_FIRST_MISS,
+      recoveryChoices: recoveryChoices.length ? recoveryChoices : undefined,
     };
   }
   return {
@@ -325,7 +377,7 @@ function stopOrPending(task: CallTextTask, nextGap: CallTextGap, extra: Partial<
   // Continue only on monotonic deterministic progress. turnsAsked is
   // incremented for metrics; it does not cap the chain.
   if (!isMonotonicAdvance(task, next)) {
-    return { kind: 'stop', ack: GRACEFUL_STOP_WHO };
+    return holdUnresolvedRecovery(task);
   }
   return { kind: 'pending', task: next, prompt: promptForGap(next) };
 }
@@ -336,7 +388,7 @@ function afterPersonKnown(task: CallTextTask, contactName: string): AdvanceResul
   }
   const ready: CallTextTask = { ...task, contactName, candidateNames: [], proposedNames: [], gap: 'missing_content' };
   if (!isMonotonicAdvance(task, ready)) {
-    return { kind: 'stop', ack: GRACEFUL_STOP_WHO };
+    return holdUnresolvedRecovery(task);
   }
   return { kind: 'ready', task: ready };
 }
@@ -366,7 +418,7 @@ export async function tryOsRefinementAdvance(
     proposedNames: [],
   };
   if (!isMonotonicAdvance(task, ready)) {
-    return { kind: 'stop', ack: GRACEFUL_STOP_WHO };
+    return holdUnresolvedRecovery(task);
   }
   return { kind: 'ready', task: ready };
 }
@@ -393,8 +445,8 @@ export function bindCallTextRecovery(
       const os = await tryOsRefinementAdvance(task, userText, opts.resolveOsPhone);
       if (os) r = os;
     }
-    // Non-advance is not a re-ask. Clarification continues only on
-    // deterministic monotonic progress; otherwise graceful stop.
+    // Non-advance is not a new clarification question. Hold the retained
+    // task and offer type/tap (or type-the-name) instead of start-over.
     if (r.kind === 'non_advance' || r.kind === 'stop') {
       if (r.kind === 'non_advance'
         && task.gap === 'missing_phone'
@@ -408,23 +460,14 @@ export function bindCallTextRecovery(
           resume,
           reaskPrompt: reask,
           budget: RECOVERY_BUDGET,
-          releasePrompt: GRACEFUL_STOP_WHO,
+          releasePrompt: CAPTURE_SECOND_MISS,
         };
       }
-      return { status: 'noop', ack: r.kind === 'stop' ? r.ack : GRACEFUL_STOP_WHO };
+      r = holdUnresolvedRecovery(task);
     }
     if (r.kind === 'pending') {
       task = r.task;
-      return {
-        status: 'pending',
-        prompt: r.prompt,
-        pendingKey: CALL_TEXT_RECOVERY_KEY,
-        resume,
-        reaskPrompt: r.prompt,
-        budget: RECOVERY_BUDGET,
-        releasePrompt: GRACEFUL_STOP_WHO,
-        recoveryChoices: r.recoveryChoices,
-      };
+      return pendingHoldCommit(r, CALL_TEXT_RECOVERY_KEY, resume);
     }
     return onReady(r.task);
   };
@@ -434,7 +477,7 @@ export function bindCallTextRecovery(
     pendingKey: CALL_TEXT_RECOVERY_KEY,
     budget: DEFAULT_RECOVERY_ASK_BUDGET,
     reaskPrompt: prompt,
-    releasePrompt: GRACEFUL_STOP_WHO,
+    releasePrompt: CAPTURE_SECOND_MISS,
     resume,
     ownsReply,
   };
@@ -510,7 +553,7 @@ export function advanceCallTextTask(
     if (hits.length >= 2 && hits.length < task.candidateNames.length) {
       return stopOrPending(task, 'ambiguous_person', { candidateNames: hits, proposedNames: [] });
     }
-    if (hits.length >= 2) return { kind: 'stop', ack: GRACEFUL_STOP_WHO };
+    if (hits.length >= 2) return holdUnresolvedRecovery(task);
     return proposeOrReask(task, trimmed);
   }
 
@@ -539,7 +582,7 @@ function afterFiniteCandidatePicked(task: CallTextTask, contactName: string): Ad
     gap: 'missing_content',
   };
   if (!isMonotonicAdvance(task, ready)) {
-    return { kind: 'stop', ack: GRACEFUL_STOP_WHO };
+    return holdUnresolvedRecovery(task);
   }
   return { kind: 'ready', task: ready };
 }
@@ -634,7 +677,7 @@ export function advanceFiniteCandidateRecovery(
     if (fullSetTokenHit === 'retain') {
       return { kind: 'pending', task, prompt: promptForGap(task) };
     }
-    return { kind: 'stop', ack: GRACEFUL_STOP_WHO };
+    return holdUnresolvedRecovery(task);
   }
   return proposeOrReask(task);
 }
@@ -681,22 +724,13 @@ export function bindOsFiniteSmsDisambiguate(
   };
 
   const resume = async (userText: string): Promise<CommitResult> => {
-    const r = advanceOsSmsDisambiguate(task, userText);
+    let r = advanceOsSmsDisambiguate(task, userText);
     if (r.kind === 'non_advance' || r.kind === 'stop') {
-      return { status: 'noop', ack: r.kind === 'stop' ? r.ack : GRACEFUL_STOP_WHO };
+      r = holdUnresolvedRecovery(task);
     }
     if (r.kind === 'pending') {
       task = r.task;
-      return {
-        status: 'pending',
-        prompt: r.prompt,
-        pendingKey: SMS_OS_DISAMBIGUATE_KEY,
-        resume,
-        reaskPrompt: r.prompt,
-        budget: RECOVERY_BUDGET,
-        releasePrompt: GRACEFUL_STOP_WHO,
-        recoveryChoices: r.recoveryChoices,
-      };
+      return pendingHoldCommit(r, SMS_OS_DISAMBIGUATE_KEY, resume);
     }
     const name = r.task.contactName.trim();
     const phone = phones.get(name);
@@ -711,7 +745,7 @@ export function bindOsFiniteSmsDisambiguate(
     pendingKey: SMS_OS_DISAMBIGUATE_KEY,
     budget: RECOVERY_BUDGET,
     reaskPrompt: `I'm not sure I caught that — which one did you mean: ${names}?`,
-    releasePrompt: GRACEFUL_STOP_WHO,
+    releasePrompt: CAPTURE_SECOND_MISS,
     resume,
   };
 }

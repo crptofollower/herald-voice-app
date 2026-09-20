@@ -289,5 +289,65 @@ export async function runContactCallFiniteRecoveryTests() {
       'identity ambiguity; Yes dials proposed; cancel clears with no tel:');
   }
 
+  {
+    freshDB();
+    const pending = await armFinite();
+    const spelled = await pending.resume('c i o f f r e');
+    assert('J1-N structural spelling proposes CALL; does not dial',
+      spelled,
+      v => v.status === 'pending'
+        && v.pendingKey === 'contact_call'
+        && v.prompt === 'Did you mean Paul Cioffre?'
+        && !dialPhone(v),
+      'proposal only');
+    if (spelled.status !== 'pending') throw new Error('expected spelling proposal');
+    const no = await spelled.resume('no');
+    assert('J1-O CALL NO after spelling proposal does not auto-dial',
+      { no, phone: dialPhone(no) },
+      v => v.no.status === 'pending' && !v.phone,
+      'NO clears proposal');
+    if (no.status !== 'pending') throw new Error('expected pending after NO');
+    const miss3 = await no.resume('zzzz-not-a-person');
+    const miss4 = miss3.status === 'pending' ? await miss3.resume('yyyy-also-wrong') : miss3;
+    assert('J1-P CALL non-advance holds type/tap instead of start-over',
+      { miss3, miss4 },
+      v => v.miss3.status === 'pending'
+        && v.miss4.status === 'pending'
+        && v.miss4.status === 'pending'
+        && v.miss4.prompt === CAPTURE_SECOND_MISS
+        && Array.isArray(v.miss4.recoveryChoices)
+        && !dialPhone(v.miss4)
+        && !/start that one over/i.test(v.miss4.status === 'pending' ? v.miss4.prompt : ''),
+      'resumable contact_call');
+    if (miss4.status !== 'pending') throw new Error('expected type/tap hold');
+    const typed = await miss4.resume('Cioffre');
+    assert('J1-Q typed fragment after CALL chips completes original CALL',
+      { phone: dialPhone(typed), ack: typed.status === 'committed' ? typed.ack : '' },
+      v => v.phone === '18178468607' && /Calling Paul Cioffre/i.test(v.ack),
+      'tel after type/tap hold');
+  }
+
+  {
+    freshDB();
+    const mixed = {
+      type: 'contact_call' as const,
+      contact: 'Paul',
+      candidates: [
+        { name: 'Paul Cioffre', phone: '18178468607', importance: 5 },
+        { name: 'Paul Smith', phone: '', importance: 5 },
+      ],
+      raw: 'call Paul',
+    };
+    const pending = await DOMAIN_WRITERS['contact_call']!.add(mixed, 'call Paul');
+    const no = pending.status === 'pending' ? await pending.resume('No') : pending;
+    assert('J1-R byName.size===1 among 2 identities: NO does not auto-dial the phoneable row',
+      { pending, no, phone: dialPhone(no) },
+      v => v.pending.status === 'pending'
+        && /Did you mean Paul Cioffre/i.test(v.pending.status === 'pending' ? v.pending.prompt : '')
+        && v.no.status === 'pending'
+        && !v.phone,
+      'wrong-recipient-adjacent: confirm required; NO is not authority');
+  }
+
   return { passed, failed: failures.length, total: passed + failures.length, failures };
 }
