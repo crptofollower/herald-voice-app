@@ -88,11 +88,13 @@ import {
   formatOperationalListClarification,
   interpretCandidateSetDemonstrative,
   isAddShapedOperationalDemonstrative,
+  isBareUnresolvedListReferent,
   isClarificationPendingKey,
   isOperationalListItemShape,
   parseClarificationDomainAnswer,
   parseOperationalListContinuationAdd,
   splitCapturedTailSegments,
+  unresolvedListReferentPrompt,
 } from './operationalListContinuity';
 
 // D0 commit 2 (S54 addendum): the headless pipeline seam. UI (ChatScreen) calls
@@ -1027,12 +1029,11 @@ export async function processUtterance(
     const continuationItem = parseOperationalListContinuationAdd(text);
     const liveDomain = discourse.peekDomain();
     if (continuationItem && liveDomain) {
-      if (!isOperationalListItemShape(continuationItem)) {
-        const listLabel = liveDomain.domain === 'todo' ? 'to-do' : 'grocery';
+      if (!isOperationalListItemShape(continuationItem) || isBareUnresolvedListReferent(continuationItem)) {
         return {
           handled: true,
           source: 'capture',
-          responseText: `What did you want to add to your ${listLabel} list?`,
+          responseText: unresolvedListReferentPrompt(liveDomain.domain === 'todo' ? 'todo' : 'grocery'),
           commits: [],
         };
       }

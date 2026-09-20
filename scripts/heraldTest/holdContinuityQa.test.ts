@@ -781,10 +781,10 @@ export async function runHoldContinuityQaV1Tests() {
       'no roses item',
     );
     assert(
-      'demonstrative grocery add keeps existing those-writer path',
-      outcome.handled && outcome.source === 'capture' && after.list_items === before.list_items + 1,
+      'demonstrative grocery add does not persist unresolved those',
+      after.list_items === before.list_items && !bodies.some((b) => /^those$/i.test(b)),
       (v) => v === true,
-      'capture +1 those',
+      'zero those write',
     );
   }
 

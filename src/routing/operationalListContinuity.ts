@@ -267,6 +267,35 @@ export function isAddShapedOperationalDemonstrative(text: string): boolean {
   return ADD_SHAPED_DEMONSTRATIVE_RE.test(text.trim());
 }
 
+/** Closed unresolved pro-forms that cannot themselves be a durable list value. */
+const BARE_UNRESOLVED_LIST_REFERENT_RE = /^(?:this|that|these|those|them|it)$/i;
+
+export const UNRESOLVED_LIST_REFERENT_REASON = 'unresolved_list_referent';
+
+export function isBareUnresolvedListReferent(item: string): boolean {
+  const s = item.trim().replace(/[.!?]+$/g, '');
+  return s.length > 0 && BARE_UNRESOLVED_LIST_REFERENT_RE.test(s);
+}
+
+export function unresolvedListReferentPrompt(listName?: string): string {
+  const n = (listName ?? 'grocery').trim().toLowerCase();
+  const label = n === 'todo' || n === 'todos' || n === 'to-do' ? 'to-do' : 'grocery';
+  return `What did you want to add to your ${label} list?`;
+}
+
+export type ListAddItemAdmission =
+  | { kind: 'empty' }
+  | { kind: 'unresolved_referent' }
+  | { kind: 'grounded'; items: string[] };
+
+/** Admission for list_add candidates. Any bare unresolved referent vetoes the whole set. */
+export function admitListAddItemCandidates(items: readonly string[]): ListAddItemAdmission {
+  const cleaned = items.map((i) => i.trim()).filter((s) => s.length > 0);
+  if (cleaned.length === 0) return { kind: 'empty' };
+  if (cleaned.some(isBareUnresolvedListReferent)) return { kind: 'unresolved_referent' };
+  return { kind: 'grounded', items: cleaned };
+}
+
 /** Demonstrative against a live candidate set. Count agreement when a count is present. Never guesses. */
 export function interpretCandidateSetDemonstrative(
   text: string,

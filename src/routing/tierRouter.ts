@@ -46,6 +46,9 @@ import {
   isUnmarkedAcquisitionShape,
   OPERATIONAL_ACQUISITION_SHAPE,
   extractNarrativeOperationalCandidates,
+  admitListAddItemCandidates,
+  unresolvedListReferentPrompt,
+  UNRESOLVED_LIST_REFERENT_REASON,
 } from "./operationalListContinuity";
 import { utteranceHasThirdPartyFiniteAction } from "./directAddress";
 
@@ -878,6 +881,27 @@ function extractResidualContextualGroceryItem(msg: string): string | null {
   return extractContextualGroceryItem(msg);
 }
 
+function listAddDecision(
+  items: string[],
+  listName: string,
+  reason: string,
+): TierDecision | null {
+  const admitted = admitListAddItemCandidates(items);
+  if (admitted.kind === 'empty') return null;
+  if (admitted.kind === 'unresolved_referent') {
+    return {
+      tier: 1,
+      reason: UNRESOLVED_LIST_REFERENT_REASON,
+      tier1Response: unresolvedListReferentPrompt(listName),
+    };
+  }
+  return {
+    tier: 1,
+    actionIntent: { type: 'list_add', items: admitted.items, listName },
+    reason,
+  };
+}
+
 const PROFILE_UPDATE_SIGNALS = [
   /\b(change|update|my\s+new)\s+(my\s+)?(insurance|doctor|pharmacy|dentist|specialist|provider)\s+(is\s+|to\s+)(.+)/i,
   /\bI\s+(changed|switched|updated)\s+my\s+(insurance|doctor|pharmacy|dentist)\s+(to\s+)?(.+)/i,
@@ -1376,13 +1400,8 @@ async function classifyQueryCore(message: string): Promise<TierDecision> {
       .split(/\s*,\s*|\s+and\s+/i)
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
-    if (items.length > 0) {
-      return {
-        tier: 1,
-        actionIntent: { type: 'list_add', items, listName: 'grocery' },
-        reason: 'action:list_add:acquisition_grocery',
-      };
-    }
+    const acquisition = listAddDecision(items, 'grocery', 'action:list_add:acquisition_grocery');
+    if (acquisition) return acquisition;
   }
 
   // Narrow unmarked acquisition: 2+ simple NP segments only. Shape is not domain.
@@ -1450,9 +1469,8 @@ async function classifyQueryCore(message: string): Promise<TierDecision> {
         .split(/\s*,\s*|\s+and\s+/i)
         .map(s => s.trim())
         .filter(s => s.length > 0);
-      if (items.length > 0) {
-        return { tier: 1, actionIntent: { type: 'list_add', items, listName }, reason: 'action:list_add' };
-      }
+      const added = listAddDecision(items, listName, 'action:list_add');
+      if (added) return added;
     }
   }
 
@@ -1544,13 +1562,8 @@ async function classifyQueryCore(message: string): Promise<TierDecision> {
         .split(/\s*,\s*|\s+and\s+/i)
         .map((s) => s.trim())
         .filter((s) => s.length > 0);
-      if (items.length > 0) {
-        return {
-          tier: 1,
-          actionIntent: { type: 'list_add', items, listName: 'grocery' },
-          reason: 'action:list_add:bare_need',
-        };
-      }
+      const bare = listAddDecision(items, 'grocery', 'action:list_add:bare_need');
+      if (bare) return bare;
     }
   }
 
@@ -1558,11 +1571,8 @@ async function classifyQueryCore(message: string): Promise<TierDecision> {
   {
     const item = extractContextualGroceryItem(msg);
     if (item) {
-      return {
-        tier: 1,
-        actionIntent: { type: 'list_add', items: [item], listName: 'grocery' },
-        reason: 'action:list_add:contextual',
-      };
+      const contextual = listAddDecision([item], 'grocery', 'action:list_add:contextual');
+      if (contextual) return contextual;
     }
   }
 
@@ -2234,11 +2244,8 @@ export async function scanResidualIntent(
   if (primaryType !== 'list_add') {
     const item = extractResidualContextualGroceryItem(msg);
     if (item) {
-      return {
-        tier: 1,
-        actionIntent: { type: 'list_add', items: [item], listName: 'grocery' },
-        reason: 'residual:list_add:contextual',
-      };
+      const residual = listAddDecision([item], 'grocery', 'residual:list_add:contextual');
+      if (residual) return residual;
     }
   }
 
@@ -2303,11 +2310,8 @@ export async function scanResidualIntent(
       if (utteranceHasThirdPartyFiniteAction(sentence)) continue;
       const items = extractNarrativeOperationalCandidates(sentence);
       if (items) {
-        return {
-          tier: 1,
-          actionIntent: { type: 'list_add', items, listName: 'grocery' },
-          reason: 'residual:list_add:sentence',
-        };
+        const residual = listAddDecision(items, 'grocery', 'residual:list_add:sentence');
+        if (residual) return residual;
       }
     }
   }
