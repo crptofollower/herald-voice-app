@@ -13,6 +13,7 @@ import {
 } from '../../src/routing/holdContinuityQa.ts';
 import { inspectHolds, formatHoldRecall } from '../../src/routing/holdRecall.ts';
 import { classifyQuery } from '../../src/routing/tierRouter.ts';
+import { ConversationalSubjectHolder } from '../../src/routing/conversationalSubject.ts';
 import type { AdmittedMultiFactCandidate } from '../../src/routing/naturalMultiFactInterpretation.ts';
 import type { CommitResult } from '../../src/routing/routeIntent.ts';
 
@@ -466,6 +467,357 @@ export async function runHoldContinuityQaV1Tests() {
       outcome.handled && outcome.source === 'pending_resume',
       (v) => v === true,
       'pending_resume',
+    );
+  }
+
+  console.log(`\n${BOLD}-- Hold Continuity Pronoun Bind V1 ---------------------------${RESET}\n`);
+
+  const WIFE_ROSES = 'My wife really loves roses.';
+  const HUSBAND_JAZZ_BARE = 'My husband really loves jazz.';
+  const SHE_FLOWERS_Q = 'What flowers does she like?';
+  const SHE_LIKE_Q = 'What does she like?';
+  const HER_FAVORITE_Q = "What's her favorite flower?";
+  const HE_MUSIC_Q = 'What music does he like?';
+  const HIS_FAVORITE_Q = "What's his favorite music?";
+  const THEY_FLOWERS_Q = 'What flowers do they like?';
+  const THEIR_FAVORITE_Q = "What's their favorite flower?";
+  const ADD_THOSE = 'add those to my grocery list';
+
+  {
+    const sheQ = classifyHoldContinuityPreferenceQuestion(SHE_FLOWERS_Q);
+    assert(
+      'she flowers question is feminine pronoun bind',
+      sheQ.kind === 'preference_pronoun' && sheQ.kind === 'preference_pronoun' && sheQ.gender === 'feminine' && sheQ.category === 'flowers',
+      (v) => v === true,
+      'preference_pronoun feminine flowers',
+    );
+    const heQ = classifyHoldContinuityPreferenceQuestion(HE_MUSIC_Q);
+    assert(
+      'he music question is masculine pronoun bind',
+      heQ.kind === 'preference_pronoun' && heQ.kind === 'preference_pronoun' && heQ.gender === 'masculine' && heQ.category === 'music',
+      (v) => v === true,
+      'preference_pronoun masculine music',
+    );
+    const herQ = classifyHoldContinuityPreferenceQuestion(HER_FAVORITE_Q);
+    assert(
+      'her favorite is feminine pronoun bind',
+      herQ.kind === 'preference_pronoun' && herQ.kind === 'preference_pronoun' && herQ.gender === 'feminine',
+      (v) => v === true,
+      'preference_pronoun feminine',
+    );
+    assert(
+      'explicit my wife still precedes pronoun shapes',
+      classifyHoldContinuityPreferenceQuestion(WIFE_Q).kind === 'preference'
+        && classifyHoldContinuityPreferenceQuestion(WIFE_Q).kind === 'preference'
+        && classifyHoldContinuityPreferenceQuestion(WIFE_Q).subject === 'wife',
+      (v) => v === true,
+      'preference wife',
+    );
+    assert(
+      'they flowers is not a pronoun bind',
+      classifyHoldContinuityPreferenceQuestion(THEY_FLOWERS_Q).kind === 'not_question',
+      (v) => v === true,
+      'not_question',
+    );
+    assert(
+      'their favorite is not a pronoun bind',
+      classifyHoldContinuityPreferenceQuestion(THEIR_FAVORITE_Q).kind === 'not_question',
+      (v) => v === true,
+      'not_question',
+    );
+  }
+
+  {
+    const { db, session, deps } = openJourneyDb();
+    const discourse = new DiscourseContinuityHolder();
+    await processUtterance(normalizeInput(WIFE_ROSES), session, deps, null, null, null, null, null, discourse);
+    const before = medCounts(db as never);
+    const refreshedBefore = discourse.peekInterpretationHold()?.refreshedAtTurn;
+    const outcome = await processUtterance(normalizeInput(SHE_FLOWERS_Q), session, deps, null, null, null, null, null, discourse);
+    const after = medCounts(db as never);
+    const spoken = outcome.handled ? outcome.responseText : '';
+    assert('wife→roses she is hold_continuity', outcome.handled && outcome.source === 'hold_continuity', (v) => v === true, 'hold_continuity');
+    assert('wife→roses she answers roses', /roses/i.test(spoken), (v) => v === true, 'roses');
+    assert('wife→roses she conversational provenance', /^You said she likes /i.test(spoken) && !DURABLE_RE.test(spoken), (v) => v === true, 'You said she likes');
+    assert('wife→roses she commits empty', outcome.handled && outcome.commits.length === 0, (v) => v === true, '[]');
+    assert('wife→roses she no pending', session.hasPending() === false, (v) => v === true, 'no pending');
+    assert('wife→roses she zero sqlite', JSON.stringify(before) === JSON.stringify(after), (v) => v === true, 'unchanged');
+    assert(
+      'wife→roses she does not refresh TTL',
+      refreshedBefore != null && discourse.peekInterpretationHold()?.refreshedAtTurn === refreshedBefore,
+      (v) => v === true,
+      'same refreshedAtTurn',
+    );
+    assert(
+      'wife→roses she does not fall through to family_capture',
+      session.peekPendingKey() !== 'family_capture',
+      (v) => v === true,
+      'no family_capture',
+    );
+  }
+
+  {
+    const { session, deps } = openJourneyDb();
+    const discourse = new DiscourseContinuityHolder();
+    await processUtterance(normalizeInput(WIFE_ROSES), session, deps, null, null, null, null, null, discourse);
+    const favorite = await processUtterance(normalizeInput(HER_FAVORITE_Q), session, deps, null, null, null, null, null, discourse);
+    assert(
+      'her favorite flower is the same read act',
+      favorite.handled && favorite.source === 'hold_continuity' && /roses/i.test(favorite.responseText),
+      (v) => v === true,
+      'hold_continuity roses',
+    );
+  }
+
+  {
+    const { session, deps } = openJourneyDb();
+    const discourse = new DiscourseContinuityHolder();
+    await processUtterance(normalizeInput(WIFE_ROSES), session, deps, null, null, null, null, null, discourse);
+    const bare = await processUtterance(normalizeInput(SHE_LIKE_Q), session, deps, null, null, null, null, null, discourse);
+    assert(
+      'what does she like is the same read act',
+      bare.handled && bare.source === 'hold_continuity' && /roses/i.test(bare.responseText),
+      (v) => v === true,
+      'hold_continuity roses',
+    );
+  }
+
+  {
+    const { session, deps } = openJourneyDb();
+    const discourse = new DiscourseContinuityHolder();
+    await processUtterance(normalizeInput(HUSBAND_JAZZ_BARE), session, deps, null, null, null, null, null, discourse);
+    const he = await processUtterance(normalizeInput(HE_MUSIC_Q), session, deps, null, null, null, null, null, discourse);
+    assert(
+      'husband→jazz he is hold_continuity',
+      he.handled && he.source === 'hold_continuity' && /jazz/i.test(he.responseText) && /^You said he likes /i.test(he.responseText),
+      (v) => v === true,
+      'he likes jazz',
+    );
+    const { session: session2, deps: deps2 } = openJourneyDb();
+    const discourse2 = new DiscourseContinuityHolder();
+    await processUtterance(normalizeInput(HUSBAND_JAZZ_BARE), session2, deps2, null, null, null, null, null, discourse2);
+    const his = await processUtterance(normalizeInput(HIS_FAVORITE_Q), session2, deps2, null, null, null, null, null, discourse2);
+    assert(
+      'his favorite music is the same masculine read act',
+      his.handled && his.source === 'hold_continuity' && /jazz/i.test(his.responseText),
+      (v) => v === true,
+      'hold_continuity jazz',
+    );
+  }
+
+  {
+    const { session, deps } = openJourneyDb();
+    const discourse = new DiscourseContinuityHolder();
+    await processUtterance(normalizeInput(WIFE_ROSES), session, deps, null, null, null, null, null, discourse);
+    await processUtterance(normalizeInput('Okay thanks.'), session, deps, null, null, null, null, null, discourse);
+    const outcome = await processUtterance(normalizeInput(SHE_FLOWERS_Q), session, deps, null, null, null, null, null, discourse);
+    assert(
+      'intervening natural turn still answers she',
+      outcome.handled && outcome.source === 'hold_continuity' && /roses/i.test(outcome.responseText),
+      (v) => v === true,
+      'hold_continuity roses',
+    );
+  }
+
+  {
+    const discourse = new DiscourseContinuityHolder();
+    discourse.beginUserTurn();
+    discourse.establishInterpretationHold('ep-two-fem', [
+      hold({ kind: 'preference', subject: 'wife', value: 'roses' }),
+      hold({ kind: 'preference', subject: 'sister', value: 'tulips' }),
+    ]);
+    const match = matchHoldContinuityQa(SHE_FLOWERS_Q, discourse.peekInterpretationHold());
+    assert('two feminine subjects do not bind she', match.kind === 'no_match', (v) => v === true, 'no_match');
+    const { session, deps } = openJourneyDb();
+    const outcome = await processUtterance(normalizeInput(SHE_FLOWERS_Q), session, deps, null, null, null, null, null, discourse);
+    assert(
+      'two feminine subjects do not answer she',
+      !(outcome.handled && outcome.source === 'hold_continuity'),
+      (v) => v === true,
+      'not hold_continuity',
+    );
+    const explicit = await processUtterance(normalizeInput(WIFE_Q), session, deps, null, null, null, null, null, discourse);
+    assert(
+      'explicit my wife still wins with two feminine holds',
+      explicit.handled && explicit.source === 'hold_continuity' && /roses/i.test(explicit.responseText) && !/tulips/i.test(explicit.responseText),
+      (v) => v === true,
+      'wife roses',
+    );
+  }
+
+  {
+    const discourse = new DiscourseContinuityHolder();
+    discourse.beginUserTurn();
+    discourse.establishInterpretationHold('ep-two-masc', [
+      hold({ kind: 'preference', subject: 'husband', value: 'jazz' }),
+      hold({ kind: 'preference', subject: 'son', value: 'rock' }),
+    ]);
+    const match = matchHoldContinuityQa(HE_MUSIC_Q, discourse.peekInterpretationHold());
+    assert('two masculine subjects do not bind he', match.kind === 'no_match', (v) => v === true, 'no_match');
+    const { session, deps } = openJourneyDb();
+    const outcome = await processUtterance(normalizeInput(HE_MUSIC_Q), session, deps, null, null, null, null, null, discourse);
+    assert(
+      'two masculine subjects do not answer he',
+      !(outcome.handled && outcome.source === 'hold_continuity'),
+      (v) => v === true,
+      'not hold_continuity',
+    );
+  }
+
+  {
+    const discourse = new DiscourseContinuityHolder();
+    discourse.beginUserTurn();
+    discourse.establishInterpretationHold('ep-mixed', [
+      hold({ kind: 'preference', subject: 'wife', value: 'roses' }),
+      hold({ kind: 'preference', subject: 'son', value: 'pizza' }),
+    ]);
+    const she = matchHoldContinuityQa(SHE_FLOWERS_Q, discourse.peekInterpretationHold());
+    const he = matchHoldContinuityQa('What food does he like?', discourse.peekInterpretationHold());
+    assert(
+      'mixed genders: she binds only wife',
+      she.kind === 'answer' && she.kind === 'answer' && she.subject === 'wife' && /roses/i.test(she.value),
+      (v) => v === true,
+      'wife roses',
+    );
+    assert(
+      'mixed genders: he binds only son',
+      he.kind === 'answer' && he.kind === 'answer' && he.subject === 'son' && /pizza/i.test(he.value),
+      (v) => v === true,
+      'son pizza',
+    );
+  }
+
+  {
+    const cases: Array<{ subject: string; question: string }> = [
+      { subject: 'spouse', question: SHE_FLOWERS_Q },
+      { subject: 'partner', question: HE_MUSIC_Q },
+      { subject: 'child', question: SHE_FLOWERS_Q },
+    ];
+    for (const c of cases) {
+      const discourse = new DiscourseContinuityHolder();
+      discourse.beginUserTurn();
+      discourse.establishInterpretationHold('ep-neutral', [
+        hold({ kind: 'preference', subject: c.subject, value: 'roses' }),
+      ]);
+      const match = matchHoldContinuityQa(c.question, discourse.peekInterpretationHold());
+      assert(
+        `${c.subject} is not inferred from she/he`,
+        match.kind === 'no_match',
+        (v) => v === true,
+        'no_match',
+      );
+    }
+  }
+
+  {
+    const { session, deps } = openJourneyDb();
+    const discourse = new DiscourseContinuityHolder();
+    await processUtterance(normalizeInput(WIFE_ROSES), session, deps, null, null, null, null, null, discourse);
+    for (let i = 0; i < DISCOURSE_TURN_TTL + 1; i++) discourse.beginUserTurn();
+    const outcome = await processUtterance(normalizeInput(SHE_FLOWERS_Q), session, deps, null, null, null, null, null, discourse);
+    assert(
+      'expired hold cannot answer she',
+      !(outcome.handled && outcome.source === 'hold_continuity'),
+      (v) => v === true,
+      'fall through',
+    );
+  }
+
+  {
+    const { db, session, deps } = openJourneyDb();
+    const discourse = new DiscourseContinuityHolder();
+    await processUtterance(normalizeInput(WIFE_ROSES), session, deps, null, null, null, null, null, discourse);
+    const before = medCounts(db as never);
+    const they = await processUtterance(normalizeInput(THEY_FLOWERS_Q), session, deps, null, null, null, null, null, discourse);
+    assert(
+      'they does not bind',
+      !(they.handled && they.source === 'hold_continuity'),
+      (v) => v === true,
+      'not hold_continuity',
+    );
+    const stmt = await processUtterance(normalizeInput('She loves lilies.'), session, deps, null, null, null, null, null, discourse);
+    const after = medCounts(db as never);
+    assert(
+      'pronoun statement is not hold_continuity',
+      !(stmt.handled && stmt.source === 'hold_continuity'),
+      (v) => v === true,
+      'not hold_continuity',
+    );
+    assert(
+      'pronoun statement does not arm family_capture',
+      session.peekPendingKey() !== 'family_capture',
+      (v) => v === true,
+      'no family_capture',
+    );
+    assert(
+      'pronoun statement does not write sqlite',
+      JSON.stringify(before) === JSON.stringify(after),
+      (v) => v === true,
+      'unchanged',
+    );
+  }
+
+  {
+    const { db, session, deps } = openJourneyDb();
+    const discourse = new DiscourseContinuityHolder();
+    await processUtterance(normalizeInput(WIFE_ROSES), session, deps, null, null, null, null, null, discourse);
+    const before = medCounts(db as never);
+    const outcome = await processUtterance(normalizeInput(ADD_THOSE), session, deps, null, null, null, null, null, discourse);
+    const after = medCounts(db as never);
+    const bodies = (db as { prepare: (s: string) => { all: () => Array<{ body: string }> } })
+      .prepare('SELECT body FROM list_items')
+      .all()
+      .map((r) => r.body.toLowerCase());
+    assert(
+      'demonstrative grocery add is not hold_continuity',
+      !(outcome.handled && outcome.source === 'hold_continuity'),
+      (v) => v === true,
+      'not hold_continuity',
+    );
+    assert(
+      'demonstrative grocery add does not write preference-hold roses',
+      !bodies.some((b) => /roses/i.test(b)),
+      (v) => v === true,
+      'no roses item',
+    );
+    assert(
+      'demonstrative grocery add keeps existing those-writer path',
+      outcome.handled && outcome.source === 'capture' && after.list_items === before.list_items + 1,
+      (v) => v === true,
+      'capture +1 those',
+    );
+  }
+
+  {
+    const { db, session, deps } = openJourneyDb();
+    const discourse = new DiscourseContinuityHolder();
+    const subject = new ConversationalSubjectHolder();
+    const sisterId = writeContactRaw({ name: 'Avery', relationship: 'sister', importance: 8, phone: '555-0100' });
+    await processUtterance(normalizeInput(WIFE_ROSES), session, deps, subject, null, null, null, null, discourse);
+    subject.establishFamily({ entityId: sisterId, displayName: 'Avery', relationship: 'sister' });
+    const before = medCounts(db as never);
+    const liveBefore = subject.peek()?.displayName;
+    const outcome = await processUtterance(normalizeInput(SHE_FLOWERS_Q), session, deps, subject, null, null, null, null, discourse);
+    const after = medCounts(db as never);
+    assert('AS collision probe had a live sister subject', liveBefore === 'Avery', (v) => v === true, 'Avery');
+    assert(
+      'AS collision probe is not Flow C referent_resume',
+      !(outcome.handled && outcome.source === 'referent_resume'),
+      (v) => v === true,
+      'not referent_resume',
+    );
+    assert(
+      'AS collision probe answers unique preference-hold wife',
+      outcome.handled && outcome.source === 'hold_continuity' && /roses/i.test(outcome.responseText),
+      (v) => v === true,
+      'hold_continuity roses',
+    );
+    assert('AS collision probe unused-clears Flow C', subject.hasLive() === false, (v) => v === true, 'cleared');
+    assert(
+      'AS collision probe zero sqlite',
+      JSON.stringify(before) === JSON.stringify(after),
+      (v) => v === true,
+      'unchanged',
     );
   }
 

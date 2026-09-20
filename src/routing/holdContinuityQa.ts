@@ -1,5 +1,6 @@
 // Hold Continuity Q&A V1 — read-only preference answers from live interpretation holds.
-// Intra-utterance subject only. No SQLite, pending, writer, promotion, or TTL refresh.
+// Explicit my <kin> wins. Unique she/he bind is a read-side fallback over live
+// preference-hold subjects only. No SQLite, pending, writer, promotion, or TTL refresh.
 
 import { FAMILY_SYNONYMS } from '../utils/familyRead';
 import type { InterpretationHoldSlot } from './discourseContinuity';
@@ -7,7 +8,8 @@ import type { AdmittedMultiFactCandidate } from './naturalMultiFactInterpretatio
 
 export type HoldContinuityQuestion =
   | { kind: 'not_question' }
-  | { kind: 'preference'; subject: string; category?: string };
+  | { kind: 'preference'; subject: string; category?: string }
+  | { kind: 'preference_pronoun'; gender: 'feminine' | 'masculine'; category?: string };
 
 export type HoldContinuityMatch =
   | { kind: 'not_question' }
@@ -35,6 +37,14 @@ const FAVORITE_RE = new RegExp(
   `^\\s*what(?:'s|\\s+is)\\s+my\\s+(${REL_ALT})'?s\\s+favorite(?:\\s+([A-Za-z]+))?\\b`,
   'i',
 );
+const DOES_LIKE_PRONOUN_RE = new RegExp(
+  `^\\s*what(?:\\s+([A-Za-z]+))?\\s+does\\s+(she|he)\\s+(?:like|love|prefer)\\b`,
+  'i',
+);
+const FAVORITE_PRONOUN_RE = new RegExp(
+  `^\\s*what(?:'s|\\s+is)\\s+(her|his)\\s+favorite(?:\\s+([A-Za-z]+))?\\b`,
+  'i',
+);
 
 const CLOSED_CATEGORY = new Set([
   'name', 'names', 'number', 'phone', 'address', 'age', 'birthday',
@@ -56,6 +66,29 @@ function inspectablePreferences(hold: InterpretationHoldSlot | null): AdmittedMu
       && typeof c.value === 'string'
       && c.value.trim().length > 0,
   );
+}
+
+function pronounGenderOf(token: string): 'feminine' | 'masculine' | undefined {
+  const t = token.trim().toLowerCase();
+  if (t === 'she' || t === 'her') return 'feminine';
+  if (t === 'he' || t === 'his') return 'masculine';
+  return undefined;
+}
+
+function uniqueCompatibleHoldSubjects(
+  candidates: AdmittedMultiFactCandidate[],
+  gender: 'feminine' | 'masculine',
+): string[] {
+  const allowed = gender === 'feminine' ? FEMININE_FAMILY : MASCULINE_FAMILY;
+  const seen = new Set<string>();
+  const subjects: string[] = [];
+  for (const c of candidates) {
+    const subject = (c.subject ?? '').trim().toLowerCase();
+    if (!allowed.has(subject) || seen.has(subject)) continue;
+    seen.add(subject);
+    subjects.push(subject);
+  }
+  return subjects;
 }
 
 function pronounFor(subject: string): { pronoun: string; verb: string } {
@@ -97,6 +130,28 @@ export function classifyHoldContinuityPreferenceQuestion(utterance: string): Hol
       : { kind: 'preference', subject };
   }
 
+  const doesPronoun = t.match(DOES_LIKE_PRONOUN_RE);
+  if (doesPronoun) {
+    const gender = pronounGenderOf(doesPronoun[2] ?? '');
+    if (!gender) return { kind: 'not_question' };
+    const categoryRaw = doesPronoun[1]?.trim().toLowerCase();
+    if (categoryRaw && CLOSED_CATEGORY.has(categoryRaw)) return { kind: 'not_question' };
+    return categoryRaw
+      ? { kind: 'preference_pronoun', gender, category: categoryRaw }
+      : { kind: 'preference_pronoun', gender };
+  }
+
+  const favoritePronoun = t.match(FAVORITE_PRONOUN_RE);
+  if (favoritePronoun) {
+    const gender = pronounGenderOf(favoritePronoun[1] ?? '');
+    if (!gender) return { kind: 'not_question' };
+    const categoryRaw = favoritePronoun[2]?.trim().toLowerCase();
+    if (categoryRaw && CLOSED_CATEGORY.has(categoryRaw)) return { kind: 'not_question' };
+    return categoryRaw
+      ? { kind: 'preference_pronoun', gender, category: categoryRaw }
+      : { kind: 'preference_pronoun', gender };
+  }
+
   return { kind: 'not_question' };
 }
 
@@ -122,10 +177,20 @@ export function matchHoldContinuityQa(
   holdSet: InterpretationHoldSlot | null,
 ): HoldContinuityMatch {
   const question = classifyHoldContinuityPreferenceQuestion(utterance);
-  if (question.kind !== 'preference') return { kind: 'not_question' };
+  if (question.kind === 'not_question') return { kind: 'not_question' };
 
-  const prefs = inspectablePreferences(holdSet).filter(
-    (c) => (c.subject ?? '').trim().toLowerCase() === question.subject,
+  const inspectable = inspectablePreferences(holdSet);
+  let subject: string | undefined;
+  if (question.kind === 'preference') {
+    subject = question.subject;
+  } else {
+    const compatible = uniqueCompatibleHoldSubjects(inspectable, question.gender);
+    if (compatible.length !== 1) return { kind: 'no_match' };
+    subject = compatible[0];
+  }
+
+  const prefs = inspectable.filter(
+    (c) => (c.subject ?? '').trim().toLowerCase() === subject,
   );
   if (prefs.length === 0) return { kind: 'no_match' };
 
@@ -134,9 +199,9 @@ export function matchHoldContinuityQa(
     const value = values[0];
     return {
       kind: 'answer',
-      subject: question.subject,
+      subject,
       value,
-      response: formatPreferenceAnswer(question.subject, value),
+      response: formatPreferenceAnswer(subject, value),
     };
   }
 
@@ -147,9 +212,9 @@ export function matchHoldContinuityQa(
       const value = categoryValues[0];
       return {
         kind: 'answer',
-        subject: question.subject,
+        subject,
         value,
-        response: formatPreferenceAnswer(question.subject, value),
+        response: formatPreferenceAnswer(subject, value),
       };
     }
   }
