@@ -2774,8 +2774,8 @@ export async function routeIntent(
           // even called) and independently establishes/refreshes the
           // candidateSet from the identical extractNarrativeOperationalCandidates
           // call. Returning an ambiguous_operational_list RouteDecision here
-          // too would additionally re-arm processUtterance.ts's own
-          // operational_list_ambiguity pending on every repeated occurrence
+          // too would additionally re-arm processUtterance.ts's
+          // clarify:operational_list pending on every repeated occurrence
           // (confirmed via regression: WCS B2/B4/C1 in
           // conversationFoundationSmoothMvp.test.ts), corrupting later turns.
           // Reconciling the two mechanisms is WCS candidate-continuity work,

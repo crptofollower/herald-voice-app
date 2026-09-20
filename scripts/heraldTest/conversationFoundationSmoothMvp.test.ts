@@ -414,7 +414,7 @@ export async function runConversationFoundationSmoothMvpTests() {
       out.handled === true
       && out.source === 'capture'
       && session.hasPending()
-      && session.peekPendingKey() === 'operational_list_ambiguity'
+      && session.peekPendingKey() === 'clarify:operational_list'
       && out.responseText === expected
       && expected !== EPHEMERAL_CLARIFY_REPLY
     ));
@@ -611,7 +611,7 @@ export async function runConversationFoundationSmoothMvpTests() {
     assert('composed: classifier decline arms grocery-vs-todo pending with original items', (
       ask.handled === true
       && session.hasPending()
-      && session.peekPendingKey() === 'operational_list_ambiguity'
+      && session.peekPendingKey() === 'clarify:operational_list'
       && /eggs and milk/i.test(ask.responseText ?? '')
       && (db.prepare('SELECT COUNT(*) as n FROM list_items').get() as { n: number }).n === 0
     ));

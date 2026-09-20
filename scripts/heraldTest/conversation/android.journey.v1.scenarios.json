@@ -288,6 +288,31 @@
           "zero_delta": true
         }
       ]
+    },
+    {
+      "id": "operational_list_clarify_resume_grocery",
+      "title": "Unmarked grab list asks grocery-vs-todo, then grocery answer writes",
+      "claimed_path": "clarify:operational_list pending -> pending_resume list_add commit",
+      "turns": [
+        {
+          "input": "grab milk and eggs",
+          "pending_key_after": "clarify:operational_list",
+          "route_source": "capture",
+          "commit_statuses": ["pending"],
+          "commit_pending_keys": ["clarify:operational_list"],
+          "zero_delta": true
+        },
+        {
+          "input": "for groceries",
+          "pending_key_after": null,
+          "pending_key_before": "clarify:operational_list",
+          "route_source": "pending_resume",
+          "commit_statuses": ["committed"],
+          "zero_delta": false,
+          "lists_added": ["grocery"],
+          "open_grocery_count": 2
+        }
+      ]
     }
   ]
 }

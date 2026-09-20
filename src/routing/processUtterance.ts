@@ -83,12 +83,14 @@ import {
 import { hasCalendarReadEvidence, readCalendarScope, scanResidualIntent } from './tierRouter';
 import { DiscourseContinuityHolder } from './discourseContinuity';
 import {
+  CLARIFY_OPERATIONAL_LIST_KEY,
   extractAmbiguousAcquisitionObject,
   formatOperationalListClarification,
   interpretCandidateSetDemonstrative,
   isAddShapedOperationalDemonstrative,
+  isClarificationPendingKey,
   isOperationalListItemShape,
-  parseOperationalDomainResolution,
+  parseClarificationDomainAnswer,
   parseOperationalListContinuationAdd,
   splitCapturedTailSegments,
 } from './operationalListContinuity';
@@ -575,15 +577,20 @@ export async function processUtterance(
   //    PendingSlot is ABSOLUTE vs Flow C: do not evaluate the referent
   //    speech-act or re-read by id while a pending owns the turn.
   //
-  //    Bounded exception (Call/Text recovery slice): a pending clarification
-  //    yields when existing routing already claims the utterance (device
-  //    action, device read, or live-data) and the text is not a plausible
-  //    pending answer. Not a capability allowlist.
+  //    Bounded exception: Call/Text recovery yields on existing route claims
+  //    (device action/read/live-data). Clarification pendings yield only for a
+  //    competing actionIntent — the same ownership test, not live-data/chit-chat.
   if (session.hasPending()) {
-    const recoveryPending = session.peekPendingKey() === CALL_TEXT_RECOVERY_KEY;
-    if (recoveryPending) {
+    const pendingKey = session.peekPendingKey();
+    if (pendingKey === CALL_TEXT_RECOVERY_KEY || isClarificationPendingKey(pendingKey)) {
       const decision = await deps.classifyQuery(text);
-      if (shouldPreemptCallTextRecovery(decision, text, session.pendingOwnsReply(text))) {
+      const owns = session.pendingOwnsReply(text);
+      const yieldClarification = isClarificationPendingKey(pendingKey)
+        && !!decision.actionIntent
+        && !owns;
+      const yieldCallText = pendingKey === CALL_TEXT_RECOVERY_KEY
+        && shouldPreemptCallTextRecovery(decision, text, owns);
+      if (yieldClarification || yieldCallText) {
         session.clearPending();
       }
     }
@@ -1252,10 +1259,7 @@ export async function processUtterance(
     const prompt = formatOperationalListClarification(object);
     if (items.length >= 2) {
       const resume = async (userText: string): Promise<CommitResult> => {
-        if (CONFIRM_NO_RE.test(userText.trim())) {
-          return { status: 'noop', ack: prompt };
-        }
-        const resolution = parseOperationalDomainResolution(userText);
+        const resolution = parseClarificationDomainAnswer(userText);
         if (resolution === 'grocery') {
           const writer = DOMAIN_WRITERS.list_add;
           if (!writer) return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
@@ -1263,7 +1267,7 @@ export async function processUtterance(
           const t0 = mono();
           const result = await writer.add(
             { type: 'list_add', items, listName: 'grocery' },
-            userText,
+            text,
           );
           logWriterOpEnd('list_add', mono() - t0, result.status);
           logCommitResult('list_add', result.status, !!result.focus);
@@ -1277,7 +1281,7 @@ export async function processUtterance(
           const t0 = mono();
           const result = await writer.add(
             { type: 'todo_add', body: items.join(' and ') },
-            userText,
+            text,
           );
           logWriterOpEnd('todo_add', mono() - t0, result.status);
           logCommitResult('todo_add', result.status, !!result.focus);
@@ -1289,7 +1293,7 @@ export async function processUtterance(
       const pending: Extract<CommitResult, { status: 'pending' }> = {
         status: 'pending',
         prompt,
-        pendingKey: 'operational_list_ambiguity',
+        pendingKey: CLARIFY_OPERATIONAL_LIST_KEY,
         resume,
         reaskPrompt: prompt,
       };
@@ -1297,6 +1301,7 @@ export async function processUtterance(
         pendingKey: pending.pendingKey,
         resume: pending.resume,
         reaskPrompt: prompt,
+        ownsReply: (userText: string) => parseClarificationDomainAnswer(userText) != null,
       });
       return { handled: true, source: 'capture', responseText: prompt, commits: [pending] };
     }

@@ -13,11 +13,25 @@ export const OBLIGATION_MODAL_FAMILY =
 export const OPERATIONAL_ACQUISITION_SHAPE =
   /\b(?:need\s+to|have\s+to|gotta|got\s+to|going\s+to|gonna|want\s+to|wanna)\s+(?:go\s+(?:to\s+(?:the\s+)?(?:grocery\s+store|supermarket|grocery|store|shop|market)\s+(?:and\s+)?)?)?(?:pick(?:\s+\w+)?\s+up|get|buy|grab)\b/i;
 
+/** Clause-initial pick up/get/buy/grab. Same verbs as the modal family; no new inventory. */
+export const IMPERATIVE_ACQUISITION_SHAPE =
+  /^\s*(?:please\s+)?(?:pick(?:\s+\w+)?\s+up|get|buy|grab)\b/i;
+
+const CAMERA_GRAB_RE = /\b(?:take|snap|grab)\s+a\s+(?:picture|photo|photograph|pic)\b/i;
+
+/** Closed clarification pending key. Not confirmation (`llm_confirm:*`). */
+export const CLARIFY_OPERATIONAL_LIST_KEY = 'clarify:operational_list';
+
+export function isClarificationPendingKey(key: string | null | undefined): boolean {
+  return typeof key === 'string' && key.startsWith('clarify:');
+}
+
 export const GROCERY_CONTEXT_MARKER =
   /\b(?:grocery|groceries|grocery\s+store|supermarket|shopping\s+list)\b/i;
 
 export function isUnmarkedAcquisitionShape(text: string): boolean {
-  return OPERATIONAL_ACQUISITION_SHAPE.test(text) && !GROCERY_CONTEXT_MARKER.test(text);
+  if (GROCERY_CONTEXT_MARKER.test(text) || CAMERA_GRAB_RE.test(text)) return false;
+  return OPERATIONAL_ACQUISITION_SHAPE.test(text) || IMPERATIVE_ACQUISITION_SHAPE.test(text);
 }
 
 /** Same comma/"and" splitter as existing list_add / grocery acquisition. */
@@ -31,14 +45,19 @@ const INFINITIVE_OR_AUX_RE =
 const DATE_TIME_DOSE_RE =
   /\b(?:today|tonight|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week|this week|this (?:morning|afternoon|evening)|at \d|by \d|\d+\s*(?:am|pm)|later)\b|\b\d+\s*(?:mg|mcg|ml)\b|\bat\s+\d{1,2}(?::\d{2})?\b|\b\d{1,2}:\d{2}\b/i;
 
-function captureUnmarkedAcquisitionTail(text: string): string | null {
-  if (!isUnmarkedAcquisitionShape(text)) return null;
-  const m = text.match(/\b(?:pick(?:\s+\w+)?\s+up|get|buy|grab)\s+(.+)/i);
-  let raw = boundCapturedTail((m?.[1] ?? '').trim());
+function normalizeAcquisitionTail(rawInput: string): string {
+  let raw = boundCapturedTail(rawInput.trim());
   raw = raw
     .replace(/\s+(?:from|at)\s+(?:the\s+)?(?:grocery\s+store|grocery|groceries|supermarket|store|market|shopping)\b.*$/i, '')
     .replace(/\s+(?:today|tonight|tomorrow|later|this\s+(?:morning|afternoon|evening|week)|next\s+week|at\s+\d.*|by\s+\d.*|\d+\s*(?:am|pm))\b.*$/i, '')
     .trim();
+  return raw;
+}
+
+function captureUnmarkedAcquisitionTail(text: string): string | null {
+  if (!isUnmarkedAcquisitionShape(text)) return null;
+  const m = text.match(/\b(?:pick(?:\s+\w+)?\s+up|get|buy|grab)\s+(.+)/i);
+  const raw = normalizeAcquisitionTail(m?.[1] ?? '');
   return raw.length > 0 ? raw : null;
 }
 
@@ -157,6 +176,22 @@ export function parseOperationalDomainResolution(text: string): 'grocery' | 'tod
   const todo = /\b(?:to-?do|todos?|tasks?)\b/i.test(t);
   if (grocery && !todo) return 'grocery';
   if (todo && !grocery) return 'todo';
+  return null;
+}
+
+const CLARIFICATION_QUESTION_OPEN_RE =
+  /^(?:what|what's|whats|how|when|where|who|why|is|are|do|does|did|can|could)\b/i;
+
+/**
+ * Answer-only grocery/todo fill for clarify:operational_list.
+ * Questions and read shapes must not authorize the missing domain input.
+ */
+export function parseClarificationDomainAnswer(text: string): 'grocery' | 'todo' | null {
+  const t = text.trim();
+  if (!t) return null;
+  if (CLARIFICATION_QUESTION_OPEN_RE.test(t) || /[?]$/.test(t)) return null;
+  const resolution = parseOperationalDomainResolution(t);
+  if (resolution === 'grocery' || resolution === 'todo') return resolution;
   return null;
 }
 
