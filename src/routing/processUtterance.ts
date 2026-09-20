@@ -24,6 +24,7 @@ import {
   answerReferentYearBoundedVisit,
 } from './conversationalSubject';
 import { isClosedActiveSubjectIdentityLookup, ACTIVE_SUBJECT_GROUNDING_ACK } from './activeSubjectReference';
+import { inspectHolds, formatHoldRecall } from './holdRecall';
 import { detectFamilyRead, resolveFamilyRead } from '../utils/familyRead';
 import { resolveHouseholdProvider } from '../utils/householdRead';
 import { getLastVisit } from '../db/medicalDB';
@@ -106,7 +107,7 @@ export type RouteDeps = Parameters<typeof routeIntent>[1];
 export type UtteranceOutcome =
   | {
       handled: true;
-      source: 'pending_resume' | 'capture' | 'referent_resume' | 'interpretation';
+      source: 'pending_resume' | 'capture' | 'referent_resume' | 'interpretation' | 'hold_recall';
       responseText: string;
       commits: CommitResult[];
       /** Presentation hint only. Never speech-parsed. Never a conversational machine. */
@@ -648,6 +649,16 @@ export async function processUtterance(
       return todoHandled('pending_resume', pendingResume.responseText, pendingResume.commits);
     }
     return groceryPending ? groceryHandled('pending_resume', pendingResume.responseText, pendingResume.commits) : pendingResume;
+  }
+  const holdRecall = inspectHolds(text, discourse?.peekInterpretationHold() ?? null);
+  const holdRecallText = formatHoldRecall(holdRecall);
+  if (holdRecallText !== null) {
+    return {
+      handled: true,
+      source: 'hold_recall',
+      responseText: holdRecallText,
+      commits: [],
+    };
   }
   const exactlyOneNarrativePerson = discourse
     ? discourse.noteNarrativeUtterance(text).exactlyOneNarrativePerson
