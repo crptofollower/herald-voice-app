@@ -297,11 +297,52 @@ export function isAddShapedOperationalDemonstrative(text: string): boolean {
 /** Closed unresolved pro-forms that cannot themselves be a durable list value. */
 const BARE_UNRESOLVED_LIST_REFERENT_RE = /^(?:this|that|these|those|them|it)$/i;
 
+/** Articles/determiners of this construction — not item identity. */
+const NON_IDENTITY_ARTICLES = new Set(['a', 'an', 'the']);
+/** Indefinite quantifiers of this construction — not item identity. */
+const NON_IDENTITY_QUANTIFIERS = new Set(['some', 'few', 'couple', 'several']);
+/** Spelled cardinals treated as bare numbers. Measure nouns are not in this class. */
+const NON_IDENTITY_CARDINALS = new Set([
+  'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',
+  'eleven', 'twelve',
+]);
+
+function tokenizeReferentialSpan(item: string): string[] {
+  return item
+    .trim()
+    .replace(/[.!?]+$/g, '')
+    .split(/\s+/)
+    .map((t) => t.replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, '').toLowerCase())
+    .filter((t) => t.length > 0);
+}
+
+function isNonIdentityReferentialToken(token: string): boolean {
+  if (NON_IDENTITY_ARTICLES.has(token)) return true;
+  if (NON_IDENTITY_QUANTIFIERS.has(token)) return true;
+  if (token === 'of') return true;
+  if (/^\d+$/.test(token)) return true;
+  if (NON_IDENTITY_CARDINALS.has(token)) return true;
+  if (BARE_UNRESOLVED_LIST_REFERENT_RE.test(token)) return true;
+  return false;
+}
+
+/**
+ * Headless indefinite quantity/referential span: after tokenization, every
+ * token is in the closed non-identity class. Any residual noun is identity
+ * and keeps the grounded path. Not a phrase blacklist.
+ */
+export function isUnresolvedReferentialQuantity(item: string): boolean {
+  const tokens = tokenizeReferentialSpan(item);
+  if (tokens.length === 0) return false;
+  return tokens.every(isNonIdentityReferentialToken);
+}
+
 export const UNRESOLVED_LIST_REFERENT_REASON = 'unresolved_list_referent';
 
 export function isBareUnresolvedListReferent(item: string): boolean {
   const s = item.trim().replace(/[.!?]+$/g, '');
-  return s.length > 0 && BARE_UNRESOLVED_LIST_REFERENT_RE.test(s);
+  if (!s) return false;
+  return BARE_UNRESOLVED_LIST_REFERENT_RE.test(s) || isUnresolvedReferentialQuantity(s);
 }
 
 export function unresolvedListReferentPrompt(listName?: string): string {
