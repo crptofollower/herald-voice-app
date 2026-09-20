@@ -1447,6 +1447,7 @@ export default function ChatScreen() {
     isAtBottomRef.current = true;
     let shadowSnapshot: PreTurnGrocerySnapshot | null = null;
     let shadowProduction: ProductionOwnerRecord | null = null;
+    let journeyOutcome: unknown = undefined;
     try {
     const historySnapshot = messages.slice(-20).map(({ role, content }) => ({ role, content }));
 
@@ -1756,6 +1757,7 @@ export default function ChatScreen() {
       resolveContact: resolveContactPhoneRef.current ?? undefined,
       getMedicationSemanticInterpreterCtx,
     }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current, calendarPresentationRef.current, calendarContinuationRef.current, discourseRef.current, conversationLedgerRef.current);
+    journeyOutcome = outcome;
     syncSituationalListVisuals(outcome);
     const continuityFocus = !outcome.handled
       ? continuityLedgerFocus(outcome.continuityFocus, outcome.continuityReferenceOnly === true)
@@ -2904,8 +2906,47 @@ export default function ChatScreen() {
           wasCorrection: /\b(no|wrong|not what i meant|that's not right)\b/i.test(text),
         });
       } catch { /* never block the UI */ }
+      try {
+        const { loadJourneyHost } = require('../dev/maybeJourneyHost');
+        loadJourneyHost()?.reportJourneyTurnOutcome(
+          journeyOutcome,
+          sessionRef.current.peekPendingKey(),
+        );
+      } catch { /* journey host only */ }
     }
   }, [userId, messages, personaKey, lat, lng, locationLabel, getContextBlock, addMessage, setError, resetSpeech, enqueueSentence, resetStreamState, stop, llmStatus, getCtx, getModelIdentity, experimentalConvStatus, getExperimentalCtx, getListRemoveShadowCtx, getMedicationSemanticInterpreterCtx, dispatchLocalIntent, dispatchEmergency]);
+
+  useEffect(() => {
+    try {
+      const { loadJourneyHost } = require('../dev/maybeJourneyHost');
+      const host = loadJourneyHost();
+      host?.bindJourneyRuntime({
+        sendMessage,
+        peekPendingKey: () => sessionRef.current.peekPendingKey(),
+        resetConversation: () => {
+          lastSentRef.current = 0;
+          sendingRef.current = false;
+          pendingContactCollectRef.current = null;
+          if (sessionRef.current.hasPending()) sessionRef.current.clearPending();
+          sessionRef.current = new ConversationSession();
+          subjectRef.current.clear();
+          medicationPresentationRef.current.clear();
+          orderedPresentationRef.current.clear();
+          todoPresentationRef.current.clear();
+          calendarPresentationRef.current.clear();
+          calendarContinuationRef.current.clear();
+          conversationLedgerRef.current = createConversationTurnLedger();
+          discourseRef.current.clear();
+          hotRingRef.current.clear();
+          setActiveSurface(null);
+          setInputText('');
+          useStore.getState().clearChat();
+        },
+      });
+    } catch {
+      /* journey host only */
+    }
+  }, [sendMessage]);
 
   const handleSend = useCallback(() => {
     sendMessage(inputText.trim());

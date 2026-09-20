@@ -48,6 +48,13 @@ import { initAppLatencyBaseline, log as latLog, mono as latMono } from './src/ut
 
 initAppLatencyBaseline();
 
+try {
+  const { loadJourneyHost } = require('./src/dev/maybeJourneyHost');
+  loadJourneyHost()?.onboardAndroidJourneyHost();
+} catch {
+  /* journey native module absent */
+}
+
 export type RootStackParamList = {
   Onboarding: undefined;
   Chat: undefined;
@@ -192,6 +199,12 @@ export default function App() {
           durationMs: Math.round((latMono() - dbT0) * 100) / 100,
           outcome: 'ready',
         });
+        try {
+          const { loadJourneyHost } = require('./src/dev/maybeJourneyHost');
+          loadJourneyHost()?.prepareInstrumentationSession();
+        } catch {
+          /* journey native module absent */
+        }
         setDbState('ready');
       } catch (e) {
         if (cancelled) return;

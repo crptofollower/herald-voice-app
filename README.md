@@ -69,6 +69,8 @@ eas build --platform ios
 eas build --platform android
 ```
 
+Local journey APKs (`:app:assembleJourney` / `:app:assembleJourneyAndroidTest`) must use a short Gradle cache on Windows, for example `GRADLE_USER_HOME=C:\g`, so CMake/ninja prefab paths stay under MAX_PATH. Do not lengthen the cache path to defeat that.
+
 ---
 
 ## Environment variables

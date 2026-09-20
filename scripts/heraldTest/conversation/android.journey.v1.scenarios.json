@@ -1,0 +1,293 @@
+{
+  "schema": "herald.android.journey.v1",
+  "source": "firebase-journey-spike-v1 trimmed to high-value Android integration journeys",
+  "scenarios": [
+    {
+      "id": "grocery_capture_read_opr_remove_reread",
+      "title": "Grocery capture, list read, OPR identify, named remove, reread",
+      "claimed_path": "list_add -> list_read -> referent_resume identify -> list remove -> list_read",
+      "turns": [
+        {
+          "input": "I need eggs and milk.",
+          "pending_key_after": null,
+          "route_source": "capture",
+          "commit_statuses": ["committed"],
+          "capability": "list_add",
+          "zero_delta": false,
+          "lists_added": ["grocery"],
+          "open_grocery_count": 2
+        },
+        {
+          "input": "What's on my grocery list?",
+          "pending_key_after": null,
+          "route_source": "device_read",
+          "route_kind": "device_read",
+          "commit_statuses": [],
+          "zero_delta": true,
+          "open_grocery_count": 2
+        },
+        {
+          "input": "the first one",
+          "pending_key_after": null,
+          "route_source": "referent_resume",
+          "route_kind": "referent_resume",
+          "commit_statuses": [],
+          "response_includes": ["eggs"],
+          "zero_delta": true,
+          "open_grocery_count": 2
+        },
+        {
+          "input": "Remove the second thing from my grocery list.",
+          "pending_key_after": null,
+          "route_source": "referent_resume",
+          "route_kind": "referent_resume",
+          "commit_statuses": [],
+          "zero_delta": false,
+          "items_changed": 1,
+          "open_grocery": ["eggs"]
+        },
+        {
+          "input": "What's on my grocery list?",
+          "pending_key_after": null,
+          "route_source": "device_read",
+          "route_kind": "device_read",
+          "commit_statuses": [],
+          "zero_delta": true,
+          "open_grocery": ["eggs"]
+        }
+      ]
+    },
+    {
+      "id": "todo_capture_read_complete_reread",
+      "title": "TODO capture, authoritative read, complete confirm, reread empty",
+      "claimed_path": "todo_add -> todo_read -> todo_complete pending -> pending_resume commit -> todo_read",
+      "turns": [
+        {
+          "input": "I need to call the dentist.",
+          "pending_key_after": null,
+          "route_source": "capture",
+          "commit_statuses": ["committed"],
+          "capability": "todo_add",
+          "zero_delta": false,
+          "lists_added": ["todos"],
+          "items_added": [{ "list_name": "todos", "body": "call the dentist." }],
+          "open_todos": ["call the dentist."]
+        },
+        {
+          "input": "What do I need to do?",
+          "pending_key_after": null,
+          "route_source": "device_read",
+          "route_kind": "device_read",
+          "commit_statuses": [],
+          "response_includes": ["call the dentist"],
+          "zero_delta": true,
+          "open_todos": ["call the dentist."]
+        },
+        {
+          "input": "I called the dentist.",
+          "pending_key_after": "todo_complete",
+          "route_source": "capture",
+          "commit_statuses": ["pending"],
+          "commit_pending_keys": ["todo_complete"],
+          "capability": "todo_complete",
+          "zero_delta": true,
+          "open_todos": ["call the dentist."]
+        },
+        {
+          "input": "Yes",
+          "pending_key_before": "todo_complete",
+          "pending_key_after": null,
+          "route_source": "pending_resume",
+          "commit_statuses": ["committed"],
+          "capability": "todo_complete",
+          "zero_delta": false,
+          "items_changed": 1,
+          "open_todos_count": 0
+        },
+        {
+          "input": "What do I need to do?",
+          "pending_key_after": null,
+          "route_source": "device_read",
+          "route_kind": "device_read",
+          "commit_statuses": [],
+          "zero_delta": true,
+          "open_todos_count": 0
+        }
+      ]
+    },
+    {
+      "id": "med_eliquis_confirm_authoritative_recall",
+      "title": "Medication capture confirm, then summary and named inquiry",
+      "claimed_path": "medical_capture pending -> commit medications -> medical:summary / medical:named_inquiry reads",
+      "turns": [
+        {
+          "input": "I take Eliquis 5 mg twice a day.",
+          "pending_key_after": "medical_capture",
+          "route_source": "capture",
+          "commit_statuses": ["pending"],
+          "commit_pending_keys": ["medical_capture"],
+          "capability": "medical_capture",
+          "zero_delta": true
+        },
+        {
+          "input": "Yes.",
+          "pending_key_before": "medical_capture",
+          "pending_key_after": null,
+          "route_source": "pending_resume",
+          "commit_statuses": ["committed"],
+          "capability": "medical_capture",
+          "zero_delta": false,
+          "medications_added": 1,
+          "medications_named": ["Eliquis"]
+        },
+        {
+          "input": "What medications am I taking?",
+          "pending_key_after": null,
+          "route_source": "device_read",
+          "route_kind": "device_read",
+          "commit_statuses": [],
+          "response_includes": ["Eliquis"],
+          "zero_delta": true,
+          "medications_named": ["Eliquis"]
+        },
+        {
+          "input": "How often do I take Eliquis?",
+          "pending_key_after": null,
+          "route_source": "device_read",
+          "route_kind": "device_read",
+          "commit_statuses": [],
+          "response_includes": ["twice a day"],
+          "zero_delta": true
+        },
+        {
+          "input": "What did I tell you about Eliquis?",
+          "pending_key_after": null,
+          "route_source": "device_read",
+          "route_kind": "device_read",
+          "commit_statuses": [],
+          "response_includes": ["Eliquis"],
+          "zero_delta": true
+        }
+      ]
+    },
+    {
+      "id": "doctor_visit_confirm_authoritative_recall",
+      "title": "Named visit capture confirm then outcome read",
+      "claimed_path": "medical_visit pending -> commit medical_records -> medical:visit_outcome_read",
+      "turns": [
+        {
+          "input": "I saw Dr. Patel today. He said my knee looked good.",
+          "pending_key_after": "medical_visit",
+          "route_source": "capture",
+          "commit_statuses": ["pending"],
+          "commit_pending_keys": ["medical_visit"],
+          "capability": "medical_visit",
+          "zero_delta": true
+        },
+        {
+          "input": "Yes.",
+          "pending_key_before": "medical_visit",
+          "pending_key_after": null,
+          "route_source": "pending_resume",
+          "commit_statuses": ["committed"],
+          "capability": "medical_visit",
+          "zero_delta": false,
+          "medical_records_added": 1
+        },
+        {
+          "input": "What did Dr. Patel say?",
+          "pending_key_after": null,
+          "route_source": "device_read",
+          "route_kind": "device_read",
+          "commit_statuses": [],
+          "response_includes": ["knee looked good"],
+          "zero_delta": true
+        }
+      ]
+    },
+    {
+      "id": "denial_grocery_recovery_zero_write",
+      "title": "Denial of grocery recovery produces zero unauthorized write",
+      "claimed_path": "llm_confirm:list_add + CONFIRM_NO -> noop, exact zero SQLite delta",
+      "turns": [
+        {
+          "input": "For my grocery list, we need bread and eggs.",
+          "pending_key_after": "llm_confirm:list_add",
+          "route_source": "capture",
+          "commit_statuses": ["pending"],
+          "commit_pending_keys": ["llm_confirm:list_add"],
+          "capability": "list_add",
+          "zero_delta": true,
+          "open_grocery_count": 0
+        },
+        {
+          "input": "no",
+          "pending_key_after": null,
+          "pending_key_before": "llm_confirm:list_add",
+          "route_source": "pending_resume",
+          "commit_statuses": ["noop"],
+          "capability": "list_add",
+          "response_includes": ["I won't remember that."],
+          "zero_delta": true,
+          "open_grocery_count": 0,
+          "open_todos_count": 0
+        }
+      ]
+    },
+    {
+      "id": "sequential_confirm_grocery_recovery",
+      "title": "Sequential confirmation: pending grocery recovery, then yes writes only that candidate",
+      "claimed_path": "deterministic_recovery list_add arms llm_confirm:list_add; first yes commits grocery only",
+      "turns": [
+        {
+          "input": "For my grocery list, we need bread and eggs.",
+          "pending_key_after": "llm_confirm:list_add",
+          "pending_key_before": null,
+          "route_source": "capture",
+          "commit_statuses": ["pending"],
+          "commit_pending_keys": ["llm_confirm:list_add"],
+          "capability": "list_add",
+          "response_includes": ["Say yes and I'll remember that."],
+          "zero_delta": true,
+          "open_grocery_count": 0,
+          "open_todos_count": 0
+        },
+        {
+          "input": "yes",
+          "pending_key_after": null,
+          "pending_key_before": "llm_confirm:list_add",
+          "route_source": "pending_resume",
+          "commit_statuses": ["committed"],
+          "capability": "list_add",
+          "response_includes": ["grocery list"],
+          "zero_delta": false,
+          "lists_added": ["grocery"],
+          "items_added": [
+            { "list_name": "grocery", "body": "bread" },
+            { "list_name": "grocery", "body": "eggs" }
+          ],
+          "open_grocery": ["bread", "eggs"],
+          "open_todos_count": 0
+        }
+      ]
+    },
+    {
+      "id": "call_unknown_contact_pending_no_launch",
+      "title": "CALL unknown contact arms pending without SQLite write or launch",
+      "claimed_path": "contact_call writer pending; exact zero authoritative delta; no resolved phone",
+      "turns": [
+        {
+          "input": "Call John.",
+          "pending_key_after": "contact_call",
+          "route_source": "capture",
+          "commit_statuses": ["pending"],
+          "commit_pending_keys": ["contact_call"],
+          "capability": "contact_call",
+          "response_includes": ["number for"],
+          "response_excludes": ["Calling"],
+          "zero_delta": true
+        }
+      ]
+    }
+  ]
+}

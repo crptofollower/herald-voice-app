@@ -25,11 +25,20 @@ class MainApplication : Application(), ReactApplication {
             PackageList(this).packages.apply {
               // Packages that cannot be autolinked yet can be added manually here, for example:
               // add(MyReactNativePackage())
+              try {
+                val clazz = Class.forName("ai.apexempire.herald.debug.DebugReactPackages")
+                val method = clazz.getMethod("packages")
+                @Suppress("UNCHECKED_CAST")
+                addAll(method.invoke(null) as List<ReactPackage>)
+              } catch (_: ClassNotFoundException) {
+                // Journey-only package absent from ordinary debug/release.
+              }
             }
 
           override fun getJSMainModuleName(): String = ".expo/.virtual-metro-entry"
 
-          override fun getUseDeveloperSupport(): Boolean = BuildConfig.DEBUG
+          override fun getUseDeveloperSupport(): Boolean =
+              BuildConfig.DEBUG && !BuildConfig.JOURNEY_EMBEDDED
 
           override val isNewArchEnabled: Boolean = BuildConfig.IS_NEW_ARCHITECTURE_ENABLED
       }
