@@ -648,11 +648,13 @@ export async function runConversationFoundationSmoothMvpTests() {
     const presented = !read.handled && read.routeDecision.kind === 'device_read'
       ? read.routeDecision.presentedGroceryIds ?? []
       : [];
-    assert('composed: grocery read is eggs, milk, bananas without wrapper language', (
+    assert('composed: grocery read names eggs, milk, bananas without wrapper language', (
       !read.handled
       && read.routeDecision.kind === 'device_read'
       && read.routeDecision.reason === 'action:list_read'
-      && readText === "You've got 3 things."
+      && /eggs/i.test(readText)
+      && /milk/i.test(readText)
+      && /bananas/i.test(readText)
       && presented.length === 3
       && afterAdd.includes('bananas')
       && afterAdd.includes('eggs')
@@ -883,10 +885,11 @@ export async function runConversationFoundationSmoothMvpTests() {
     const readText = !read.handled && read.routeDecision.kind === 'device_read'
       ? read.routeDecision.response
       : '';
-    assert('WCS B4: grocery read-back is exactly eggs and chocolate milk', (
+    assert('WCS B4: grocery read-back names eggs and chocolate milk', (
       !read.handled
       && read.routeDecision.kind === 'device_read'
-      && readText === "You've got 2 things."
+      && /eggs/i.test(readText)
+      && /chocolate milk/i.test(readText)
       && afterThose.length === 2
       && afterThose.includes('eggs')
       && afterThose.includes('chocolate milk')

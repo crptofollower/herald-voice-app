@@ -33,7 +33,7 @@ export function composeOpenListSpeech(listName: string, items: PresentedListItem
   if (listName === 'grocery') {
     return items.length === 0
       ? realizeGroceryListReadAct({ kind: 'empty' })
-      : realizeGroceryListReadAct({ kind: 'count', itemCount: items.length });
+      : realizeGroceryListReadAct({ kind: 'items', items: items.map((i) => i.body) });
   }
   return items.length === 0
     ? `Your ${listName} list is empty.`
