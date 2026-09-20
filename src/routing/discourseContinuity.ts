@@ -302,7 +302,10 @@ export class WorkingConversationState {
     episodeId: string,
     candidates: InterpretationHoldSlot['candidates'],
   ): void {
-    if (!episodeId.trim() || candidates.length < 2) return;
+    // Structural only: a live hold must contain a non-empty already-admitted
+    // array. Semantic singleton policy is owned by admitNaturalMultiFactProposal.
+    // Production caller is processUtterance after interpretation_hold ADMIT.
+    if (!episodeId.trim() || candidates.length === 0) return;
     const at = this.now();
     this.interpretationHold = {
       episodeId: episodeId.trim(),

@@ -172,11 +172,16 @@ export async function runPreferenceAssociationFoundationV1Tests() {
   {
     const one = 'My wife\'s favorite flowers are gardenias.';
     const admitted = admitNaturalMultiFactProposal(one, proposeNaturalMultiFactFromUtterance(one));
+    const pref = admitted.decision === 'ADMIT' ? prefs(admitted.candidates) : [];
     assert(
-      'admission floor still >=2',
-      admitted.decision === 'DEFER' && admitted.decision === 'DEFER' && /below_threshold/.test(admitted.reason),
+      'lone grounded preference is eligible singleton ADMIT',
+      admitted.decision === 'ADMIT'
+        && admitted.candidates.length === 1
+        && pref.length === 1
+        && pref[0].subject === 'wife'
+        && /^gardenias$/i.test(pref[0].value),
       (v) => v === true,
-      'DEFER below_threshold',
+      'ADMIT wife→gardenias',
     );
   }
 

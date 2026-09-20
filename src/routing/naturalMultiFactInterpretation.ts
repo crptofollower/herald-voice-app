@@ -156,6 +156,29 @@ function familyKeysIn(text: string): string[] {
   return found;
 }
 
+/** Distinct family keys whose spans are not contained in a longer key match. */
+function uniqueFamilyKeysIn(text: string): string[] {
+  const spans: { key: string; start: number; end: number }[] = [];
+  for (const key of FAMILY_KEYS) {
+    const re = new RegExp(`\\b${key.replace(/-/g, '[- ]')}\\b`, 'gi');
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text))) {
+      const start = m.index;
+      const end = start + m[0].length;
+      if (spans.some((s) => s.start <= start && s.end >= end)) continue;
+      spans.push({ key, start, end });
+    }
+  }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const s of spans) {
+    if (seen.has(s.key)) continue;
+    seen.add(s.key);
+    out.push(s.key);
+  }
+  return out;
+}
+
 function familySubject(sentence: string): string | undefined {
   return familyKeysIn(sentence)[0];
 }
@@ -401,10 +424,37 @@ export function admitNaturalMultiFactProposal(
     });
   }
 
-  if (admitted.length < 2) {
-    return { decision: 'DEFER', reason: `below_threshold:${admitted.length}` };
+  if (admitted.length >= 2) {
+    return { decision: 'ADMIT', episodeId, candidates: admitted };
   }
-  return { decision: 'ADMIT', episodeId, candidates: admitted };
+  if (admitted.length === 1 && isStandalonePreferenceEligible(raw, admitted[0])) {
+    return { decision: 'ADMIT', episodeId, candidates: admitted };
+  }
+  return { decision: 'DEFER', reason: `below_threshold:${admitted.length}` };
+}
+
+function isStandalonePreferenceEligible(
+  raw: string,
+  c: AdmittedMultiFactCandidate,
+): boolean {
+  if (c.kind !== 'preference') return false;
+  const subject = c.subject?.trim();
+  if (!subject) return false;
+  if (c.hedge) return false;
+  if (c.attribution) return false;
+  if (c.contradictGroupId) return false;
+  const uniqueKeys = uniqueFamilyKeysIn(raw);
+  if (uniqueKeys.length !== 1) return false;
+  if (uniqueKeys[0] !== subject.toLowerCase()) return false;
+  const value = c.value.trim();
+  if (!value) return false;
+  if (value.toLowerCase() === raw.trim().toLowerCase()) return false;
+  const sentences = splitMultiFactSentences(raw);
+  if (sentences.some((s) => s.trim().toLowerCase() === value.toLowerCase())) return false;
+  if (!isAssertivePreference(raw) && !sentences.some((s) => isAssertivePreference(s))) {
+    return false;
+  }
+  return true;
 }
 
 export function visitInterceptShouldYieldToMultiFact(

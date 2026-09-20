@@ -4,7 +4,6 @@ import { openJourneyDb } from './journeyHarness.ts';
 import { processUtterance } from '../../src/routing/processUtterance.ts';
 import { ConversationSession } from '../../src/routing/conversationSession.ts';
 import { DiscourseContinuityHolder, DISCOURSE_TURN_TTL } from '../../src/routing/discourseContinuity.ts';
-import type { InterpretationHoldSlot } from '../../src/routing/discourseContinuity.ts';
 import { normalizeInput } from '../../src/utils/normalizeInput.ts';
 import { detectEmergency } from '../../src/routing/emergencySignals.ts';
 import {
@@ -103,14 +102,13 @@ export async function runHoldRecallV1Tests() {
     const wcs = new DiscourseContinuityHolder();
     wcs.beginUserTurn();
     wcs.establishInterpretationHold('ep1', [hold({ value: 'only one thing', kind: 'event' })]);
-    assert('WCS establish still no-ops a singleton', wcs.peekInterpretationHold(), (v) => v === null, 'null');
-    const synthetic: InterpretationHoldSlot = {
-      episodeId: 'ep-synthetic',
-      sourceTurn: 1,
-      refreshedAtTurn: 1,
-      candidates: [hold({ value: 'only one thing', kind: 'event' })],
-    };
-    const one = inspectHolds('What did I say?', synthetic);
+    assert(
+      'WCS establish accepts a non-empty admitted array',
+      (wcs.peekInterpretationHold()?.candidates.length ?? 0) === 1,
+      (v) => v === true,
+      '1',
+    );
+    const one = inspectHolds('What did I say?', wcs.peekInterpretationHold());
     assert('one hold is whole_set', one.kind === 'whole_set' && one.candidates.length === 1, (v) => v === true, '1');
     assert('one hold wording', formatHoldRecall(one) === 'A moment ago you said only one thing.', (v) => v === true, 'A moment ago…');
   }
