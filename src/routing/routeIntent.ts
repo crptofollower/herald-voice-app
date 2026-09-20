@@ -9,6 +9,8 @@ import { detectDiagnosisCapture, detectDoctorIntroCapture, detectMedicalEvent, i
 import type { LlamaContext } from 'llama.rn';
 import { MEDICATION_SEMANTIC_INTERPRETATION_ENABLED, CAPABILITY_READ_ROUTER_ENABLED, GROCERY_SEMANTIC_DECOMPOSITION_ENABLED, SEMANTIC_CAPABILITY_DISPATCH_ENABLED, NATURAL_MULTI_FACT_INTERPRETATION_ENABLED } from '../constants/features';
 import { tryNaturalMultiFactHold, type MultiFactProposalGenerationResult } from './naturalMultiFactInterpretation';
+import { answerHoldContinuityQa } from './holdContinuityQa';
+import type { InterpretationHoldSlot } from './discourseContinuity';
 import { generateMedicationSemanticProposal, admitMedicationSemanticProposal, medicationSemanticProposalFromDispatchWrite } from './medicationSemanticInterpretation';
 import {
   generateGrocerySemanticProposal,
@@ -2253,6 +2255,8 @@ export async function routeIntent(
     naturalMultiFactInterpretationEnabled?: boolean;
     /** Test-only proposer. Omitted ⇒ deterministic utterance proposer. */
     proposeNaturalMultiFact?: (text: string) => MultiFactProposalGenerationResult;
+    /** Read-only live interpretation-hold snapshot. Peek must not refresh TTL. */
+    peekInterpretationHold?: () => InterpretationHoldSlot | null;
   },
 ): Promise<RouteDecision> {
   const routeT0 = latMono();
@@ -2362,6 +2366,22 @@ export async function routeIntent(
       tier: 2,
       context: decision.localContext ?? { intent: 'memory_probe' },
       reason: decision.reason,
+    };
+  }
+
+  // Hold Continuity Q&A V1: after authoritative tier-1/2 reads, before the
+  // deterministic capture floor can arm a new pending from this utterance.
+  // Live pending is owned upstream in processUtterance and never reaches here.
+  const holdContinuityResponse = answerHoldContinuityQa(
+    text,
+    deps.peekInterpretationHold?.() ?? null,
+  );
+  if (holdContinuityResponse) {
+    return {
+      kind: 'device_read',
+      tier: 1,
+      response: holdContinuityResponse,
+      reason: 'hold_continuity:preference',
     };
   }
 

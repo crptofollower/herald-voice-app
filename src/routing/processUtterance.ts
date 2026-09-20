@@ -107,7 +107,7 @@ export type RouteDeps = Parameters<typeof routeIntent>[1];
 export type UtteranceOutcome =
   | {
       handled: true;
-      source: 'pending_resume' | 'capture' | 'referent_resume' | 'interpretation' | 'hold_recall';
+      source: 'pending_resume' | 'capture' | 'referent_resume' | 'interpretation' | 'hold_recall' | 'hold_continuity';
       responseText: string;
       commits: CommitResult[];
       /** Presentation hint only. Never speech-parsed. Never a conversational machine. */
@@ -1069,7 +1069,10 @@ export async function processUtterance(
     }
   }
   // 2) The single routing authority — called exactly once per utterance.
-  const routeDecision = await routeIntent(text, deps);
+  const routeDecision = await routeIntent(text, {
+    ...deps,
+    peekInterpretationHold: () => discourse?.peekInterpretationHold() ?? null,
+  });
   logRouteDecision({
     kind: routeDecision.kind,
     reason: (routeDecision as { reason?: string }).reason,
@@ -1112,6 +1115,14 @@ export async function processUtterance(
       correctable: routeDecision.pending.correctable,
     });
     return { handled: true, source: 'capture', responseText: routeDecision.pending.prompt, commits: [routeDecision.pending] };
+  }
+  if (routeDecision.kind === 'device_read' && routeDecision.reason === 'hold_continuity:preference') {
+    return {
+      handled: true,
+      source: 'hold_continuity',
+      responseText: routeDecision.response,
+      commits: [],
+    };
   }
   if (routeDecision.kind === 'interpretation_hold') {
     discourse?.establishInterpretationHold(routeDecision.episodeId, routeDecision.candidates);
