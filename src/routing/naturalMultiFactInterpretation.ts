@@ -143,13 +143,143 @@ function uniqueSpans(raw: string, re: RegExp): string[] {
   return out;
 }
 
-function familySubject(sentence: string): string | undefined {
-  const lower = sentence.toLowerCase();
+function familyKeysIn(text: string): string[] {
+  const found: string[] = [];
+  const seen = new Set<string>();
   for (const key of FAMILY_KEYS) {
     const re = new RegExp(`\\b${key.replace(/-/g, '[- ]')}\\b`, 'i');
-    if (re.test(lower)) return key;
+    if (!re.test(text)) continue;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    found.push(key);
+  }
+  return found;
+}
+
+function familySubject(sentence: string): string | undefined {
+  return familyKeysIn(sentence)[0];
+}
+
+const FEMININE_FAMILY = new Set([
+  'wife', 'mother', 'mom', 'sister', 'daughter', 'grandmother', 'grandma',
+  'mother-in-law', 'daughter-in-law', 'granddaughter',
+]);
+const MASCULINE_FAMILY = new Set([
+  'husband', 'father', 'dad', 'brother', 'son', 'grandfather', 'grandpa',
+  'father-in-law', 'son-in-law', 'grandson',
+]);
+
+type PronounGender = 'feminine' | 'masculine';
+
+function preferencePronounGender(sentence: string): PronounGender | undefined {
+  const she = /\b(?:she|hers)\b/i.test(sentence) || /\bher\b/i.test(sentence);
+  const he = /\b(?:he|him|his)\b/i.test(sentence);
+  if (she && he) return undefined;
+  if (she) return 'feminine';
+  if (he) return 'masculine';
+  return undefined;
+}
+
+function genderCompatibleFamily(keys: readonly string[], gender: PronounGender): string[] {
+  const allowed = gender === 'feminine' ? FEMININE_FAMILY : MASCULINE_FAMILY;
+  return keys.filter((k) => allowed.has(k));
+}
+
+const INTERVENING_PERSON_RE =
+  /\b(?:the\s+)?(?:nurses?|doctors?|dermatologists?|oncologists?|teachers?|receptionists?)\b/i;
+
+function hasInterveningPerson(sentence: string): boolean {
+  if (INTERVENING_PERSON_RE.test(sentence)) return true;
+  if (/\bDr\.?\s+[A-Z][a-zA-Z]+\b/.test(sentence)) return true;
+  return false;
+}
+
+function localFamilyAntecedent(
+  sentences: readonly string[],
+  index: number,
+  gender: PronounGender,
+): string | undefined {
+  for (let i = index - 1; i >= 0; i--) {
+    const prior = sentences[i];
+    const compatible = genderCompatibleFamily(familyKeysIn(prior), gender);
+    if (compatible.length > 1) return undefined;
+    if (compatible.length === 1) {
+      if (hasInterveningPerson(prior)) return undefined;
+      return compatible[0];
+    }
+    if (hasInterveningPerson(prior)) return undefined;
   }
   return undefined;
+}
+
+const DETERMINERS = new Set(['the', 'a', 'an']);
+const PREFERENCE_OBJECT_CLOSED = new Set([
+  'to', 'it', 'this', 'that', 'him', 'her', 'them', 'me', 'us', 'you', 'going',
+  'the', 'a', 'an', 'five', 'ten', 'minutes', 'minute', 'hours', 'hour',
+]);
+
+function isInterrogativeSentence(sentence: string): boolean {
+  const t = sentence.trim();
+  if (/\?\s*$/.test(t)) return true;
+  if (/^\s*(?:does|do|did|is|are|was|were|can|could|would|will|have|has|had)\b/i.test(t)) return true;
+  if (/^\s*(?:what|who|which|when|where|why|how)\b/i.test(t)) return true;
+  return false;
+}
+
+function hasNegativePreferencePolarity(sentence: string): boolean {
+  return /(?:doesn'?t|don'?t|didn'?t|never|no\s+longer)\s+(?:really\s+)?(?:like|love|likes|loves|liked|loved)\b/i.test(sentence)
+    || /\b(?:does|do|did)\s+not\s+(?:really\s+)?(?:like|love|likes|loves|liked|loved)\b/i.test(sentence);
+}
+
+function isNonPreferenceLike(sentence: string): boolean {
+  if (/\bwould\s+like\b/i.test(sentence) || /\blike\s+to\b/i.test(sentence)) return true;
+  if (/\blooks?\s+like\b/i.test(sentence)) return true;
+  if (/\b(?:was|were|is|are|'s)\s+like\b/i.test(sentence)) return true;
+  return false;
+}
+
+function hasPreferencePredicate(sentence: string): boolean {
+  if (/\bfavorite\b/i.test(sentence)) return true;
+  if (isNonPreferenceLike(sentence)) return false;
+  if (/\b(?:loves|loved|likes|liked)\b/i.test(sentence)) return true;
+  if (/\b(?:i|you|we|they|she|he)\s+like\b/i.test(sentence)) return true;
+  return false;
+}
+
+function extractPreferenceObject(sentence: string): string | undefined {
+  const favorite = sentence.match(
+    /\bfavorite\s+[A-Za-z]+\s+(?:is|are)\s+(?:(?:the|a|an)\s+)?([A-Za-z][A-Za-z'-]*)/i,
+  );
+  if (favorite?.[1] && !PREFERENCE_OBJECT_CLOSED.has(favorite[1].toLowerCase()) && !DETERMINERS.has(favorite[1].toLowerCase())) {
+    return favorite[1];
+  }
+  if (isNonPreferenceLike(sentence)) return undefined;
+  const loves = sentence.match(
+    /\b(?:loves|loved|likes|liked|love|like)\s+(?:(?:the|a|an)\s+)?([A-Za-z][A-Za-z'-]*)\b/i,
+  );
+  if (loves?.[1] && !PREFERENCE_OBJECT_CLOSED.has(loves[1].toLowerCase()) && !DETERMINERS.has(loves[1].toLowerCase())) {
+    return loves[1];
+  }
+  return undefined;
+}
+
+function isAssertivePreference(sentence: string): boolean {
+  if (isInterrogativeSentence(sentence)) return false;
+  if (hasNegativePreferencePolarity(sentence)) return false;
+  if (!hasPreferencePredicate(sentence)) return false;
+  return extractPreferenceObject(sentence) !== undefined;
+}
+
+function resolvePreferenceSubject(
+  sentence: string,
+  sentences: readonly string[],
+  index: number,
+): string | undefined {
+  const explicit = familySubject(sentence);
+  if (explicit) return explicit;
+  const gender = preferencePronounGender(sentence);
+  if (!gender) return undefined;
+  return localFamilyAntecedent(sentences, index, gender);
 }
 
 function extractHedge(sentence: string): string | undefined {
@@ -170,7 +300,7 @@ function classifyKind(sentence: string): MultiFactKind {
   if (EMOTION_CANCER_RE.test(sentence)) return 'emotion_drop';
   if (PRESCRIBE_RE.test(sentence)) return 'prescribed';
   if (/\bmight\b/i.test(sentence) || /\blooks like\b/i.test(sentence)) return 'attributed_claim';
-  if (/\bfavorite\b/i.test(sentence)) return 'preference';
+  if (isAssertivePreference(sentence)) return 'preference';
   if (TODO_ADD_PREFIX.test(sentence) || /\bi need\b/i.test(sentence) || /\bi gotta\b/i.test(sentence)) {
     return 'obligation';
   }
@@ -192,14 +322,19 @@ function splitMultiFactSentences(raw: string): string[] {
 export function proposeNaturalMultiFactFromUtterance(raw: string): MultiFactProposal {
   const episodeId = episodeIdFor(raw);
   const candidates: MultiFactProposedCandidate[] = [];
-  for (const sentence of splitMultiFactSentences(raw)) {
+  const sentences = splitMultiFactSentences(raw);
+  for (let i = 0; i < sentences.length; i++) {
+    const sentence = sentences[i];
     const kind = classifyKind(sentence);
     const dates = uniqueSpans(sentence, DATE_SPAN_RE);
     const hedge = extractHedge(sentence);
+    const preferenceObject = kind === 'preference' ? extractPreferenceObject(sentence) : undefined;
     const candidate: MultiFactProposedCandidate = {
       kind,
-      value: sentence,
-      subject: familySubject(sentence),
+      value: preferenceObject ?? sentence,
+      subject: kind === 'preference'
+        ? resolvePreferenceSubject(sentence, sentences, i)
+        : familySubject(sentence),
       attribution: extractAttribution(sentence),
       hedge,
       temporal: dates[0],
