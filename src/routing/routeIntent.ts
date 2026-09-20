@@ -55,6 +55,7 @@ import {
 } from './operationalListContinuity';
 import { extractNarrativeTodoAdd, splitNarrativeSentences } from '../utils/instructionSignals';
 import { utteranceHasThirdPartyFiniteAction } from './directAddress';
+import { withRoutedEffect } from './routedOperationEffect';
 
 type ActionIntent = NonNullable<TierDecision['actionIntent']>;
 
@@ -2273,6 +2274,13 @@ export async function routeIntent(
     /** Read-only live interpretation-hold snapshot. Peek must not refresh TTL. */
     peekInterpretationHold?: () => InterpretationHoldSlot | null;
   },
+): Promise<RouteDecision & { effect: import('./routedOperationEffect').RoutedEffectClass }> {
+  return withRoutedEffect(await routeIntentCore(text, deps));
+}
+
+async function routeIntentCore(
+  text: string,
+  deps: Parameters<typeof routeIntent>[1],
 ): Promise<RouteDecision> {
   const routeT0 = latMono();
   const turnId = getActiveTurnId();
