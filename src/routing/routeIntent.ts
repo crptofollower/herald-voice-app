@@ -120,6 +120,11 @@ export type CommitResult =
        *  writer that doesn't populate this has its commit completely
        *  unaffected (Slice 4 proof: focus is carried, never load-bearing). */
       focus?: DomainFocusEnvelope;
+      /** Structured bodies that actually inserted this turn. Grocery list_add
+       *  uses this so the ledger can record committed item identity without
+       *  parsing acknowledgement prose. Absent or empty means no item-level
+       *  add evidence. Never includes requested-but-uncommitted duplicates. */
+      committed?: string[];
       referenceOnly?: boolean }
   | { status: 'pending';   prompt: string; pendingKey: string;
       kind?: 'standard' | 'destructive';
@@ -561,12 +566,10 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       }
       // Semantic Focus Contract V1 — Slice 4. list.id is the real list row
       // id — either just SELECTed or just INSERTed and already COMMITted
-      // above, never derived after the fact. Collection-level only,
-      // deliberately: an "add milk, eggs, and bananas" turn does not
-      // produce per-item focus merely because itemList.length > 1 — the
-      // list itself is what remains conversationally referable at this
-      // boundary; item-level addressability stays with the existing
-      // presentation-holder mechanism, unchanged this slice.
+      // above, never derived after the fact. Collection-level identity stays
+      // the referable focus. Committed item names are returned separately
+      // on `committed` so Recent Action Recall can record item evidence
+      // without parsing acknowledgement prose.
       const listFocus = { kind: 'collection' as const, displayValue: `${listName} list`, resolverKey: list.id, referable: true };
       if (committed.length === 1) {
         // Grocery Integrity V1: the ack names the item that ACTUALLY committed
@@ -578,12 +581,13 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
           status: 'committed',
           ack: composeCaptureAck('list_add', realizeGroceryAddAct({ kind: 'added_one', item: committed[0], listName })),
           focus: listFocus,
+          committed,
         };
       }
-      // Collection-level focus stays ONE entry regardless of how many rows
-      // committed (Semantic Focus Contract V1 — Slice 4, unchanged); only the
-      // count spoken is now commit-truth.
-      return { status: 'committed', ack: composeCaptureAck('list_add', `${committed.length} items are on your ${listName} list now.`), focus: listFocus };
+      // Collection identity stays the primary referable focus. Committed item
+      // names ride alongside it for Recent Action Recall — one operation,
+      // multiple committed items, never requested duplicates.
+      return { status: 'committed', ack: composeCaptureAck('list_add', `${committed.length} items are on your ${listName} list now.`), focus: listFocus, committed };
     },
     async remove(item: string): Promise<CommitResult> {
       return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
@@ -630,7 +634,7 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       // Semantic Focus Contract V1 — Slice 4. newItemId is the exact id
       // just inserted above (same value, reused — not regenerated), the
       // real, stable identity for this item, never derived after the fact.
-      return { status: 'committed', ack, focus: { kind: 'item', displayValue: body, resolverKey: newItemId, referable: true } };
+      return { status: 'committed', ack, focus: { kind: 'item', displayValue: body, resolverKey: newItemId, referable: true }, committed: [body] };
     },
     async remove(item: string): Promise<CommitResult> {
       const db = getDB();

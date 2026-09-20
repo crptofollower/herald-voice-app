@@ -139,8 +139,9 @@ export async function runGroceryIntegrityV1Tests() {
     );
     assert('GI9 commit succeeded', commits[0]?.status, (v) => v === 'committed', 'committed');
     const r = ledger.peek(Date.now());
-    assert('GI9 exactly ONE focus entry despite 3 rows', r[0]?.focus.length, (v) => v === 1, '1');
-    assert('GI9 focus kind is collection', r[0]?.focus[0]?.kind, (v) => v === 'collection', 'collection');
+    const itemNames = r[0]?.focus.filter((f) => f.kind === 'item').map((f) => f.displayValue.toLowerCase()) ?? [];
+    assert('GI9 collection remains primary', r[0]?.focus[0]?.kind, (v) => v === 'collection', 'collection');
+    assert('GI9 committed item evidence is milk, bread, bananas', itemNames, (v) => JSON.stringify(v) === JSON.stringify(['milk', 'bread', 'bananas']), 'milk,bread,bananas');
   }
 
   // ── 10. Removal regression: bananas is independently addressable/removable ─

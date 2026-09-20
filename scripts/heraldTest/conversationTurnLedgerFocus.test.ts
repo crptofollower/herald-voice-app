@@ -226,7 +226,8 @@ export async function runConversationTurnLedgerFocusTests() {
     );
     assertTrue('list: commit succeeded', commits[0]?.status === 'committed');
     const r = ledger.peek(Date.now());
-    assert('SLICE4-PROOF: exactly ONE focus entry despite 3 items (no invented item-level focus)', r[0]?.focus.length, 1);
+    const itemNames = r[0]?.focus.filter((f) => f.kind === 'item').map((f) => f.displayValue) ?? [];
+    assert('SLICE4-PROOF: collection remains primary; committed items are secondary evidence', itemNames, ['milk', 'eggs', 'bananas']);
     assert('SLICE4-PROOF: list focus kind is collection', r[0]?.focus[0]?.kind, 'collection');
     assert('SLICE4-PROOF: list commit is authoritative', r[0]?.focus[0]?.tier, 'authoritative');
     const listResolverKey = r[0]?.focus[0]?.resolverKey;

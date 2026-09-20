@@ -3,7 +3,8 @@ import type { RouteDecision, CommitResult, ResolveContactFn, DomainFocusEnvelope
 import { mayPreserveExistingClarification } from './routedOperationEffect';
 import type { IntentRecord } from '../hooks/llmLayers';
 import type { ConversationTurnLedger } from './conversationTurnLedger';
-import { commitResultOutcome, captureAuthorityTier, buildFocusEntry } from './conversationTurnLedgerWrite';
+import { commitResultOutcome, captureAuthorityTier, buildFocusEntry, buildCommitLedgerFocus } from './conversationTurnLedgerWrite';
+import { answerRecentCommittedAddRecall } from './recentActionRecall';
 import { ConversationSession, CONFIRM_YES_RE, CONFIRM_NO_RE } from './conversationSession';
 import { CALL_TEXT_RECOVERY_KEY, shouldPreemptCallTextRecovery } from './callTextReadiness';
 import { detectEmergency } from './emergencySignals';
@@ -117,7 +118,7 @@ export type RouteDeps = Parameters<typeof routeIntent>[1];
 export type UtteranceOutcome =
   | {
       handled: true;
-      source: 'pending_resume' | 'capture' | 'referent_resume' | 'interpretation' | 'hold_recall' | 'hold_continuity';
+      source: 'pending_resume' | 'capture' | 'referent_resume' | 'interpretation' | 'hold_recall' | 'hold_continuity' | 'recent_add_recall';
       responseText: string;
       commits: CommitResult[];
       /** Presentation hint only. Never speech-parsed. Never a conversational machine. */
@@ -514,7 +515,7 @@ export async function applyIntents(
       outcome: commitResultOutcome(added.status),
       authorityTier: captureAuthorityTier(ledgerSource),
       assistantReplySummary: added.status === 'committed' || added.status === 'noop' || added.status === 'failed' ? added.ack : null,
-      focus: buildFocusEntry(added.focus, { status: added.status, source: ledgerSource }),
+      focus: buildCommitLedgerFocus(added, { source: ledgerSource }),
     });
     results.push(added);
   }
@@ -662,7 +663,7 @@ export async function processUtterance(
       // tier:'conversational', never misread as an authoritative/proposal
       // capture. Every existing domain resume closure omits this field, so
       // this is a no-op for them (undefined, same as before).
-      focus: buildFocusEntry(result.focus, { status: result.status, source: 'deterministic', referenceOnly: result.referenceOnly }),
+      focus: buildCommitLedgerFocus(result, { source: 'deterministic', referenceOnly: result.referenceOnly }),
     });
     const pendingResume = {
       handled: true as const,
@@ -1096,6 +1097,20 @@ export async function processUtterance(
         discourse.establishDomain(domain === 'todo' ? 'todo' : 'grocery');
       }
       return captureWithOptionalCapabilitySurface(responseText, commits, [intent]);
+    }
+  }
+  // 1d) Recent Action Recall V1 — most recent committed list-add evidence.
+  //     Interpretation may claim the act; item names come only from the ledger.
+  //     No qualifying add falls through to ordinary routing (no fabricated items).
+  if (ledger) {
+    const recentAdd = answerRecentCommittedAddRecall(text, ledger.peek(Date.now()));
+    if (recentAdd.handled) {
+      return {
+        handled: true,
+        source: 'recent_add_recall',
+        responseText: recentAdd.responseText,
+        commits: [],
+      };
     }
   }
   // 2) The single routing authority — called exactly once per utterance.

@@ -176,6 +176,50 @@ export function buildFocusEntry(
   ];
 }
 
+/**
+ * Ledger focus for a writer result. Preserves the domain's primary envelope
+ * (collection/list identity for grocery add) and appends secondary item
+ * entries from structured committed names only. Duplicate displayValues
+ * already present on the primary envelope are not repeated. Item extras are
+ * not independently referable — recap/list-read authority is unchanged.
+ */
+export function buildCommitLedgerFocus(
+  result: CommitResult,
+  facts: {
+    source: 'deterministic' | 'llm';
+    referenceOnly?: boolean;
+  },
+): ConversationTurnFocusEntry[] {
+  const primary = buildFocusEntry(result.focus, {
+    status: result.status,
+    source: facts.source,
+    referenceOnly: facts.referenceOnly ?? result.referenceOnly,
+  });
+  if (result.status !== 'committed') return primary;
+  const names = result.committed;
+  if (!Array.isArray(names) || names.length === 0) return primary;
+  const seen: Record<string, true> = {};
+  for (const entry of primary) {
+    seen[`${entry.kind}:${entry.displayValue.trim().toLowerCase()}`] = true;
+  }
+  const extras: ConversationTurnFocusEntry[] = [];
+  for (const raw of names) {
+    if (typeof raw !== 'string') continue;
+    const displayValue = raw.trim();
+    if (!displayValue) continue;
+    const key = `item:${displayValue.toLowerCase()}`;
+    if (seen[key]) continue;
+    seen[key] = true;
+    extras.push(
+      ...buildFocusEntry(
+        { kind: 'item', displayValue, referable: false, role: 'secondary' },
+        { status: result.status, source: facts.source, referenceOnly: facts.referenceOnly },
+      ),
+    );
+  }
+  return primary.concat(extras);
+}
+
 /** Orchestration-layer helper: attach continuity identity to an existing ledger write. */
 export function continuityLedgerFocus(
   envelope: DomainFocusEnvelope | undefined,
