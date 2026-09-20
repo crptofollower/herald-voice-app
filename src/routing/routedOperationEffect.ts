@@ -3,7 +3,8 @@
 // authorize execution, dispatch, writers, or pending mutation.
 //
 // Assignment authority is classifyRoutedEffect / withRoutedEffect at the
-// public routeIntent return. processUtterance must not consume this yet.
+// public routeIntent return. processUtterance may consume only
+// mayPreserveExistingClarification (effect === 'read_only').
 
 import type { IntentRecord } from '../hooks/llmLayers';
 import type { TierDecision } from './tierRouter';

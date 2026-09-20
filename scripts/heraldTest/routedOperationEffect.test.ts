@@ -308,10 +308,17 @@ export async function runRoutedOperationEffectContractV1Tests() {
 
   const puSrc = fs.readFileSync(path.join(__dirname, '../../src/routing/processUtterance.ts'), 'utf8');
   assert(
-    'processUtterance does not import or consume effect helpers',
-    puSrc.includes('routedOperationEffect') || puSrc.includes('mayPreserveExistingClarification') || puSrc.includes('classifyRoutedEffect'),
-    (v) => v === false,
-    'no consumption',
+    'processUtterance consumes only mayPreserveExistingClarification',
+    {
+      module: puSrc.includes("from './routedOperationEffect'"),
+      preserve: puSrc.includes('mayPreserveExistingClarification'),
+      classify: puSrc.includes('classifyRoutedEffect') || puSrc.includes('ACTION_INTENT_EFFECT'),
+    },
+    (v) => {
+      const o = v as { module: boolean; preserve: boolean; classify: boolean };
+      return o.module && o.preserve && !o.classify;
+    },
+    'mayPreserve import only',
   );
   assert(
     'clarification yield still keys off actionIntent (lifecycle unchanged)',
@@ -338,14 +345,14 @@ export async function runRoutedOperationEffectContractV1Tests() {
       null, null, null, null, null, discourse,
     );
     assert(
-      'metadata did not preserve clarification across time (survival not implemented)',
+      'read_only time interruption preserves operational clarification (survival)',
       {
         armed: arm.handled && keyBefore === CLARIFY_OPERATIONAL_LIST_KEY,
         after: session.peekPendingKey(),
         interruptKind: !interrupt.handled ? interrupt.routeDecision.kind : null,
         effect: !interrupt.handled && 'effect' in interrupt.routeDecision
           ? (interrupt.routeDecision as RouteDecision & { effect?: string }).effect
-          : classifyRoutedEffect(interrupt.handled ? groceryAdd : interrupt.routeDecision),
+          : null,
         rows: groceryCount(db as never) - nBefore,
       },
       (v) => {
@@ -353,12 +360,12 @@ export async function runRoutedOperationEffectContractV1Tests() {
           armed: boolean;
           after: string | null;
           interruptKind: string | null;
-          effect: string;
+          effect: string | null;
           rows: number;
         };
-        return o.armed && o.after === null && o.interruptKind === 'device_action' && o.effect === 'read_only' && o.rows === 0;
+        return o.armed && o.after === CLARIFY_OPERATIONAL_LIST_KEY && o.interruptKind === 'device_action' && o.effect === 'read_only' && o.rows === 0;
       },
-      'armed, then pending cleared, time device_action read_only, zero writes',
+      'armed, pending kept, time device_action read_only, zero writes',
     );
   }
 

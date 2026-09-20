@@ -156,6 +156,10 @@ export class ConversationSession {
     return this.pending?.pendingKey ?? null;
   }
 
+  peekPendingBudget(): number | null {
+    return this.pending?.budget ?? null;
+  }
+
   pendingOwnsReply(userText: string): boolean {
     return this.pending?.ownsReply?.(userText) === true;
   }

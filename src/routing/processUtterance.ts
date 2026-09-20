@@ -1,5 +1,6 @@
 import { routeIntent, DOMAIN_WRITERS, composeAck, allConverted } from './routeIntent';
 import type { RouteDecision, CommitResult, ResolveContactFn, DomainFocusEnvelope } from './routeIntent';
+import { mayPreserveExistingClarification } from './routedOperationEffect';
 import type { IntentRecord } from '../hooks/llmLayers';
 import type { ConversationTurnLedger } from './conversationTurnLedger';
 import { commitResultOutcome, captureAuthorityTier, buildFocusEntry } from './conversationTurnLedgerWrite';
@@ -587,22 +588,38 @@ export async function processUtterance(
   //    Bounded exception: Call/Text recovery yields on existing route claims
   //    (device action/read/live-data). Clarification pendings yield only for a
   //    competing actionIntent — the same ownership test, not live-data/chit-chat.
+  //    Obligation Survival V1: a completed read_only interruption (effect
+  //    helper only) is realized without clearPending/resolvePending. Non-read_only
+  //    does not itself mean supersede.
+  let routedClarificationInterrupt: RouteDecision | undefined;
+  let preserveClarificationRead = false;
   if (session.hasPending()) {
     const pendingKey = session.peekPendingKey();
     if (pendingKey === CALL_TEXT_RECOVERY_KEY || isClarificationPendingKey(pendingKey)) {
-      const decision = await deps.classifyQuery(text);
       const owns = session.pendingOwnsReply(text);
-      const yieldClarification = isClarificationPendingKey(pendingKey)
-        && !!decision.actionIntent
-        && !owns;
-      const yieldCallText = pendingKey === CALL_TEXT_RECOVERY_KEY
-        && shouldPreemptCallTextRecovery(decision, text, owns);
-      if (yieldClarification || yieldCallText) {
-        session.clearPending();
+      if (isClarificationPendingKey(pendingKey) && !owns) {
+        routedClarificationInterrupt = await routeIntent(text, {
+          ...deps,
+          peekInterpretationHold: () => discourse?.peekInterpretationHold() ?? null,
+        });
+        preserveClarificationRead = mayPreserveExistingClarification(routedClarificationInterrupt);
+      }
+      if (!preserveClarificationRead) {
+        const decision = await deps.classifyQuery(text);
+        const yieldClarification = isClarificationPendingKey(pendingKey)
+          && !!decision.actionIntent
+          && !owns;
+        const yieldCallText = pendingKey === CALL_TEXT_RECOVERY_KEY
+          && shouldPreemptCallTextRecovery(decision, text, owns);
+        if (yieldClarification || yieldCallText) {
+          session.clearPending();
+        } else {
+          routedClarificationInterrupt = undefined;
+        }
       }
     }
   }
-  if (session.hasPending()) {
+  if (session.hasPending() && !preserveClarificationRead) {
     subject?.clear();
     medicationPresentation?.clear();
     orderedPresentation?.clear();
@@ -1082,7 +1099,9 @@ export async function processUtterance(
     }
   }
   // 2) The single routing authority — called exactly once per utterance.
-  const routeDecision = await routeIntent(text, {
+  //    A clarification-interrupt probe above may already hold that decision
+  //    (preserve path, or yield-after-probe). Do not route twice.
+  const routeDecision = routedClarificationInterrupt ?? await routeIntent(text, {
     ...deps,
     peekInterpretationHold: () => discourse?.peekInterpretationHold() ?? null,
   });
