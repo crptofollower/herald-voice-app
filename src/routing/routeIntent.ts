@@ -2308,6 +2308,16 @@ async function routeIntentCore(
     };
   }
 
+  if (decision.tier === 1 && decision.reason === 'medical:visit_history_unresolved_specialty') {
+    const { buildVisitHistorySpecialtyPending, VISIT_HISTORY_SPECIALTY_RE } = await import('./visitHistorySpecialtyPending');
+    const specialty = text.match(VISIT_HISTORY_SPECIALTY_RE)?.[1] ?? 'that specialist';
+    return {
+      kind: 'medical_read_pending',
+      pending: buildVisitHistorySpecialtyPending(text, specialty),
+      reason: decision.reason,
+    };
+  }
+
   if (decision.tier === 1 && typeof decision.tier1Response === 'string') {
     // Bounded semantic override: family:read matches "what's my <relation>…"
     // including preference questions. A unique Hold Continuity preference

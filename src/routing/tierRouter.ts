@@ -6,6 +6,8 @@
 import { getCachedEvents, formatCachedEventsForSpeech, refreshCalendarCache, getCacheAge, getCachedEventsForDate, formatEventsForSpecificDay, queryCalendarRange } from "../db/calendarCacheDB";
 import { formatHistoricalCalendarRangeForSpeech, resolveHistoricalCalendarRange, toPresentedCalendarSnapshot } from "./historicalCalendarRange";
 import { resolveVisitHistoryTemporalConstraint } from "./visitHistoryTemporal";
+import { composeVisitHistoryReadResponse } from "./visitHistoryRead";
+import { VISIT_HISTORY_SPECIALTY_RE, visitHistorySpecialtyPrompt } from "./visitHistorySpecialtyPending";
 import { calendarWriteIsRecent } from "../db/calendarState";
 import { getFactsSummary } from "../db/factDB";
 import { normalizeInput } from "../utils/normalizeInput";
@@ -2095,16 +2097,13 @@ async function classifyQueryCore(message: string): Promise<TierDecision> {
     VISIT_HISTORY_READ.some((p) => p.test(msg) || p.test(msgForVisitReaders))
     || isVisitHistoryVerificationQuestion(msg)
   ) {
-    const { getLastVisit, getLastVisitInRange } = await import('../db/medicalDB');
-    const { formatSpokenDate } = await import('../utils/parseTime');
     const { extractDoctorName } = await import('../utils/detectMedicalEvent');
     const doctorHint = extractDoctorName(msg);
-    const SPECIALTY_REFERENCE = /\bmy\s+(dentist|cardiologist|neurologist|oncologist|psychiatrist|therapist|specialist)\b/i;
-    const specialtyMatch = msg.match(SPECIALTY_REFERENCE);
+    const specialtyMatch = msg.match(VISIT_HISTORY_SPECIALTY_RE);
     if (!doctorHint && specialtyMatch) {
       return {
         tier: 1,
-        tier1Response: `Help me out — when you say "${specialtyMatch[1]}," who do you mean? Tell me their name and I'll look it up.`,
+        tier1Response: visitHistorySpecialtyPrompt(specialtyMatch[1]),
         isMedical: true,
         reason: "medical:visit_history_unresolved_specialty",
       };
@@ -2127,63 +2126,8 @@ async function classifyQueryCore(message: string): Promise<TierDecision> {
       };
     }
     const temporal = resolveVisitHistoryTemporalConstraint(msg);
-    if (temporal.kind === 'unresolved') {
-      return {
-        tier: 1,
-        tier1Response: "I can check yesterday, last week, last month, or how many months ago — not a specific month or date like that.",
-        isMedical: true,
-        reason: "medical:visit_history_unresolved_temporal",
-      };
-    }
-    const {
-      findPersistedDoctorCalendarEvidence,
-      findPersistedDoctorCalendarEvidenceInRange,
-      realizePersistedDoctorCalendarEvidence,
-      displayNameForCalendarEvidence,
-    } = await import('../db/calendarEvidenceDoctorRead');
-    const visit = temporal.kind === 'resolved'
-      ? getLastVisitInRange(doctorHint, temporal.range.start, temporal.range.end)
-      : getLastVisit(doctorHint);
-    const persisted = temporal.kind === 'resolved'
-      ? findPersistedDoctorCalendarEvidenceInRange(doctorHint, temporal.range.start, temporal.range.end)
-      : findPersistedDoctorCalendarEvidence(doctorHint);
-    const calDisplay = doctorHint
-      ?? (persisted[0] ? displayNameForCalendarEvidence(persisted[0], 'your doctor') : 'your doctor');
-    const calendarSpeech = realizePersistedDoctorCalendarEvidence(
-      doctorHint ?? calDisplay,
-      calDisplay,
-      persisted,
-    );
-    let response: string;
-    if (visit) {
-      const who = visit.doctorName ?? 'your doctor';
-      const spoken = formatSpokenDate(visit.visitDate);
-      const details: string[] = [];
-      if (visit.reason) details.push(`for ${visit.reason}`);
-      if (visit.diagnosis) details.push(`diagnosed with ${visit.diagnosis}`);
-      if (visit.notes) details.push(visit.notes);
-      if (visit.follow_up) details.push(`follow-up: ${visit.follow_up}`);
-      const reasonPart = details.length > 0 ? ` — ${details.join('; ')}` : '';
-      const medicalSpeech = temporal.kind === 'resolved'
-        ? `Yes, you saw ${who} on ${spoken}${reasonPart}.`
-        : `You last saw ${who} on ${spoken}${reasonPart}.`;
-      response = calendarSpeech ? `${medicalSpeech} ${calendarSpeech}` : medicalSpeech;
-    } else if (temporal.kind === 'resolved') {
-      if (calendarSpeech) {
-        response = calendarSpeech;
-      } else {
-        const who = doctorHint ?? 'that doctor';
-        response = `I don't have a visit with ${who} ${temporal.range.speechLabel}.`;
-      }
-    } else if (doctorHint) {
-      const { answerHistoricalCalendarVisitEvidence } = await import('./conversationalSubject');
-      response = await answerHistoricalCalendarVisitEvidence(doctorHint, doctorHint);
-    } else if (calendarSpeech) {
-      response = calendarSpeech;
-    } else {
-      response = "I don't have any visits yet — tell me and I'll remember.";
-    }
-    return { tier: 1, tier1Response: response, isMedical: true, reason: "medical:visit_history_read" };
+    const composed = await composeVisitHistoryReadResponse(doctorHint, temporal);
+    return { tier: 1, tier1Response: composed.response, isMedical: true, reason: composed.reason };
   }
 
   // Tier 1: visit read (enumeration) — MUST precede calendar-week so "who did
