@@ -2067,6 +2067,19 @@ async function classifyQueryCore(message: string): Promise<TierDecision> {
       };
     }
     const visit = getLastVisit(doctorHint);
+    const {
+      findPersistedDoctorCalendarEvidence,
+      realizePersistedDoctorCalendarEvidence,
+      displayNameForCalendarEvidence,
+    } = await import('../db/calendarEvidenceDoctorRead');
+    const persisted = findPersistedDoctorCalendarEvidence(doctorHint);
+    const calDisplay = doctorHint
+      ?? (persisted[0] ? displayNameForCalendarEvidence(persisted[0], 'your doctor') : 'your doctor');
+    const calendarSpeech = realizePersistedDoctorCalendarEvidence(
+      doctorHint ?? calDisplay,
+      calDisplay,
+      persisted,
+    );
     let response: string;
     if (visit) {
       const who = visit.doctorName ?? 'your doctor';
@@ -2079,10 +2092,13 @@ async function classifyQueryCore(message: string): Promise<TierDecision> {
       const reasonPart = details.length > 0 ? ` — ${details.join('; ')}` : '';
       // Sentence shape is duplicated with answerReferentVisitDate
       // (conversationalSubject.ts). Do not factor (Continuity Step 3 / Rule 11).
-      response = `You last saw ${who} on ${spoken}${reasonPart}.`;
+      const medicalSpeech = `You last saw ${who} on ${spoken}${reasonPart}.`;
+      response = calendarSpeech ? `${medicalSpeech} ${calendarSpeech}` : medicalSpeech;
     } else if (doctorHint) {
       const { answerHistoricalCalendarVisitEvidence } = await import('./conversationalSubject');
       response = await answerHistoricalCalendarVisitEvidence(doctorHint, doctorHint);
+    } else if (calendarSpeech) {
+      response = calendarSpeech;
     } else {
       response = "I don't have any visits yet — tell me and I'll remember.";
     }

@@ -8,7 +8,7 @@ import { useEffect, useRef } from "react";
 import * as Calendar from "expo-calendar";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useStore } from "../store/useStore";
-import { addAppointment } from "../db/appointmentsDB";
+import { ingestAuthorizedCalendarEvent, isAppointmentWorth } from "../db/calendarEvidenceIngest";
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -16,30 +16,6 @@ const SYNC_INTERVAL_MS  = 24 * 60 * 60 * 1000; // once per day
 const LAST_SYNC_KEY     = "herald_calendar_last_sync";
 const MONTHS_PAST       = 12;  // look back 12 months
 const MONTHS_FUTURE     = 6;   // look ahead 6 months
-
-// Keywords that signal a meaningful appointment Herald should remember
-const APPOINTMENT_KEYWORDS = [
-  // Medical
-  "dentist", "dental", "doctor", "dr.", "physician", "clinic", "hospital",
-  "appointment", "checkup", "check-up", "physical", "exam", "screening",
-  "specialist", "therapy", "therapist", "counseling", "psychiatrist",
-  "optometrist", "eye doctor", "vision", "dermatologist", "cardiologist",
-  "orthopedic", "surgeon", "surgery", "procedure", "lab", "blood work",
-  "mammogram", "colonoscopy", "vaccination", "vaccine", "shot", "flu shot",
-  "prescription", "pharmacy", "refill",
-  // Automotive
-  "oil change", "car service", "tire", "mechanic", "auto",
-  // Home
-  "ac service", "hvac", "plumber", "electrician", "pest control", "inspection",
-  // Wellness
-  "gym", "trainer", "massage", "chiropractor", "acupuncture",
-  // Financial
-  "financial advisor", "accountant", "tax", "insurance",
-  // Travel
-  "flight", "hotel", "trip", "vacation", "travel",
-  // Family
-  "birthday", "anniversary", "graduation", "wedding",
-];
 
 // Category mapping
 function detectCategory(title: string, notes: string): string {
@@ -71,11 +47,6 @@ function estimateInterval(category: string): number {
     appointment:   90,  // quarterly default
   };
   return intervals[category] ?? 90;
-}
-
-function isAppointmentWorth(title: string, notes: string = ""): boolean {
-  const text = (title + " " + notes).toLowerCase();
-  return APPOINTMENT_KEYWORDS.some(kw => text.includes(kw));
 }
 
 // ─── Main hook ────────────────────────────────────────────────────────────────
@@ -146,20 +117,21 @@ async function syncCalendar(userId: string) {
       return;
     }
 
+    const observedAt = new Date().toISOString();
     for (const appt of appointments) {
       try {
         const startISO = new Date(appt.date).toISOString();
         const endISO = appt.end_date ? new Date(appt.end_date).toISOString() : undefined;
-        addAppointment({
+        ingestAuthorizedCalendarEvent({
           title: appt.title,
-          category: appt.category,
-          apptDateISO: startISO,
-          apptDatePrecision: appt.all_day ? "date_only" : "exact",
-          endDateISO: endISO,
-          location: appt.location || undefined,
           notes: appt.notes || undefined,
-          source: "device_calendar",
+          startISO,
+          endISO,
+          allDay: appt.all_day,
+          location: appt.location || undefined,
+          category: appt.category,
           externalId: appt.external_id,
+          observedAt,
         });
         console.log("[HERALD] appointment saved (device_calendar):", appt.title);
       } catch {

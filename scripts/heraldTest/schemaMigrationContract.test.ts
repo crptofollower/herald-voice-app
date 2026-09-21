@@ -70,7 +70,7 @@ export async function runSchemaMigrationContractTests() {
     await runMigrations();
 
     const meta = db.prepare('SELECT version FROM schema_meta ORDER BY version DESC LIMIT 1;').get();
-    assert('SM1 fresh install lands at schema_meta v22', meta?.version, v => v === 22, 22);
+    assert('SM1 fresh install lands at schema_meta v23', meta?.version, v => v === 23, 23);
 
     const mrCols = columnNames(db, 'medical_records');
     assert('SM2 fresh install: medical_records has status', mrCols.includes('status'), v => v === true, true);
@@ -105,7 +105,7 @@ export async function runSchemaMigrationContractTests() {
     await runMigrations();
 
     const meta = db.prepare('SELECT version FROM schema_meta ORDER BY version DESC LIMIT 1;').get();
-    assert('SM6 upgrade from v18 lands at v22', meta?.version, v => v === 22, 22);
+    assert('SM6 upgrade from v18 lands at v23', meta?.version, v => v === 23, 23);
 
     const mrCols = columnNames(db, 'medical_records');
     assert('SM7 upgrade: medical_records gains status + surfaced_at', 
@@ -124,7 +124,7 @@ export async function runSchemaMigrationContractTests() {
     await runMigrations();
     const cols = columnNames(db, 'evidence');
     assert('SM10 fresh install: evidence table exists with required columns',
-      ['id', 'source_class', 'source_kind', 'source_id', 'raw_text', 'observed_at'].every((c) => cols.includes(c)),
+      ['id', 'source_class', 'source_kind', 'source_id', 'raw_text', 'observed_at', 'event_at'].every((c) => cols.includes(c)),
       v => v === true, true);
   }
 
@@ -144,12 +144,37 @@ export async function runSchemaMigrationContractTests() {
     setDB(makeShim(db));
     await runMigrations();
     const meta = db.prepare('SELECT version FROM schema_meta ORDER BY version DESC LIMIT 1;').get();
-    assert('SM11 upgrade from v21 lands at v22', meta?.version, v => v === 22, 22);
+    assert('SM11 upgrade from v21 lands at v23', meta?.version, v => v === 23, 23);
     const cols = columnNames(db, 'evidence');
     assert('SM12 upgrade from v21 creates evidence table', cols.includes('id') && cols.includes('source_class') && cols.includes('raw_text'), v => v === true, true);
     const existingRow = db.prepare(`SELECT diagnosis, status FROM medical_records WHERE id = 'mr_v21';`).get();
     assert('SM13 upgrade from v21 leaves existing medical_records untouched',
       existingRow?.diagnosis === 'flu' && existingRow?.status === 'noted', v => v === true, true);
+  }
+
+  {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE schema_meta (version INTEGER NOT NULL, migrated_at TEXT NOT NULL);
+      CREATE TABLE evidence (
+        id TEXT PRIMARY KEY,
+        source_class TEXT NOT NULL,
+        source_kind TEXT NOT NULL,
+        source_id TEXT,
+        raw_text TEXT NOT NULL,
+        observed_at TEXT NOT NULL
+      );
+    `);
+    db.prepare(`INSERT INTO schema_meta (version, migrated_at) VALUES (22, datetime('now'));`).run();
+    db.prepare(`INSERT INTO evidence (id, source_class, source_kind, source_id, raw_text, observed_at)
+      VALUES ('ev_v22', 'external_source', 'calendar', 'cal_1', 'Oil change', '2026-09-21T00:00:00.000Z');`).run();
+    setDB(makeShim(db));
+    await runMigrations();
+    const meta = db.prepare('SELECT version FROM schema_meta ORDER BY version DESC LIMIT 1;').get();
+    assert('SM14 upgrade from v22 lands at v23', meta?.version, v => v === 23, 23);
+    const row = db.prepare(`SELECT raw_text, source_id, event_at FROM evidence WHERE id = 'ev_v22';`).get();
+    assert('SM15 v22→v23 preserves existing evidence', row?.raw_text === 'Oil change' && row?.source_id === 'cal_1', v => v === true, true);
+    assert('SM16 v22→v23 adds event_at without destroying the row', Object.prototype.hasOwnProperty.call(row, 'event_at') && row?.event_at == null, v => v === true, true);
   }
 
   const total = passed + failures.length;

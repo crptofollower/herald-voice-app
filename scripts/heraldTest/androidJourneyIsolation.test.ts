@@ -118,8 +118,8 @@ export async function runAndroidJourneyIsolationV1Tests() {
     'probe beside sendMessage',
   );
   assert(
-    'JS host snapshots lists/medications/medical_records only',
-    host.includes('FROM medications') && host.includes('FROM medical_records') && !host.includes('FROM contacts') && !host.includes('FROM facts'),
+    'JS host snapshots lists/medications/medical_records/evidence read-only',
+    host.includes('FROM medications') && host.includes('FROM medical_records') && host.includes('FROM evidence') && host.includes('event_at') && !host.includes('FROM contacts') && !host.includes('FROM facts'),
     (v) => v === true,
     'V1 sqlite domains',
   );

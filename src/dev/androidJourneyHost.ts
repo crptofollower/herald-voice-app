@@ -39,6 +39,16 @@ type ListItemRow = {
 type MedRow = { id: string; name: string; is_active: number };
 type RecordRow = { id: string; notes: string | null; status: string | null };
 
+type EvidenceSnapRow = {
+  id: string;
+  source_class: string;
+  source_kind: string;
+  source_id: string | null;
+  raw_text: string;
+  observed_at: string;
+  event_at: string | null;
+};
+
 type AuthoritativeSnapshot = {
   ok: boolean;
   ready: boolean;
@@ -46,6 +56,7 @@ type AuthoritativeSnapshot = {
   list_items: ListItemRow[];
   medications: MedRow[];
   medical_records: RecordRow[];
+  evidence: EvidenceSnapRow[];
 };
 
 export type JourneyTurnResult = {
@@ -130,7 +141,7 @@ function nativeModule(): NativeBridge | null {
 }
 
 function emptySnapshot(ok = false): AuthoritativeSnapshot {
-  return { ok, ready: isDBReady(), lists: [], list_items: [], medications: [], medical_records: [] };
+  return { ok, ready: isDBReady(), lists: [], list_items: [], medications: [], medical_records: [], evidence: [] };
 }
 
 function snapshotAuthoritative(): AuthoritativeSnapshot {
@@ -146,13 +157,19 @@ function snapshotAuthoritative(): AuthoritativeSnapshot {
     );
     let medications: MedRow[] = [];
     let medical_records: RecordRow[] = [];
+    let evidence: EvidenceSnapRow[] = [];
     try {
       medications = db.getAllSync<MedRow>(`SELECT id, name, is_active FROM medications;`);
     } catch { /* table may be absent on a partial open */ }
     try {
       medical_records = db.getAllSync<RecordRow>(`SELECT id, notes, status FROM medical_records;`);
     } catch { /* optional */ }
-    return { ok: true, ready: true, lists, list_items, medications, medical_records };
+    try {
+      evidence = db.getAllSync<EvidenceSnapRow>(
+        `SELECT id, source_class, source_kind, source_id, raw_text, observed_at, event_at FROM evidence;`,
+      );
+    } catch { /* optional until v23 */ }
+    return { ok: true, ready: true, lists, list_items, medications, medical_records, evidence };
   } catch {
     return emptySnapshot(false);
   }

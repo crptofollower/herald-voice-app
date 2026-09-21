@@ -248,6 +248,14 @@ export async function answerHistoricalCalendarVisitEvidence(
   displayName: string,
 ): Promise<string> {
   const BACK_MONTHS = HISTORICAL_CALENDAR_VISIT_EVIDENCE_MONTHS;
+  const {
+    findPersistedDoctorCalendarEvidence,
+    realizePersistedDoctorCalendarEvidence,
+  } = await import('../db/calendarEvidenceDoctorRead');
+  const persisted = findPersistedDoctorCalendarEvidence(doctorTerm);
+  const persistedSpeech = realizePersistedDoctorCalendarEvidence(doctorTerm, displayName, persisted);
+  if (persistedSpeech) return persistedSpeech;
+
   const { normalizeDoctorNameForMatch } = await import('../db/medicalDB');
   const {
     queryCalendarEvidence,

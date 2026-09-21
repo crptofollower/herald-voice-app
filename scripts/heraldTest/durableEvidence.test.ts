@@ -70,11 +70,21 @@ export async function runDurableEvidenceTests() {
       sourceClass: 'external_source',
       sourceKind: 'calendar',
       sourceId: 'cal_evt_abc',
-      rawText: JSON.stringify({ title: 'Should not mint a second row' }),
+      rawText: payload,
+      observedAt: '2026-09-21T20:00:00.000Z',
     });
     assertTrue('external: same source observation reinsert returns the same id', second.id === first.id);
     assertTrue('external: reinsert does not duplicate', count(db, 'evidence') === 1);
-    assertTrue('external: reinsert does not overwrite original payload', getEvidenceById(first.id)?.rawText === payload);
+    assertTrue('external: identical reinsert does not overwrite original payload', getEvidenceById(first.id)?.rawText === payload);
+    const updated = persistEvidence({
+      sourceClass: 'external_source',
+      sourceKind: 'calendar',
+      sourceId: 'cal_evt_abc',
+      rawText: JSON.stringify({ title: 'Dentist rescheduled' }),
+      eventAt: '2026-09-23T14:00:00.000Z',
+      observedAt: '2026-09-22T00:00:00.000Z',
+    });
+    assertTrue('external: changed observation updates the same identity', updated.id === first.id && updated.rawText.includes('Dentist rescheduled') && updated.eventAt === '2026-09-23T14:00:00.000Z');
 
     const unnamedA = persistEvidence({
       sourceClass: 'external_source',

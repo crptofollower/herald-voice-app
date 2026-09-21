@@ -1,5 +1,5 @@
 // src/db/evidenceDB.ts
-// Durable Evidence Substrate V1 — storage only.
+// Durable Evidence Substrate — storage only.
 // Unconfirmed authorized personal evidence. Not medical_records, facts,
 // contacts, notes, observations, calendar_cache, or appointments.
 // No routing, promotion, fuzzy retrieval, or entity minting.
@@ -16,6 +16,7 @@ export type EvidenceRecord = {
   sourceId: string | null;
   rawText: string;
   observedAt: string;
+  eventAt: string | null;
 };
 
 export type PersistEvidenceInput = {
@@ -24,6 +25,7 @@ export type PersistEvidenceInput = {
   sourceId?: string | null;
   rawText: string;
   observedAt?: string;
+  eventAt?: string | null;
   /** User-explicit only. Same capture identity is the same row; omitted mints a new id. */
   captureId?: string | null;
 };
@@ -41,7 +43,11 @@ type EvidenceRow = {
   source_id: string | null;
   raw_text: string;
   observed_at: string;
+  event_at: string | null;
 };
+
+const EVIDENCE_SELECT =
+  "id, source_class, source_kind, source_id, raw_text, observed_at, event_at";
 
 function isSourceClass(value: string): value is EvidenceSourceClass {
   return (EVIDENCE_SOURCE_CLASSES as readonly string[]).includes(value);
@@ -58,6 +64,7 @@ function mapRow(row: EvidenceRow): EvidenceRecord {
     sourceId: row.source_id,
     rawText: row.raw_text,
     observedAt: row.observed_at,
+    eventAt: row.event_at ?? null,
   };
 }
 
@@ -83,25 +90,41 @@ export function persistEvidence(input: PersistEvidenceInput): EvidenceRecord {
   }
   const sourceId = normalizeOptionalId(input.sourceId);
   const observedAt = input.observedAt?.trim() || new Date().toISOString();
+  const eventAt = normalizeOptionalId(input.eventAt);
 
   if (input.sourceClass === "external_source" && sourceId) {
     const existing = db.getFirstSync<EvidenceRow>(
-      `SELECT id, source_class, source_kind, source_id, raw_text, observed_at
+      `SELECT ${EVIDENCE_SELECT}
          FROM evidence
         WHERE source_class = 'external_source'
           AND source_kind = ?
           AND source_id = ?;`,
       [sourceKind, sourceId],
     );
-    if (existing) return mapRow(existing);
+    if (existing) {
+      const samePayload =
+        existing.raw_text === rawText && (existing.event_at ?? null) === eventAt;
+      if (samePayload) return mapRow(existing);
+      db.runSync(
+        `UPDATE evidence
+            SET raw_text = ?, event_at = ?, observed_at = ?
+          WHERE id = ?;`,
+        [rawText, eventAt, observedAt, existing.id],
+      );
+      const updated = db.getFirstSync<EvidenceRow>(
+        `SELECT ${EVIDENCE_SELECT} FROM evidence WHERE id = ?;`,
+        [existing.id],
+      );
+      if (!updated) throw new Error("evidence: update failed to round-trip");
+      return mapRow(updated);
+    }
   }
 
   const captureId =
     input.sourceClass === "user_explicit" ? normalizeOptionalId(input.captureId) : null;
   if (captureId) {
     const existing = db.getFirstSync<EvidenceRow>(
-      `SELECT id, source_class, source_kind, source_id, raw_text, observed_at
-         FROM evidence WHERE id = ?;`,
+      `SELECT ${EVIDENCE_SELECT} FROM evidence WHERE id = ?;`,
       [captureId],
     );
     if (existing) return mapRow(existing);
@@ -109,13 +132,12 @@ export function persistEvidence(input: PersistEvidenceInput): EvidenceRecord {
 
   const id = captureId ?? mintEvidenceId();
   db.runSync(
-    `INSERT INTO evidence (id, source_class, source_kind, source_id, raw_text, observed_at)
-     VALUES (?, ?, ?, ?, ?, ?);`,
-    [id, input.sourceClass, sourceKind, sourceId, rawText, observedAt],
+    `INSERT INTO evidence (id, source_class, source_kind, source_id, raw_text, observed_at, event_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?);`,
+    [id, input.sourceClass, sourceKind, sourceId, rawText, observedAt, eventAt],
   );
   const stored = db.getFirstSync<EvidenceRow>(
-    `SELECT id, source_class, source_kind, source_id, raw_text, observed_at
-       FROM evidence WHERE id = ?;`,
+    `SELECT ${EVIDENCE_SELECT} FROM evidence WHERE id = ?;`,
     [id],
   );
   if (!stored) throw new Error("evidence: persist failed to round-trip");
@@ -125,8 +147,7 @@ export function persistEvidence(input: PersistEvidenceInput): EvidenceRecord {
 export function getEvidenceById(id: string): EvidenceRecord | null {
   const db = getDB();
   const row = db.getFirstSync<EvidenceRow>(
-    `SELECT id, source_class, source_kind, source_id, raw_text, observed_at
-       FROM evidence WHERE id = ?;`,
+    `SELECT ${EVIDENCE_SELECT} FROM evidence WHERE id = ?;`,
     [id],
   );
   return row ? mapRow(row) : null;
@@ -148,7 +169,7 @@ export function listActiveEvidence(selector: ActiveEvidenceSelector): EvidenceRe
     params.push(selector.sourceId);
   }
   const rows = db.getAllSync<EvidenceRow>(
-    `SELECT id, source_class, source_kind, source_id, raw_text, observed_at
+    `SELECT ${EVIDENCE_SELECT}
        FROM evidence
       WHERE ${clauses.join(" AND ")}
       ORDER BY observed_at ASC, id ASC;`,

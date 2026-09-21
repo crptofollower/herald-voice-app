@@ -2,7 +2,7 @@
 // Herald device SQLite — table definitions and migration runner.
 // Session L — Device-First Intelligence Layer
 //
-// SCHEMA VERSION: 22
+// SCHEMA VERSION: 23
 // v1: Initial schema — facts, profile, medical, calendar_cache (ISO strings), life_tracker
 // v2: calendar_cache rebuilt with Unix ms timestamps (timezone fix)
 // v3: Entity graph + importance scoring + temporal awareness (locked Session L spec)
@@ -30,6 +30,7 @@
 //      Herald-owned scheduling memory independent of the device-calendar mirror)
 // v21: medical_records.visit_outcome + outcome_asked_at (post-visit outcome ask / never-nag)
 // v22: evidence table — unconfirmed authorized personal evidence (not truth)
+// v23: evidence.event_at — source calendar event time (distinct from observed_at)
 //
 // RULE: NEVER modify a past migration. Always add at the next version number.
 //
@@ -61,7 +62,7 @@
 // (src/screens/ChatScreen.tsx) for the same class of eager-import avoidance.
 import type * as SQLite from "expo-sqlite";
 
-export const SCHEMA_VERSION = 22;
+export const SCHEMA_VERSION = 23;
 export const DB_NAME = "herald_device.db";
 
 // ─── Open database ────────────────────────────────────────────────────────────
@@ -835,5 +836,15 @@ const MIGRATIONS: Record<number, (db: SQLite.SQLiteDatabase) => void> = {
         WHERE source_class = 'external_source' AND source_id IS NOT NULL;
     `);
     console.log("Herald schema V22: evidence table added (unconfirmed personal evidence)");
+  },
+
+  // ── v23: evidence.event_at (source event time; not observation time) ─────
+  23: (db) => {
+    try {
+      db.execSync("ALTER TABLE evidence ADD COLUMN event_at TEXT;");
+    } catch {
+      // column already exists (re-run safety) — ignore
+    }
+    console.log("Herald schema V23: evidence.event_at added");
   },
 };
