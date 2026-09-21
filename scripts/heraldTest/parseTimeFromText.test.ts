@@ -306,14 +306,11 @@ export async function runParseTimeFromTextTests() {
     );
   }
 
-  // PT17: calendar:specific_day_past routing, empty case — honest miss,
-  // appointments-sourced, past-tense phrasing distinct from piece A's
-  // calendar_cache-sourced "Your calendar is clear ___."
-  // calendar-shaped past request, not 'what did I do' —
-  // that phrasing is broader than Calendar's scope and belongs to a future
-  // life-history authority, not this reader.
+  // PT17: calendar:specific_day_past routing, empty case — honest miss
+  // from the authorized device-calendar range, calendar provenance.
   {
     const { setDB } = await import('../../src/db/schema.ts');
+    const { setCalendarEventFetcher, resetCalendarEventFetcher } = await import('../../src/db/calendarCacheDB.ts');
     setDB({
       getAllSync: (_sql: string, _params?: unknown[]) => [],
       getFirstSync: (_sql: string, _params?: unknown[]) => null,
@@ -321,58 +318,62 @@ export async function runParseTimeFromTextTests() {
       execSync: (_sql: string) => {},
     });
     const { classifyQuery } = await import('../../src/routing/tierRouter.ts');
-
-    const d = await classifyQuery("What's on my calendar last Thursday?");
-    console.log(`${DIM}PT17 routing: reason=${JSON.stringify(d.reason)} response=${JSON.stringify(d.tier1Response)}${RESET}`);
-    assert(
-      'PT17 "What\'s on my calendar last Thursday?" (empty) → calendar:specific_day_past, honest miss',
-      { reason: d.reason, response: d.tier1Response },
-      (v) => {
-        const x = v as { reason?: string; response?: string };
-        return x.reason === 'calendar:specific_day_past' &&
-          x.response === "I don't have anything on your calendar for last Thursday that I know of.";
-      },
-      'reason calendar:specific_day_past; honest-miss for "last Thursday"',
-    );
+    setCalendarEventFetcher(async () => ({ status: 'ok', events: [] }));
+    try {
+      const d = await classifyQuery("What's on my calendar last Thursday?");
+      console.log(`${DIM}PT17 routing: reason=${JSON.stringify(d.reason)} response=${JSON.stringify(d.tier1Response)}${RESET}`);
+      assert(
+        'PT17 "What\'s on my calendar last Thursday?" (empty) → calendar:specific_day_past, honest miss',
+        { reason: d.reason, response: d.tier1Response },
+        (v) => {
+          const x = v as { reason?: string; response?: string };
+          return x.reason === 'calendar:specific_day_past' &&
+            x.response === "Your calendar is clear last Thursday.";
+        },
+        'reason calendar:specific_day_past; honest-miss for "last Thursday"',
+      );
+    } finally {
+      resetCalendarEventFetcher();
+    }
   }
 
-  // PT18: calendar:specific_day_past, non-empty — proves a real appointments
-  // row actually reaches the composer, not just the honest-miss path.
-  // calendar-shaped past request, not 'what did I do' —
-  // that phrasing is broader than Calendar's scope and belongs to a future
-  // life-history authority, not this reader.
+  // PT18: calendar:specific_day_past, non-empty — device-calendar range row
+  // reaches the composer with calendar provenance, not occurred-visit tense.
   {
     const { setDB } = await import('../../src/db/schema.ts');
+    const { setCalendarEventFetcher, resetCalendarEventFetcher } = await import('../../src/db/calendarCacheDB.ts');
     setDB({
-      getAllSync: (sql: string, _params?: unknown[]) => {
-        if (sql.includes('FROM appointments')) {
-          return [{
-            id: 'apt1', title: 'Dentist', category: 'dental',
-            appt_date: '2020-01-01T15:00:00.000Z', appt_date_precision: 'exact',
-            end_date: null, location: null, notes: null, source: 'user_told',
-            external_id: null, raw_phrase: null, status: 'upcoming',
-            created_at: '2020-01-01T00:00:00.000Z',
-            updated_at: '2020-01-01T00:00:00.000Z', removed_at: null,
-          }];
-        }
-        return [];
-      },
+      getAllSync: (_sql: string, _params?: unknown[]) => [],
       getFirstSync: (_sql: string, _params?: unknown[]) => null,
       runSync: (_sql: string, _params?: unknown[]) => ({ changes: 0, lastInsertRowId: 0 }),
       execSync: (_sql: string) => {},
     });
     const { classifyQuery } = await import('../../src/routing/tierRouter.ts');
-    const d = await classifyQuery("What's on my calendar last Thursday?");
-    console.log(`${DIM}PT18 routing: reason=${JSON.stringify(d.reason)} response=${JSON.stringify(d.tier1Response)}${RESET}`);
-    assert(
-      'PT18 "What\'s on my calendar last Thursday?" (one row) → composer speaks it, past tense',
-      { reason: d.reason, mentionsTitle: (d.tier1Response ?? '').includes('Dentist'), mentionsHad: (d.tier1Response ?? '').includes('You had') },
-      (v) => {
-        const x = v as { reason?: string; mentionsTitle?: boolean; mentionsHad?: boolean };
-        return x.reason === 'calendar:specific_day_past' && x.mentionsTitle === true && x.mentionsHad === true;
-      },
-      'reason calendar:specific_day_past; response includes "Dentist" and "You had"',
-    );
+    setCalendarEventFetcher(async (start: Date) => ({
+      status: 'ok',
+      events: [{
+        id: 'apt1',
+        title: 'Dentist',
+        startDate: new Date(start.getTime() + 15 * 3600_000),
+        endDate: new Date(start.getTime() + 16 * 3600_000),
+        allDay: false,
+      }],
+    }));
+    try {
+      const d = await classifyQuery("What's on my calendar last Thursday?");
+      console.log(`${DIM}PT18 routing: reason=${JSON.stringify(d.reason)} response=${JSON.stringify(d.tier1Response)}${RESET}`);
+      assert(
+        'PT18 "What\'s on my calendar last Thursday?" (one row) → composer speaks it, calendar provenance',
+        { reason: d.reason, mentionsTitle: (d.tier1Response ?? '').includes('Dentist'), shows: (d.tier1Response ?? '').includes('Your calendar shows'), mentionsHad: (d.tier1Response ?? '').includes('You had') },
+        (v) => {
+          const x = v as { reason?: string; mentionsTitle?: boolean; shows?: boolean; mentionsHad?: boolean };
+          return x.reason === 'calendar:specific_day_past' && x.mentionsTitle === true && x.shows === true && x.mentionsHad === false;
+        },
+        'reason calendar:specific_day_past; response includes "Dentist" and "Your calendar shows"',
+      );
+    } finally {
+      resetCalendarEventFetcher();
+    }
   }
 
   // PT19: connector-bearing calendar shape ("for" between verb and temporal)

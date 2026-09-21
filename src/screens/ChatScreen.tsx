@@ -561,6 +561,7 @@ export default function ChatScreen() {
     | {
         kind: 'schedule';
         presentedIds: string[];
+        presentedEvents?: Array<{ id: string; title: string; start_ms: number; all_day: number }>;
         scope: ScheduleScope;
         cacheUnloaded: boolean;
       };
@@ -689,6 +690,11 @@ export default function ChatScreen() {
         : (outcome.routeDecision.kind === 'device_read'
           ? (outcome.routeDecision.presentedCalendarEventIds ?? [])
           : []);
+      const presentedEvents = outcome.handled
+        ? outcome.presentedCalendarEvents
+        : (outcome.routeDecision.kind === 'device_read'
+          ? outcome.routeDecision.presentedCalendarEvents
+          : undefined);
       const reason = outcome.handled
         ? (outcome.calendarReadReason ?? 'calendar:today')
         : (outcome.routeDecision.kind === 'device_read'
@@ -697,8 +703,9 @@ export default function ChatScreen() {
       setActiveSurface({
         kind: 'schedule',
         presentedIds,
+        presentedEvents,
         scope: scheduleScopeFromReason(reason),
-        cacheUnloaded: calendarCacheIsUnloaded(),
+        cacheUnloaded: presentedEvents !== undefined ? false : calendarCacheIsUnloaded(),
       });
     }
   }, [refreshGroceryCapabilitySurface, refreshTodoCapabilitySurface]);
@@ -3663,7 +3670,10 @@ export default function ChatScreen() {
 
   const scheduleRows = useMemo(() => {
     if (activeSurface?.kind !== 'schedule') return [];
-    return projectScheduleRowsFromPresentedIds(activeSurface.presentedIds);
+    return projectScheduleRowsFromPresentedIds(
+      activeSurface.presentedIds,
+      activeSurface.presentedEvents,
+    );
   }, [activeSurface]);
 
   const groceryWorkspaceActive =

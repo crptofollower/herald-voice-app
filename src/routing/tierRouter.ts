@@ -3,8 +3,8 @@
 // Session L — Device-First Intelligence Layer
 // Build 20 fix: additional calendar phrase coverage (Bug 2 from Session L).
 
-import { getCachedEvents, formatCachedEventsForSpeech, refreshCalendarCache, getCacheAge, getCachedEventsForDate, formatEventsForSpecificDay } from "../db/calendarCacheDB";
-import { getAppointmentsForLocalDate, formatAppointmentsForSpecificDay } from "../db/appointmentsDB";
+import { getCachedEvents, formatCachedEventsForSpeech, refreshCalendarCache, getCacheAge, getCachedEventsForDate, formatEventsForSpecificDay, queryCalendarRange } from "../db/calendarCacheDB";
+import { formatHistoricalCalendarRangeForSpeech, resolveHistoricalCalendarRange, toPresentedCalendarSnapshot } from "./historicalCalendarRange";
 import { calendarWriteIsRecent } from "../db/calendarState";
 import { getFactsSummary } from "../db/factDB";
 import { normalizeInput } from "../utils/normalizeInput";
@@ -98,6 +98,8 @@ export interface TierDecision {
   presentedMedicationIds?: string[];
   /** Ordered IDs from the same calendar event rows that produced tier-1 calendar speech. IDs only. */
   presentedCalendarEventIds?: string[];
+  /** Same rows as presentedCalendarEventIds — Schedule projection without a second calendar query. */
+  presentedCalendarEvents?: Array<{ id: string; title: string; start_ms: number; all_day: number }>;
 }
 
 export interface LocalContext {
@@ -123,7 +125,7 @@ export interface LocalContext {
  * Only "on my calendar" / "my schedule" pass both axes; generics are TERSE-only.
  */
 const CALENDAR_READ_FREE: RegExp[] = [
-  /\bwhat(?:'s| is) (?:on my calendar|my schedule)\b/i,
+  /\bwhat(?:'s| is| was| were) (?:on my calendar|my schedule)\b/i,
 ];
 
 /** Shared weekday-name source — used by the calendar request-shape
@@ -146,7 +148,9 @@ const WEEKDAY_NAMES =
  * phrase than the four original windows, using the exact same
  * connector-plus-temporal slot every pattern already reserves. */
 const CALENDAR_TERSE_TEMPORAL =
-  '(?:today|tomorrow|this(?:\\s+coming)?\\s+week|coming\\s+week|next\\s+week|next\\s+(?:7|seven)\\s+days' +
+  '(?:today|tomorrow|yesterday|this(?:\\s+coming)?\\s+week|coming\\s+week|next\\s+week|last\\s+week|last\\s+month' +
+  '|(?:(?:a|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)|\\d+)\\s+months?\\s+ago' +
+  '|next\\s+(?:7|seven)\\s+days' +
   `|(?:next|this|last|on)?\\s*(?:${WEEKDAY_NAMES}))`;
 
 /**
@@ -158,16 +162,16 @@ const CALENDAR_TERSE_TEMPORAL =
 const CALENDAR_READ_TERSE: RegExp[] = [
   // "My schedule next week." / "What's my schedule for tomorrow?"
   new RegExp(
-    `^(?:what(?:'s| is)\\s+)?my\\s+schedule(?:\\s+(?:for\\s+)?${CALENDAR_TERSE_TEMPORAL})?\\s*[?.!]*$`,
+    `^(?:what(?:'s| is| was| were)\\s+)?my\\s+schedule(?:\\s+(?:for\\s+)?${CALENDAR_TERSE_TEMPORAL})?\\s*[?.!]*$`,
     'i',
   ),
   // "On my calendar next week." / "On my schedule for this week."
   new RegExp(
-    `^(?:what(?:'s| is)\\s+)?on\\s+my\\s+(?:calendar|schedule)(?:\\s+(?:for\\s+)?${CALENDAR_TERSE_TEMPORAL})?\\s*[?.!]*$`,
+    `^(?:what(?:'s| is| was| were)\\s+)?on\\s+my\\s+(?:calendar|schedule)(?:\\s+(?:for\\s+)?${CALENDAR_TERSE_TEMPORAL})?\\s*[?.!]*$`,
     'i',
   ),
   // "Week's schedule?" / "My week's schedule." / "What's my week's schedule?"
-  /^(?:what(?:'s| is)\s+)?(?:my\s+)?week(?:'s| is)\s+schedule\s*[?.!]*$/i,
+  /^(?:what(?:'s| is| was| were)\s+)?(?:my\s+)?week(?:'s| is)\s+schedule\s*[?.!]*$/i,
   // "Calendar next week."
   new RegExp(
     `^calendar(?:\\s+(?:for\\s+)?${CALENDAR_TERSE_TEMPORAL})?\\s*[?.!]*$`,
@@ -187,7 +191,7 @@ const CALENDAR_READ_TERSE: RegExp[] = [
   ),
   // "What's scheduled next week?" / "What's planned for tomorrow?"
   new RegExp(
-    `^what(?:'s| is)\\s+(?:scheduled|planned)(?:\\s+(?:for\\s+)?${CALENDAR_TERSE_TEMPORAL})?\\s*[?.!]*$`,
+    `^what(?:'s| is| was| were)\\s+(?:scheduled|planned)(?:\\s+(?:for\\s+)?${CALENDAR_TERSE_TEMPORAL})?\\s*[?.!]*$`,
     'i',
   ),
   // Shape-less calendar NP: "Any appointments next week?" / "Any meetings today?"
@@ -224,7 +228,7 @@ const CALENDAR_LEADING_DISCOURSE_RE =
 const CALENDAR_PERSONAL_SCHEDULE_INQUIRY: RegExp[] = [
   // "What's going on tomorrow?" — not "... going on with/at X tomorrow"
   new RegExp(
-    `^what(?:'s| is)\\s+going\\s+on(?:\\s+(?:for\\s+)?${CALENDAR_TERSE_TEMPORAL})\\s*[?.!]*$`,
+    `^what(?:'s| is| was| were)\\s+going\\s+on(?:\\s+(?:for\\s+)?${CALENDAR_TERSE_TEMPORAL})\\s*[?.!]*$`,
     'i',
   ),
   // "What do I have going on tomorrow?" — going on must abut temporal scope
@@ -239,7 +243,7 @@ const CALENDAR_PERSONAL_SCHEDULE_INQUIRY: RegExp[] = [
   ),
   // Ordinal ask still authorizes a full schedule read — no ordinal resolution here.
   new RegExp(
-    `^what(?:'s| is)\\s+(?:the\\s+)?(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\\s+(?:thing|one)\\s+(?:(?:i(?:'ve|\\s+have)\\s+got)|(?:do\\s+i\\s+have))(?:\\s+going\\s+on)?(?:\\s+(?:for\\s+)?${CALENDAR_TERSE_TEMPORAL})\\s*[?.!]*$`,
+    `^what(?:'s| is| was| were)\\s+(?:the\\s+)?(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\\s+(?:thing|one)\\s+(?:(?:i(?:'ve|\\s+have)\\s+got)|(?:do\\s+i\\s+have))(?:\\s+going\\s+on)?(?:\\s+(?:for\\s+)?${CALENDAR_TERSE_TEMPORAL})\\s*[?.!]*$`,
     'i',
   ),
 ];
@@ -279,9 +283,9 @@ const CALENDAR_TRAVEL_READ: RegExp[] = [
 
 /** Phrases that default to the today window when no other temporal scope is present. */
 const CALENDAR_TODAY_DEFAULT_READ: RegExp[] = [
-  /\bwhat(?:'s| is) on my calendar\b/i,
-  /\bwhat(?:'s| is) on my schedule\b/i,
-  /\bwhat(?:'s| is) my schedule\b/i,
+  /\bwhat(?:'s| is| was| were) on my calendar\b/i,
+  /\bwhat(?:'s| is| was| were) on my schedule\b/i,
+  /\bwhat(?:'s| is| was| were) my schedule\b/i,
   /\banything on my calendar\b/i,
   /\bdo i have anything scheduled\b/i,
 ];
@@ -971,6 +975,37 @@ function tier1CalendarReadDecision(
     reason,
     presentedCalendarEventIds: events.map((e) => e.id),
   };
+}
+
+function rangeCalendarReadDecision(
+  events: Awaited<ReturnType<typeof getTier1CalendarEvents>>,
+  response: string,
+  reason: string,
+): TierDecision {
+  return {
+    tier: 1,
+    tier1Response: response,
+    reason,
+    presentedCalendarEventIds: events.map((e) => e.id),
+    presentedCalendarEvents: toPresentedCalendarSnapshot(events),
+  };
+}
+
+async function readDeviceCalendarRangeDecision(
+  start: Date,
+  end: Date,
+  responseFor: (events: Awaited<ReturnType<typeof getTier1CalendarEvents>>) => string,
+  reason: string,
+): Promise<TierDecision> {
+  const result = await queryCalendarRange(start, end);
+  if (result.status === 'unavailable') {
+    return {
+      tier: 1,
+      tier1Response: "I couldn't check your calendar right now.",
+      reason: 'calendar:unavailable',
+    };
+  }
+  return rangeCalendarReadDecision(result.events, responseFor(result.events), reason);
 }
 
 export type CalendarScopeWindow = "today" | "tomorrow" | "this week" | "next week";
@@ -1859,16 +1894,21 @@ async function classifyQueryCore(message: string): Promise<TierDecision> {
       }
 
       const dayLabel = `last ${weekdayName}`;
-      const pastAppointments = getAppointmentsForLocalDate(resolvedDate);
-      return {
-        tier: 1,
-        tier1Response: formatAppointmentsForSpecificDay(pastAppointments, dayLabel),
-        reason: "calendar:specific_day_past",
-      };
+      const dayEnd = new Date(resolved);
+      dayEnd.setDate(resolved.getDate() + 1);
+      return readDeviceCalendarRangeDecision(
+        resolved,
+        dayEnd,
+        (events) => formatHistoricalCalendarRangeForSpeech(events, {
+          speechLabel: dayLabel,
+          includeWeekday: false,
+        }),
+        "calendar:specific_day_past",
+      );
     }
   }
 
-  if (hasUnresolvableDate && isCalendarIntent) {
+  if (hasUnresolvableDate && isCalendarIntent && !resolveHistoricalCalendarRange(msg)) {
     return {
       tier: 1,
       tier1Response: "I can only tell you about today, tomorrow, this week, or next week right now.",
@@ -1885,9 +1925,25 @@ async function classifyQueryCore(message: string): Promise<TierDecision> {
   const calendarTravel = hasCalendarTravelRead(msg);
   const hasNearMe = /\b(near me|near here|nearest|closest|close to me)\b/i.test(msg);
   const hasWeatherTomorrow = /\bweather\b/i.test(msg);
+  const historicalRange = calendarRead ? resolveHistoricalCalendarRange(msg) : null;
   const todayDefault =
     CALENDAR_TODAY_DEFAULT_READ.some((p) => p.test(msg)) &&
-    !hasToday && !hasTomorrow && !hasThisWeek && !hasNextWeek;
+    !hasToday && !hasTomorrow && !hasThisWeek && !hasNextWeek && !historicalRange;
+
+  if (
+    historicalRange &&
+    !hasToday &&
+    !hasTomorrow &&
+    !hasThisWeek &&
+    !hasNextWeek
+  ) {
+    return readDeviceCalendarRangeDecision(
+      historicalRange.start,
+      historicalRange.end,
+      (events) => formatHistoricalCalendarRangeForSpeech(events, historicalRange),
+      historicalRange.reason,
+    );
+  }
 
   // Tier 1: calendar today — bare this-week/next-week markers exclude (not only
   // authorized week-read phrases), so "today … this week is packed" cannot

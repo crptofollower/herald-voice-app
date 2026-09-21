@@ -219,6 +219,7 @@ export function isCalendarAgendaSpeech(text: string): boolean {
   const t = text.trim();
   if (t.startsWith("I don't have your calendar loaded yet.")) return true;
   if (t.startsWith('Your calendar is clear ')) return true;
+  if (t.startsWith('Your calendar shows')) return true;
   if (/^(Today|Tomorrow|This week|Next week) you have: /.test(t)) return true;
   if (/^You have .+ (today|tomorrow|this week|next week)\.$/.test(t)) return true;
   return false;

@@ -128,6 +128,7 @@ export type UtteranceOutcome =
       /** Presentation hint only. Never speech-parsed. Never a conversational machine. */
       capabilitySurface?: 'grocery' | 'todo' | 'schedule';
       presentedCalendarEventIds?: string[];
+      presentedCalendarEvents?: Array<{ id: string; title: string; start_ms: number; all_day: number }>;
       calendarReadReason?: string;
     }
   | { handled: true; source: 'emergency' }

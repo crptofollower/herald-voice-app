@@ -4,8 +4,15 @@
 import { getCacheAge, getCachedEventById, type CachedEvent } from '../db/calendarCacheDB';
 import type { UtteranceOutcome } from './processUtterance';
 
-export type ScheduleScope = 'today' | 'tomorrow' | 'this week' | 'next week' | 'day';
+export type ScheduleScope = 'today' | 'tomorrow' | 'this week' | 'next week' | 'day' | 'yesterday' | 'last week' | 'last month';
 export type ScheduleIconKind = 'flight' | 'birthday' | 'dining' | 'doctor' | 'generic';
+
+export type PresentedCalendarEvent = {
+  id: string;
+  title: string;
+  start_ms: number;
+  all_day: number;
+};
 
 export type ScheduleSurfaceRow = {
   id: string;
@@ -23,7 +30,10 @@ export function scheduleScopeFromReason(reason: string): ScheduleScope {
   if (reason === 'calendar:tomorrow') return 'tomorrow';
   if (reason === 'calendar:week') return 'this week';
   if (reason === 'calendar:next_week') return 'next week';
-  if (reason === 'calendar:specific_day') return 'day';
+  if (reason === 'calendar:specific_day' || reason === 'calendar:specific_day_past') return 'day';
+  if (reason === 'calendar:yesterday') return 'yesterday';
+  if (reason === 'calendar:last_week') return 'last week';
+  if (reason === 'calendar:last_month') return 'last month';
   return 'today';
 }
 
@@ -35,7 +45,7 @@ export function classifyScheduleTitleIcon(title: string): ScheduleIconKind {
   return 'generic';
 }
 
-function toRow(event: CachedEvent): ScheduleSurfaceRow {
+function toRow(event: PresentedCalendarEvent | CachedEvent): ScheduleSurfaceRow {
   return {
     id: event.id,
     title: event.title,
@@ -45,10 +55,13 @@ function toRow(event: CachedEvent): ScheduleSurfaceRow {
   };
 }
 
-export function projectScheduleRowsFromPresentedIds(ids: readonly string[]): ScheduleSurfaceRow[] {
+export function projectScheduleRowsFromPresentedIds(
+  ids: readonly string[],
+  snapshots?: readonly PresentedCalendarEvent[] | null,
+): ScheduleSurfaceRow[] {
   const rows: ScheduleSurfaceRow[] = [];
   for (const id of ids) {
-    const event = getCachedEventById(id);
+    const event = snapshots?.find((e) => e.id === id) ?? (snapshots ? undefined : getCachedEventById(id));
     if (!event) continue;
     rows.push(toRow(event));
   }
@@ -62,6 +75,10 @@ const CALENDAR_READ_REASONS = new Set([
   'calendar:week',
   'calendar:next_week',
   'calendar:specific_day',
+  'calendar:specific_day_past',
+  'calendar:yesterday',
+  'calendar:last_week',
+  'calendar:last_month',
 ]);
 
 export function scheduleOutcomeIdentifiesSurface(outcome: UtteranceOutcome): boolean {
@@ -81,5 +98,8 @@ export function scheduleScopeLabel(scope: ScheduleScope): string {
   if (scope === 'this week') return 'THIS WEEK';
   if (scope === 'next week') return 'NEXT WEEK';
   if (scope === 'day') return 'SCHEDULE';
+  if (scope === 'yesterday') return 'YESTERDAY';
+  if (scope === 'last week') return 'LAST WEEK';
+  if (scope === 'last month') return 'LAST MONTH';
   return 'TODAY';
 }

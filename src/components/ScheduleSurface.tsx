@@ -41,13 +41,15 @@ function dayKey(ms: number): string {
 }
 
 function groupRows(rows: ScheduleSurfaceRow[], scope: ScheduleScope): { heading: string | null; rows: ScheduleSurfaceRow[] }[] {
-  if (scope === 'today' || scope === 'tomorrow') {
+  if (scope === 'today' || scope === 'tomorrow' || scope === 'yesterday') {
     return [{ heading: null, rows }];
   }
   const groups: { heading: string | null; rows: ScheduleSurfaceRow[] }[] = [];
   let current: { heading: string | null; rows: ScheduleSurfaceRow[] } | null = null;
   for (const row of rows) {
-    const heading = weekdayShort(row.startMs);
+    const heading = scope === 'last month'
+      ? new Date(row.startMs).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }).toUpperCase()
+      : weekdayShort(row.startMs);
     if (!current || current.heading !== heading) {
       current = { heading, rows: [] };
       groups.push(current);
@@ -65,7 +67,7 @@ export function ScheduleSurface({
   accent,
 }: Props) {
   const groups = groupRows(rows, scope);
-  const showDayOnRow = scope === 'today' || scope === 'tomorrow';
+  const showDayOnRow = scope === 'today' || scope === 'tomorrow' || scope === 'yesterday';
   return (
     <ScrollView
       style={styles.scroll}
