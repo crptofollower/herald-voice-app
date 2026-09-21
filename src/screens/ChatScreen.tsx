@@ -116,6 +116,9 @@ import { createHotNarrativeRing, hasImmediatelyAdjacentHotAuthorization } from '
 import { createConversationTurnLedger, type ConversationTurnLedger } from '../routing/conversationTurnLedger';
 import { answerImmediateSemanticRecap } from '../routing/immediateSemanticRecap';
 import { answerActiveSubjectReference } from '../routing/activeSubjectReference';
+import {
+  deriveActiveTurnPresentation,
+} from '../presentation/activeTurnPresence';
 import { answerFromDevice } from '../utils/localAnswers';
 import { parseTimeFromText } from '../utils/parseTime';
 import { detectFamilyRead, answerFamilyRead } from '../utils/familyRead';
@@ -530,6 +533,15 @@ export default function ChatScreen() {
   const [isWaiting, setIsWaiting] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [thinkingPhrase, setThinkingPhrase] = useState(THINKING_PHRASES[0]);
+  // Active Turn Presence V1 — turn-scoped utterance ownership (not heardPreview).
+  const [activeTurnPresence, setActiveTurnPresence] = useState<{
+    turnId: number;
+    utterance: string;
+    startedAtMs: number;
+  } | null>(null);
+  const [turnInFlight, setTurnInFlight] = useState(false);
+  const [presenceNowMs, setPresenceNowMs] = useState(() => Date.now());
+  const isStreamingRef = useRef(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [dbReady, setDbReady] = useState(false);
   type ActiveCapabilitySurface =
@@ -1012,6 +1024,23 @@ export default function ChatScreen() {
     return () => clearInterval(interval);
   }, [isWaiting]);
 
+  isStreamingRef.current = isStreaming;
+
+  // Keep Active Turn Presence facts fresh while an exchange is owned.
+  useEffect(() => {
+    if (!activeTurnPresence) return;
+    const id = setInterval(() => {
+      setTurnInFlight(sendingRef.current);
+      setPresenceNowMs(Date.now());
+      // Release when execution finished and TTS/stream are idle — no new timeout authority.
+      if (!sendingRef.current && !isSpeakingRef.current && !isStreamingRef.current) {
+        setActiveTurnPresence(null);
+        setTurnInFlight(false);
+      }
+    }, 100);
+    return () => clearInterval(id);
+  }, [activeTurnPresence]);
+
   const upgradeLiveGreeting = useCallback(
     (greetingLat?: number, greetingLng?: number, greetingLabel?: string) => {
       const local_time = new Date().toLocaleTimeString("en-US", {
@@ -1444,6 +1473,13 @@ export default function ChatScreen() {
 
     lastSentRef.current = now;
     sendingRef.current = true;
+    setTurnInFlight(true);
+    setActiveTurnPresence({
+      turnId: turnIndexRef.current,
+      utterance: text,
+      startedAtMs: Date.now(),
+    });
+    setPresenceNowMs(Date.now());
     followTranscriptRef.current = true;
     isAtBottomRef.current = true;
     let shadowSnapshot: PreTurnGrocerySnapshot | null = null;
@@ -3698,6 +3734,37 @@ export default function ChatScreen() {
 
   // ── Render ────────────────────────────────────────────────────────────────
 
+  const lastDisplayMessage = displayMessages.length > 0
+    ? displayMessages[displayMessages.length - 1]
+    : null;
+  const activeTurnAssistantText =
+    (streamingContent && streamingContent.trim())
+      || (lastDisplayMessage?.role === 'assistant' ? lastDisplayMessage.content : null);
+  const activeTurnPresentation = deriveActiveTurnPresentation(
+    {
+      activeTurnId: activeTurnPresence?.turnId ?? null,
+      activeUserUtterance: activeTurnPresence?.utterance ?? null,
+      turnInFlight,
+      isWaiting,
+      isStreaming,
+      streamingContent,
+      isSpeaking,
+      userUtteranceCommittedInTranscript:
+        !!activeTurnPresence
+        && lastDisplayMessage?.role === 'user'
+        && lastDisplayMessage.content === activeTurnPresence.utterance,
+      assistantResponseText: activeTurnAssistantText,
+      terminalOutcome: 'none',
+      capabilitySurfaceActive: groceryWorkspaceActive,
+    },
+    {
+      elapsedMs: activeTurnPresence
+        ? Math.max(0, presenceNowMs - activeTurnPresence.startedAtMs)
+        : 0,
+      processingIndicatorThresholdMs: 200,
+    },
+  );
+
   const aiInitial = (aiName || 'Herald').trim().charAt(0).toUpperCase();
   const livePartialText = isRecording && partialText.trim() && !heardPreviewText
     ? partialText.trim()
@@ -3877,7 +3944,23 @@ export default function ChatScreen() {
                       isEphemeral
                     />
                   ) : null}
-                  {heardPreviewText ? (
+                  {activeTurnPresentation.showUserUtterance
+                    && activeTurnPresentation.userUtterance
+                    && !transcriptMessages.some(
+                      (m) => m.role === 'user' && m.content === activeTurnPresentation.userUtterance,
+                    ) ? (
+                    <MessageBubble
+                      message={{
+                        id: "active-turn-user",
+                        role: "user",
+                        content: activeTurnPresentation.userUtterance,
+                        timestamp: Date.now(),
+                      }}
+                      persona={persona}
+                      visualWeight="current"
+                      isEphemeral
+                    />
+                  ) : heardPreviewText ? (
                     <MessageBubble
                       message={{
                         id: "heard-preview",
@@ -3901,7 +3984,7 @@ export default function ChatScreen() {
                       accent={persona.colors.accent}
                     />
                   ) : null}
-                  {isWaiting && (
+                  {(isWaiting || activeTurnPresentation.showProcessingIndicator) && (
                     <View style={styles.typingRow}>
                       <BouncingDots color={persona.colors.accent} />
                       <Text
@@ -3915,7 +3998,7 @@ export default function ChatScreen() {
                       </Text>
                     </View>
                   )}
-                  {!isWaiting && streamingContent ? (
+                  {!isWaiting && !activeTurnPresentation.showProcessingIndicator && streamingContent ? (
                     <MessageBubble
                       message={{
                         id: "streaming",
