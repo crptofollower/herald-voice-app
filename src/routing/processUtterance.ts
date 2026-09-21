@@ -1,10 +1,14 @@
 import { routeIntent, DOMAIN_WRITERS, composeAck, allConverted } from './routeIntent';
 import type { RouteDecision, CommitResult, ResolveContactFn, DomainFocusEnvelope } from './routeIntent';
-import { mayPreserveExistingClarification } from './routedOperationEffect';
+import { mayPreserveExistingClarification, withRoutedEffect } from './routedOperationEffect';
 import type { IntentRecord } from '../hooks/llmLayers';
 import type { ConversationTurnLedger } from './conversationTurnLedger';
 import { commitResultOutcome, captureAuthorityTier, buildFocusEntry, buildCommitLedgerFocus } from './conversationTurnLedgerWrite';
 import { answerRecentCommittedAddRecall } from './recentActionRecall';
+import {
+  bindFollowingTurnListReferent,
+  followingTurnListReferentFailClosedSpeech,
+} from './followingTurnListReferent';
 import { ConversationSession, CONFIRM_YES_RE, CONFIRM_NO_RE } from './conversationSession';
 import { CALL_TEXT_RECOVERY_KEY, shouldPreemptCallTextRecovery } from './callTextReadiness';
 import { detectEmergency } from './emergencySignals';
@@ -1109,6 +1113,48 @@ export async function processUtterance(
         handled: true,
         source: 'recent_add_recall',
         responseText: recentAdd.responseText,
+        commits: [],
+      };
+    }
+    const boundReferent = bindFollowingTurnListReferent(text, ledger.peek(Date.now()));
+    if (boundReferent.kind === 'replace') {
+      return {
+        handled: false,
+        routeDecision: withRoutedEffect({
+          kind: 'device_action',
+          tier: 1,
+          actionIntent: {
+            type: 'list_update',
+            oldItem: boundReferent.oldItem,
+            newItem: boundReferent.newItem,
+            listName: boundReferent.listName,
+          },
+          reason: 'action:list_update',
+        }),
+        continuationRecoveryCandidates,
+      };
+    }
+    if (boundReferent.kind === 'remove') {
+      return {
+        handled: false,
+        routeDecision: withRoutedEffect({
+          kind: 'device_action',
+          tier: 1,
+          actionIntent: {
+            type: 'list_remove',
+            item: boundReferent.item,
+            listName: boundReferent.listName,
+          },
+          reason: 'action:list_remove',
+        }),
+        continuationRecoveryCandidates,
+      };
+    }
+    if (boundReferent.kind === 'fail_closed') {
+      return {
+        handled: true,
+        source: 'capture',
+        responseText: followingTurnListReferentFailClosedSpeech(boundReferent.reason),
         commits: [],
       };
     }
