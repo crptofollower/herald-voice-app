@@ -145,12 +145,32 @@ function logActiveSubjectDiag(event: ActiveSubjectDiagEvent): void {
  *  act (ownership), not the identity answer. Held-out paraphrases stay on
  *  Stage B. */
 const IDENTITY_LOOKUP_RE =
-  /^(?:who|what)(?:['\u2019]s|\s+(?:am|was|were|are))\s+(?:i|we)\s+(?:just\s+)?(?:(?:talking|speaking|chatting)\s+(?:about|with|to)|saying)(?:\s+just\s+now)?\s*[?.!]*$/i;
+  /^(?:who|what)(?:['\u2019]s|\s+(?:am|was|were|are))\s+(?:i|we)\s+(?:just\s+)?(?:(?:talking|speaking|chatting)\s+(about|with|to)|saying)(?:\s+just\s+now)?\s*[?.!]*$/i;
+
+export type ActiveSubjectIdentityRelation = 'about' | 'with' | 'to';
 
 /** Same closed identity class as Stage A. Used by processUtterance so a
  *  live Flow C medical_doctor is not unused-cleared on this turn. */
 export function isClosedActiveSubjectIdentityLookup(text: string): boolean {
   return IDENTITY_LOOKUP_RE.test(text.trim());
+}
+
+/** Relation already established by the closed identity act. `saying` has no
+ *  connective in the grammar, so it preserves topic (`about`). Unmatched
+ *  utterances return null — this is not a phrase-exception table. */
+export function closedActiveSubjectIdentityRelation(text: string): ActiveSubjectIdentityRelation | null {
+  const m = text.trim().match(IDENTITY_LOOKUP_RE);
+  if (!m) return null;
+  const rel = m[1]?.toLowerCase();
+  if (rel === 'about' || rel === 'with' || rel === 'to') return rel;
+  return 'about';
+}
+
+export function realizeActiveSubjectIdentityReply(
+  displayValue: string,
+  relation: ActiveSubjectIdentityRelation,
+): string {
+  return `You were talking ${relation} ${displayValue}.`;
 }
 
 /** "what did/was I say/saying about him/her/them" — a CLOSED shape,
@@ -462,7 +482,8 @@ export const ACTIVE_SUBJECT_GROUNDING_ACK = 'Okay.';
 
 export type ActiveSubjectOutcome =
   | { handled: false }
-  | { handled: true; kind: 'identity' | 'content'; reply: string; focus: ConversationTurnFocusEntry[] }
+  | { handled: true; kind: 'identity'; reply: string; focus: ConversationTurnFocusEntry[]; relation: ActiveSubjectIdentityRelation }
+  | { handled: true; kind: 'content'; reply: string; focus: ConversationTurnFocusEntry[] }
   /** Minimal neutral acknowledgment only — never a phrase implying the
    *  proposition was saved or persisted as personal truth. */
   | { handled: true; kind: 'grounding'; reply: typeof ACTIVE_SUBJECT_GROUNDING_ACK; focus: ConversationTurnFocusEntry[] }
@@ -572,7 +593,7 @@ export async function answerActiveSubjectReference(
       finalOutcome: isClosedMedication ? 'answered' : 'not_handled',
     });
     if (isClosedMedication) {
-      return { handled: true, kind: 'identity', reply: "I don't have anything recent to go on — what were you referring to?", focus: [] };
+      return { handled: true, kind: 'identity', reply: "I don't have anything recent to go on — what were you referring to?", focus: [], relation: 'about' };
     }
     return { handled: false };
   }
@@ -609,14 +630,18 @@ export async function answerActiveSubjectReference(
   }
 
   const kind: 'identity' | 'content' = isClosedContent ? 'content' : 'identity';
+  const relation: ActiveSubjectIdentityRelation =
+    isClosedIdentity ? (closedActiveSubjectIdentityRelation(t) ?? 'about') : 'about';
   const reply = kind === 'content'
     ? `You said: "${candidate.record.utterance}"`
-    : `You were talking about ${candidate.displayValue}.`;
+    : realizeActiveSubjectIdentityReply(candidate.displayValue, relation);
   emit({
     act, targetKind, candidates: eligibleCandidates, fastPathUsed: diagSink.fastPathUsed ?? false,
     semanticStageInvoked: diagSink.semanticStageInvoked ?? false, semanticResult: diagSink.semanticResult ?? 'selected',
     selectedCandidateIndex: candidate.index, selectedCandidateKind: candidate.kind, resultingFocusTier: null,
     pendingArmed: false, finalOutcome: 'answered',
   });
-  return { handled: true, kind, reply, focus: [] };
+  return kind === 'content'
+    ? { handled: true, kind: 'content', reply, focus: [] }
+    : { handled: true, kind: 'identity', reply, focus: [], relation };
 }

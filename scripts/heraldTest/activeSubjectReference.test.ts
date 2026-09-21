@@ -21,6 +21,9 @@ import {
   resolveActiveSubjectCandidate,
   ACTIVE_SUBJECT_GROUNDING_ACK,
   isClosedActiveSubjectIdentityLookup,
+  closedActiveSubjectIdentityRelation,
+  realizeActiveSubjectIdentityReply,
+  type ActiveSubjectIdentityRelation,
 } from '../../src/routing/activeSubjectReference.ts';
 import { DOMAIN_WRITERS } from '../../src/routing/routeIntent.ts';
 import { continuityLedgerFocus } from '../../src/routing/conversationTurnLedgerWrite.ts';
@@ -822,6 +825,97 @@ export async function runActiveSubjectReferenceTests() {
     assertTrue('continuity: ISR does not own talking-with identity', classifyImmediateRecapDeterministic('Who was I talking with?') === false);
     assertTrue('continuity: RAR does not own talking-with identity', classifyRecentCommittedAddRecall('Who was I talking with?') === false);
     assertTrue('continuity: RAR still owns ask-to-add', classifyRecentCommittedAddRecall('What did I ask you to add?') === true);
+  }
+
+  console.log(`\n${BOLD}-- Semantic Relation Preservation V1 --${RESET}`);
+  {
+    const closedRelations: Array<[string, ActiveSubjectIdentityRelation]> = [
+      ['Who was I talking about?', 'about'],
+      ['Who was I talking with?', 'with'],
+      ['Who was I talking to?', 'to'],
+      ['Who was I speaking about?', 'about'],
+      ['Who was I speaking with?', 'with'],
+      ['Who was I speaking to?', 'to'],
+      ['Who was I chatting about?', 'about'],
+      ['Who was I chatting with?', 'with'],
+      ['Who was I chatting to?', 'to'],
+      ['Who am I chatting to?', 'to'],
+      ['Who was I just talking with?', 'with'],
+      ['Who was I talking with just now?', 'with'],
+      ['Who were we talking about?', 'about'],
+    ];
+    for (const [phrase, relation] of closedRelations) {
+      assertTrue(`relation: ${JSON.stringify(phrase)} remains owned`, isClosedActiveSubjectIdentityLookup(phrase));
+      assertTrue(`relation: ${JSON.stringify(phrase)} captures ${relation}`, closedActiveSubjectIdentityRelation(phrase) === relation);
+    }
+    assertTrue('relation: saying remains owned', isClosedActiveSubjectIdentityLookup('Who was I saying?'));
+    assertTrue('relation: saying has no connective so preserves topic', closedActiveSubjectIdentityRelation('Who was I saying?') === 'about');
+    assertTrue('relation: Open YouTube unclaimed', closedActiveSubjectIdentityRelation('Open YouTube') === null);
+    assertTrue('relation: grocery list unclaimed', closedActiveSubjectIdentityRelation("What's on my grocery list?") === null);
+    assertTrue('relation: medications unclaimed', closedActiveSubjectIdentityRelation('What medications am I taking?') === null);
+    assertTrue('relation: appointment unclaimed', closedActiveSubjectIdentityRelation('When is my appointment?') === null);
+    assertTrue('relation: held-out who-did-I-mean is not closed identity', closedActiveSubjectIdentityRelation('Who did I mean there?') === null);
+    const others: ActiveSubjectIdentityRelation[] = ['about', 'with', 'to'];
+    for (const relation of others) {
+      assertTrue(
+        `realizer: talking ${relation} is the established connective`,
+        realizeActiveSubjectIdentityReply('Mickey', relation).includes(`talking ${relation} Mickey`),
+      );
+      for (const other of others.filter((r) => r !== relation)) {
+        assertTrue(
+          `realizer: talking ${relation} never silently becomes ${other}`,
+          !realizeActiveSubjectIdentityReply('Mickey', relation).includes(`talking ${other} `),
+        );
+      }
+    }
+  }
+  {
+    const mickey = rec({
+      turnIndex: 1,
+      utterance: 'I was talking this morning with Mickey about Herald.',
+      intentType: null,
+      operation: 'conversational',
+      outcome: 'generated',
+      authorityTier: 'conversational',
+      focus: [{ kind: 'person', displayValue: 'Mickey', referable: true, tier: 'conversational' }],
+    });
+    const realizeCases: Array<[string, ActiveSubjectIdentityRelation]> = [
+      ['Who was I talking with?', 'with'],
+      ['Who was I talking to?', 'to'],
+      ['Who was I talking about?', 'about'],
+      ['Who was I speaking with?', 'with'],
+      ['Who was I chatting to?', 'to'],
+    ];
+    for (const [phrase, relation] of realizeCases) {
+      const out = await answerActiveSubjectReference(phrase, { ledgerEntries: [mickey] });
+      assertTrue(`preserve: ${JSON.stringify(phrase)} handled identity`, out.handled === true && out.kind === 'identity');
+      assertTrue(`preserve: ${JSON.stringify(phrase)} relation is ${relation}`, out.handled === true && out.kind === 'identity' && out.relation === relation);
+      assertTrue(`preserve: ${JSON.stringify(phrase)} subject remains Mickey`, out.handled === true && /mickey/i.test(out.reply));
+      assertTrue(`preserve: ${JSON.stringify(phrase)} realizes ${relation}`, out.handled === true && new RegExp(`\\btalking ${relation}\\b`, 'i').test(out.reply));
+      for (const other of (['about', 'with', 'to'] as const).filter((r) => r !== relation)) {
+        assertTrue(
+          `preserve: ${JSON.stringify(phrase)} never silently becomes ${other}`,
+          out.handled === true && !new RegExp(`\\btalking ${other}\\b`, 'i').test(out.reply),
+        );
+      }
+    }
+    const zero = await answerActiveSubjectReference('Who was I talking with?', { ledgerEntries: [] });
+    assertTrue('preserve: no person evidence still does not fabricate', zero.handled === false);
+    const paul = rec({
+      turnIndex: 2,
+      utterance: 'Paul drove me there.',
+      intentType: null,
+      operation: 'conversational',
+      outcome: 'generated',
+      authorityTier: 'conversational',
+      focus: [{ kind: 'person', displayValue: 'Paul', referable: true, tier: 'conversational' }],
+    });
+    const amb = await answerActiveSubjectReference('Who was I talking with?', { ledgerEntries: [mickey, paul] });
+    assertTrue('preserve: ambiguity remains pending, not a silent pick', amb.handled === true && amb.kind === 'ambiguous' && /mickey/i.test(amb.reply) && /paul/i.test(amb.reply));
+    assertTrue('preserve: ambiguity is not identity realization', amb.handled === true && amb.kind === 'ambiguous' && !/\btalking (?:about|with|to)\b/i.test(amb.reply));
+    assertTrue('preserve: Open YouTube remains unclaimed', (await answerActiveSubjectReference('Open YouTube', { ledgerEntries: [mickey] })).handled === false);
+    assertTrue('preserve: grocery read remains unclaimed', (await answerActiveSubjectReference("What's on my grocery list?", { ledgerEntries: [mickey] })).handled === false);
+    assertTrue('preserve: medication read remains unclaimed', (await answerActiveSubjectReference('What medications am I taking?', { ledgerEntries: [mickey] })).handled === false);
   }
   {
     const routeSrc = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src/routing/routeIntent.ts'), 'utf8');
