@@ -2,7 +2,7 @@
 // Herald device SQLite — table definitions and migration runner.
 // Session L — Device-First Intelligence Layer
 //
-// SCHEMA VERSION: 21
+// SCHEMA VERSION: 22
 // v1: Initial schema — facts, profile, medical, calendar_cache (ISO strings), life_tracker
 // v2: calendar_cache rebuilt with Unix ms timestamps (timezone fix)
 // v3: Entity graph + importance scoring + temporal awareness (locked Session L spec)
@@ -29,6 +29,7 @@
 // v20: appointments table (canonical domain record — closes confirmed gap,
 //      Herald-owned scheduling memory independent of the device-calendar mirror)
 // v21: medical_records.visit_outcome + outcome_asked_at (post-visit outcome ask / never-nag)
+// v22: evidence table — unconfirmed authorized personal evidence (not truth)
 //
 // RULE: NEVER modify a past migration. Always add at the next version number.
 //
@@ -60,7 +61,7 @@
 // (src/screens/ChatScreen.tsx) for the same class of eager-import avoidance.
 import type * as SQLite from "expo-sqlite";
 
-export const SCHEMA_VERSION = 21;
+export const SCHEMA_VERSION = 22;
 export const DB_NAME = "herald_device.db";
 
 // ─── Open database ────────────────────────────────────────────────────────────
@@ -815,5 +816,24 @@ const MIGRATIONS: Record<number, (db: SQLite.SQLiteDatabase) => void> = {
       // column already exists (re-run safety) — ignore
     }
     console.log("Herald schema V21: medical_records.visit_outcome + outcome_asked_at added");
+  },
+
+  // ── v22: durable evidence substrate (unconfirmed; not domain truth) ──────
+  22: (db) => {
+    db.execSync(`
+      CREATE TABLE IF NOT EXISTS evidence (
+        id            TEXT PRIMARY KEY,
+        source_class  TEXT NOT NULL,
+        source_kind   TEXT NOT NULL,
+        source_id     TEXT,
+        raw_text      TEXT NOT NULL,
+        observed_at   TEXT NOT NULL
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_evidence_external_source_id
+        ON evidence(source_class, source_kind, source_id)
+        WHERE source_class = 'external_source' AND source_id IS NOT NULL;
+    `);
+    console.log("Herald schema V22: evidence table added (unconfirmed personal evidence)");
   },
 };

@@ -178,9 +178,9 @@ export async function runEverydayCapabilitySurfacesV1Tests() {
   }
 
   assert('schema version unchanged (no grocery overlay table)',
-    SCHEMA_VERSION, (v) => v === 21, '21');
+    SCHEMA_VERSION, (v) => v === 22, '22');
   assert('schema has no Stage-1 list_items migration',
-    /SCHEMA_VERSION = 21/.test(schemaSrc) && !/CREATE TABLE grocery_overlay/.test(schemaSrc),
+    /SCHEMA_VERSION = 22/.test(schemaSrc) && !/CREATE TABLE grocery_overlay/.test(schemaSrc),
     (v) => v === true, 'true');
   assert('getPresentedOpenListItems still filters checked = 0',
     /checked = 0/.test(listReadSrc), (v) => v === true, 'true');

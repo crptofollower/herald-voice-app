@@ -70,7 +70,7 @@ export async function runSchemaMigrationContractTests() {
     await runMigrations();
 
     const meta = db.prepare('SELECT version FROM schema_meta ORDER BY version DESC LIMIT 1;').get();
-    assert('SM1 fresh install lands at schema_meta v21', meta?.version, v => v === 21, 21);
+    assert('SM1 fresh install lands at schema_meta v22', meta?.version, v => v === 22, 22);
 
     const mrCols = columnNames(db, 'medical_records');
     assert('SM2 fresh install: medical_records has status', mrCols.includes('status'), v => v === true, true);
@@ -105,7 +105,7 @@ export async function runSchemaMigrationContractTests() {
     await runMigrations();
 
     const meta = db.prepare('SELECT version FROM schema_meta ORDER BY version DESC LIMIT 1;').get();
-    assert('SM6 upgrade from v18 lands at v21', meta?.version, v => v === 21, 21);
+    assert('SM6 upgrade from v18 lands at v22', meta?.version, v => v === 22, 22);
 
     const mrCols = columnNames(db, 'medical_records');
     assert('SM7 upgrade: medical_records gains status + surfaced_at', 
@@ -116,6 +116,40 @@ export async function runSchemaMigrationContractTests() {
       v => v === 'noted', '"noted"');
     assert('SM9 upgrade: existing row diagnosis unchanged (no data loss)', existingRow?.diagnosis,
       v => v === 'flu', '"flu"');
+  }
+
+  {
+    const db = new Database(':memory:');
+    setDB(makeShim(db));
+    await runMigrations();
+    const cols = columnNames(db, 'evidence');
+    assert('SM10 fresh install: evidence table exists with required columns',
+      ['id', 'source_class', 'source_kind', 'source_id', 'raw_text', 'observed_at'].every((c) => cols.includes(c)),
+      v => v === true, true);
+  }
+
+  {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE schema_meta (version INTEGER NOT NULL, migrated_at TEXT NOT NULL);
+      CREATE TABLE medical_records (
+        id TEXT PRIMARY KEY, visit_date TEXT, doctor_name TEXT, facility TEXT,
+        reason TEXT, diagnosis TEXT, follow_up TEXT, notes TEXT, created_at TEXT,
+        removed_at TEXT, status TEXT DEFAULT 'noted', surfaced_at TEXT,
+        visit_outcome TEXT, outcome_asked_at TEXT
+      );
+    `);
+    db.prepare(`INSERT INTO schema_meta (version, migrated_at) VALUES (21, datetime('now'));`).run();
+    db.prepare(`INSERT INTO medical_records (id, doctor_name, diagnosis, created_at, status) VALUES ('mr_v21', 'Dr. Sarver', 'flu', datetime('now'), 'noted');`).run();
+    setDB(makeShim(db));
+    await runMigrations();
+    const meta = db.prepare('SELECT version FROM schema_meta ORDER BY version DESC LIMIT 1;').get();
+    assert('SM11 upgrade from v21 lands at v22', meta?.version, v => v === 22, 22);
+    const cols = columnNames(db, 'evidence');
+    assert('SM12 upgrade from v21 creates evidence table', cols.includes('id') && cols.includes('source_class') && cols.includes('raw_text'), v => v === true, true);
+    const existingRow = db.prepare(`SELECT diagnosis, status FROM medical_records WHERE id = 'mr_v21';`).get();
+    assert('SM13 upgrade from v21 leaves existing medical_records untouched',
+      existingRow?.diagnosis === 'flu' && existingRow?.status === 'noted', v => v === true, true);
   }
 
   const total = passed + failures.length;
