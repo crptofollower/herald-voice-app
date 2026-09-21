@@ -153,6 +153,13 @@ export async function runRecentActionRecallV1Tests() {
     assert(`classifier matches "${p}"`, classifyRecentCommittedAddRecall(p));
   }
   assert('classifier rejects recap', !classifyRecentCommittedAddRecall('What did I just tell you?'));
+  assert('classifier rejects tell-you without add', !classifyRecentCommittedAddRecall('What did I tell you?'));
+  assert('classifier rejects ask-you without add', !classifyRecentCommittedAddRecall('What did I ask you?'));
+  assert('classifier matches ask-to-add commission', classifyRecentCommittedAddRecall('What did I ask you to add?'));
+  assert('classifier matches tell-to-add commission', classifyRecentCommittedAddRecall('What did I tell you to add?'));
+  assert('classifier matches commissioned want-you-to-add', classifyRecentCommittedAddRecall('What did I want you to add?'));
+  assert('classifier rejects commissioned non-add', !classifyRecentCommittedAddRecall('What did I ask you to remind me?'));
+  assert('classifier rejects third-person commission', !classifyRecentCommittedAddRecall('What did I tell Jane to add?'));
   assert('classifier rejects list read', !classifyRecentCommittedAddRecall("What's on my grocery list?"));
   assert('classifier rejects generic just-do', !classifyRecentCommittedAddRecall('What did I just do?'));
   assert('recap classifier still matches tell-you', classifyImmediateRecapDeterministic('What did I just tell you?'));
@@ -382,6 +389,51 @@ export async function runRecentActionRecallV1Tests() {
     }
     assert('all natural phrasings share the same mechanism', allSame);
     assert('phrasings did not extra-write', groceryBodies(db).length === 1 && JSON.stringify(committedItems(ledger)) === JSON.stringify(['eggs']));
+  }
+
+  {
+    const { db, ledger, say } = fresh();
+    const add = await say('add milk and eggs to my grocery list');
+    const ask = await say('What did I ask you to add?');
+    const tell = await say('What did I tell you to add?');
+    const direct = await say('What did I just add?');
+    assert('commission grocery committed two items', add.handled === true && JSON.stringify(groceryBodies(db)) === JSON.stringify(['eggs', 'milk']));
+    assert('ask-to-add source is recent_add_recall', ask.handled === true && ask.source === 'recent_add_recall');
+    assert('ask-to-add names only committed items', ask.handled === true && ask.responseText === 'You added milk and eggs.');
+    assert('tell-to-add source is recent_add_recall', tell.handled === true && tell.source === 'recent_add_recall');
+    assert('tell-to-add same operation', tell.handled === true && tell.responseText === ask.responseText);
+    assert('direct add recall still works after commission forms', direct.handled === true && direct.source === 'recent_add_recall' && direct.responseText === ask.responseText);
+    assert('commission grocery ledger both items', JSON.stringify(committedItems(ledger)) === JSON.stringify(['milk', 'eggs']));
+  }
+
+  {
+    const { db, say } = fresh();
+    await say('add buy stamps to my todo list');
+    const ask = await say('What did I ask you to add?');
+    const tell = await say('What did I tell you to add?');
+    assert('todo ask-to-add is recent_add_recall', ask.handled === true && ask.source === 'recent_add_recall' && /buy stamps/i.test(ask.responseText));
+    assert('todo tell-to-add shares RAR', tell.handled === true && tell.source === 'recent_add_recall' && tell.responseText === ask.responseText);
+    assert('todo commission did not extra-write', todoBodies(db).filter((b) => b === 'buy stamps').length === 1);
+  }
+
+  {
+    const { say } = fresh();
+    const ask = await say('What did I ask you to add?');
+    assert('commission with no qualifying add does not fabricate', !(ask.handled && ask.source === 'recent_add_recall'));
+  }
+
+  {
+    const { ledger, say } = fresh();
+    await say('add eggs to my grocery list');
+    const unrelated = await say('What did I ask you to remind me?');
+    const recap = await say('What did I just tell you?');
+    const read = await say("What's on my grocery list?");
+    const tellAdd = await say('What did I tell you to add?');
+    assert('unrelated ask/tell is not recent_add_recall', !(unrelated.handled && unrelated.source === 'recent_add_recall'));
+    assert('discourse recap is not recent_add_recall', !(recap.handled && recap.source === 'recent_add_recall'));
+    assert('list read is not stolen by commission RAR', groceryReadText(read).toLowerCase().includes('eggs'));
+    assert('recap classifier still owns tell-you', classifyImmediateRecapDeterministic('What did I just tell you?'));
+    assert('tell-you-to-add is recent_add_recall not ISR', tellAdd.handled === true && tellAdd.source === 'recent_add_recall' && tellAdd.responseText === 'You added eggs.');
   }
 
   console.log('');
