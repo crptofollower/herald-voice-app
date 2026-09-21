@@ -25,6 +25,7 @@ import {
 } from './todoSemanticCapture';
 import { generateCapabilityProposal, admitCapabilityProposal, WIRED_READ_CAPABILITY, CAPABILITY_RISK_CLASS, type CapabilityId, type CapabilityProposal, logSemanticDispatchDiag, type SemanticDispatchDiag } from './capabilityRouting';
 import { evaluateSemanticDispatchEligibility } from './semanticDispatchEligibility';
+import { isClosedActiveSubjectIdentityLookup } from './activeSubjectReference';
 import { detectFamilyCapture } from '../utils/familyCapture';
 import { getDB } from '../db/schema';
 import { capturePerson } from '../db/capturePerson';
@@ -2595,6 +2596,15 @@ async function routeIntentCore(
   let dispatchSeamRan = false;
   let dispatchSelected: CapabilityId | null = null;
   let dispatchProposal: CapabilityProposal | null = null;
+
+  // Deterministic Continuity Fast Path V1: closed Active Subject identity
+  // lookup owns this utterance before semantic capability dispatch. Routing
+  // identifies ownership only — ChatScreen's existing needs_clarification
+  // seam still answers via answerActiveSubjectReference. A dedicated reason
+  // keeps the Qwen default seam from running when Active Subject can resolve.
+  if (eligibleDefaultFallthrough && isClosedActiveSubjectIdentityLookup(text)) {
+    return { kind: 'needs_clarification', reason: 'active_subject_identity' };
+  }
 
   if (eligibleDefaultFallthrough && dispatchOn) {
     dispatchSeamRan = true;

@@ -28,6 +28,7 @@ import { ConversationalSubjectHolder } from '../../src/routing/conversationalSub
 import { DiscourseContinuityHolder } from '../../src/routing/discourseContinuity.ts';
 import { writeMedicalRecord } from '../../src/db/medicalDB.ts';
 import { classifyImmediateRecapDeterministic, answerImmediateSemanticRecap } from '../../src/routing/immediateSemanticRecap.ts';
+import { classifyRecentCommittedAddRecall } from '../../src/routing/recentActionRecall.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -716,9 +717,18 @@ export async function runActiveSubjectReferenceTests() {
   {
     const positives = [
       'Who was I talking about?',
+      'Who was I talking with?',
+      'Who was I speaking with?',
+      'Who was I chatting with?',
+      'Who was I speaking about?',
+      'Who was I chatting about?',
+      'Who was I talking to?',
+      'Who am I chatting to?',
+      'Who was I just talking with?',
+      'Who was I talking with just now?',
+      'Who were we talking about?',
       'Who was I just talking about?',
       'Who was I talking about just now?',
-      'Who were we talking about?',
       "Who's I talking about",
       "Who's I just talking about",
       'Who\u2019s I just talking about',
@@ -730,9 +740,15 @@ export async function runActiveSubjectReferenceTests() {
       'Open YouTube',
       "Who's my plumber?",
       "Who's my doctor?",
+      'Who was my last doctor?',
       'Who was the last doctor I saw?',
       'Who was just talking about?',
       'What did I ask the doctor?',
+      "What's on my grocery list?",
+      'What medications am I taking?',
+      'When is my appointment?',
+      'What did I just tell you?',
+      'Who did I mean there?',
     ];
     for (const phrase of negatives) {
       assertTrue(`closed identity rejects: ${JSON.stringify(phrase)}`, !isClosedActiveSubjectIdentityLookup(phrase));
@@ -758,6 +774,74 @@ export async function runActiveSubjectReferenceTests() {
       const when = await processUtterance('When did I last see him?', session, deps, subject, null, null, null, null, null, null);
       assertTrue(`variant reread: ${JSON.stringify(phrase)} then when-last-see-him is referent_resume`, when.handled === true && when.source === 'referent_resume' && /last saw/i.test(when.responseText) && /smith/i.test(when.responseText));
     }
+  }
+
+  console.log(`\n${BOLD}-- Deterministic Continuity Fast Path V1 --${RESET}`);
+  {
+    const mickey = rec({
+      turnIndex: 1,
+      utterance: 'I was talking this morning with Mickey about Herald.',
+      intentType: null,
+      operation: 'conversational',
+      outcome: 'generated',
+      authorityTier: 'conversational',
+      focus: [{ kind: 'person', displayValue: 'Mickey', referable: true, tier: 'conversational' }],
+    });
+    const identityPhrases = [
+      'Who was I talking about?',
+      'Who was I talking with?',
+      'Who was I speaking with?',
+      'Who was I chatting with?',
+    ];
+    for (const phrase of identityPhrases) {
+      const { result, events } = await captureActiveSubjectDiagEvents(() =>
+        answerActiveSubjectReference(phrase, { ledgerEntries: [mickey] }),
+      );
+      assertTrue(`continuity: ${JSON.stringify(phrase)} handled identity`, result.handled === true && result.kind === 'identity');
+      assertTrue(`continuity: ${JSON.stringify(phrase)} names Mickey`, result.handled === true && /mickey/i.test(result.reply));
+      assertTrue(
+        `continuity: ${JSON.stringify(phrase)} uses Stage A fast path (no Stage B)`,
+        events.some((e) => e.fastPathUsed === true && e.semanticStageInvoked === false),
+      );
+    }
+    const zero = await answerActiveSubjectReference('Who was I talking with?', { ledgerEntries: [] });
+    assertTrue('continuity: zero person evidence does not fabricate', zero.handled === false && !/mickey|smith/i.test(JSON.stringify(zero)));
+    const paul = rec({
+      turnIndex: 2,
+      utterance: 'Paul drove me there.',
+      intentType: null,
+      operation: 'conversational',
+      outcome: 'generated',
+      authorityTier: 'conversational',
+      focus: [{ kind: 'person', displayValue: 'Paul', referable: true, tier: 'conversational' }],
+    });
+    const amb = await answerActiveSubjectReference('Who was I talking with?', { ledgerEntries: [mickey, paul] });
+    assertTrue('continuity: two people clarify, no silent pick', amb.handled === true && amb.kind === 'ambiguous');
+    assertTrue('continuity: ambiguous names both, fabricates neither as the answer', amb.handled === true && amb.kind === 'ambiguous' && /mickey/i.test(amb.reply) && /paul/i.test(amb.reply) && !/^You were talking about /i.test(amb.reply));
+    assertTrue('continuity: ISR still owns tell-you recap', classifyImmediateRecapDeterministic('What did I just tell you?') === true);
+    assertTrue('continuity: ISR does not own talking-with identity', classifyImmediateRecapDeterministic('Who was I talking with?') === false);
+    assertTrue('continuity: RAR does not own talking-with identity', classifyRecentCommittedAddRecall('Who was I talking with?') === false);
+    assertTrue('continuity: RAR still owns ask-to-add', classifyRecentCommittedAddRecall('What did I ask you to add?') === true);
+  }
+  {
+    const routeSrc = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src/routing/routeIntent.ts'), 'utf8');
+    const fallthrough = routeSrc.indexOf('const eligibleDefaultFallthrough');
+    const identCall = routeSrc.indexOf('isClosedActiveSubjectIdentityLookup(text)', fallthrough);
+    const dispatchCall = routeSrc.indexOf('evaluateSemanticDispatchEligibility(text)', fallthrough);
+    assertTrue('continuity: routeIntent identity ownership precedes semantic dispatch', fallthrough >= 0 && identCall > fallthrough && dispatchCall > identCall);
+    const identReturn = routeSrc.slice(identCall, identCall + 400);
+    assertTrue('continuity: routeIntent returns dedicated active_subject_identity reason', /active_subject_identity/.test(identReturn));
+    assertTrue('continuity: routeIntent does not answer Active Subject itself', !/answerActiveSubjectReference\s*\(/.test(routeSrc));
+  }
+  {
+    const chatSrc = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src/screens/ChatScreen.tsx'), 'utf8');
+    const nc = chatSrc.indexOf("if (outcome.routeDecision.kind === 'needs_clarification')");
+    const recap = chatSrc.indexOf('answerImmediateSemanticRecap', nc);
+    const active = chatSrc.indexOf('answerActiveSubjectReference', nc);
+    const qwenGate = chatSrc.indexOf("outcome.routeDecision.reason === 'default'", nc);
+    assertTrue('continuity: ChatScreen still answers Active Subject on the needs_clarification seam', nc >= 0 && recap > nc && active > recap);
+    assertTrue('continuity: Qwen default seam runs only after Active Subject, and only for reason default', qwenGate > active);
+    assertTrue('continuity: dedicated identity reason is not a Qwen generate site', !/active_subject_identity/.test(chatSrc));
   }
 
   console.log(`\n${BOLD}-- Pass 1: medication thing consumption --${RESET}`);

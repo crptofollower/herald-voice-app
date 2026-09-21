@@ -541,6 +541,82 @@ export async function runSemanticCapabilityDispatchTests() {
   }
 
   {
+    freshDB();
+    const identityUtterances = [
+      'Who was I talking about?',
+      'Who was I talking with?',
+      'Who was I speaking with?',
+      'Who was I chatting with?',
+    ];
+    for (const utterance of identityUtterances) {
+      const { ctx, counts } = countingCtx([DISPATCH_READ, DISPATCH_OTHER, MED_OK, GROCERY_OK]);
+      const decision = await routeIntent(utterance, baseDeps(ctx));
+      assert(`IDENTITY ${JSON.stringify(utterance)} is needs_clarification`,
+        decision.kind, (v) => v === 'needs_clarification', 'needs_clarification');
+      assert(`IDENTITY ${JSON.stringify(utterance)} reason is active_subject_identity`,
+        (decision as any).reason, (v) => v === 'active_subject_identity', 'active_subject_identity');
+      assert(`IDENTITY ${JSON.stringify(utterance)} dispatch completions are 0`,
+        counts.dispatch, (v) => v === 0, '0');
+      assert(`IDENTITY ${JSON.stringify(utterance)} total 3B completions are 0`,
+        counts.total, (v) => v === 0, '0');
+    }
+  }
+
+  {
+    freshDB();
+    const { ctx } = countingCtx([DISPATCH_READ, DISPATCH_OTHER, MED_OK, GROCERY_OK]);
+    const decision = await routeIntent('Who was my last doctor?', baseDeps(ctx));
+    assert('BOUNDARY last-doctor is not active_subject_identity',
+      (decision as any).reason, (v) => v !== 'active_subject_identity', 'not active_subject_identity');
+  }
+
+  {
+    freshDB();
+    const { ctx, counts } = countingCtx([DISPATCH_LIST_READ, GROCERY_OK, MED_OK]);
+    const decision = await routeIntent("what's on my grocery list", baseDeps(ctx));
+    assert('BOUNDARY grocery-list remains device_read', decision.kind, (v) => v === 'device_read', 'device_read');
+    assert('BOUNDARY grocery-list is not active_subject_identity',
+      (decision as any).reason, (v) => v !== 'active_subject_identity', 'not active_subject_identity');
+    assert('BOUNDARY grocery-list dispatch stays 0', counts.dispatch, (v) => v === 0, '0');
+  }
+
+  {
+    const db = freshDB();
+    seedMedication(db, 'metformin');
+    const { ctx } = countingCtx([DISPATCH_READ, MED_OK, GROCERY_OK]);
+    const decision = await routeIntent('What medications am I taking?', baseDeps(ctx));
+    assert('BOUNDARY medications-taking is not active_subject_identity',
+      (decision as any).reason, (v) => v !== 'active_subject_identity', 'not active_subject_identity');
+    assert('BOUNDARY medications-taking remains a capability/read path',
+      decision.kind === 'device_read' || (decision as any).reason === 'medical:summary',
+      (v) => v === true, 'device_read or medical:summary');
+  }
+
+  {
+    freshDB();
+    const { ctx } = countingCtx([DISPATCH_READ, DISPATCH_OTHER, MED_OK, GROCERY_OK]);
+    const decision = await routeIntent('When is my appointment?', baseDeps(ctx));
+    assert('BOUNDARY appointment is not active_subject_identity',
+      (decision as any).reason, (v) => v !== 'active_subject_identity', 'not active_subject_identity');
+  }
+
+  {
+    freshDB();
+    const { ctx } = countingCtx([DISPATCH_READ, DISPATCH_OTHER, MED_OK, GROCERY_OK]);
+    const decision = await routeIntent('What did I just tell you?', baseDeps(ctx));
+    assert('BOUNDARY tell-you is not active_subject_identity',
+      (decision as any).reason, (v) => v !== 'active_subject_identity', 'not active_subject_identity');
+  }
+
+  {
+    freshDB();
+    const { ctx } = countingCtx([DISPATCH_READ, DISPATCH_OTHER, MED_OK, GROCERY_OK]);
+    const decision = await routeIntent('Who did I mean there?', baseDeps(ctx));
+    assert('BOUNDARY held-out WH is not closed identity ownership',
+      (decision as any).reason, (v) => v !== 'active_subject_identity', 'not active_subject_identity');
+  }
+
+  {
     const harness = openJourneyDb();
     const { ctx } = countingCtx([ONE_PASS_GROCERY]);
     const deps = {

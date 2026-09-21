@@ -153,6 +153,7 @@ export async function runRecentActionRecallV1Tests() {
     assert(`classifier matches "${p}"`, classifyRecentCommittedAddRecall(p));
   }
   assert('classifier rejects recap', !classifyRecentCommittedAddRecall('What did I just tell you?'));
+  assert('classifier rejects closed identity talking-with', !classifyRecentCommittedAddRecall('Who was I talking with?'));
   assert('classifier rejects tell-you without add', !classifyRecentCommittedAddRecall('What did I tell you?'));
   assert('classifier rejects ask-you without add', !classifyRecentCommittedAddRecall('What did I ask you?'));
   assert('classifier matches ask-to-add commission', classifyRecentCommittedAddRecall('What did I ask you to add?'));

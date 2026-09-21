@@ -15,10 +15,11 @@
 //     separate on purpose (CTO correction, 2026-09-xx):
 //       (a) ACT applicability — is this utterance actually a reference-
 //           continuity act at all? Confirmed deterministically only for two
-//           closed question shapes ("who/what am/was/were I/we talking
-//           about/saying", "what did/was I say/saying about him/her/them")
-//           and one statement-continuation gate (contains a bound third-
-//           person referent, is not itself a question). A broader,
+//           closed question shapes ("who/what am/was/were I/we" +
+//           {talk,speak,chat}×{about,with,to} or "saying"; "what did/was I
+//           say/saying about him/her/them") and one statement-continuation
+//           gate (contains a bound third-person referent, is not itself a
+//           question). A broader,
 //           verb-agnostic structural shape ("short first-person WH-question,
 //           no named subject of its own") is merely a candidate for Stage B
 //           to judge — it never grants act-confirmed status by itself, so
@@ -135,14 +136,16 @@ function logActiveSubjectDiag(event: ActiveSubjectDiagEvent): void {
 // ─── Stage A — closed structural shapes ────────────────────────────────────
 
 /** Closed first-person identity lookup: who or what, then an auxiliary,
- *  then I or we, then talking about or saying.
- *  Auxiliary is a separate was, am, are, or were, or a local who-apostrophe-s
- *  contraction (straight or curly) — not a global contraction expander.
- *  Optional temporal filler just before the verb, and optional just now after.
- *  Matching this CONFIRMS the identity-lookup act. Held-out paraphrases stay
- *  on Stage B. */
+ *  then I or we, then a continuity verb from the closed class
+ *  {talking|speaking|chatting} × {about|with|to}, or the existing saying
+ *  form. Auxiliary is a separate was, am, are, or were, or a local
+ *  who-apostrophe-s contraction (straight or curly) — not a global
+ *  contraction expander. Optional temporal filler just before the verb,
+ *  and optional just now after. Matching this CONFIRMS the identity-lookup
+ *  act (ownership), not the identity answer. Held-out paraphrases stay on
+ *  Stage B. */
 const IDENTITY_LOOKUP_RE =
-  /^(?:who|what)(?:['\u2019]s|\s+(?:am|was|were|are))\s+(?:i|we)\s+(?:just\s+)?(?:talking\s+about|saying)(?:\s+just\s+now)?\s*[?.!]*$/i;
+  /^(?:who|what)(?:['\u2019]s|\s+(?:am|was|were|are))\s+(?:i|we)\s+(?:just\s+)?(?:(?:talking|speaking|chatting)\s+(?:about|with|to)|saying)(?:\s+just\s+now)?\s*[?.!]*$/i;
 
 /** Same closed identity class as Stage A. Used by processUtterance so a
  *  live Flow C medical_doctor is not unused-cleared on this turn. */
