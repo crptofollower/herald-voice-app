@@ -53,6 +53,19 @@ export function findPersistedDoctorCalendarEvidence(doctorHint?: string): Eviden
   return [...relevant].sort((a, b) => String(a.eventAt).localeCompare(String(b.eventAt)));
 }
 
+export function findPersistedDoctorCalendarEvidenceInRange(
+  doctorHint: string | undefined,
+  start: Date,
+  end: Date,
+): EvidenceRecord[] {
+  const startMs = start.getTime();
+  const endMs = end.getTime();
+  return findPersistedDoctorCalendarEvidence(doctorHint).filter((row) => {
+    const ms = Date.parse(row.eventAt!);
+    return Number.isFinite(ms) && ms >= startMs && ms < endMs;
+  });
+}
+
 export function realizePersistedDoctorCalendarEvidence(
   doctorTerm: string,
   displayName: string,

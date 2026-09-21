@@ -173,6 +173,48 @@ export function getLastVisit(doctorHint?: string): {
   };
 }
 
+function visitDateStartMs(visitDate: string): number | null {
+  const m = visitDate.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime();
+  const parsed = Date.parse(visitDate);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/** Same authority and doctor-name match as getLastVisit, constrained to [start, end). */
+export function getLastVisitInRange(
+  doctorHint: string | undefined,
+  start: Date,
+  end: Date,
+): ReturnType<typeof getLastVisit> {
+  const records = getMedicalRecords().filter(
+    (r) => r.status !== 'upcoming' && r.visit_date
+  );
+  const filtered = doctorHint
+    ? records.filter(
+        (r) => r.doctor_name && normalizeDoctorNameForMatch(r.doctor_name).includes(normalizeDoctorNameForMatch(doctorHint))
+      )
+    : records;
+  const startMs = start.getTime();
+  const endMs = end.getTime();
+  const inRange = filtered.filter((r) => {
+    const ms = visitDateStartMs(r.visit_date!);
+    return ms !== null && ms >= startMs && ms < endMs;
+  });
+  if (inRange.length === 0) return null;
+  const sorted = [...inRange].sort((a, b) =>
+    (b.visit_date! > a.visit_date! ? 1 : -1)
+  );
+  const latest = sorted[0];
+  return {
+    doctorName: latest.doctor_name,
+    visitDate: latest.visit_date!,
+    notes: latest.notes,
+    reason: latest.reason,
+    diagnosis: latest.diagnosis,
+    follow_up: latest.follow_up,
+  };
+}
+
 /**
  * Existing upcoming appointment matching this doctor + date exactly, if any
  * (duplicate-recognition gate, 2026-08-09 — "I already have you down for

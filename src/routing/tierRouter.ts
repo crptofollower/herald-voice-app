@@ -5,13 +5,14 @@
 
 import { getCachedEvents, formatCachedEventsForSpeech, refreshCalendarCache, getCacheAge, getCachedEventsForDate, formatEventsForSpecificDay, queryCalendarRange } from "../db/calendarCacheDB";
 import { formatHistoricalCalendarRangeForSpeech, resolveHistoricalCalendarRange, toPresentedCalendarSnapshot } from "./historicalCalendarRange";
+import { resolveVisitHistoryTemporalConstraint } from "./visitHistoryTemporal";
 import { calendarWriteIsRecent } from "../db/calendarState";
 import { getFactsSummary } from "../db/factDB";
 import { normalizeInput } from "../utils/normalizeInput";
 import { getProfileSummary, getProfileField } from "../db/profileDB";
 import { getMedicalSummary, composeMedicalSummary, getMedicalRecords, getDiagnosisSummary, getDoctorsSummary } from "../db/medicalDB";
 import { getRecentMentions, formatRecentMentions } from "../db/recallDB";
-import { detectMedicalEvent, extractDoctorName, afterLeadingReadRequestWrapper, isReadShapedUtterance } from "../utils/detectMedicalEvent";
+import { detectMedicalEvent, extractDoctorName, afterLeadingReadRequestWrapper, isReadShapedUtterance, isVisitHistoryVerificationQuestion } from "../utils/detectMedicalEvent";
 import { answerNamedMedicationInquiry } from "../utils/medicationInquiry";
 import type { MedicalEvent } from "../utils/detectMedicalEvent";
 import { MONTHS, CALENDAR_WRITE_TRIGGER, CALENDAR_WRITE_NAMED_APPOINTMENT, parseDatePhrase } from "../utils/parseTime";
@@ -2090,8 +2091,11 @@ async function classifyQueryCore(message: string): Promise<TierDecision> {
   // leading phrase — it cannot itself manufacture a match; the remainder must
   // still independently satisfy one of the patterns below.
   const msgForVisitReaders = afterLeadingReadRequestWrapper(msg);
-  if (VISIT_HISTORY_READ.some((p) => p.test(msg) || p.test(msgForVisitReaders))) {
-    const { getLastVisit } = await import('../db/medicalDB');
+  if (
+    VISIT_HISTORY_READ.some((p) => p.test(msg) || p.test(msgForVisitReaders))
+    || isVisitHistoryVerificationQuestion(msg)
+  ) {
+    const { getLastVisit, getLastVisitInRange } = await import('../db/medicalDB');
     const { formatSpokenDate } = await import('../utils/parseTime');
     const { extractDoctorName } = await import('../utils/detectMedicalEvent');
     const doctorHint = extractDoctorName(msg);
@@ -2122,13 +2126,27 @@ async function classifyQueryCore(message: string): Promise<TierDecision> {
         reason: "medical:visit_history_unresolved_referent",
       };
     }
-    const visit = getLastVisit(doctorHint);
+    const temporal = resolveVisitHistoryTemporalConstraint(msg);
+    if (temporal.kind === 'unresolved') {
+      return {
+        tier: 1,
+        tier1Response: "I can check yesterday, last week, last month, or how many months ago — not a specific month or date like that.",
+        isMedical: true,
+        reason: "medical:visit_history_unresolved_temporal",
+      };
+    }
     const {
       findPersistedDoctorCalendarEvidence,
+      findPersistedDoctorCalendarEvidenceInRange,
       realizePersistedDoctorCalendarEvidence,
       displayNameForCalendarEvidence,
     } = await import('../db/calendarEvidenceDoctorRead');
-    const persisted = findPersistedDoctorCalendarEvidence(doctorHint);
+    const visit = temporal.kind === 'resolved'
+      ? getLastVisitInRange(doctorHint, temporal.range.start, temporal.range.end)
+      : getLastVisit(doctorHint);
+    const persisted = temporal.kind === 'resolved'
+      ? findPersistedDoctorCalendarEvidenceInRange(doctorHint, temporal.range.start, temporal.range.end)
+      : findPersistedDoctorCalendarEvidence(doctorHint);
     const calDisplay = doctorHint
       ?? (persisted[0] ? displayNameForCalendarEvidence(persisted[0], 'your doctor') : 'your doctor');
     const calendarSpeech = realizePersistedDoctorCalendarEvidence(
@@ -2146,10 +2164,17 @@ async function classifyQueryCore(message: string): Promise<TierDecision> {
       if (visit.notes) details.push(visit.notes);
       if (visit.follow_up) details.push(`follow-up: ${visit.follow_up}`);
       const reasonPart = details.length > 0 ? ` — ${details.join('; ')}` : '';
-      // Sentence shape is duplicated with answerReferentVisitDate
-      // (conversationalSubject.ts). Do not factor (Continuity Step 3 / Rule 11).
-      const medicalSpeech = `You last saw ${who} on ${spoken}${reasonPart}.`;
+      const medicalSpeech = temporal.kind === 'resolved'
+        ? `Yes, you saw ${who} on ${spoken}${reasonPart}.`
+        : `You last saw ${who} on ${spoken}${reasonPart}.`;
       response = calendarSpeech ? `${medicalSpeech} ${calendarSpeech}` : medicalSpeech;
+    } else if (temporal.kind === 'resolved') {
+      if (calendarSpeech) {
+        response = calendarSpeech;
+      } else {
+        const who = doctorHint ?? 'that doctor';
+        response = `I don't have a visit with ${who} ${temporal.range.speechLabel}.`;
+      }
     } else if (doctorHint) {
       const { answerHistoricalCalendarVisitEvidence } = await import('./conversationalSubject');
       response = await answerHistoricalCalendarVisitEvidence(doctorHint, doctorHint);

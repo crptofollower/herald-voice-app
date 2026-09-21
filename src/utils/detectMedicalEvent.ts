@@ -219,6 +219,17 @@ export function isReadShapedUtterance(text: string): boolean {
     || CALENDAR_READ_START.test(afterLeadingReadRequestWrapper(raw));
 }
 
+/** Polar/cleft verification of a past visit — capture-decline only. Does not authorize a read. */
+export function isVisitHistoryVerificationQuestion(text: string): boolean {
+  const raw = afterLeadingReadRequestWrapper(text.trim());
+  return (
+    /^was it\b[\s\S]*\bthat i\b[\s\S]*\b(?:saw|see|visited)\b/i.test(raw)
+    || /^didn(?:['’]t| not)\s+i\s+(?:see|saw|visited)\b/i.test(raw)
+    || /^did\s+i\s+(?:see|saw|visited)\b/i.test(raw)
+    || /^was\b[\s\S]*\bthe (?:doctor|physician) i\b[\s\S]*\b(?:saw|see|visited)\b/i.test(raw)
+  );
+}
+
 export function extractDoctorName(text: string): string | undefined {
   const dr = text.match(DR_NAME);
   if (dr?.[1]) {
@@ -503,6 +514,7 @@ export function detectMedicalEvent(text: string): MedicalEvent | null {
   const raw = text.trim();
   if (!raw) return null;
   if (isReadShapedUtterance(raw)) return null;
+  if (isVisitHistoryVerificationQuestion(raw)) return null;
   if (isCatalogMedicationReadUtterance(raw)) return null;
   if (isMedicationInquirySpeechAct(raw)) return null;
   if (REMINDER_START.test(raw)) return null;
