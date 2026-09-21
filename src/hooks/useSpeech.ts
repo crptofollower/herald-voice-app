@@ -48,25 +48,20 @@ import * as ExpoSpeech from "expo-speech";
 import { API_BASE } from "../constants/api";
 import { createTurnStartGate } from "./turnStartGate";
 import { getActiveTurnId, log as latLog, mono as latMono } from "../utils/latencyInstrument";
+import {
+  TTS_TERMINAL_FAILSAFE_MS,
+  applyExpoSpeechTerminal,
+  applyTtsTerminalFailsafe,
+  speechLifecycleLog,
+} from "./speechLifecycleInvariants";
+
+export { applyExpoSpeechTerminal } from "./speechLifecycleInvariants";
 
 const ON_DEVICE_TTS = true;
 
 const TTS_ENDPOINT = `${API_BASE}/tts`;
 const TTS_SPEED = 0.88;
 const SENTENCE_PAUSE_MS = 200;
-
-/** Live-generation gate for ExpoSpeech onDone / onError / onStopped. */
-export function applyExpoSpeechTerminal(opts: {
-  callbackGen: number;
-  currentGen: number;
-  markNativeIdle: () => void;
-  continueDrain: () => void;
-}): 'applied' | 'stale' {
-  if (opts.callbackGen !== opts.currentGen) return 'stale';
-  opts.markNativeIdle();
-  opts.continueDrain();
-  return 'applied';
-}
 
 function cleanForSpeech(text: string): string {
   return text
@@ -130,6 +125,40 @@ export function useSpeech(ensureMicSuspendedRef: EnsureMicSuspendedRef) {
   const genRef           = useRef(0); // incremented on reset/unmount to abandon stale loops
   const expoQueueRef = useRef<string[]>([]);
   const expoSpeakingRef  = useRef(false); // guards overlapping expo-speech fallbacks
+  const failsafeRef = useRef<{ gen: number; timer: ReturnType<typeof setTimeout> } | null>(null);
+
+  const clearFailsafe = (gen: number) => {
+    if (failsafeRef.current && failsafeRef.current.gen === gen) {
+      clearTimeout(failsafeRef.current.timer);
+      failsafeRef.current = null;
+    }
+  };
+
+  const armFailsafe = (gen: number) => {
+    if (failsafeRef.current) {
+      clearTimeout(failsafeRef.current.timer);
+      failsafeRef.current = null;
+    }
+    failsafeRef.current = {
+      gen,
+      timer: setTimeout(() => {
+        if (failsafeRef.current?.gen !== gen) return;
+        failsafeRef.current = null;
+        const applied = applyTtsTerminalFailsafe({
+          failsafeGen: gen,
+          currentGen: genRef.current,
+          markNativeIdle: () => { expoSpeakingRef.current = false; },
+          releaseSpeaking: () => {
+            expoQueueRef.current = [];
+            streamEndedRef.current = true;
+            setSpeaking(false);
+            speechLifecycleLog('SPEAKING_RELEASED', { gen, reason: 'failsafe' });
+          },
+        });
+        speechLifecycleLog('TTS_TERMINAL', { gen, type: 'failsafe', applied });
+      }, TTS_TERMINAL_FAILSAFE_MS),
+    };
+  };
 
   const streamEndedRef = useRef(true);      // true = no stream currently open
   const turnSuppressedRef = useRef(false);  // true = mic suspend failed, stay silent this turn
@@ -185,6 +214,7 @@ export function useSpeech(ensureMicSuspendedRef: EnsureMicSuspendedRef) {
 
   // ── Hard stop ──────────────────────────────────────────────────────────────
   const stop = useCallback(async () => {
+    const releasedGen = genRef.current;
     genRef.current += 1;
     textQueueRef.current  = [];
     audioQueueRef.current = [];
@@ -192,6 +222,12 @@ export function useSpeech(ensureMicSuspendedRef: EnsureMicSuspendedRef) {
     playingRef.current    = false;
     expoSpeakingRef.current = false;
     setSpeaking(false);
+    if (failsafeRef.current) {
+      clearTimeout(failsafeRef.current.timer);
+      failsafeRef.current = null;
+    }
+    speechLifecycleLog('TTS_TERMINAL', { gen: releasedGen, type: 'explicit_stop' });
+    speechLifecycleLog('SPEAKING_RELEASED', { gen: releasedGen, reason: 'explicit_stop' });
 
     streamEndedRef.current = true;
     turnSuppressedRef.current = false;
@@ -289,17 +325,30 @@ export function useSpeech(ensureMicSuspendedRef: EnsureMicSuspendedRef) {
         expoSpeakingRef.current = true;
         ExpoSpeech.stop();
         setSpeaking(true);
+        speechLifecycleLog('SPEAKING_ACQUIRED', { gen, path: 'fallback' });
+        const onFallbackTerminal = () => {
+          clearFailsafe(gen);
+          const applied = applyExpoSpeechTerminal({
+            callbackGen: gen,
+            currentGen: genRef.current,
+            markNativeIdle: () => { expoSpeakingRef.current = false; },
+            continueDrain: () => {
+              if (!playingRef.current) {
+                setSpeaking(false);
+                speechLifecycleLog('SPEAKING_RELEASED', { gen, reason: 'fallback_terminal' });
+              }
+            },
+          });
+          speechLifecycleLog('TTS_TERMINAL', { gen, type: 'native', path: 'fallback', applied });
+        };
+        armFailsafe(gen);
+        speechLifecycleLog('EXPO_SPEECH_DISPATCH', { gen, path: 'fallback' });
         ExpoSpeech.speak(clean, {
           rate: 0.9,
           pitch: 1.0,
-          onDone: () => {
-            expoSpeakingRef.current = false;
-            if (!playingRef.current) setSpeaking(false);
-          },
-          onError: () => {
-            expoSpeakingRef.current = false;
-            if (!playingRef.current) setSpeaking(false);
-          },
+          onDone: onFallbackTerminal,
+          onError: onFallbackTerminal,
+          onStopped: onFallbackTerminal,
         });
       }
     }
@@ -313,6 +362,7 @@ export function useSpeech(ensureMicSuspendedRef: EnsureMicSuspendedRef) {
     if (!next) {
       if (streamEndedRef.current) {
         setSpeaking(false);
+        speechLifecycleLog('SPEAKING_RELEASED', { gen: genRef.current, reason: 'empty_queue_stream_ended' });
       }
       // else: queue empty but more sentences are still expected -- stay
       // "speaking" and wait for the next enqueueSentence/finishStream call.
@@ -321,14 +371,18 @@ export function useSpeech(ensureMicSuspendedRef: EnsureMicSuspendedRef) {
     expoSpeakingRef.current = true;
     latLog('TTS initiation', { turnId: getActiveTurnId(), engine: 'expo-speech' });
     const utteranceGen = genRef.current;
+    speechLifecycleLog('EXPO_SPEECH_DISPATCH', { gen: utteranceGen });
     const onTerminal = () => {
-      applyExpoSpeechTerminal({
+      clearFailsafe(utteranceGen);
+      const applied = applyExpoSpeechTerminal({
         callbackGen: utteranceGen,
         currentGen: genRef.current,
         markNativeIdle: () => { expoSpeakingRef.current = false; },
         continueDrain: drainExpoQueue,
       });
+      speechLifecycleLog('TTS_TERMINAL', { gen: utteranceGen, type: 'native', applied });
     };
+    armFailsafe(utteranceGen);
     ExpoSpeech.speak(next, {
       rate: 0.9,
       pitch: 1.0,
@@ -371,6 +425,7 @@ export function useSpeech(ensureMicSuspendedRef: EnsureMicSuspendedRef) {
 
         if (ON_DEVICE_TTS || isShortOrOneSentence(clean)) {
           setSpeaking(true);
+          speechLifecycleLog('SPEAKING_ACQUIRED', { gen });
           expoQueueRef.current.push(clean);
           drainExpoQueue();
           return;

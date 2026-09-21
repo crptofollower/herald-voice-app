@@ -9,6 +9,11 @@ import { decideOneShotEnd, decideOneShotNoSpeech } from './oneShotEndDecision';
 import { buildStartConfig } from './recognitionModeConfig';
 import type { RecognitionMode } from './recognitionModeConfig';
 import { beginTurn, getActiveTurnId, log as latLog, mono as latMono } from '../utils/latencyInstrument';
+import {
+  LISTENING_READY_TIMEOUT_MS,
+  applyListeningReadyTimeout,
+  speechLifecycleLog,
+} from './speechLifecycleInvariants';
 
 export { evaluateEmptySessionRecovery } from './emptySessionRecoveryDecision';
 
@@ -68,6 +73,15 @@ export function useMic(
   // Android recognizer (Listening shown, no results delivered) or fires a
   // non-no-speech error that kills a live turn. One session at a time, always.
   const engineActiveRef = useRef(false);
+  const listeningReadyRef = useRef(false);
+  const readyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearReadyTimeout = () => {
+    if (readyTimeoutRef.current) {
+      clearTimeout(readyTimeoutRef.current);
+      readyTimeoutRef.current = null;
+    }
+  };
 
   // ── TEMP DIAGNOSTIC — recovery-contract evidence gathering, 2026-08-02 ──
   // Additive only. No control flow depends on micSessionRef or entryPointRef.
@@ -124,6 +138,8 @@ export function useMic(
     if (bufferTimerRef.current) { clearTimeout(bufferTimerRef.current); bufferTimerRef.current = null; }
     bufferRef.current = '';
     if (maxTimer.current) { clearTimeout(maxTimer.current); maxTimer.current = null; }
+    clearReadyTimeout();
+    listeningReadyRef.current = false;
 
     const promise = suspendCoordinatorRef.current.beginSuspend(() => {
       rlog('TEARDOWN_REQUESTED', { reason: 'suspend_for_speech' });
@@ -195,6 +211,14 @@ export function useMic(
   useSpeechRecognitionEvent('start', () => {
     log('NATIVE_START_EVENT');
     rlog('NATIVE_ACTIVE');
+    if (!engineActiveRef.current) {
+      speechLifecycleLog('RECOGNITION_NATIVE_READY_IGNORED', { session: micSessionRef.current, reason: 'not_requested' });
+      return;
+    }
+    clearReadyTimeout();
+    listeningReadyRef.current = true;
+    setIsRecording(true);
+    speechLifecycleLog('RECOGNITION_NATIVE_READY', { session: micSessionRef.current });
   });
 
   // Empty-session recovery gap, 2026-08-13: onset alone (before any
@@ -312,7 +336,10 @@ export function useMic(
   useSpeechRecognitionEvent('error', (event) => {
     log('NATIVE_ERROR', { error: event.error, message: (event as any).message });
     rlog('NATIVE_ERROR', { code: event.error });
+    speechLifecycleLog('RECOGNITION_ERROR', { session: micSessionRef.current, error: event.error });
     engineActiveRef.current = false;
+    listeningReadyRef.current = false;
+    clearReadyTimeout();
     clearEmptySessionRecovery();
     // no-speech with a buffered transcript = the one-shot utterance completed
     // and the engine timed out; flush once. Do not restart.
@@ -342,7 +369,10 @@ export function useMic(
   useSpeechRecognitionEvent('end', () => {
     log('NATIVE_END');
     rlog('NATIVE_END');
+    speechLifecycleLog('RECOGNITION_END', { session: micSessionRef.current, nativeReady: listeningReadyRef.current });
     engineActiveRef.current = false;
+    listeningReadyRef.current = false;
+    clearReadyTimeout();
     clearEmptySessionRecovery();
     // Per the library's own contract, 'end' is always the last event
     // dispatched, including after errors -- the one reliable confirmation
@@ -397,12 +427,15 @@ export function useMic(
     return () => {
       suspendCoordinatorRef.current.cancel();
       clearEmptySessionRecovery();
+      clearReadyTimeout();
     };
   }, []);
 
   // ── stopRecording memoized -- onTranscript is its only external dep ─────────
   const stopRecording = useCallback(async () => {
     clearEmptySessionRecovery();
+    clearReadyTimeout();
+    listeningReadyRef.current = false;
     turnActiveRef.current = false; // manual stop: the resulting 'end' must NOT restart
     speechStartedRef.current = false;
     if (bufferTimerRef.current) {
@@ -460,8 +493,18 @@ export function useMic(
     );
     try {
       log('START_REQUEST');
-      if (engineActiveRef.current) { log('START_BLOCKED', { reason: 'engineActive' }); rlog('NATIVE_START_BLOCKED', { reason: 'engineActive' }); return; }      // session already live -- never double-start
-      if (ttsActiveRef?.current) { log('START_BLOCKED', { reason: 'ttsActive' }); rlog('NATIVE_START_BLOCKED', { reason: 'ttsActive' }); return; }        // Herald is audible -- mic stays closed
+      if (engineActiveRef.current) {
+        log('START_BLOCKED', { reason: 'engineActive' });
+        rlog('NATIVE_START_BLOCKED', { reason: 'engineActive' });
+        speechLifecycleLog('TALK_BLOCKED', { reason: 'engineActive' });
+        return;
+      }
+      if (ttsActiveRef?.current) {
+        log('START_BLOCKED', { reason: 'ttsActive' });
+        rlog('NATIVE_START_BLOCKED', { reason: 'ttsActive' });
+        speechLifecycleLog('TALK_BLOCKED', { reason: 'ttsActive' });
+        return;
+      }
       const { granted } =
         await ExpoSpeechRecognitionModule.requestPermissionsAsync();
       if (!granted) { console.error('[useMic] Mic permission denied'); return; }
@@ -470,21 +513,44 @@ export function useMic(
       latestPartialRef.current = '';
       setPartialText('');
       clearEmptySessionRecovery();
+      clearReadyTimeout();
+      listeningReadyRef.current = false;
 
       let stateBefore: string = 'unknown';
       try { stateBefore = await ExpoSpeechRecognitionModule.getStateAsync(); } catch (e) { stateBefore = `error:${String(e)}`; }
       log('STATE_BEFORE_START', { state: stateBefore });
 
       micSessionRef.current += 1;
+      const session = micSessionRef.current;
+      speechLifecycleLog('RECOGNITION_REQUESTED', { session, mode: recognitionModeRef.current });
       ExpoSpeechRecognitionModule.start(getStartConfig());
       engineActiveRef.current = true;
-      setIsRecording(true);
       log('NATIVE_START_CALLED');
       rlog('NATIVE_START_REQUESTED', { restart: false });
 
       let stateAfter: string = 'unknown';
       try { stateAfter = await ExpoSpeechRecognitionModule.getStateAsync(); } catch (e) { stateAfter = `error:${String(e)}`; }
       log('STATE_AFTER_START', { state: stateAfter });
+
+      readyTimeoutRef.current = setTimeout(() => {
+        readyTimeoutRef.current = null;
+        const decision = applyListeningReadyTimeout({
+          timeoutSession: session,
+          currentSession: micSessionRef.current,
+          requested: engineActiveRef.current,
+          nativeReady: listeningReadyRef.current,
+        });
+        if (decision !== 'fail_closed') return;
+        speechLifecycleLog('RECOGNITION_READY_TIMEOUT', { session });
+        log('READINESS_TIMEOUT');
+        rlog('READINESS_TIMEOUT', { session });
+        engineActiveRef.current = false;
+        listeningReadyRef.current = false;
+        setIsRecording(false);
+        try { ExpoSpeechRecognitionModule.abort(); } catch (e) {
+          console.error('[useMic] readiness abort failed:', e);
+        }
+      }, LISTENING_READY_TIMEOUT_MS);
 
       maxTimer.current = setTimeout(() => stopRecording(), 30000);
     } catch (e) {

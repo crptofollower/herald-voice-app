@@ -21,8 +21,9 @@ export async function runTtsTerminalLifecycleTests() {
 
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
   const speechSrc = fs.readFileSync(path.join(root, 'src/hooks/useSpeech.ts'), 'utf8');
+  const invSrc = fs.readFileSync(path.join(root, 'src/hooks/speechLifecycleInvariants.ts'), 'utf8');
   const chatSrc = fs.readFileSync(path.join(root, 'src/screens/ChatScreen.tsx'), 'utf8');
-  const helper = speechSrc.match(/export function applyExpoSpeechTerminal[\s\S]*?return 'applied';\r?\n\}/)?.[0] ?? '';
+  const helper = invSrc.match(/export function applyExpoSpeechTerminal[\s\S]*?return 'applied';\r?\n\}/)?.[0] ?? '';
   const drain = speechSrc.match(/const drainExpoQueue = useCallback\(\(\) => \{[\s\S]*?\}, \[\]\);/)?.[0] ?? '';
   const stop = speechSrc.match(/const stop = useCallback\(async \(\) => \{[\s\S]*?\}, \[\]\);/)?.[0] ?? '';
 
@@ -77,4 +78,11 @@ export async function runTtsTerminalLifecycleTests() {
     'LSM speaking mirror intact');
 
   return { passed, failed: failures.length, total: passed + failures.length, failures };
+}
+
+const isDirect = process.argv[1]?.includes('ttsTerminalLifecycle');
+if (isDirect) {
+  runTtsTerminalLifecycleTests().then((r) => {
+    if (r.failed) process.exit(1);
+  });
 }

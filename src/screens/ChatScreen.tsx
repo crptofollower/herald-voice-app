@@ -72,6 +72,7 @@ import { beacon } from "../utils/diag";
 import { useCalendar } from "../hooks/useCalendar";
 import { ensureCoords, useLocation } from "../hooks/useLocation";
 import { useMic } from "../hooks/useMic";
+import { speechLifecycleLog, talkAttemptAdmission } from "../hooks/speechLifecycleInvariants";
 import { useRaiseToWake } from "../hooks/useRaiseToWake";
 import { useDeviceMemory } from "../hooks/useDeviceMemory";
 import { useLocalLLM } from '../hooks/useLocalLLM';
@@ -2916,38 +2917,6 @@ export default function ChatScreen() {
     }
   }, [userId, messages, personaKey, lat, lng, locationLabel, getContextBlock, addMessage, setError, resetSpeech, enqueueSentence, resetStreamState, stop, llmStatus, getCtx, getModelIdentity, experimentalConvStatus, getExperimentalCtx, getListRemoveShadowCtx, getMedicationSemanticInterpreterCtx, dispatchLocalIntent, dispatchEmergency]);
 
-  useEffect(() => {
-    try {
-      const { loadJourneyHost } = require('../dev/maybeJourneyHost');
-      const host = loadJourneyHost();
-      host?.bindJourneyRuntime({
-        sendMessage,
-        peekPendingKey: () => sessionRef.current.peekPendingKey(),
-        resetConversation: () => {
-          lastSentRef.current = 0;
-          sendingRef.current = false;
-          pendingContactCollectRef.current = null;
-          if (sessionRef.current.hasPending()) sessionRef.current.clearPending();
-          sessionRef.current = new ConversationSession();
-          subjectRef.current.clear();
-          medicationPresentationRef.current.clear();
-          orderedPresentationRef.current.clear();
-          todoPresentationRef.current.clear();
-          calendarPresentationRef.current.clear();
-          calendarContinuationRef.current.clear();
-          conversationLedgerRef.current = createConversationTurnLedger();
-          discourseRef.current.clear();
-          hotRingRef.current.clear();
-          setActiveSurface(null);
-          setInputText('');
-          useStore.getState().clearChat();
-        },
-      });
-    } catch {
-      /* journey host only */
-    }
-  }, [sendMessage]);
-
   const handleSend = useCallback(() => {
     sendMessage(inputText.trim());
   }, [inputText, sendMessage]);
@@ -3019,6 +2988,41 @@ export default function ChatScreen() {
 
   const { isRecording, startRecording, stopRecording, suspendForSpeech, partialText } = useMic(handleTranscript, isSpeakingRef, handleNoRecognizableSpeech);
   suspendForSpeechRef.current = suspendForSpeech;
+
+  useEffect(() => {
+    try {
+      const { loadJourneyHost } = require('../dev/maybeJourneyHost');
+      const host = loadJourneyHost();
+      host?.bindJourneyRuntime({
+        sendMessage,
+        peekPendingKey: () => sessionRef.current.peekPendingKey(),
+        resetConversation: () => {
+          lastSentRef.current = 0;
+          sendingRef.current = false;
+          pendingContactCollectRef.current = null;
+          if (sessionRef.current.hasPending()) sessionRef.current.clearPending();
+          sessionRef.current = new ConversationSession();
+          subjectRef.current.clear();
+          medicationPresentationRef.current.clear();
+          orderedPresentationRef.current.clear();
+          todoPresentationRef.current.clear();
+          calendarPresentationRef.current.clear();
+          calendarContinuationRef.current.clear();
+          conversationLedgerRef.current = createConversationTurnLedger();
+          discourseRef.current.clear();
+          hotRingRef.current.clear();
+          setActiveSurface(null);
+          setInputText('');
+          useStore.getState().clearChat();
+        },
+        startRecording: (entryPoint?: 'manual_button' | 'post_tts_handoff' | 'unknown_entry', mode?: 'open' | 'control_confirmation') =>
+          startRecording(entryPoint ?? 'manual_button', mode ?? 'open'),
+        peekSpeaking: () => isSpeakingRef.current,
+      });
+    } catch {
+      /* journey host only */
+    }
+  }, [sendMessage, startRecording]);
 
   useRaiseToWake({
     aiName: aiName || 'Herald',
@@ -3995,11 +3999,20 @@ export default function ChatScreen() {
                   },
                 ]}
                 onPress={() => {
+                  const talk = talkAttemptAdmission({
+                    isStreaming,
+                    isWaiting,
+                    isSpeaking: isSpeakingRef.current,
+                  });
+                  if (!talk.admitted) {
+                    speechLifecycleLog('TALK_BLOCKED', { reason: talk.reason });
+                  }
                   if (isStreaming || isWaiting || isSpeakingRef.current) return;
                   Keyboard.dismiss();
                   if (isRecording) {
                     stopRecording();
                   } else {
+                    speechLifecycleLog('TALK_ADMITTED', { reason: 'mic_start' });
                     // 50ms delay: lets Android layout settle after keyboard dismiss
                     // before speech recognition initialises -- fixes first-tap miss.
                     // M1 short-utterance follow-on, 2026-08-13: bias STT toward the

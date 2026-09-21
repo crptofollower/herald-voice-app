@@ -10,10 +10,16 @@ import { useStore } from '../store/useStore';
 import { normalizeInput } from '../utils/normalizeInput';
 
 type SendMessageFn = (text: string, inputSource?: 'typed' | 'speech') => Promise<void>;
+type StartRecordingFn = (
+  entryPoint?: 'manual_button' | 'post_tts_handoff' | 'unknown_entry',
+  mode?: 'open' | 'control_confirmation',
+) => Promise<void> | void;
 type JourneyRuntime = {
   sendMessage: SendMessageFn;
   peekPendingKey: () => string | null;
   resetConversation: () => void;
+  startRecording?: StartRecordingFn;
+  peekSpeaking?: () => boolean;
 };
 
 type NativeBridge = {
@@ -98,6 +104,7 @@ export type JourneyTurnResult = {
 const SUBMIT_EVENT = 'DebugJourneySubmitTurn';
 const RESET_EVENT = 'DebugJourneyResetScenario';
 const TEARDOWN_EVENT = 'DebugJourneyTeardown';
+const SPEECH_PROBE_EVENT = 'DebugJourneySpeechProbe';
 const NATIVE_NAME = 'DebugJourneyBridge';
 
 let runtime: JourneyRuntime | null = null;
@@ -105,6 +112,7 @@ let native: NativeBridge | null = null;
 let subscription: { remove: () => void } | null = null;
 let resetSubscription: { remove: () => void } | null = null;
 let teardownSubscription: { remove: () => void } | null = null;
+let speechProbeSubscription: { remove: () => void } | null = null;
 let inFlightTurnId: string | null = null;
 let lastReportedOutcome: unknown = undefined;
 let lastReportedPendingKey: string | null = null;
@@ -499,6 +507,70 @@ async function runTurn(payload: {
   }
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitFor(pred: () => boolean, timeoutMs: number): Promise<{ met: boolean; waitedMs: number }> {
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    if (pred()) return { met: true, waitedMs: Date.now() - t0 };
+    await sleep(50);
+  }
+  return { met: pred(), waitedMs: Date.now() - t0 };
+}
+
+async function runSpeechLifecycleProbe(): Promise<void> {
+  const startRecording = runtime?.startRecording;
+  if (!startRecording) {
+    emitComplete({
+      schema: 'herald.journey.speech_lifecycle.v1',
+      status: 'FAIL',
+      failReason: 'start_recording_unbound',
+    });
+    return;
+  }
+  await startRecording('manual_button', 'open');
+  await sleep(8000);
+  let sendMessageInvoked = false;
+  let sendMessageReturned = false;
+  if (runtime?.sendMessage) {
+    sendMessageInvoked = true;
+    try {
+      await runtime.sendMessage('hello', 'typed');
+      sendMessageReturned = true;
+    } catch (e) {
+      emitComplete({
+        schema: 'herald.journey.speech_lifecycle.v1',
+        status: 'FAIL',
+        failReason: e instanceof Error ? e.message : 'send_message_threw',
+        sendMessageInvoked,
+        sendMessageReturned,
+      });
+      return;
+    }
+  }
+  const speakingNow = () => !!runtime?.peekSpeaking?.();
+  const ttsAssert = await waitFor(speakingNow, 15000);
+  const ttsClear = ttsAssert.met ? await waitFor(() => !speakingNow(), 20000) : { met: false, waitedMs: 0 };
+  const rearmBlocked = speakingNow();
+  if (!rearmBlocked) {
+    await startRecording('manual_button', 'open');
+  }
+  emitComplete({
+    schema: 'herald.journey.speech_lifecycle.v1',
+    status: 'PASS',
+    failReason: null,
+    sendMessageInvoked,
+    sendMessageReturned,
+    speakingBecameTrue: ttsAssert.met,
+    speakingCleared: ttsClear.met,
+    rearmBlocked,
+    ttsAssertWaitMs: ttsAssert.waitedMs,
+    ttsClearWaitMs: ttsClear.waitedMs,
+  });
+}
+
 function runReset(): void {
   try {
     if (!isDBReady()) {
@@ -526,6 +598,8 @@ export function bindJourneySendMessage(fn: SendMessageFn): void {
     sendMessage: fn,
     peekPendingKey: runtime?.peekPendingKey ?? (() => lastReportedPendingKey),
     resetConversation: runtime?.resetConversation ?? (() => {}),
+    startRecording: runtime?.startRecording,
+    peekSpeaking: runtime?.peekSpeaking,
   };
   if (native) {
     try { native.hostReady(); } catch { /* ignore */ }
@@ -567,6 +641,9 @@ export function onboardAndroidJourneyHost(): void {
   teardownSubscription = DeviceEventEmitter.addListener(TEARDOWN_EVENT, () => {
     teardownAndroidJourneyHost();
   });
+  speechProbeSubscription = DeviceEventEmitter.addListener(SPEECH_PROBE_EVENT, () => {
+    void runSpeechLifecycleProbe();
+  });
 }
 
 export function teardownAndroidJourneyHost(): void {
@@ -576,6 +653,8 @@ export function teardownAndroidJourneyHost(): void {
   resetSubscription = null;
   teardownSubscription?.remove();
   teardownSubscription = null;
+  speechProbeSubscription?.remove();
+  speechProbeSubscription = null;
   runtime = null;
   native = null;
   inFlightTurnId = null;

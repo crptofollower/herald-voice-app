@@ -104,11 +104,18 @@ export async function runAndroidJourneyIsolationV1Tests() {
   );
 
   const host = fs.readFileSync(path.join(ROOT, 'src/dev/androidJourneyHost.ts'), 'utf8');
+  const bridge = fs.readFileSync(path.join(ROOT, 'android/app/src/journey/java/ai/apexempire/herald/journey/HeraldJourneyBridge.kt'), 'utf8');
   assert(
     'JS host invokes sendMessage, not a router substitute',
     host.includes('await runtime.sendMessage(text, \'typed\')') && !host.includes('processUtterance('),
     (v) => v === true,
     'sendMessage front door',
+  );
+  assert(
+    'speech lifecycle probe is available and does not replace sendMessage as the typed front door',
+    host.includes('DebugJourneySpeechProbe') && host.includes('runSpeechLifecycleProbe') && bridge.includes('fun probeSpeechLifecycle'),
+    (v) => v === true,
+    'probe beside sendMessage',
   );
   assert(
     'JS host snapshots lists/medications/medical_records only',

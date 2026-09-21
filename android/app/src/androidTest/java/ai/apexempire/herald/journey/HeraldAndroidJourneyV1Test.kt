@@ -34,6 +34,10 @@ class HeraldAndroidJourneyV1Test {
     HeraldJourneyBridge.requestHostTeardown()
   }
 
+  // Speech ownership probe: HeraldJourneyBridge.probeSpeechLifecycle().
+  // Not a @Test on this pack — typed sendMessage remains the FTL V1 front door
+  // until a later authorized Firebase speech run.
+
   @Test
   fun androidJourneyV1Pack_packagedSendMessage() {
     val suiteStart = System.currentTimeMillis()
