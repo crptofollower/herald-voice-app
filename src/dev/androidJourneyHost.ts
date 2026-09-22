@@ -6,6 +6,9 @@ import { DeviceEventEmitter, NativeModules, Platform } from 'react-native';
 import { initDB, isDBReady } from '../db/useDeviceDB';
 import { getDB } from '../db/schema';
 import { setProfileField } from '../db/profileDB';
+import { writeMedicalRecord } from '../db/medicalDB';
+import { ingestAuthorizedCalendarEvent } from '../db/calendarEvidenceIngest';
+import { setNow, resetNow } from '../utils/heraldClock';
 import { useStore } from '../store/useStore';
 import { normalizeInput } from '../utils/normalizeInput';
 
@@ -37,7 +40,13 @@ type ListItemRow = {
   removed_at: string | null;
 };
 type MedRow = { id: string; name: string; is_active: number };
-type RecordRow = { id: string; notes: string | null; status: string | null };
+type RecordRow = {
+  id: string;
+  notes: string | null;
+  status: string | null;
+  doctor_name?: string | null;
+  visit_date?: string | null;
+};
 
 type EvidenceSnapRow = {
   id: string;
@@ -162,7 +171,9 @@ function snapshotAuthoritative(): AuthoritativeSnapshot {
       medications = db.getAllSync<MedRow>(`SELECT id, name, is_active FROM medications;`);
     } catch { /* table may be absent on a partial open */ }
     try {
-      medical_records = db.getAllSync<RecordRow>(`SELECT id, notes, status FROM medical_records;`);
+      medical_records = db.getAllSync<RecordRow>(
+        `SELECT id, notes, status, doctor_name, visit_date FROM medical_records;`,
+      );
     } catch { /* optional */ }
     try {
       evidence = db.getAllSync<EvidenceSnapRow>(
@@ -438,6 +449,49 @@ function failEnvelope(
   };
 }
 
+const MEDICAL_TEMPORAL_PIN = new Date(2026, 8, 21, 15, 0, 0);
+
+function seedCalendarVance(start: Date, externalId: string): void {
+  ingestAuthorizedCalendarEvent({
+    title: 'Appointment with Dr. Vance',
+    startISO: start.toISOString(),
+    externalId,
+    observedAt: MEDICAL_TEMPORAL_PIN.toISOString(),
+  });
+}
+
+function applyMedicalTemporalFixture(scenarioId: string | null): void {
+  resetNow();
+  if (!scenarioId) return;
+  const pinClock = [
+    'direct_confirmed_in_range',
+    'direct_calendar_only',
+    'direct_unsupported_temporal',
+    'specialty_clarify_confirmed',
+    'specialty_clarify_out_of_range',
+    'specialty_clarify_calendar_only',
+    'specialty_clarify_unsupported_then_identity',
+    'specialty_clarify_nonname_reask',
+  ].includes(scenarioId);
+  if (!pinClock) return;
+  setNow(MEDICAL_TEMPORAL_PIN);
+  if (
+    scenarioId === 'direct_confirmed_in_range'
+    || scenarioId === 'direct_unsupported_temporal'
+    || scenarioId === 'specialty_clarify_confirmed'
+    || scenarioId === 'specialty_clarify_unsupported_then_identity'
+    || scenarioId === 'specialty_clarify_nonname_reask'
+  ) {
+    writeMedicalRecord({ doctor_name: 'Dr. Vance', visit_date: '2026-08-12', status: 'noted' });
+  }
+  if (scenarioId === 'specialty_clarify_out_of_range') {
+    writeMedicalRecord({ doctor_name: 'Dr. Vance', visit_date: '2026-07-03', status: 'noted' });
+  }
+  if (scenarioId === 'direct_calendar_only' || scenarioId === 'specialty_clarify_calendar_only') {
+    seedCalendarVance(new Date(2026, 7, 12, 15, 0, 0), `cal_vance_${scenarioId}`);
+  }
+}
+
 function resetAuthoritativeLists(): void {
   if (!isDBReady()) return;
   const db = getDB();
@@ -445,6 +499,8 @@ function resetAuthoritativeLists(): void {
   db.execSync('DELETE FROM lists;');
   try { db.execSync('DELETE FROM medications;'); } catch { /* optional */ }
   try { db.execSync('DELETE FROM medical_records;'); } catch { /* optional */ }
+  try { db.execSync('DELETE FROM evidence;'); } catch { /* optional */ }
+  try { db.execSync('DELETE FROM appointments;'); } catch { /* optional */ }
 }
 
 async function runTurn(payload: {
@@ -588,7 +644,7 @@ async function runSpeechLifecycleProbe(): Promise<void> {
   });
 }
 
-function runReset(): void {
+function runReset(scenarioId: string | null = null): void {
   try {
     if (!isDBReady()) {
       emitComplete({ schema: 'herald.journey.reset.v1', status: 'FAIL', failReason: 'db_not_ready' });
@@ -596,11 +652,17 @@ function runReset(): void {
     }
     resetAuthoritativeLists();
     runtime?.resetConversation();
+    applyMedicalTemporalFixture(scenarioId);
     seenTurnIds.clear();
     inFlightTurnId = null;
     lastReportedOutcome = undefined;
     lastReportedPendingKey = null;
-    emitComplete({ schema: 'herald.journey.reset.v1', status: 'PASS', failReason: null });
+    emitComplete({
+      schema: 'herald.journey.reset.v1',
+      status: 'PASS',
+      failReason: null,
+      scenarioId,
+    });
   } catch (e) {
     emitComplete({
       schema: 'herald.journey.reset.v1',
@@ -652,8 +714,9 @@ export function onboardAndroidJourneyHost(): void {
   subscription = DeviceEventEmitter.addListener(SUBMIT_EVENT, (payload) => {
     void runTurn(payload ?? {});
   });
-  resetSubscription = DeviceEventEmitter.addListener(RESET_EVENT, () => {
-    runReset();
+  resetSubscription = DeviceEventEmitter.addListener(RESET_EVENT, (payload) => {
+    const scenarioId = payload && typeof payload.scenarioId === 'string' ? payload.scenarioId : null;
+    runReset(scenarioId);
   });
   teardownSubscription = DeviceEventEmitter.addListener(TEARDOWN_EVENT, () => {
     teardownAndroidJourneyHost();

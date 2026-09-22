@@ -1,0 +1,202 @@
+{
+  "schema": "herald.android.medicalTemporal.v1",
+  "source": "Firebase certification of Medical Temporal Evidence Questions V1 and Temporal Clarification Continuity V1",
+  "scenarios": [
+    {
+      "id": "direct_confirmed_in_range",
+      "title": "Direct last-month visit history with confirmed medical record in range",
+      "claimed_path": "medical:visit_history_read confirmed occurrence",
+      "turns": [
+        {
+          "input": "Was it last month that I saw Dr. Vance?",
+          "pending_key_after": null,
+          "route_source": "device_read",
+          "route_kind": "device_read",
+          "commit_statuses": [],
+          "zero_delta": true,
+          "response_includes": ["Yes, you saw Dr. Vance", "August 12"],
+          "response_excludes": ["Your calendar shows", "You last saw"]
+        }
+      ]
+    },
+    {
+      "id": "direct_calendar_only",
+      "title": "Direct last-month visit history with calendar evidence only",
+      "claimed_path": "medical:visit_history_read calendar provenance",
+      "turns": [
+        {
+          "input": "Was it last month that I saw Dr. Vance?",
+          "pending_key_after": null,
+          "route_source": "device_read",
+          "route_kind": "device_read",
+          "commit_statuses": [],
+          "zero_delta": true,
+          "response_includes": ["Your calendar shows", "Vance"],
+          "response_excludes": ["Yes, you saw", "You last saw", "you visited", "you attended"]
+        }
+      ]
+    },
+    {
+      "id": "direct_unsupported_temporal",
+      "title": "Direct explicit unsupported month constraint fails closed",
+      "claimed_path": "medical:visit_history_unresolved_temporal",
+      "turns": [
+        {
+          "input": "Was Dr. Vance the doctor I saw in August?",
+          "pending_key_after": null,
+          "route_source": "device_read",
+          "route_kind": "device_read",
+          "commit_statuses": [],
+          "zero_delta": true,
+          "response_includes": ["I can check yesterday, last week, last month"],
+          "response_excludes": ["Yes, you saw", "You last saw"]
+        }
+      ]
+    },
+    {
+      "id": "specialty_clarify_confirmed",
+      "title": "Cardiologist clarification resumes last-month confirmed visit",
+      "claimed_path": "medical_read_pending -> pending_resume visit_history_read",
+      "turns": [
+        {
+          "input": "Didn't I see my cardiologist last month?",
+          "pending_key_after": "medical_visit_history_specialty",
+          "route_source": "capture",
+          "commit_statuses": ["pending"],
+          "commit_pending_keys": ["medical_visit_history_specialty"],
+          "zero_delta": true,
+          "response_includes": ["cardiologist", "who do you mean"],
+          "response_excludes": ["Yes, you saw", "You last saw", "Dr. Vance"]
+        },
+        {
+          "input": "Dr. Vance.",
+          "pending_key_before": "medical_visit_history_specialty",
+          "pending_key_after": null,
+          "route_source": "pending_resume",
+          "commit_statuses": ["committed"],
+          "zero_delta": true,
+          "response_includes": ["Yes, you saw Dr. Vance", "August 12"],
+          "response_excludes": ["You last saw"]
+        }
+      ]
+    },
+    {
+      "id": "specialty_clarify_out_of_range",
+      "title": "Clarification keeps last-month constraint when confirmed visit is outside range",
+      "claimed_path": "medical_read_pending -> pending_resume honest miss",
+      "turns": [
+        {
+          "input": "Didn't I see my cardiologist last month?",
+          "pending_key_after": "medical_visit_history_specialty",
+          "route_source": "capture",
+          "commit_statuses": ["pending"],
+          "commit_pending_keys": ["medical_visit_history_specialty"],
+          "zero_delta": true,
+          "response_includes": ["cardiologist", "who do you mean"],
+          "response_excludes": ["Yes, you saw", "You last saw"]
+        },
+        {
+          "input": "Dr. Vance.",
+          "pending_key_before": "medical_visit_history_specialty",
+          "pending_key_after": null,
+          "route_source": "pending_resume",
+          "commit_statuses": ["committed"],
+          "zero_delta": true,
+          "response_includes": ["I don't have a visit with Dr. Vance last month"],
+          "response_excludes": ["Yes, you saw", "You last saw"]
+        }
+      ]
+    },
+    {
+      "id": "specialty_clarify_calendar_only",
+      "title": "Clarification-resumed calendar-only evidence keeps calendar provenance",
+      "claimed_path": "medical_read_pending -> pending_resume calendar provenance",
+      "turns": [
+        {
+          "input": "Didn't I see my cardiologist last month?",
+          "pending_key_after": "medical_visit_history_specialty",
+          "route_source": "capture",
+          "commit_statuses": ["pending"],
+          "commit_pending_keys": ["medical_visit_history_specialty"],
+          "zero_delta": true,
+          "response_includes": ["cardiologist", "who do you mean"],
+          "response_excludes": ["Yes, you saw", "You last saw"]
+        },
+        {
+          "input": "Dr. Vance.",
+          "pending_key_before": "medical_visit_history_specialty",
+          "pending_key_after": null,
+          "route_source": "pending_resume",
+          "commit_statuses": ["committed"],
+          "zero_delta": true,
+          "response_includes": ["Your calendar shows", "Vance"],
+          "response_excludes": ["Yes, you saw", "You last saw", "you visited", "you attended"]
+        }
+      ]
+    },
+    {
+      "id": "specialty_clarify_unsupported_then_identity",
+      "title": "Unsupported original temporal stays fail-closed after identity fill",
+      "claimed_path": "medical_read_pending -> pending_resume unresolved_temporal",
+      "turns": [
+        {
+          "input": "Didn't I see my cardiologist in August?",
+          "pending_key_after": "medical_visit_history_specialty",
+          "route_source": "capture",
+          "commit_statuses": ["pending"],
+          "commit_pending_keys": ["medical_visit_history_specialty"],
+          "zero_delta": true,
+          "response_includes": ["cardiologist", "who do you mean"],
+          "response_excludes": ["Yes, you saw", "You last saw"]
+        },
+        {
+          "input": "Dr. Vance.",
+          "pending_key_before": "medical_visit_history_specialty",
+          "pending_key_after": null,
+          "route_source": "pending_resume",
+          "commit_statuses": ["committed"],
+          "zero_delta": true,
+          "response_includes": ["I can check yesterday, last week, last month"],
+          "response_excludes": ["Yes, you saw", "You last saw"]
+        }
+      ]
+    },
+    {
+      "id": "specialty_clarify_nonname_reask",
+      "title": "Non-name reply re-asks without discarding last-month obligation",
+      "claimed_path": "medical_read_pending reask then resume",
+      "turns": [
+        {
+          "input": "Didn't I see my cardiologist last month?",
+          "pending_key_after": "medical_visit_history_specialty",
+          "route_source": "capture",
+          "commit_statuses": ["pending"],
+          "commit_pending_keys": ["medical_visit_history_specialty"],
+          "zero_delta": true,
+          "response_includes": ["who do you mean"],
+          "response_excludes": ["Yes, you saw"]
+        },
+        {
+          "input": "the one downtown",
+          "pending_key_before": "medical_visit_history_specialty",
+          "pending_key_after": "medical_visit_history_specialty",
+          "route_source": "pending_resume",
+          "commit_statuses": ["pending"],
+          "zero_delta": true,
+          "response_includes": ["who do you mean"],
+          "response_excludes": ["Yes, you saw", "You last saw"]
+        },
+        {
+          "input": "Dr. Vance.",
+          "pending_key_before": "medical_visit_history_specialty",
+          "pending_key_after": null,
+          "route_source": "pending_resume",
+          "commit_statuses": ["committed"],
+          "zero_delta": true,
+          "response_includes": ["Yes, you saw Dr. Vance", "August 12"],
+          "response_excludes": ["You last saw"]
+        }
+      ]
+    }
+  ]
+}

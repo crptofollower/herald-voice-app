@@ -202,7 +202,10 @@ tasks.register("syncJourneyScenarioContract", Copy) {
     doFirst {
         delete "${layout.buildDirectory.get()}/generated/journeyAssets/herald"
     }
-    from("${projectRoot}/scripts/heraldTest/conversation/android.journey.v1.scenarios.json")
+    from("${projectRoot}/scripts/heraldTest/conversation") {
+        include "android.journey.v1.scenarios.json"
+        include "android.medicalTemporal.v1.scenarios.json"
+    }
     into("${layout.buildDirectory.get()}/generated/journeyAssets/herald")
 }
 tasks.matching { it.name.toLowerCase().contains("androidtest") }.configureEach {

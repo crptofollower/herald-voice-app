@@ -125,7 +125,7 @@ object HeraldJourneyBridge {
     return json
   }
 
-  fun resetScenario(timeoutMs: Long = DEFAULT_TIMEOUT_MS): String {
+  fun resetScenario(timeoutMs: Long = DEFAULT_TIMEOUT_MS, scenarioId: String? = null): String {
     if (!inFlight.compareAndSet(false, true)) {
       return JSONObject().put("schema", "herald.journey.reset.v1").put("status", "FAIL").put("failReason", "duplicate_or_in_flight").toString()
     }
@@ -140,9 +140,11 @@ object HeraldJourneyBridge {
       return JSONObject().put("schema", "herald.journey.reset.v1").put("status", "FAIL").put("failReason", "react_context_missing").toString()
     }
     try {
+      val params = Arguments.createMap()
+      if (scenarioId != null) params.putString("scenarioId", scenarioId)
       ctx
         .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
-        .emit(RESET_EVENT, Arguments.createMap())
+        .emit(RESET_EVENT, params)
     } catch (e: Exception) {
       inFlight.set(false)
       waiter.set(null)

@@ -231,8 +231,11 @@ export async function runCalendarEvidenceCompositionTests() {
   {
     const host = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src/dev/androidJourneyHost.ts'), 'utf8');
     const cal = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src/hooks/useCalendar.ts'), 'utf8');
-    assertTrue('AuthoritativeSnapshot observes evidence including event_at', /FROM evidence/.test(host) && /event_at/.test(host));
-    assertTrue('AuthoritativeSnapshot does not write evidence', !/persistEvidence|ingestAuthorizedCalendarEvent/.test(host));
+    const snapStart = host.indexOf('function snapshotAuthoritative');
+    const snapEnd = host.indexOf('function diffSnapshots');
+    const snapshotFn = snapStart >= 0 && snapEnd > snapStart ? host.slice(snapStart, snapEnd) : '';
+    assertTrue('AuthoritativeSnapshot observes evidence including event_at', /FROM evidence/.test(snapshotFn) && /event_at/.test(snapshotFn));
+    assertTrue('AuthoritativeSnapshot does not write evidence', snapshotFn.length > 0 && !/persistEvidence|ingestAuthorizedCalendarEvent/.test(snapshotFn));
     assertTrue('production sync seam persists evidence alongside appointments', /ingestAuthorizedCalendarEvent/.test(cal) && /isAppointmentWorth/.test(cal));
     assertTrue('production sync is not a second calendar sweep', (cal.match(/getEventsAsync/g) || []).length === 1);
   }
