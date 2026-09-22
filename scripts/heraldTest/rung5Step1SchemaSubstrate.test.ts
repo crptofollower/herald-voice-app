@@ -45,7 +45,7 @@ const UNTOUCHED_TABLES: Record<string, string[]> = {
     'entity_id', 'importance_score', 'valid_until', 'context_type',
   ],
   evidence: [
-    'id', 'source_class', 'source_kind', 'source_id', 'raw_text', 'observed_at', 'event_at',
+    'id', 'source_class', 'source_kind', 'source_id', 'raw_text', 'observed_at', 'event_at', 'removed_at',
   ],
   medical_records: [
     'id', 'visit_date', 'doctor_name', 'facility', 'reason', 'diagnosis', 'follow_up',
@@ -95,16 +95,16 @@ export async function runRung5Step1SchemaSubstrateTests() {
     }
   }
 
-  console.log(`\n${BOLD}-- Rung 5 Step 1 schema substrate (v24) --${RESET}\n`);
+  console.log(`\n${BOLD}-- Rung 5 Step 1 schema substrate (v24 + v25 evidence.removed_at) --${RESET}\n`);
 
-  assert('SCHEMA_VERSION export is 24', SCHEMA_VERSION, (v) => v === 24, '24');
+  assert('SCHEMA_VERSION export is 25', SCHEMA_VERSION, (v) => v === 25, '25');
 
   const db = new Database(':memory:');
   setDB(makeShim(db));
   await runMigrations();
 
   const meta = db.prepare('SELECT version FROM schema_meta ORDER BY version DESC LIMIT 1;').get() as { version: number };
-  assert('schema_meta top version is 24', meta?.version, (v) => v === 24, '24');
+  assert('schema_meta top version is 25', meta?.version, (v) => v === 25, '25');
 
   const episodeInfo = tableInfo(db, 'episodes');
   assert('episodes column names are the ratified v19 shape plus domain',
@@ -136,15 +136,15 @@ export async function runRung5Step1SchemaSubstrateTests() {
 
   for (const [table, expected] of Object.entries(UNTOUCHED_TABLES)) {
     const cols = columnNames(db, table);
-    assert(`v24 does not alter ${table} columns`,
+    assert(`current schema does not alter ${table} columns beyond ratified additions`,
       cols, (v) => JSON.stringify(v) === JSON.stringify(expected), JSON.stringify(expected));
   }
 
   let threw = false;
   try { await runMigrations(); } catch { threw = true; }
-  assert('v24 re-run is a no-op and does not throw', threw, (v) => v === false, 'false');
+  assert('v25 re-run is a no-op and does not throw', threw, (v) => v === false, 'false');
   const metaAfter = db.prepare('SELECT version FROM schema_meta ORDER BY version DESC LIMIT 1;').get() as { version: number };
-  assert('re-run leaves schema_meta at 24', metaAfter?.version, (v) => v === 24, '24');
+  assert('re-run leaves schema_meta at 25', metaAfter?.version, (v) => v === 25, '25');
   assert('re-run does not duplicate episodes columns',
     columnNames(db, 'episodes'), (v) => JSON.stringify(v) === JSON.stringify(EPISODES_COLUMNS), JSON.stringify(EPISODES_COLUMNS));
 

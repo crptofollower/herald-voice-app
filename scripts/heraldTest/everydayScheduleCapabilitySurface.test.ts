@@ -154,8 +154,8 @@ export async function runEverydayScheduleCapabilitySurfaceTests() {
       (v) => v === true, 'true');
   }
 
-  assert('schema version unchanged',
-    SCHEMA_VERSION, (v) => v === 24, '24');
+  assert('schema version is current',
+    SCHEMA_VERSION, (v) => v === 25, '25');
   assert('projection does not write or read appointments/medical tables',
     /appointments/.test(overlaySrc) || /medical_records/.test(overlaySrc) || /detectCategory/.test(overlaySrc),
     (v) => v === false, 'false');

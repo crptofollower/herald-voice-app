@@ -172,8 +172,20 @@ export function listActiveEvidence(selector: ActiveEvidenceSelector): EvidenceRe
     `SELECT ${EVIDENCE_SELECT}
        FROM evidence
       WHERE ${clauses.join(" AND ")}
+        AND removed_at IS NULL
       ORDER BY observed_at ASC, id ASC;`,
     params,
   );
   return rows.map(mapRow);
+}
+
+export function softRemoveEvidence(id: string): boolean {
+  const edgeId = (id ?? "").trim();
+  if (!edgeId) return false;
+  const db = getDB();
+  const result = db.runSync(
+    `UPDATE evidence SET removed_at = ? WHERE id = ? AND removed_at IS NULL;`,
+    [new Date().toISOString(), edgeId],
+  );
+  return (result?.changes ?? 0) > 0;
 }

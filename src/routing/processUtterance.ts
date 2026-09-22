@@ -35,6 +35,16 @@ import { EPISODE_RECALL_LIMIT } from '../db/episodeRead';
 import { listActiveEpisodes } from '../db/episodesWriter';
 import { realizeEpisodePerspective } from '../utils/episodeCapture';
 import { isClosedActiveSubjectIdentityLookup, ACTIVE_SUBJECT_GROUNDING_ACK } from './activeSubjectReference';
+import {
+  admitReminiscenceVerbatim,
+  suppressLastReminiscence,
+} from '../db/reminiscenceWrite';
+import {
+  detectDontSaveReminiscence,
+  detectReminiscenceAdmission,
+  detectReminiscenceRecall,
+} from '../utils/reminiscenceAdmission';
+import { answerLiveReminiscenceRecall } from '../db/recollectionRead';
 import { inspectHolds, formatHoldRecall } from './holdRecall';
 import { detectFamilyRead, resolveFamilyRead } from '../utils/familyRead';
 import { resolveHouseholdProvider } from '../utils/householdRead';
@@ -1181,6 +1191,31 @@ export async function processUtterance(
         commits: [],
       };
     }
+  }
+  if (detectDontSaveReminiscence(text)) {
+    return {
+      handled: true,
+      source: 'recollection',
+      responseText: suppressLastReminiscence(),
+      commits: [],
+    };
+  }
+  const reminiscenceRaw = detectReminiscenceAdmission(text);
+  if (reminiscenceRaw) {
+    return {
+      handled: true,
+      source: 'recollection',
+      responseText: admitReminiscenceVerbatim(reminiscenceRaw),
+      commits: [],
+    };
+  }
+  if (detectReminiscenceRecall(text)) {
+    return {
+      handled: true,
+      source: 'recollection',
+      responseText: answerLiveReminiscenceRecall(),
+      commits: [],
+    };
   }
   // 2) The single routing authority — called exactly once per utterance.
   //    A clarification-interrupt probe above may already hold that decision

@@ -70,7 +70,7 @@ export async function runSchemaMigrationContractTests() {
     await runMigrations();
 
     const meta = db.prepare('SELECT version FROM schema_meta ORDER BY version DESC LIMIT 1;').get();
-    assert('SM1 fresh install lands at schema_meta v24', meta?.version, v => v === 24, 24);
+    assert('SM1 fresh install lands at schema_meta v25', meta?.version, v => v === 25, 25);
 
     const mrCols = columnNames(db, 'medical_records');
     assert('SM2 fresh install: medical_records has status', mrCols.includes('status'), v => v === true, true);
@@ -105,7 +105,7 @@ export async function runSchemaMigrationContractTests() {
     await runMigrations();
 
     const meta = db.prepare('SELECT version FROM schema_meta ORDER BY version DESC LIMIT 1;').get();
-    assert('SM6 upgrade from v18 lands at v24', meta?.version, v => v === 24, 24);
+    assert('SM6 upgrade from v18 lands at v25', meta?.version, v => v === 25, 25);
 
     const mrCols = columnNames(db, 'medical_records');
     assert('SM7 upgrade: medical_records gains status + surfaced_at', 
@@ -144,7 +144,7 @@ export async function runSchemaMigrationContractTests() {
     setDB(makeShim(db));
     await runMigrations();
     const meta = db.prepare('SELECT version FROM schema_meta ORDER BY version DESC LIMIT 1;').get();
-    assert('SM11 upgrade from v21 lands at v24', meta?.version, v => v === 24, 24);
+    assert('SM11 upgrade from v21 lands at v25', meta?.version, v => v === 25, 25);
     const cols = columnNames(db, 'evidence');
     assert('SM12 upgrade from v21 creates evidence table', cols.includes('id') && cols.includes('source_class') && cols.includes('raw_text'), v => v === true, true);
     const existingRow = db.prepare(`SELECT diagnosis, status FROM medical_records WHERE id = 'mr_v21';`).get();
@@ -171,10 +171,39 @@ export async function runSchemaMigrationContractTests() {
     setDB(makeShim(db));
     await runMigrations();
     const meta = db.prepare('SELECT version FROM schema_meta ORDER BY version DESC LIMIT 1;').get();
-    assert('SM14 upgrade from v22 lands at v24', meta?.version, v => v === 24, 24);
+    assert('SM14 upgrade from v22 lands at v25', meta?.version, v => v === 25, 25);
     const row = db.prepare(`SELECT raw_text, source_id, event_at FROM evidence WHERE id = 'ev_v22';`).get();
     assert('SM15 v22→v23 preserves existing evidence', row?.raw_text === 'Oil change' && row?.source_id === 'cal_1', v => v === true, true);
     assert('SM16 v22→v23 adds event_at without destroying the row', Object.prototype.hasOwnProperty.call(row, 'event_at') && row?.event_at == null, v => v === true, true);
+  }
+
+  {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE schema_meta (version INTEGER NOT NULL, migrated_at TEXT NOT NULL);
+      CREATE TABLE evidence (
+        id TEXT PRIMARY KEY,
+        source_class TEXT NOT NULL,
+        source_kind TEXT NOT NULL,
+        source_id TEXT,
+        raw_text TEXT NOT NULL,
+        observed_at TEXT NOT NULL,
+        event_at TEXT
+      );
+    `);
+    db.prepare(`INSERT INTO schema_meta (version, migrated_at) VALUES (24, datetime('now'));`).run();
+    db.prepare(`INSERT INTO evidence (id, source_class, source_kind, source_id, raw_text, observed_at, event_at)
+      VALUES ('ev_v24', 'user_explicit', 'reminiscence', NULL, 'When I was a kid, we spent summers at the lake.', '2026-09-22T00:00:00.000Z', NULL);`).run();
+    setDB(makeShim(db));
+    await runMigrations();
+    const meta = db.prepare('SELECT version FROM schema_meta ORDER BY version DESC LIMIT 1;').get();
+    assert('SM17 upgrade from v24 lands at v25', meta?.version, v => v === 25, 25);
+    const row = db.prepare(`SELECT raw_text, source_kind, removed_at FROM evidence WHERE id = 'ev_v24';`).get();
+    assert('SM18 v24→v25 preserves existing evidence and adds removed_at live-null',
+      row?.raw_text === 'When I was a kid, we spent summers at the lake.'
+        && row?.source_kind === 'reminiscence'
+        && row?.removed_at == null,
+      v => v === true, true);
   }
 
   const total = passed + failures.length;

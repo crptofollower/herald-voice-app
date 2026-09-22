@@ -2,7 +2,7 @@
 // Herald device SQLite — table definitions and migration runner.
 // Session L — Device-First Intelligence Layer
 //
-// SCHEMA VERSION: 24
+// SCHEMA VERSION: 25
 // v1: Initial schema — facts, profile, medical, calendar_cache (ISO strings), life_tracker
 // v2: calendar_cache rebuilt with Unix ms timestamps (timezone fix)
 // v3: Entity graph + importance scoring + temporal awareness (locked Session L spec)
@@ -33,6 +33,7 @@
 // v23: evidence.event_at — source calendar event time (distinct from observed_at)
 // v24: episodes table (S_DISCLOSE v19 shape + domain join key) and
 //      entity_relationships provenance/supersession columns
+// v25: evidence.removed_at — Track R liveness / soft-delete (Natural Recollection Authority)
 //
 // RULE: NEVER modify a past migration. Always add at the next version number.
 //
@@ -64,7 +65,7 @@
 // (src/screens/ChatScreen.tsx) for the same class of eager-import avoidance.
 import type * as SQLite from "expo-sqlite";
 
-export const SCHEMA_VERSION = 24;
+export const SCHEMA_VERSION = 25;
 export const DB_NAME = "herald_device.db";
 
 // ─── Open database ────────────────────────────────────────────────────────────
@@ -879,5 +880,15 @@ const MIGRATIONS: Record<number, (db: SQLite.SQLiteDatabase) => void> = {
       try { db.execSync(col + ";"); } catch { /* column already exists — safe */ }
     }
     console.log("Herald schema V24: episodes table + entity_relationships provenance/supersession columns added");
+  },
+
+  // ── v25: evidence.removed_at (Track R liveness / soft-delete) ─────────────
+  25: (db) => {
+    try {
+      db.execSync("ALTER TABLE evidence ADD COLUMN removed_at TEXT;");
+    } catch {
+      // column already exists (re-run safety) — ignore
+    }
+    console.log("Herald schema V25: evidence.removed_at added");
   },
 };

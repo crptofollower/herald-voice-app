@@ -203,10 +203,10 @@ export async function runEverydayTodoCapabilitySurfaceTests() {
       dbRow.checked === 1 && !!dbRow.removed_at, (v) => v === true, 'true');
   }
 
-  assert('schema version unchanged (no todo overlay table)',
-    SCHEMA_VERSION, (v) => v === 24, '24');
+  assert('schema version is current (no todo overlay table)',
+    SCHEMA_VERSION, (v) => v === 25, '25');
   assert('schema has no Stage-2 list_items migration',
-    /SCHEMA_VERSION = 24/.test(schemaSrc) && !/CREATE TABLE todo_overlay/.test(schemaSrc),
+    /SCHEMA_VERSION = 25/.test(schemaSrc) && !/CREATE TABLE todo_overlay/.test(schemaSrc),
     (v) => v === true, 'true');
   assert('open-item reader still excludes checked rows',
     /checked = 0/.test(listReadSrc) && /getPresentedOpenListItems\('todos'\)/.test(overlaySrc),
