@@ -155,7 +155,7 @@ export async function runEverydayScheduleCapabilitySurfaceTests() {
   }
 
   assert('schema version unchanged',
-    SCHEMA_VERSION, (v) => v === 23, '23');
+    SCHEMA_VERSION, (v) => v === 24, '24');
   assert('projection does not write or read appointments/medical tables',
     /appointments/.test(overlaySrc) || /medical_records/.test(overlaySrc) || /detectCategory/.test(overlaySrc),
     (v) => v === false, 'false');

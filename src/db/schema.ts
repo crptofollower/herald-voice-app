@@ -2,7 +2,7 @@
 // Herald device SQLite — table definitions and migration runner.
 // Session L — Device-First Intelligence Layer
 //
-// SCHEMA VERSION: 23
+// SCHEMA VERSION: 24
 // v1: Initial schema — facts, profile, medical, calendar_cache (ISO strings), life_tracker
 // v2: calendar_cache rebuilt with Unix ms timestamps (timezone fix)
 // v3: Entity graph + importance scoring + temporal awareness (locked Session L spec)
@@ -31,6 +31,8 @@
 // v21: medical_records.visit_outcome + outcome_asked_at (post-visit outcome ask / never-nag)
 // v22: evidence table — unconfirmed authorized personal evidence (not truth)
 // v23: evidence.event_at — source calendar event time (distinct from observed_at)
+// v24: episodes table (S_DISCLOSE v19 shape + domain join key) and
+//      entity_relationships provenance/supersession columns
 //
 // RULE: NEVER modify a past migration. Always add at the next version number.
 //
@@ -62,7 +64,7 @@
 // (src/screens/ChatScreen.tsx) for the same class of eager-import avoidance.
 import type * as SQLite from "expo-sqlite";
 
-export const SCHEMA_VERSION = 23;
+export const SCHEMA_VERSION = 24;
 export const DB_NAME = "herald_device.db";
 
 // ─── Open database ────────────────────────────────────────────────────────────
@@ -846,5 +848,36 @@ const MIGRATIONS: Record<number, (db: SQLite.SQLiteDatabase) => void> = {
       // column already exists (re-run safety) — ignore
     }
     console.log("Herald schema V23: evidence.event_at added");
+  },
+
+  // ── v24: Rung 5 schema substrate (episodes + edge provenance/supersession) ─
+  24: (db) => {
+    db.execSync(`
+      CREATE TABLE IF NOT EXISTS episodes (
+        id                 TEXT PRIMARY KEY,
+        raw_phrase         TEXT NOT NULL,
+        occurred_at        TEXT,
+        occurred_precision TEXT,
+        captured_at        TEXT NOT NULL,
+        category           TEXT,
+        domain             TEXT,
+        salience           INTEGER,
+        sentiment          TEXT,
+        source             TEXT NOT NULL,
+        score              INTEGER,
+        embedding_ref      TEXT,
+        removed_at         TEXT
+      );
+    `);
+    for (const col of [
+      "ALTER TABLE entity_relationships ADD COLUMN stated_as TEXT",
+      "ALTER TABLE entity_relationships ADD COLUMN raw_phrase TEXT",
+      "ALTER TABLE entity_relationships ADD COLUMN source TEXT",
+      "ALTER TABLE entity_relationships ADD COLUMN ended_at TEXT",
+      "ALTER TABLE entity_relationships ADD COLUMN removed_at TEXT",
+    ]) {
+      try { db.execSync(col + ";"); } catch { /* column already exists — safe */ }
+    }
+    console.log("Herald schema V24: episodes table + entity_relationships provenance/supersession columns added");
   },
 };

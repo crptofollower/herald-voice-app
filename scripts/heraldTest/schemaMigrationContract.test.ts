@@ -70,7 +70,7 @@ export async function runSchemaMigrationContractTests() {
     await runMigrations();
 
     const meta = db.prepare('SELECT version FROM schema_meta ORDER BY version DESC LIMIT 1;').get();
-    assert('SM1 fresh install lands at schema_meta v23', meta?.version, v => v === 23, 23);
+    assert('SM1 fresh install lands at schema_meta v24', meta?.version, v => v === 24, 24);
 
     const mrCols = columnNames(db, 'medical_records');
     assert('SM2 fresh install: medical_records has status', mrCols.includes('status'), v => v === true, true);
@@ -105,7 +105,7 @@ export async function runSchemaMigrationContractTests() {
     await runMigrations();
 
     const meta = db.prepare('SELECT version FROM schema_meta ORDER BY version DESC LIMIT 1;').get();
-    assert('SM6 upgrade from v18 lands at v23', meta?.version, v => v === 23, 23);
+    assert('SM6 upgrade from v18 lands at v24', meta?.version, v => v === 24, 24);
 
     const mrCols = columnNames(db, 'medical_records');
     assert('SM7 upgrade: medical_records gains status + surfaced_at', 
@@ -144,7 +144,7 @@ export async function runSchemaMigrationContractTests() {
     setDB(makeShim(db));
     await runMigrations();
     const meta = db.prepare('SELECT version FROM schema_meta ORDER BY version DESC LIMIT 1;').get();
-    assert('SM11 upgrade from v21 lands at v23', meta?.version, v => v === 23, 23);
+    assert('SM11 upgrade from v21 lands at v24', meta?.version, v => v === 24, 24);
     const cols = columnNames(db, 'evidence');
     assert('SM12 upgrade from v21 creates evidence table', cols.includes('id') && cols.includes('source_class') && cols.includes('raw_text'), v => v === true, true);
     const existingRow = db.prepare(`SELECT diagnosis, status FROM medical_records WHERE id = 'mr_v21';`).get();
@@ -171,7 +171,7 @@ export async function runSchemaMigrationContractTests() {
     setDB(makeShim(db));
     await runMigrations();
     const meta = db.prepare('SELECT version FROM schema_meta ORDER BY version DESC LIMIT 1;').get();
-    assert('SM14 upgrade from v22 lands at v23', meta?.version, v => v === 23, 23);
+    assert('SM14 upgrade from v22 lands at v24', meta?.version, v => v === 24, 24);
     const row = db.prepare(`SELECT raw_text, source_id, event_at FROM evidence WHERE id = 'ev_v22';`).get();
     assert('SM15 v22→v23 preserves existing evidence', row?.raw_text === 'Oil change' && row?.source_id === 'cal_1', v => v === true, true);
     assert('SM16 v22→v23 adds event_at without destroying the row', Object.prototype.hasOwnProperty.call(row, 'event_at') && row?.event_at == null, v => v === true, true);

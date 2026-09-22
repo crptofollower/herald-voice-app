@@ -52,9 +52,9 @@ export async function runCalendarEvidenceCompositionTests() {
     const db = new Database(':memory:');
     setDB(makeShim(db));
     await runMigrations();
-    assertTrue('fresh v23 schema version', SCHEMA_VERSION === 23);
+    assertTrue('fresh v24 schema version', SCHEMA_VERSION === 24);
     const cols = db.prepare('PRAGMA table_info(evidence);').all().map((r) => r.name);
-    assertTrue('fresh v23 has event_at', cols.includes('event_at'));
+    assertTrue('fresh schema has event_at', cols.includes('event_at'));
   }
 
   {
