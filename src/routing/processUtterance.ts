@@ -37,13 +37,20 @@ import { realizeEpisodePerspective } from '../utils/episodeCapture';
 import { isClosedActiveSubjectIdentityLookup, ACTIVE_SUBJECT_GROUNDING_ACK } from './activeSubjectReference';
 import {
   admitReminiscenceVerbatim,
+  suppressCurrentReminiscenceArc,
   suppressLastReminiscence,
 } from '../db/reminiscenceWrite';
 import {
+  detectDontKeepThisStory,
   detectDontSaveReminiscence,
-  detectReminiscenceAdmission,
   detectReminiscenceRecall,
+  foldReminiscenceText,
 } from '../utils/reminiscenceAdmission';
+import { nominateReminiscence } from '../utils/reminiscenceNominator';
+import {
+  getDefaultReminiscenceArc,
+  type ReminiscenceArcHolder,
+} from './reminiscenceArc';
 import { answerLiveReminiscenceRecall } from '../db/recollectionRead';
 import { inspectHolds, formatHoldRecall } from './holdRecall';
 import { detectFamilyRead, resolveFamilyRead } from '../utils/familyRead';
@@ -137,7 +144,7 @@ export type RouteDeps = Parameters<typeof routeIntent>[1];
 export type UtteranceOutcome =
   | {
       handled: true;
-      source: 'pending_resume' | 'capture' | 'referent_resume' | 'interpretation' | 'hold_recall' | 'hold_continuity' | 'recent_add_recall';
+      source: 'pending_resume' | 'capture' | 'referent_resume' | 'interpretation' | 'hold_recall' | 'hold_continuity' | 'recent_add_recall' | 'recollection';
       responseText: string;
       commits: CommitResult[];
       /** Presentation hint only. Never speech-parsed. Never a conversational machine. */
@@ -219,6 +226,10 @@ function admitsNarrativeContinuityPublication(routeDecision: RouteDecision): boo
   }
   if (routeDecision.kind === 'backend' && !routeDecision.readMeta) return true;
   return false;
+}
+
+function isRecollectionNominationFallthrough(routeDecision: RouteDecision): boolean {
+  return routeDecision.kind === 'needs_clarification' && routeDecision.reason === 'default';
 }
 
 function maybeEstablishConversationalSubject(
@@ -584,9 +595,11 @@ export async function processUtterance(
   calendarContinuation?: CalendarContinuationHolder | null,
   discourse?: DiscourseContinuityHolder | null,
   ledger?: ConversationTurnLedger | null,
+  reminiscenceArc?: ReminiscenceArcHolder | null,
 ): Promise<UtteranceOutcome> {
   const turnId = getActiveTurnId();
   latLog('processUtterance START', { turnId });
+  const arc = reminiscenceArc ?? getDefaultReminiscenceArc();
   subject?.beginUserTurn();
   medicationPresentation?.beginUserTurn();
   orderedPresentation?.beginUserTurn();
@@ -607,6 +620,7 @@ export async function processUtterance(
     calendarPresentation?.clear();
     calendarContinuation?.clear();
     discourse?.clear();
+    arc.clear();
     return { handled: true, source: 'emergency' };
   }
   // 1) Pending continuation — the confirm-primitive (Law 2: a pending state
@@ -1196,16 +1210,15 @@ export async function processUtterance(
     return {
       handled: true,
       source: 'recollection',
-      responseText: suppressLastReminiscence(),
+      responseText: suppressLastReminiscence(arc),
       commits: [],
     };
   }
-  const reminiscenceRaw = detectReminiscenceAdmission(text);
-  if (reminiscenceRaw) {
+  if (detectDontKeepThisStory(text)) {
     return {
       handled: true,
       source: 'recollection',
-      responseText: admitReminiscenceVerbatim(reminiscenceRaw),
+      responseText: suppressCurrentReminiscenceArc(arc),
       commits: [],
     };
   }
@@ -1232,6 +1245,9 @@ export async function processUtterance(
     intentTypes: routeDecision.kind === 'capture' ? routeDecision.intents.map((i) => i.type) : undefined,
     actionType: routeDecision.kind === 'device_action' ? routeDecision.actionIntent.type : undefined,
   });
+  if (!isRecollectionNominationFallthrough(routeDecision)) {
+    arc.close();
+  }
   // D-phone-repair, 2026-08-13: processUtterance is the sole boundary that
   // may call session.setPending (Spine §3a / Law 2) -- routeIntent itself
   // never touches session. This mirrors applyIntents' existing pending-arm
@@ -1552,6 +1568,18 @@ export async function processUtterance(
     continuityReferenceOnly = true;
   }
   logTodoCompletePendingProbe(text, session);
+  if (isRecollectionNominationFallthrough(routeDecision)) {
+    const disposition = nominateReminiscence(text, { arcOpen: arc.isOpen() });
+    if (disposition === 'AUTOBIOGRAPHICAL' || disposition === 'CONTINUE_ARC') {
+      return {
+        handled: true,
+        source: 'recollection',
+        responseText: admitReminiscenceVerbatim(foldReminiscenceText(text), arc),
+        commits: [],
+      };
+    }
+    arc.close();
+  }
   return {
     handled: false,
     routeDecision,

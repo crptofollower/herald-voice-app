@@ -15,6 +15,8 @@ import { writeMedicalRecord } from '../../src/db/medicalDB.ts';
 import { listActiveEvidence, persistEvidence, softRemoveEvidence } from '../../src/db/evidenceDB.ts';
 import { answerLiveReminiscenceRecall } from '../../src/db/recollectionRead.ts';
 import { resetReminiscenceAdmissionState } from '../../src/db/reminiscenceWrite.ts';
+import { resetDefaultReminiscenceArc } from '../../src/routing/reminiscenceArc.ts';
+import { resetReminiscenceNominator } from '../../src/utils/reminiscenceNominator.ts';
 import {
   detectDontSaveReminiscence,
   detectReminiscenceAdmission,
@@ -45,6 +47,8 @@ async function fresh() {
   setDB(makeShim(db));
   await runMigrations();
   resetReminiscenceAdmissionState();
+  resetDefaultReminiscenceArc();
+  resetReminiscenceNominator();
   setNow(new Date(2026, 8, 22, 12, 0, 0));
   const session = new ConversationSession();
   const subject = new ConversationalSubjectHolder();
