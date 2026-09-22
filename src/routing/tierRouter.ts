@@ -22,6 +22,7 @@ import { PERSON_RELATIONSHIP_ALTERNATION, normalizePersonTarget, liftRelationshi
 import { detectHouseholdRead, type HouseholdReadIntent } from "../utils/householdRead";
 import { detectServiceRemove, detectPhoneCapture } from "../utils/householdCapture";
 import { detectFamilyRead, answerFamilyRead } from "../utils/familyRead";
+import { detectPersonAssociationRead, answerPersonAssociationRead } from "../db/graphRead";
 import {
   REMINDER_SIGNALS,
   NOTE_CAPTURE_SIGNALS,
@@ -2216,6 +2217,19 @@ async function classifyQueryCore(message: string): Promise<TierDecision> {
         tier: 1,
         tier1Response: answerFamilyRead(famRead),
         reason: 'family:read',
+      };
+    }
+  }
+
+  // Tier 1: person↔person graph read — stored entity_relationships only.
+  // Name-possessor interrogative. Me-relative possessors stay with familyRead.
+  {
+    const graphRead = detectPersonAssociationRead(msg);
+    if (graphRead) {
+      return {
+        tier: 1,
+        tier1Response: answerPersonAssociationRead(graphRead),
+        reason: 'graph:person_association_read',
       };
     }
   }
