@@ -222,7 +222,7 @@ function observational(
   };
 }
 
-export const RECOLLECTION_SEMANTIC_EVAL_FIXTURES: RecollectionSemanticEvalRow[] = [
+export const RECOLLECTION_SEMANTIC_DEVICE_MATRIX_V1: RecollectionSemanticEvalRow[] = [
   ...RECOLLECTION_SEMANTIC_FROZEN_ORIGINAL.map((row) => scored(
     row.class,
     row.utterance,
@@ -314,4 +314,54 @@ export const RECOLLECTION_SEMANTIC_EVAL_FIXTURES: RecollectionSemanticEvalRow[] 
     'G7 turn 3 return to own story; not a new arc policy',
     { sequenceId: 'g7_story_digression_return', turnIndex: 3 },
   ),
+];
+
+/** Shadow Expansion V1 — generalized failure-class contrast. Do not retarget matrix v1. */
+export const RECOLLECTION_SEMANTIC_EXPANSION_V1: RecollectionSemanticEvalRow[] = [
+  scored(
+    'g8_open_arc_backchannel_mmhmm',
+    'Mm-hmm.',
+    'UNCERTAIN',
+    true,
+    'G8 open-arc backchannel/acknowledgment; current contract is UNCERTAIN, not CONTINUE_ARC',
+  ),
+  scored(
+    'g8_open_arc_thin_that_one',
+    'That one.',
+    'UNCERTAIN',
+    true,
+    'G8 open-arc thin demonstrative; insufficient Track-C support; UNCERTAIN, not CONTINUE_ARC',
+  ),
+  scored(
+    'g8_open_arc_contentful_return',
+    'The peaches stained the seat covers that whole summer.',
+    'AUTOBIOGRAPHICAL',
+    true,
+    'G8 open-arc contentful autobiographical return; current evaluation policy remains AUTO, not CONTINUE_ARC; R-safety is separate from exact-label',
+  ),
+  scored(
+    'g8_third_party_ordinary_activity',
+    'Pat walks his dog past the library every evening.',
+    'THIRD_PARTY',
+    false,
+    'G8 ordinary third-party activity; recollection object is principally Pat\'s habit, not the speaker\'s past',
+  ),
+  scored(
+    'g8_third_party_private_life',
+    'Rita hasn\'t told her boss she\'s looking for another job.',
+    'THIRD_PARTY',
+    false,
+    'G8 principally another person\'s private-life content; non-medical THIRD_PARTY pressure',
+  ),
+  observational(
+    'g8_mixed_stt_blob',
+    'I used to take the late bus, can you add milk, and also what\'s on Wednesday.',
+    false,
+    'G8 mixed multi-intent/STT blob; observational only; no scored admission expectation',
+  ),
+];
+
+export const RECOLLECTION_SEMANTIC_EVAL_FIXTURES: RecollectionSemanticEvalRow[] = [
+  ...RECOLLECTION_SEMANTIC_DEVICE_MATRIX_V1,
+  ...RECOLLECTION_SEMANTIC_EXPANSION_V1,
 ];

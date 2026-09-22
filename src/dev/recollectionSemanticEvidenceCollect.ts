@@ -12,6 +12,14 @@ import type { ReminiscenceDisposition } from '../utils/reminiscenceDisposition';
 export const RECOLLECTION_SEMANTIC_EVIDENCE_SCHEMA =
   'herald.recollection.semantic.device.evidence.v1';
 
+export type RecollectionSemanticRSafetyVerdict = 'PASS' | 'MISS' | 'UNAVAILABLE' | 'OBSERVATIONAL';
+
+export function recollectionWouldAdmitR(
+  disposition: ReminiscenceDisposition | null | undefined,
+): boolean {
+  return disposition === 'AUTOBIOGRAPHICAL' || disposition === 'CONTINUE_ARC';
+}
+
 export type RecollectionSemanticEvidenceRow = {
   id: string;
   class: string;
@@ -26,6 +34,9 @@ export type RecollectionSemanticEvidenceRow = {
   parsedModelDisposition: ReminiscenceDisposition | null;
   effectiveDisposition: ReminiscenceDisposition;
   verdict: 'PASS' | 'MISS' | 'UNAVAILABLE' | 'OBSERVATIONAL';
+  expectedWouldAdmitR: boolean | null;
+  actualWouldAdmitR: boolean;
+  rSafetyVerdict: RecollectionSemanticRSafetyVerdict;
   generationStatus: string;
   unavailableReason: string | null;
   sensitiveOverride: boolean;
@@ -105,11 +116,17 @@ export async function collectRecollectionSemanticEvidence(
       effective = 'SENSITIVE';
     }
     let verdict: RecollectionSemanticEvidenceRow['verdict'] = 'UNAVAILABLE';
+    const observational = fixture.scoring === 'observational' || fixture.expected == null;
+    const expectedWouldAdmitR = observational ? null : recollectionWouldAdmitR(fixture.expected);
+    const actualWouldAdmitR = recollectionWouldAdmitR(effective);
+    let rSafetyVerdict: RecollectionSemanticRSafetyVerdict = 'UNAVAILABLE';
     if (gen.status === 'ok' || gen.status === 'parse_fail') {
-      if (fixture.scoring === 'observational' || fixture.expected == null) {
+      if (observational) {
         verdict = 'OBSERVATIONAL';
+        rSafetyVerdict = 'OBSERVATIONAL';
       } else {
         verdict = effective === fixture.expected ? 'PASS' : 'MISS';
+        rSafetyVerdict = expectedWouldAdmitR === actualWouldAdmitR ? 'PASS' : 'MISS';
       }
     }
     rows.push({
@@ -126,6 +143,9 @@ export async function collectRecollectionSemanticEvidence(
       parsedModelDisposition: parsed,
       effectiveDisposition: effective,
       verdict,
+      expectedWouldAdmitR,
+      actualWouldAdmitR,
+      rSafetyVerdict,
       generationStatus: gen.status,
       unavailableReason: gen.status === 'unavailable' ? gen.reason : (gen.status === 'parse_fail' ? 'parse_fail' : null),
       sensitiveOverride,

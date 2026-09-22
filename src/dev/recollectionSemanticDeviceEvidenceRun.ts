@@ -52,9 +52,12 @@ function summarize(artifact: RecollectionSemanticEvidenceArtifact): string {
   const unavailable = artifact.rows.filter((r) => r.verdict === 'UNAVAILABLE').length;
   const observational = artifact.rows.filter((r) => r.verdict === 'OBSERVATIONAL').length;
   const lat = artifact.latency;
+  const rPass = scored.filter((r) => r.rSafetyVerdict === 'PASS').length;
+  const rMiss = scored.filter((r) => r.rSafetyVerdict === 'MISS').length;
   return [
     'Recollection 3B evidence finished.',
     `scored PASS ${pass} / MISS ${miss}; observational ${observational}; unavailable ${unavailable}.`,
+    `R-safety PASS ${rPass} / MISS ${rMiss} (diagnostic only; not a write).`,
     lat.n > 0
       ? `inference n=${lat.n} min=${lat.minMs}ms p50=${lat.p50Ms}ms p95=${lat.p95Ms}ms max=${lat.maxMs}ms.`
       : 'inference latency unmeasured.',
