@@ -68,10 +68,13 @@ export async function runRung5Gap3RelationshipDualWriteTests() {
   const captureSrc = fs.readFileSync(path.join(root, 'src/db/capturePerson.ts'), 'utf8');
   const backfillSrc = fs.readFileSync(path.join(root, 'src/db/backfillContacts.ts'), 'utf8');
   const srcFiles = walkTs(path.join(root, 'src'));
+  const writerRel = path.join('src', 'db', 'entityRelationshipsWriter.ts').replace(/\\/g, '/');
   const insertHits = srcFiles.flatMap((file) => {
+    const rel = path.relative(root, file).replace(/\\/g, '/');
+    if (rel === writerRel) return [];
     const text = fs.readFileSync(file, 'utf8');
     return [...text.matchAll(/INSERT(?:\s+OR\s+\w+)?\s+INTO\s+entity_relationships/gi)]
-      .map((m) => `${path.relative(root, file)}:${m[0]}`);
+      .map((m) => `${rel}:${m[0]}`);
   });
 
   assert('capturePerson no longer shadow-writes relationship facts',
@@ -81,7 +84,7 @@ export async function runRung5Gap3RelationshipDualWriteTests() {
       && /Never touches the facts table/.test(backfillSrc)
       && !/DELETE\s+FROM\s+facts/i.test(backfillSrc),
     (v) => v === true, 'true');
-  assert('zero entity_relationships INSERT writers in src/',
+  assert('entity_relationships INSERT writers remain only entityRelationshipsWriter.ts',
     insertHits, (v) => Array.isArray(v) && (v as string[]).length === 0, '[]');
 
   const db = await freshDb();
