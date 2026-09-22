@@ -152,12 +152,17 @@ export async function runCapabilityRoutingTests() {
     parseCapabilityProposal('{"capability":"grocery.capture","confidence":"high","op":"grocery_capture","candidates":[1],"score":0.9}'),
     (v) => v === null, 'null');
 
-  // ─── admission: only the wired read capability, non-low confidence, ADMITs ─
-  const admit = (capability: CapabilityId, confidence: 'high' | 'medium' | 'low') =>
-    admitCapabilityProposal({ capability, confidence });
-  assert('ADMIT_READ for read_summary @ high', admit('medication.read_summary', 'high').decision, (v) => v === 'ADMIT_READ', 'ADMIT_READ');
-  assert('ADMIT_READ for read_summary @ medium', admit('medication.read_summary', 'medium').decision, (v) => v === 'ADMIT_READ', 'ADMIT_READ');
+  // ─── admission: wired read + medication-domain evidence, non-low confidence ─
+  const MED_EVIDENCE = 'What medications am I taking?';
+  const admit = (capability: CapabilityId, confidence: 'high' | 'medium' | 'low', text = MED_EVIDENCE) =>
+    admitCapabilityProposal({ capability, confidence }, text);
+  assert('ADMIT_READ for read_summary @ high with medication-domain evidence', admit('medication.read_summary', 'high').decision, (v) => v === 'ADMIT_READ', 'ADMIT_READ');
+  assert('ADMIT_READ for read_summary @ medium with medication-domain evidence', admit('medication.read_summary', 'medium').decision, (v) => v === 'ADMIT_READ', 'ADMIT_READ');
   assert('ABSTAIN for read_summary @ low (confidence downgrades only)', admit('medication.read_summary', 'low').decision, (v) => v === 'ABSTAIN', 'ABSTAIN');
+  assert('ABSTAIN for high-confidence read_summary with zero medication-domain evidence',
+    admit('medication.read_summary', 'high', 'When was the last doctor I saw?').decision, (v) => v === 'ABSTAIN', 'ABSTAIN');
+  assert('zero-evidence high-confidence abstain reason is no_medication_domain_evidence',
+    admit('medication.read_summary', 'high', 'When was the last doctor I saw?').reason, (v) => v === 'no_medication_domain_evidence', 'no_medication_domain_evidence');
   // A write capability can NEVER be executed from the read admission path.
   assert('ABSTAIN for medication.capture (write off-ramp — never ADMIT_READ)', admit('medication.capture', 'high').decision, (v) => v === 'ABSTAIN', 'ABSTAIN');
   // Unrelated input cannot be forced into medication: every off-ramp abstains.

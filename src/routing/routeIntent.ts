@@ -2229,8 +2229,11 @@ async function tryGrocerySemanticP2Route(
   return grocerySemanticP2Decision(text, generation.proposal);
 }
 
-async function admitWiredMedicationRead(proposal: { capability: CapabilityId; confidence: 'high' | 'medium' | 'low' }): Promise<RouteDecision | null> {
-  const admission = admitCapabilityProposal(proposal);
+async function admitWiredMedicationRead(
+  proposal: { capability: CapabilityId; confidence: 'high' | 'medium' | 'low' },
+  utterance: string,
+): Promise<RouteDecision | null> {
+  const admission = admitCapabilityProposal(proposal, utterance);
   if (admission.decision === 'ADMIT_READ') {
     const { composeMedicalSummary } = await import('../db/medicalDB');
     const summary = composeMedicalSummary();
@@ -2641,7 +2644,7 @@ async function routeIntentCore(
         specialistResult: 'not_run',
       };
       if (dispatchSelected === WIRED_READ_CAPABILITY && capabilityReadOn) {
-        const readDecision = await admitWiredMedicationRead(capGen.proposal);
+        const readDecision = await admitWiredMedicationRead(capGen.proposal, text);
         if (readDecision) {
           dispatchDiag.finalOutcome = readDecision.reason === 'personal_memory:recall_declined'
             ? 'recall_declined'
@@ -2821,7 +2824,7 @@ async function routeIntentCore(
   } else if (capabilityReadOn && eligibleDefaultFallthrough) {
     const capGen = await generateCapabilityProposal(text, getSemanticCtx);
     if (capGen.status === 'ok') {
-      const admission = admitCapabilityProposal(capGen.proposal);
+      const admission = admitCapabilityProposal(capGen.proposal, text);
       if (admission.decision === 'ADMIT_READ') {
         const { composeMedicalSummary } = await import('../db/medicalDB');
         const summary = composeMedicalSummary();

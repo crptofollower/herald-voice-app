@@ -1,7 +1,24 @@
 // Shared visit-history read composition — direct named-doctor queries and
 // specialty-clarification resume use this one authority path.
 
+import { afterLeadingReadRequestWrapper } from '../utils/detectMedicalEvent';
 import type { VisitHistoryTemporalConstraint } from './visitHistoryTemporal';
+
+// Residual after see/saw/visited. Presence of a non-empty residual is the
+// object-bearing signal. Recency-only tails are the generic "who did I see last"
+// class and are not an unresolved object. This does not classify the object
+// as medical, household, or anything else.
+const SEE_OBJECT_SPAN_RE = /\b(?:see|saw|visited)\b\s+(.+)/i;
+const GENERIC_SEE_OBJECT_TAIL_RE = /^(?:the\s+)?(?:last|most recently)(?:\s+time)?$/i;
+
+export function visitHistorySeeObjectSpan(text: string): string | undefined {
+  const raw = afterLeadingReadRequestWrapper(text.trim());
+  const m = raw.match(SEE_OBJECT_SPAN_RE);
+  if (!m?.[1]) return undefined;
+  const obj = m[1].trim().replace(/[?!.]+$/g, '').trim();
+  if (!obj || GENERIC_SEE_OBJECT_TAIL_RE.test(obj)) return undefined;
+  return obj;
+}
 
 export async function composeVisitHistoryReadResponse(
   doctorHint: string | undefined,

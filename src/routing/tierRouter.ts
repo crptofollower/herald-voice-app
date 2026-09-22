@@ -6,7 +6,7 @@
 import { getCachedEvents, formatCachedEventsForSpeech, refreshCalendarCache, getCacheAge, getCachedEventsForDate, formatEventsForSpecificDay, queryCalendarRange } from "../db/calendarCacheDB";
 import { formatHistoricalCalendarRangeForSpeech, resolveHistoricalCalendarRange, toPresentedCalendarSnapshot } from "./historicalCalendarRange";
 import { resolveVisitHistoryTemporalConstraint } from "./visitHistoryTemporal";
-import { composeVisitHistoryReadResponse } from "./visitHistoryRead";
+import { composeVisitHistoryReadResponse, visitHistorySeeObjectSpan } from "./visitHistoryRead";
 import { VISIT_HISTORY_SPECIALTY_RE, visitHistorySpecialtyPrompt } from "./visitHistorySpecialtyPending";
 import { calendarWriteIsRecent } from "../db/calendarState";
 import { getFactsSummary } from "../db/factDB";
@@ -2123,6 +2123,18 @@ async function classifyQueryCore(message: string): Promise<TierDecision> {
         tier1Response: "I'm not sure who you mean — which doctor?",
         isMedical: true,
         reason: "medical:visit_history_unresolved_referent",
+      };
+    }
+    // Object-bearing see/saw/visited with unresolved X must not treat
+    // doctorHint === undefined as authority for getLastVisit(undefined).
+    // Named / specialty / pronoun owners already returned above. Generic
+    // visit-history phrases have no see-object span and still compose unhinted.
+    if (!doctorHint && visitHistorySeeObjectSpan(msg)) {
+      return {
+        tier: 1,
+        tier1Response: "I'm not sure who you mean.",
+        isMedical: true,
+        reason: "medical:visit_history_unresolved_object",
       };
     }
     const temporal = resolveVisitHistoryTemporalConstraint(msg);

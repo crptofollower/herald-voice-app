@@ -9,15 +9,14 @@
 //     → deterministic, NON-LINGUISTIC structural admission (this module)
 //     → existing authoritative reader (the CALLER invokes it; not here)
 //
-// This module contains NO database access, NO session/pending mutation, NO
-// write authority, and — the load-bearing property for this slice — NO regex,
-// keyword, phrase, branded-name, or sentence-template matching over the
-// transcript. It never inspects the English utterance to decide that it is
-// "medication-shaped." The probabilistic interpreter determines meaning; the
-// deterministic layer here only checks the SHAPE of the proposal (schema,
-// capability membership, risk class, confidence bucket). The one place raw
-// text is touched is the model prompt input in generateCapabilityProposal —
-// it is handed to the interpreter verbatim, never pattern-matched.
+// This module contains NO database access, NO session/pending mutation, and
+// NO write authority. Proposal generation still does not pattern-match the
+// transcript: generateCapabilityProposal hands the utterance to the interpreter
+// verbatim. Deterministic admission checks proposal shape (schema, capability
+// membership, risk class, confidence) and, for medication.read_summary, the
+// existing hasMedicationDomainEvidence helper — not a new phrase list and not
+// interpreter confidence. The interpreter may propose; it does not acquire
+// authority to disclose an unrelated personal-data domain.
 //
 // Slice boundary: only `medication.read_summary` is WIRED. Every other
 // capability (including every non-medication off-ramp) admits to ABSTAIN and
@@ -29,6 +28,7 @@
 // exclusion list.
 
 import type { LlamaContext } from 'llama.rn';
+import { hasMedicationDomainEvidence } from '../utils/detectMedicalEvent';
 import { isLlamaContextBusy } from '../utils/llamaContextExclusive';
 import {
   logSemanticDispatchInferenceEnd,
@@ -190,14 +190,10 @@ export function parseCapabilityProposal(rawModelOutput: string): CapabilityPropo
 // Pure, synchronous. No DB, no network, no session, no transcript. Produces
 // exactly one of ADMIT_READ / ABSTAIN.
 //
-// For `medication.read_summary` there is deliberately NO medication-language
-// evidence gate (Slice 1 contract): a valid, non-low-confidence proposal for
-// the wired read capability admits directly. This is SAFE precisely because a
-// summary read persists nothing and fabricates nothing — its entire content is
-// produced by the authoritative SQLite reader from real stored rows. A wrong
-// read is a recoverable sentence, not a corrupted record; applying a linguistic
-// evidence gate here would only recreate the "is this medication-shaped English"
-// parser this architecture exists to remove.
+// medication.read_summary requires positive medication-domain evidence from
+// the existing hasMedicationDomainEvidence helper. Confidence may only
+// downgrade; it never substitutes for that evidence. A high-confidence
+// proposal with zero medication-domain evidence ABSTAINS.
 //
 // hasIndependentMedicationEvidence is intentionally NOT called here. It gates
 // the write seam only.
@@ -206,7 +202,10 @@ export type CapabilityAdmission =
   | { decision: 'ADMIT_READ'; capability: 'medication.read_summary'; riskClass: 'read' }
   | { decision: 'ABSTAIN'; reason: string };
 
-export function admitCapabilityProposal(proposal: CapabilityProposal): CapabilityAdmission {
+export function admitCapabilityProposal(
+  proposal: CapabilityProposal,
+  utterance: string,
+): CapabilityAdmission {
   // Membership is guaranteed by parse; re-assert defensively (a future caller
   // could construct a proposal object directly, bypassing parse).
   if (!CAPABILITY_ID_SET.has(proposal.capability)) {
@@ -233,6 +232,10 @@ export function admitCapabilityProposal(proposal: CapabilityProposal): Capabilit
   // a substitute for either).
   if (proposal.confidence === 'low') {
     return { decision: 'ABSTAIN', reason: 'low_confidence' };
+  }
+
+  if (!hasMedicationDomainEvidence(utterance)) {
+    return { decision: 'ABSTAIN', reason: 'no_medication_domain_evidence' };
   }
 
   return { decision: 'ADMIT_READ', capability: 'medication.read_summary', riskClass: 'read' };
