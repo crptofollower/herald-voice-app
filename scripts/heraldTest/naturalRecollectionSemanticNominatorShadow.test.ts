@@ -225,7 +225,7 @@ export async function runNaturalRecollectionSemanticNominatorShadowV1Tests(): Pr
     assert('authoritative nominator remains synchronous; C4 still follows routeIntent',
       fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src/utils/reminiscenceDisposition.ts'), 'utf8').includes(') => ReminiscenceDisposition;')
         && processSrc.includes('const disposition = nominateReminiscence(text, { arcOpen: arc.isOpen() });')
-        && processSrc.includes('if (shouldObserveRecollectionSemanticShadow(getSemanticCtx))')
+        && processSrc.includes('if (!flowEligible && shouldObserveRecollectionSemanticShadow(getSemanticCtx))')
         && processSrc.includes('await observeRecollectionSemanticShadow(')
         && processSrc.indexOf('const routeDecision = routedClarificationInterrupt ?? await routeIntent')
           < processSrc.indexOf('await observeRecollectionSemanticShadow('),

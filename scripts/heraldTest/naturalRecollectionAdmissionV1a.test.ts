@@ -187,7 +187,7 @@ export async function runNaturalRecollectionAdmissionV1aTests() {
           && rows[1].rawText === ABOUT
           && !rows.some((r) => r.rawText.includes(ASSISTANT_Q))
           && !/when Dad|Colorado|I was about twelve when/i.test(rows[1].rawText)
-          && arc.peekAssistantQuestion() === ASSISTANT_Q
+          && arc.peekAssistantQuestion() === 'Okay.'
           && arc.peekState() === 'ARC_OPEN',
         (v) => v === true, 'true');
     }

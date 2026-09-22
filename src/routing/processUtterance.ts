@@ -52,6 +52,10 @@ import {
   shouldObserveRecollectionSemanticShadow,
 } from './recollectionSemanticNomination';
 import {
+  generateRecollectionConversationFlow,
+  recollectionFlowSpeech,
+} from './recollectionConversationFlow';
+import {
   getDefaultReminiscenceArc,
   type ReminiscenceArcHolder,
 } from './reminiscenceArc';
@@ -1577,7 +1581,11 @@ export async function processUtterance(
   if (isRecollectionNominationFallthrough(routeDecision)) {
     const disposition = nominateReminiscence(text, { arcOpen: arc.isOpen() });
     const getSemanticCtx = deps.getMedicationSemanticInterpreterCtx ?? (() => null);
-    if (shouldObserveRecollectionSemanticShadow(getSemanticCtx)) {
+    const flowEligible = arc.isOpen()
+      && disposition !== 'AUTOBIOGRAPHICAL'
+      && disposition !== 'CONTINUE_ARC';
+    // Flow-eligible turns own the shared 3B context. Diagnostic shadow must not run first.
+    if (!flowEligible && shouldObserveRecollectionSemanticShadow(getSemanticCtx)) {
       await observeRecollectionSemanticShadow(
         text,
         { arcOpen: arc.isOpen() },
@@ -1586,10 +1594,27 @@ export async function processUtterance(
       );
     }
     if (disposition === 'AUTOBIOGRAPHICAL' || disposition === 'CONTINUE_ARC') {
+      const responseText = admitReminiscenceVerbatim(foldReminiscenceText(text), arc);
+      arc.noteAssistantQuestion(responseText);
       return {
         handled: true,
         source: 'recollection',
-        responseText: admitReminiscenceVerbatim(foldReminiscenceText(text), arc),
+        responseText,
+        commits: [],
+      };
+    }
+    if (arc.isOpen()) {
+      const flow = await generateRecollectionConversationFlow(
+        text,
+        getSemanticCtx,
+        arc,
+      );
+      const responseText = recollectionFlowSpeech(flow);
+      arc.noteAssistantQuestion(responseText);
+      return {
+        handled: true,
+        source: 'recollection',
+        responseText,
         commits: [],
       };
     }
