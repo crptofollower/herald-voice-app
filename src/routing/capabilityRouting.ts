@@ -29,7 +29,7 @@
 
 import type { LlamaContext } from 'llama.rn';
 import { hasMedicationDomainEvidence } from '../utils/detectMedicalEvent';
-import { isLlamaContextBusy } from '../utils/llamaContextExclusive';
+import { runSharedSemanticCompletion } from '../utils/semanticCompletionLifecycle';
 import {
   logSemanticDispatchInferenceEnd,
   logSemanticDispatchInferenceStart,
@@ -390,44 +390,43 @@ Return ONLY JSON. Do not add any other text.`;
 // never run at the same wall-clock moment on a constrained device — deferring
 // to "unavailable" costs nothing. Both checks are plain early-returns before
 // any state is claimed; never queues, never waits.
-let capabilityInterpreterInFlight = false;
-
 export async function generateCapabilityProposal(
   raw: string,
   getCtx: () => LlamaContext | null,
 ): Promise<CapabilityGenerationResult> {
-  const ctx = getCtx();
-  if (!ctx) return { status: 'unavailable', reason: 'ctx_missing' };
-  if (capabilityInterpreterInFlight) return { status: 'unavailable', reason: 'in_flight' };
-  if (isLlamaContextBusy()) return { status: 'unavailable', reason: 'ctx_busy' };
-  capabilityInterpreterInFlight = true;
   const t0 = latMono();
-  logSemanticDispatchInferenceStart();
-  try {
-    const result = await ctx.completion({
-      messages: [
-        { role: 'system', content: CAPABILITY_PROPOSAL_SYSTEM_PROMPT },
-        { role: 'user', content: raw },
-      ],
-      n_predict: 128,
-      temperature: 0,
-      top_p: 0.8,
-      top_k: 20,
-      min_p: 0,
-      response_format: CAPABILITY_PROPOSAL_RESPONSE_FORMAT,
-    } as any);
-    const text = String((result as any)?.content || (result as any)?.text || '').trim();
-    const proposal = parseCapabilityProposal(text);
-    logSemanticDispatchInferenceEnd(
-      latMono() - t0,
-      result,
-      proposal ? 'ok' : 'parse_fail',
-    );
-    return proposal ? { status: 'ok', proposal } : { status: 'parse_fail', raw: text };
-  } catch {
-    logSemanticDispatchInferenceEnd(latMono() - t0, undefined, 'error');
-    return { status: 'unavailable', reason: 'error' };
-  } finally {
-    capabilityInterpreterInFlight = false;
+  const run = await runSharedSemanticCompletion(getCtx, {
+    messages: [
+      { role: 'system', content: CAPABILITY_PROPOSAL_SYSTEM_PROMPT },
+      { role: 'user', content: raw },
+    ],
+    n_predict: 128,
+    temperature: 0,
+    top_p: 0.8,
+    top_k: 20,
+    min_p: 0,
+    response_format: CAPABILITY_PROPOSAL_RESPONSE_FORMAT,
+  }, {
+    onAcquired: () => logSemanticDispatchInferenceStart(),
+  });
+  if (run.status === 'unavailable') {
+    if (run.reason === 'error') {
+      logSemanticDispatchInferenceEnd(latMono() - t0, undefined, 'error');
+    }
+    const reason =
+      run.reason === 'no_ctx' ? 'ctx_missing' :
+      run.reason === 'busy' ? 'ctx_busy' :
+      run.reason === 'in_flight' ? 'in_flight' :
+      'error';
+    return { status: 'unavailable', reason };
   }
+  const result = run.value;
+  const text = String((result as any)?.content || (result as any)?.text || '').trim();
+  const proposal = parseCapabilityProposal(text);
+  logSemanticDispatchInferenceEnd(
+    latMono() - t0,
+    result,
+    proposal ? 'ok' : 'parse_fail',
+  );
+  return proposal ? { status: 'ok', proposal } : { status: 'parse_fail', raw: text };
 }

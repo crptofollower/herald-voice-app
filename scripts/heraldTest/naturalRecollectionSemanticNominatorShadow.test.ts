@@ -26,6 +26,7 @@ import {
   RECOLLECTION_SEMANTIC_PROPOSAL_SYSTEM_PROMPT,
 } from '../../src/routing/recollectionSemanticNomination.ts';
 import { resetNow, setNow } from '../../src/utils/heraldClock.ts';
+import { resetSemanticCompletionLifecycleForTests } from '../../src/utils/semanticCompletionLifecycle.ts';
 import {
   RECOLLECTION_SEMANTIC_DEVICE_EVIDENCE_TRIGGER,
   isRecollectionSemanticDeviceEvidenceTrigger,
@@ -69,6 +70,7 @@ async function fresh(opts?: { completionText?: string; hang?: boolean }) {
   resetDefaultReminiscenceArc();
   resetReminiscenceNominator();
   resetRecollectionSemanticShadow();
+  resetSemanticCompletionLifecycleForTests();
   setNow(new Date(2026, 8, 22, 12, 0, 0));
   const session = new ConversationSession();
   const subject = new ConversationalSubjectHolder();
@@ -164,6 +166,7 @@ export async function runNaturalRecollectionSemanticNominatorShadowV1Tests(): Pr
       assert('timeout fails closed',
         gen.status === 'unavailable' && gen.reason === 'timeout',
         (v) => v === true, 'true');
+      resetSemanticCompletionLifecycleForTests();
     }
 
     {
@@ -188,6 +191,7 @@ export async function runNaturalRecollectionSemanticNominatorShadowV1Tests(): Pr
         second.status === 'unavailable' && second.reason === 'in_flight',
         (v) => v === true, 'true');
       await hanging.catch(() => {});
+      resetSemanticCompletionLifecycleForTests();
     }
 
     {
@@ -214,7 +218,7 @@ export async function runNaturalRecollectionSemanticNominatorShadowV1Tests(): Pr
     );
     assert('semantic nomination has no remote provider path',
       !/openrouter|railway|\/ask\b|fetch\(|XMLHttpRequest/i.test(nominatorSrc)
-        && nominatorSrc.includes('ctx.completion')
+        && nominatorSrc.includes('runSharedSemanticCompletion')
         && nominatorSrc.includes('getCtx()'),
       (v) => v === true, 'true');
 

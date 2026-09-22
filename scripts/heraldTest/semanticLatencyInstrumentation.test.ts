@@ -201,9 +201,13 @@ export async function runSemanticLatencyInstrumentationTests() {
     assert('semantic 3B stays CPU-only',
       /n_gpu_layers:\s*0/.test(engine) && !/n_gpu_layers:\s*[1-9]/.test(engine),
       (v) => v === true, 'n_gpu_layers 0');
+    const lifecycle = fs.readFileSync(path.join(root, 'src/utils/semanticCompletionLifecycle.ts'), 'utf8');
     assert('timeout/error specialist outcomes still map identically',
-      /String\(e\)\.includes\('timeout'\) \? 'timeout' : 'error'/.test(todo)
-      && /String\(e\)\.includes\('timeout'\) \? 'timeout' : 'error'/.test(grocery),
+      /String\(e\)\.includes\('timeout'\) \? 'timeout' : 'error'/.test(lifecycle)
+      && /run\.reason === 'timeout' \|\| run\.reason === 'error'/.test(todo)
+      && /run\.reason === 'timeout' \|\| run\.reason === 'error'/.test(grocery)
+      && /logSemanticSpecialistInferenceEnd\('todo'/.test(todo)
+      && /logSemanticSpecialistInferenceEnd\('grocery'/.test(grocery),
       (v) => v === true, 'timeout|error');
     assert('realization marker sits immediately before speak/dispatchRead handoff',
       /logRealizationDoneIfSemanticTurn\(\);[\s\S]{0,80}speak\(outcome\.responseText\)/.test(chat)

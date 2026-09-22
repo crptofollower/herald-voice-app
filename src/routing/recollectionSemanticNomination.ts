@@ -3,6 +3,7 @@
 // On-device ctx.completion only. Unknown/malformed/unavailable → UNCERTAIN.
 
 import { isLlamaContextBusy } from '../utils/llamaContextExclusive';
+import { runSharedSemanticCompletion } from '../utils/semanticCompletionLifecycle';
 import { hasSensitiveRecollectionBackstop } from '../utils/reminiscenceAdmission';
 import {
   REMINISCENCE_DISPOSITIONS,
@@ -99,7 +100,6 @@ export function parseRecollectionSemanticProposal(rawModelOutput: string): {
   };
 }
 
-let interpreterInFlight = false;
 let shadowCalls = 0;
 let lastShadow: RecollectionSemanticShadow | null = null;
 
@@ -112,7 +112,6 @@ export function peekLastRecollectionSemanticShadow(): RecollectionSemanticShadow
 }
 
 export function resetRecollectionSemanticShadow(): void {
-  interpreterInFlight = false;
   shadowCalls = 0;
   lastShadow = null;
 }
@@ -127,61 +126,43 @@ export async function generateRecollectionSemanticProposal(
   opts?: { timeoutMs?: number; arcOpen?: boolean },
 ): Promise<RecollectionSemanticGeneration> {
   const started = Date.now();
-  const ctx = getCtx();
-  if (!ctx) {
-    return { status: 'unavailable', reason: 'no_ctx', durationMs: Date.now() - started };
-  }
-  if (interpreterInFlight) {
-    return { status: 'unavailable', reason: 'in_flight', durationMs: Date.now() - started };
-  }
-  if (isLlamaContextBusy()) {
-    return { status: 'unavailable', reason: 'busy', durationMs: Date.now() - started };
-  }
   logRecollectionSemantic('interpreter_invoke');
-  interpreterInFlight = true;
-  try {
-    const completion = ctx.completion({
-      messages: [
-        { role: 'system', content: RECOLLECTION_SEMANTIC_PROPOSAL_SYSTEM_PROMPT },
-        {
-          role: 'user',
-          content: `arc_open: ${opts?.arcOpen === true ? 'true' : 'false'}\nutterance: ${raw}`,
-        },
-      ],
-      n_predict: 96,
-      temperature: 0,
-      top_p: 0.8,
-      top_k: 20,
-      min_p: 0,
-    } as any);
-    const timed = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('timeout')), opts?.timeoutMs ?? RECOLLECTION_SEMANTIC_TIMEOUT_MS);
-    });
-    const result = await Promise.race([completion, timed]);
-    const text = String((result as { content?: string; text?: string })?.content
-      || (result as { content?: string; text?: string })?.text
-      || '').trim();
-    const proposal = parseRecollectionSemanticProposal(text);
-    if (!proposal) {
-      logRecollectionSemantic('parse_fail');
-      return { status: 'parse_fail', raw: text, durationMs: Date.now() - started };
-    }
-    logRecollectionSemantic('proposal', { disposition: proposal.disposition });
-    return {
-      status: 'ok',
-      disposition: proposal.disposition,
-      confidence: proposal.confidence,
-      reason: proposal.reason,
-      raw: text,
-      durationMs: Date.now() - started,
-    };
-  } catch (e) {
-    const reason = String(e).includes('timeout') ? 'timeout' : 'error';
-    logRecollectionSemantic('interpreter_unavailable', { reason });
-    return { status: 'unavailable', reason, durationMs: Date.now() - started };
-  } finally {
-    interpreterInFlight = false;
+  const run = await runSharedSemanticCompletion(getCtx, {
+    messages: [
+      { role: 'system', content: RECOLLECTION_SEMANTIC_PROPOSAL_SYSTEM_PROMPT },
+      {
+        role: 'user',
+        content: `arc_open: ${opts?.arcOpen === true ? 'true' : 'false'}\nutterance: ${raw}`,
+      },
+    ],
+    n_predict: 96,
+    temperature: 0,
+    top_p: 0.8,
+    top_k: 20,
+    min_p: 0,
+  }, {
+    callerDeadlineMs: opts?.timeoutMs ?? RECOLLECTION_SEMANTIC_TIMEOUT_MS,
+  });
+  if (run.status === 'unavailable') {
+    logRecollectionSemantic('interpreter_unavailable', { reason: run.reason });
+    return { status: 'unavailable', reason: run.reason, durationMs: Date.now() - started };
   }
+  const result = run.value as { content?: string; text?: string };
+  const text = String(result?.content || result?.text || '').trim();
+  const proposal = parseRecollectionSemanticProposal(text);
+  if (!proposal) {
+    logRecollectionSemantic('parse_fail');
+    return { status: 'parse_fail', raw: text, durationMs: Date.now() - started };
+  }
+  logRecollectionSemantic('proposal', { disposition: proposal.disposition });
+  return {
+    status: 'ok',
+    disposition: proposal.disposition,
+    confidence: proposal.confidence,
+    reason: proposal.reason,
+    raw: text,
+    durationMs: Date.now() - started,
+  };
 }
 
 function unavailableShadow(reason: 'no_ctx' | 'in_flight' | 'busy' | 'timeout' | 'error'): RecollectionSemanticShadow {

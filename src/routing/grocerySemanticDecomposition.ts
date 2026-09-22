@@ -9,7 +9,6 @@
 
 import type { LlamaContext } from 'llama.rn';
 import { findStandardSpan } from '../hooks/llmLayers';
-import { isLlamaContextBusy } from '../utils/llamaContextExclusive';
 import {
   boundDiagnosticStrings,
   logSemanticAdmissionDone,
@@ -22,6 +21,7 @@ import {
 } from '../utils/latencyInstrument';
 import { isReadShapedUtterance } from '../utils/detectMedicalEvent';
 import { shouldRefuseLlmCaptureProposal } from './speechActAuthority';
+import { runSharedSemanticCompletion } from '../utils/semanticCompletionLifecycle';
 import type { CapabilityProposal } from './capabilityRouting';
 
 export const GROCERY_SEMANTIC_CAPABILITIES = ['grocery_capture', 'not_grocery_capture', 'uncertain'] as const;
@@ -265,67 +265,48 @@ confidence: number 0 to 1
 Describe the sentence, not the world. Never resolve or normalize a name. confidence never authorizes a capture by itself.
 If the sentence treats a multi-word food name as one item, emit it as one candidate.`;
 
-let interpreterInFlight = false;
-
 export async function generateGrocerySemanticProposal(
   raw: string,
   getCtx: () => LlamaContext | null,
 ): Promise<GroceryProposalGenerationResult> {
   logGrocerySemantic('interpreter_invoke');
-  const ctx = getCtx();
-  if (!ctx) {
-    logGrocerySemantic('interpreter_unavailable', { reason: 'no_ctx' });
-    return { status: 'unavailable', reason: 'no_ctx' };
-  }
-  if (interpreterInFlight) {
-    logGrocerySemantic('interpreter_unavailable', { reason: 'in_flight' });
-    return { status: 'unavailable', reason: 'in_flight' };
-  }
-  if (isLlamaContextBusy()) {
-    logGrocerySemantic('interpreter_unavailable', { reason: 'busy' });
-    return { status: 'unavailable', reason: 'busy' };
-  }
-  interpreterInFlight = true;
   const t0 = latMono();
-  logSemanticSpecialistInferenceStart('grocery');
-  try {
-    const completion = ctx.completion({
-      messages: [
-        { role: 'system', content: GROCERY_SEMANTIC_PROPOSAL_SYSTEM_PROMPT },
-        { role: 'user', content: raw },
-      ],
-      n_predict: 128,
-      temperature: 0,
-      top_p: 0.8,
-      top_k: 20,
-      min_p: 0,
-    } as any);
-    const timed = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('timeout')), GROCERY_SEMANTIC_TIMEOUT_MS);
-    });
-    const result = await Promise.race([completion, timed]);
-    const text = String((result as any)?.content || (result as any)?.text || '').trim();
-    const proposal = parseGrocerySemanticProposal(text);
-    if (!proposal) {
-      logGrocerySemantic('parse_fail');
-      logSemanticSpecialistInferenceEnd('grocery', latMono() - t0, result, 'parse_fail');
-      return { status: 'parse_fail', raw: text };
+  const run = await runSharedSemanticCompletion(getCtx, {
+    messages: [
+      { role: 'system', content: GROCERY_SEMANTIC_PROPOSAL_SYSTEM_PROMPT },
+      { role: 'user', content: raw },
+    ],
+    n_predict: 128,
+    temperature: 0,
+    top_p: 0.8,
+    top_k: 20,
+    min_p: 0,
+  }, {
+    callerDeadlineMs: GROCERY_SEMANTIC_TIMEOUT_MS,
+    onAcquired: () => logSemanticSpecialistInferenceStart('grocery'),
+  });
+  if (run.status === 'unavailable') {
+    logGrocerySemantic('interpreter_unavailable', { reason: run.reason });
+    if (run.reason === 'timeout' || run.reason === 'error') {
+      logSemanticSpecialistInferenceEnd('grocery', latMono() - t0, undefined, run.reason);
     }
-    logGrocerySemantic('proposal', {
-      capability: proposal.capability,
-      candidateCount: proposal.candidates.length,
-      confidence: proposal.confidence,
-    });
-    logSemanticSpecialistInferenceEnd('grocery', latMono() - t0, result, 'ok');
-    return { status: 'ok', proposal };
-  } catch (e) {
-    const reason = String(e).includes('timeout') ? 'timeout' : 'error';
-    logGrocerySemantic('interpreter_unavailable', { reason });
-    logSemanticSpecialistInferenceEnd('grocery', latMono() - t0, undefined, reason);
-    return { status: 'unavailable', reason };
-  } finally {
-    interpreterInFlight = false;
+    return { status: 'unavailable', reason: run.reason };
   }
+  const result = run.value;
+  const text = String((result as any)?.content || (result as any)?.text || '').trim();
+  const proposal = parseGrocerySemanticProposal(text);
+  if (!proposal) {
+    logGrocerySemantic('parse_fail');
+    logSemanticSpecialistInferenceEnd('grocery', latMono() - t0, result, 'parse_fail');
+    return { status: 'parse_fail', raw: text };
+  }
+  logGrocerySemantic('proposal', {
+    capability: proposal.capability,
+    candidateCount: proposal.candidates.length,
+    confidence: proposal.confidence,
+  });
+  logSemanticSpecialistInferenceEnd('grocery', latMono() - t0, result, 'ok');
+  return { status: 'ok', proposal };
 }
 
 export async function tryP1GrocerySemanticItems(

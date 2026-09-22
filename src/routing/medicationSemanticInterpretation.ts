@@ -48,7 +48,7 @@ import {
   isReadShapedUtterance,
   isMedicationQuestionShape,
 } from '../utils/detectMedicalEvent';
-import { isLlamaContextBusy } from '../utils/llamaContextExclusive';
+import { runSharedSemanticCompletion } from '../utils/semanticCompletionLifecycle';
 import {
   boundDiagnosticStrings,
   logSemanticAdmissionDone,
@@ -352,46 +352,41 @@ Describe the sentence, not the world. Never resolve or normalize a name. confide
 // concern this codebase has no evidence to dismiss. Deferring to
 // "unavailable" costs nothing and avoids it entirely, per the standing
 // preference for safe serialization over speculative concurrency
-// optimization. Never queues, never waits — both checks are plain
-// early-returns before any state is claimed.
-let interpreterInFlight = false;
+// optimization. Never queues, never waits — both checks are now owned by
+// semanticCompletionLifecycle.ts. This module does not hold a private in-flight boolean.
 
 export async function generateMedicationSemanticProposal(
   raw: string,
   getCtx: () => LlamaContext | null,
 ): Promise<ProposalGenerationResult> {
-  const ctx = getCtx();
-  if (!ctx) return { status: 'unavailable' };
-  if (interpreterInFlight) return { status: 'unavailable' };
-  if (isLlamaContextBusy()) return { status: 'unavailable' };
-  interpreterInFlight = true;
   const t0 = latMono();
-  logSemanticSpecialistInferenceStart('medication');
-  try {
-    const result = await ctx.completion({
-      messages: [
-        { role: 'system', content: MEDICATION_SEMANTIC_PROPOSAL_SYSTEM_PROMPT },
-        { role: 'user', content: raw },
-      ],
-      n_predict: 128,
-      temperature: 0,
-      top_p: 0.8,
-      top_k: 20,
-      min_p: 0,
-    } as any);
-    const text = String((result as any)?.content || (result as any)?.text || '').trim();
-    const proposal = parseSemanticProposal(text);
-    logSemanticSpecialistInferenceEnd(
-      'medication',
-      latMono() - t0,
-      result,
-      proposal ? 'ok' : 'parse_fail',
-    );
-    return proposal ? { status: 'ok', proposal } : { status: 'parse_fail', raw: text };
-  } catch {
-    logSemanticSpecialistInferenceEnd('medication', latMono() - t0, undefined, 'error');
+  const run = await runSharedSemanticCompletion(getCtx, {
+    messages: [
+      { role: 'system', content: MEDICATION_SEMANTIC_PROPOSAL_SYSTEM_PROMPT },
+      { role: 'user', content: raw },
+    ],
+    n_predict: 128,
+    temperature: 0,
+    top_p: 0.8,
+    top_k: 20,
+    min_p: 0,
+  }, {
+    onAcquired: () => logSemanticSpecialistInferenceStart('medication'),
+  });
+  if (run.status === 'unavailable') {
+    if (run.reason === 'error') {
+      logSemanticSpecialistInferenceEnd('medication', latMono() - t0, undefined, 'error');
+    }
     return { status: 'unavailable' };
-  } finally {
-    interpreterInFlight = false;
   }
+  const result = run.value;
+  const text = String((result as any)?.content || (result as any)?.text || '').trim();
+  const proposal = parseSemanticProposal(text);
+  logSemanticSpecialistInferenceEnd(
+    'medication',
+    latMono() - t0,
+    result,
+    proposal ? 'ok' : 'parse_fail',
+  );
+  return proposal ? { status: 'ok', proposal } : { status: 'parse_fail', raw: text };
 }
