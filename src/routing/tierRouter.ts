@@ -24,6 +24,7 @@ import { detectServiceRemove, detectPhoneCapture } from "../utils/householdCaptu
 import { detectFamilyRead, answerFamilyRead } from "../utils/familyRead";
 import { detectPersonAssociationRead, answerPersonAssociationRead } from "../db/graphRead";
 import { detectEpisodeCapture } from "../utils/episodeCapture";
+import { detectEpisodeRecall, answerEpisodeRecall } from "../db/episodeRead";
 import {
   REMINDER_SIGNALS,
   NOTE_CAPTURE_SIGNALS,
@@ -2184,6 +2185,17 @@ async function classifyQueryCore(message: string): Promise<TierDecision> {
     const n = new Date();
     const startOfDay = new Date(n.getFullYear(), n.getMonth(), n.getDate()).getTime();
     return { tier: 1, tier1Response: formatRecentMentions(getRecentMentions(startOfDay)), reason: 'recall:temporal' };
+  }
+
+  {
+    const episodeRecall = detectEpisodeRecall(msg);
+    if (episodeRecall) {
+      return {
+        tier: 1,
+        tier1Response: answerEpisodeRecall(),
+        reason: 'episode:recall',
+      };
+    }
   }
 
   // Tier 1: diagnosis read — BEFORE the general medical summary so a diagnosis

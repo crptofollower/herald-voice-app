@@ -42,7 +42,7 @@ function derivePrecision(clause: string, occurredAt: string | null): EpisodePrec
   return 'unknown';
 }
 
-function confirmClause(remainder: string): string {
+export function realizeEpisodePerspective(remainder: string): string {
   const clause = stripTrailingPunct(remainder);
   if (/^we\b/i.test(clause)) return clause.replace(/^we\b/i, 'you');
   if (/^i\b/i.test(clause)) return clause.replace(/^i\b/i, 'you');
@@ -75,7 +75,7 @@ export async function addEpisodeCapture(
   if (!remainder || !raw) {
     return { status: 'failed', ack: "I couldn't hold onto that — say it once more?" };
   }
-  const prompt = `Want me to remember that ${confirmClause(remainder)}?`;
+  const prompt = `Want me to remember that ${realizeEpisodePerspective(remainder)}?`;
   return {
     status: 'pending',
     prompt,

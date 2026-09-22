@@ -111,3 +111,17 @@ export function softRemoveEpisode(id: string): boolean {
 export function getEpisodeById(id: string): EpisodeRow | null {
   return loadEpisode(id);
 }
+
+export function listActiveEpisodes(limit?: number): EpisodeRow[] {
+  const db = getDB();
+  const sql =
+    `SELECT id, raw_phrase, occurred_at, occurred_precision, captured_at,
+            category, domain, salience, sentiment, source, score, embedding_ref, removed_at
+     FROM episodes
+     WHERE ${ACTIVE_PREDICATE}
+     ORDER BY captured_at DESC, id DESC`;
+  if (typeof limit === 'number' && limit >= 0) {
+    return db.getAllSync<EpisodeRow>(`${sql} LIMIT ?;`, [limit]);
+  }
+  return db.getAllSync<EpisodeRow>(`${sql};`);
+}
