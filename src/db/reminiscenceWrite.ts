@@ -1,19 +1,21 @@
 // Deterministic Track R append. Verbatim + provenance only.
 // Never truth, never entities, never domain stores.
+// Last-unit suppression identity lives on the session-owned arc holder.
 
 import { persistEvidence, softRemoveEvidence } from './evidenceDB';
 import { REMINISCENCE_SOURCE_KIND } from './recollectionRead';
 import { now } from '../utils/heraldClock';
-import type { ReminiscenceArcHolder } from '../routing/reminiscenceArc';
+import {
+  getDefaultReminiscenceArc,
+  type ReminiscenceArcHolder,
+} from '../routing/reminiscenceArc';
 import {
   realizeRecollectionNothingToForget,
   realizeRecollectionSuppressed,
 } from '../conversation/recollectionRealization';
 
-let lastAdmittedId: string | null = null;
-
 export function resetReminiscenceAdmissionState(): void {
-  lastAdmittedId = null;
+  getDefaultReminiscenceArc().clear();
 }
 
 export function admitReminiscenceVerbatim(
@@ -27,15 +29,16 @@ export function admitReminiscenceVerbatim(
     observedAt: now().toISOString(),
     eventAt: null,
   });
-  lastAdmittedId = stored.id;
-  arc?.appendRow(stored.id);
+  if (arc) {
+    arc.appendRow(stored.id);
+    arc.noteLastAdmitted(stored.id);
+  }
   return 'Okay.';
 }
 
 export function suppressLastReminiscence(arc?: ReminiscenceArcHolder | null): string {
-  if (!lastAdmittedId) return realizeRecollectionNothingToForget();
-  const id = lastAdmittedId;
-  lastAdmittedId = null;
+  const id = arc?.takeLastAdmitted() ?? null;
+  if (!id) return realizeRecollectionNothingToForget();
   const removed = softRemoveEvidence(id);
   arc?.dropRow(id);
   if (!removed) return realizeRecollectionNothingToForget();
@@ -48,7 +51,6 @@ export function suppressCurrentReminiscenceArc(arc: ReminiscenceArcHolder): stri
   let removedAny = false;
   for (const id of ids) {
     if (softRemoveEvidence(id)) removedAny = true;
-    if (lastAdmittedId === id) lastAdmittedId = null;
   }
   arc.clear();
   if (!removedAny) return realizeRecollectionNothingToForget();

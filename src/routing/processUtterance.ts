@@ -599,6 +599,8 @@ export async function processUtterance(
 ): Promise<UtteranceOutcome> {
   const turnId = getActiveTurnId();
   latLog('processUtterance START', { turnId });
+  // Production ChatScreen always passes an explicit holder. The module
+  // singleton remains test/proving fallback when callers omit the argument.
   const arc = reminiscenceArc ?? getDefaultReminiscenceArc();
   subject?.beginUserTurn();
   medicationPresentation?.beginUserTurn();

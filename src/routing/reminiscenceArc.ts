@@ -8,6 +8,7 @@ export class ReminiscenceArcHolder {
   private state: ReminiscenceArcState = 'NO_ARC';
   private rowIds: string[] = [];
   private lastAssistantQuestion: string | null = null;
+  private lastAdmittedId: string | null = null;
 
   peekState(): ReminiscenceArcState {
     return this.state;
@@ -23,6 +24,20 @@ export class ReminiscenceArcHolder {
 
   peekRowIds(): readonly string[] {
     return this.rowIds;
+  }
+
+  peekLastAdmittedId(): string | null {
+    return this.lastAdmittedId;
+  }
+
+  noteLastAdmitted(id: string): void {
+    this.lastAdmittedId = id;
+  }
+
+  takeLastAdmitted(): string | null {
+    const id = this.lastAdmittedId;
+    this.lastAdmittedId = null;
+    return id;
   }
 
   /** Track C only. Never written to evidence. */
@@ -47,6 +62,7 @@ export class ReminiscenceArcHolder {
 
   dropRow(id: string): void {
     this.rowIds = this.rowIds.filter((rowId) => rowId !== id);
+    if (this.lastAdmittedId === id) this.lastAdmittedId = null;
     if (this.rowIds.length === 0 && this.state === 'ARC_OPEN') {
       this.state = 'NO_ARC';
       this.lastAssistantQuestion = null;
@@ -61,11 +77,13 @@ export class ReminiscenceArcHolder {
     this.state = 'NO_ARC';
     this.rowIds = [];
     this.lastAssistantQuestion = null;
+    this.lastAdmittedId = null;
   }
 }
 
 let defaultArc = new ReminiscenceArcHolder();
 
+/** Test/proving singleton only. Production ChatScreen must pass an explicit holder. */
 export function getDefaultReminiscenceArc(): ReminiscenceArcHolder {
   return defaultArc;
 }

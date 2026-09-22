@@ -164,6 +164,7 @@ import { isTodoOpenListSpeech } from '../db/listRead';
 import { isCalendarAgendaSpeech } from '../db/calendarCacheDB';
 import { CalendarContinuationHolder } from '../routing/calendarContinuation';
 import { DiscourseContinuityHolder } from '../routing/discourseContinuity';
+import { ReminiscenceArcHolder } from '../routing/reminiscenceArc';
 import { formatOperationalListClarification } from '../routing/operationalListContinuity';
 import { CalendarPresentationHolder } from '../routing/calendarPresentation';
 import { processUtterance, applyIntents, type UtteranceOutcome } from '../routing/processUtterance';
@@ -600,6 +601,7 @@ export default function ChatScreen() {
   const calendarPresentationRef = useRef<CalendarPresentationHolder>(new CalendarPresentationHolder());
   const calendarContinuationRef = useRef<CalendarContinuationHolder>(new CalendarContinuationHolder());
   const discourseRef = useRef<DiscourseContinuityHolder>(new DiscourseContinuityHolder());
+  const reminiscenceArcRef = useRef<ReminiscenceArcHolder>(new ReminiscenceArcHolder());
 
   // Conversation Continuity Contract V1 — Slice 1/2 (2026-09-08). Bounded
   // RAM-only turn ledger, written additively alongside HOT/WCS/Flow C/
@@ -1471,6 +1473,7 @@ export default function ChatScreen() {
       calendarPresentationRef.current.clear();
       calendarContinuationRef.current.clear();
       discourseRef.current.clear();
+      reminiscenceArcRef.current.clear();
       hotRingRef.current.clear();
       setActiveSurface(null);
       await dispatchEmergency(text);
@@ -1800,7 +1803,7 @@ export default function ChatScreen() {
       },
       resolveContact: resolveContactPhoneRef.current ?? undefined,
       getMedicationSemanticInterpreterCtx,
-    }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current, calendarPresentationRef.current, calendarContinuationRef.current, discourseRef.current, conversationLedgerRef.current);
+    }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current, calendarPresentationRef.current, calendarContinuationRef.current, discourseRef.current, conversationLedgerRef.current, reminiscenceArcRef.current);
     journeyOutcome = outcome;
     syncSituationalListVisuals(outcome);
     const continuityFocus = !outcome.handled
@@ -3018,7 +3021,7 @@ export default function ChatScreen() {
         },
         resolveContact: resolveContactPhoneRef.current ?? undefined,
         getMedicationSemanticInterpreterCtx,
-      }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current, calendarPresentationRef.current, calendarContinuationRef.current, discourseRef.current, conversationLedgerRef.current);
+      }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current, calendarPresentationRef.current, calendarContinuationRef.current, discourseRef.current, conversationLedgerRef.current, reminiscenceArcRef.current);
       syncSituationalListVisuals(outcome);
       if (outcome.handled && outcome.source === 'pending_resume' && outcome.responseText) {
         addMessage({ id: generateId('msg'), role: 'assistant', content: outcome.responseText, timestamp: Date.now() });
@@ -3053,6 +3056,7 @@ export default function ChatScreen() {
           calendarContinuationRef.current.clear();
           conversationLedgerRef.current = createConversationTurnLedger();
           discourseRef.current.clear();
+          reminiscenceArcRef.current.clear();
           hotRingRef.current.clear();
           setActiveSurface(null);
           setInputText('');
