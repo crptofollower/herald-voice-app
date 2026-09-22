@@ -74,6 +74,10 @@ import { ensureCoords, useLocation } from "../hooks/useLocation";
 import { useMic } from "../hooks/useMic";
 import { speechLifecycleLog, talkAttemptAdmission } from "../hooks/speechLifecycleInvariants";
 import { useRaiseToWake } from "../hooks/useRaiseToWake";
+import {
+  createTalkSession,
+  TALK_SESSION_FOLLOWUP_DELAY_MS,
+} from "../hooks/talkSession";
 import { useDeviceMemory } from "../hooks/useDeviceMemory";
 import { useLocalLLM } from '../hooks/useLocalLLM';
 import { useMedicationSemanticInterpreterEngine } from '../hooks/useMedicationSemanticInterpreterEngine';
@@ -747,8 +751,12 @@ export default function ChatScreen() {
 
   const suspendForSpeechRef = useRef<(() => Promise<{ confirmed: boolean }>) | null>(null);
   const { speak, enqueueSentence, finishStream, resetSpeech, stop, isSpeaking, isSpeakingRef } = useSpeech(suspendForSpeechRef);
-  const [handsFreeMode, setHandsFreeMode] = useState(false);
-  const handsFreeRef = useRef(false);
+  const talkSessionRef = useRef(createTalkSession());
+  const followupTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevIsSpeakingRef = useRef(false);
+  const ttsEndedWhileStreamingRef = useRef(false);
+  const terminateTalkSessionRef = useRef<() => void>(() => {});
+  const scheduleTalkSessionFollowupRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     const show = Keyboard.addListener('keyboardDidShow', (e) => setKeyboardHeight(e.endCoordinates.height));
@@ -859,6 +867,7 @@ export default function ChatScreen() {
       "change",
       (nextState: AppStateStatus) => {
         if (nextState === "background" || nextState === "inactive") {
+          terminateTalkSessionRef.current();
           if (streamAbortRef.current) {
             streamAbortRef.current.abort();
             resetStreamState();
@@ -3012,8 +3021,9 @@ export default function ChatScreen() {
   const [heardPreviewText, setHeardPreviewText] = useState('');
 
   const handleTranscript = useCallback((transcript: string) => {
-    if (!transcript.trim()) return;
     const trimmed = transcript.trim().slice(0, 2000);
+    if (trimmed) talkSessionRef.current.noteContentfulUtterance();
+    if (!trimmed) return;
     latLog('handleTranscript entry', { turnId: getActiveTurnId(), charLen: trimmed.length });
     // Brief display in input bar so user sees what was heard, then send
     setInputText(trimmed);
@@ -3038,6 +3048,7 @@ export default function ChatScreen() {
   // a user message bubble) -- nothing was said, so none of that applies;
   // only the assistant's re-ask/release reply, if any, is surfaced.
   const handleNoRecognizableSpeech = useCallback(async () => {
+    talkSessionRef.current.noteFollowupSilence();
     if (sendingRef.current || !sessionRef.current.hasPending()) return;
     sendingRef.current = true;
     try {
@@ -3069,6 +3080,47 @@ export default function ChatScreen() {
 
   const { isRecording, startRecording, stopRecording, suspendForSpeech, partialText } = useMic(handleTranscript, isSpeakingRef, handleNoRecognizableSpeech);
   suspendForSpeechRef.current = suspendForSpeech;
+
+  const clearTalkSessionFollowupTimer = () => {
+    if (followupTimerRef.current) {
+      clearTimeout(followupTimerRef.current);
+      followupTimerRef.current = null;
+    }
+  };
+
+  const terminateTalkSession = () => {
+    clearTalkSessionFollowupTimer();
+    ttsEndedWhileStreamingRef.current = false;
+    talkSessionRef.current.terminate();
+  };
+  terminateTalkSessionRef.current = terminateTalkSession;
+
+  const armTalkSessionFollowupTimer = (token: number) => {
+    clearTalkSessionFollowupTimer();
+    followupTimerRef.current = setTimeout(() => {
+      followupTimerRef.current = null;
+      const ctx = {
+        ttsSpeaking: isSpeakingRef.current,
+        streaming: isStreamingRef.current,
+        appActive: AppState.currentState === 'active',
+      };
+      if (ctx.ttsSpeaking || ctx.streaming) {
+        if (talkSessionRef.current.pendingFollowupGeneration === token) {
+          armTalkSessionFollowupTimer(token);
+        }
+        return;
+      }
+      const { shouldStart } = talkSessionRef.current.evaluateFollowupFire(token, ctx);
+      if (shouldStart) startRecording('post_tts_handoff');
+    }, TALK_SESSION_FOLLOWUP_DELAY_MS);
+  };
+
+  const scheduleTalkSessionFollowup = () => {
+    const { schedule, generation } = talkSessionRef.current.noteTtsTerminal();
+    if (!schedule) return;
+    armTalkSessionFollowupTimer(generation);
+  };
+  scheduleTalkSessionFollowupRef.current = scheduleTalkSessionFollowup;
 
   useEffect(() => {
     try {
@@ -3118,17 +3170,29 @@ export default function ChatScreen() {
   });
 
   useEffect(() => {
-    handsFreeRef.current = handsFreeMode;
-  }, [handsFreeMode]);
+    const wasSpeaking = prevIsSpeakingRef.current;
+    prevIsSpeakingRef.current = isSpeaking;
+    if (wasSpeaking && !isSpeaking) {
+      if (isStreamingRef.current) {
+        ttsEndedWhileStreamingRef.current = true;
+        return;
+      }
+      scheduleTalkSessionFollowupRef.current();
+    }
+  }, [isSpeaking]);
 
   useEffect(() => {
-    if (!isSpeaking && handsFreeRef.current && !isStreaming) {
-      // Ref check AT FIRE TIME — state was true 700ms ago is not proof it's
-      // true now; startRecording itself re-checks, this just avoids the call.
-      const timer = setTimeout(() => { if (!isSpeakingRef.current) startRecording('post_tts_handoff'); }, 1400);
-      return () => clearTimeout(timer);
+    if (!isStreaming && ttsEndedWhileStreamingRef.current && !isSpeakingRef.current) {
+      ttsEndedWhileStreamingRef.current = false;
+      scheduleTalkSessionFollowupRef.current();
     }
-  }, [isSpeaking, isStreaming, startRecording]);
+  }, [isStreaming]);
+
+  useEffect(() => {
+    return () => {
+      terminateTalkSessionRef.current();
+    };
+  }, []);
 
   // ── Intent execution ──────────────────────────────────────────────────────
 
@@ -4142,6 +4206,7 @@ export default function ChatScreen() {
                   if (isStreaming || isWaiting || isSpeakingRef.current) return;
                   Keyboard.dismiss();
                   if (isRecording) {
+                    terminateTalkSession();
                     stopRecording();
                   } else {
                     speechLifecycleLog('TALK_ADMITTED', { reason: 'mic_start' });
@@ -4151,6 +4216,8 @@ export default function ChatScreen() {
                     // closed confirm vocabulary when a pending confirmation is
                     // active at tap time -- manual button only, per approved scope.
                     const micMode = sessionRef.current.hasPending() ? 'control_confirmation' : 'open';
+                    clearTalkSessionFollowupTimer();
+                    talkSessionRef.current.activateFromManualTap();
                     setTimeout(() => startRecording('manual_button', micMode), 50);
                   }
                 }}
