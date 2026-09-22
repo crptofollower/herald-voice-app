@@ -66,7 +66,11 @@ function percentile(sorted: number[], p: number): number | null {
 
 function latencyBlock(rows: RecollectionSemanticEvidenceRow[]) {
   const durationsMs = rows
-    .filter((r) => r.generationStatus === 'ok' || r.generationStatus === 'parse_fail' || r.unavailableReason === 'timeout')
+    .filter((r) =>
+      r.generationStatus === 'ok'
+      || r.generationStatus === 'parse_fail'
+      || r.unavailableReason === 'error'
+      || r.unavailableReason === 'timeout')
     .map((r) => r.durationMs)
     .filter((n) => Number.isFinite(n));
   const sorted = [...durationsMs].sort((a, b) => a - b);
@@ -90,6 +94,7 @@ export async function collectRecollectionSemanticEvidence(
     const stubDisposition = nominateReminiscence(fixture.utterance, { arcOpen: fixture.arcOpen });
     const gen = await generateRecollectionSemanticProposal(fixture.utterance, getCtx, {
       arcOpen: fixture.arcOpen,
+      waitForNativeSettlement: true,
     });
     const parsed = gen.status === 'ok' ? gen.disposition : null;
     const raw = gen.status === 'ok' || gen.status === 'parse_fail' ? gen.raw : null;

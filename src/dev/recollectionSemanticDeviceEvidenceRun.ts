@@ -73,7 +73,7 @@ export async function runRecollectionSemanticDeviceEvidence(opts: {
     llamaRnAvailable: !!ctx,
     remoteFallback: false,
     privacy: 'local ctx.completion only; no Railway/OpenRouter/fetch',
-    note: 'Natural Recollection semantic matrix. Observational. Stub remains Track-R writer.',
+    note: 'Natural Recollection semantic matrix. Evidence waits for native ctx.completion settlement with no caller deadline. Production Recollection deadline remains 8000ms. Observational. Stub remains Track-R writer.',
     modelFilename: LARGE_MODEL.filename,
     nCtx: MEDICATION_INTERPRETER_INIT.n_ctx,
     nGpuLayers: MEDICATION_INTERPRETER_INIT.n_gpu_layers,

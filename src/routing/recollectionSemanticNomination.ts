@@ -123,7 +123,7 @@ function logRecollectionSemantic(event: string, extra: Record<string, unknown> =
 export async function generateRecollectionSemanticProposal(
   raw: string,
   getCtx: () => RecollectionSemanticCtx | null,
-  opts?: { timeoutMs?: number; arcOpen?: boolean },
+  opts?: { timeoutMs?: number; arcOpen?: boolean; waitForNativeSettlement?: boolean },
 ): Promise<RecollectionSemanticGeneration> {
   const started = Date.now();
   logRecollectionSemantic('interpreter_invoke');
@@ -140,9 +140,11 @@ export async function generateRecollectionSemanticProposal(
     top_p: 0.8,
     top_k: 20,
     min_p: 0,
-  }, {
-    callerDeadlineMs: opts?.timeoutMs ?? RECOLLECTION_SEMANTIC_TIMEOUT_MS,
-  });
+  }, opts?.waitForNativeSettlement === true
+    ? {}
+    : {
+      callerDeadlineMs: opts?.timeoutMs ?? RECOLLECTION_SEMANTIC_TIMEOUT_MS,
+    });
   if (run.status === 'unavailable') {
     logRecollectionSemantic('interpreter_unavailable', { reason: run.reason });
     return { status: 'unavailable', reason: run.reason, durationMs: Date.now() - started };
