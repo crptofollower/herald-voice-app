@@ -5,9 +5,19 @@ import {
 } from 'expo-speech-recognition';
 import { createSuspendCoordinator } from './suspendCoordinator';
 import { evaluateEmptySessionRecovery, shouldCancelEmptySessionRecovery, shouldCancelEmptySessionRecoveryOnSpeechStart } from './emptySessionRecoveryDecision';
-import { decideOneShotEnd, decideOneShotNoSpeech } from './oneShotEndDecision';
+import { decideOneShotNoSpeech } from './oneShotEndDecision';
 import { buildStartConfig } from './recognitionModeConfig';
 import type { RecognitionMode } from './recognitionModeConfig';
+import {
+  OPEN_SPEECH_CONTINUATION_GAP_MS,
+  OPEN_SPEECH_MAX_TURN_MS,
+  applyReopenedNativeSession,
+  createIdleOpenSpeechTurnState,
+  reduceOpenSpeechTurn,
+  type OpenSpeechEffect,
+  type OpenSpeechEvent,
+  type OpenSpeechTurnState,
+} from './openSpeechTurnBoundary';
 import { beginTurn, getActiveTurnId, log as latLog, mono as latMono } from '../utils/latencyInstrument';
 import {
   LISTENING_READY_TIMEOUT_MS,
@@ -55,6 +65,9 @@ export function useMic(
   const emptySessionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const emptySessionTokenRef = useRef<number | null>(null);
   const speechStartedRef = useRef(false);
+  const boundaryRef = useRef<OpenSpeechTurnState>(createIdleOpenSpeechTurnState());
+  const continuationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const heraldMaxTurnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Cancels/clears the empty-session recovery timer + its captured token.
   // Called on every path that means "this session is no longer a candidate
@@ -138,6 +151,9 @@ export function useMic(
     if (bufferTimerRef.current) { clearTimeout(bufferTimerRef.current); bufferTimerRef.current = null; }
     bufferRef.current = '';
     if (maxTimer.current) { clearTimeout(maxTimer.current); maxTimer.current = null; }
+    clearContinuationTimer();
+    clearHeraldMaxTurnTimer();
+    executeBoundaryEffects(applyBoundary({ type: 'tts_preempt' }));
     clearReadyTimeout();
     listeningReadyRef.current = false;
 
@@ -170,13 +186,121 @@ export function useMic(
   const recognitionModeRef = useRef<RecognitionMode>('open');
   const getStartConfig = () => buildStartConfig(recognitionModeRef.current);
 
-  // One-shot (continuous:false): native 'end' is the flush boundary.
-  // Deliver the buffered transcript without calling native stop() -- the
-  // session has already ended -- and without restartListening(), which
-  // was continuous-mode pause-stitching and created a second recognition
-  // session (and extra Android start/stop tones) per spoken turn.
-  const deliverBufferWithoutNativeStop = (source: string) => {
-    const final = bufferRef.current.trim();
+  // One-shot (continuous:false): native 'end' is the provider session
+  // boundary. Open mode may reopen inside a Herald turn; control_confirmation
+  // still flushes the Herald turn on native end.
+  const clearContinuationTimer = () => {
+    if (continuationTimerRef.current) {
+      clearTimeout(continuationTimerRef.current);
+      continuationTimerRef.current = null;
+    }
+  };
+  const clearHeraldMaxTurnTimer = () => {
+    if (heraldMaxTurnTimerRef.current) {
+      clearTimeout(heraldMaxTurnTimerRef.current);
+      heraldMaxTurnTimerRef.current = null;
+    }
+  };
+
+  const applyBoundary = (event: OpenSpeechEvent): OpenSpeechEffect[] => {
+    const out = reduceOpenSpeechTurn(boundaryRef.current, event);
+    boundaryRef.current = out.state;
+    return out.effects;
+  };
+
+  const requestNativeStart = (session: number) => {
+    ExpoSpeechRecognitionModule.start(getStartConfig());
+    engineActiveRef.current = true;
+    readyTimeoutRef.current = setTimeout(() => {
+      readyTimeoutRef.current = null;
+      const decision = applyListeningReadyTimeout({
+        timeoutSession: session,
+        currentSession: micSessionRef.current,
+        requested: engineActiveRef.current,
+        nativeReady: listeningReadyRef.current,
+      });
+      if (decision !== 'fail_closed') return;
+      speechLifecycleLog('RECOGNITION_READY_TIMEOUT', { session });
+      log('READINESS_TIMEOUT');
+      rlog('READINESS_TIMEOUT', { session });
+      engineActiveRef.current = false;
+      listeningReadyRef.current = false;
+      setIsRecording(false);
+      try { ExpoSpeechRecognitionModule.abort(); } catch (e) {
+        console.error('[useMic] readiness abort failed:', e);
+      }
+      if (boundaryRef.current.phase === 'listening' || boundaryRef.current.phase === 'awaiting_continuation') {
+        executeBoundaryEffects(applyBoundary({
+          type: 'recognition_error',
+          nativeSessionId: session,
+        }));
+      }
+    }, LISTENING_READY_TIMEOUT_MS);
+  };
+
+  const startContinuationNative = () => {
+    if (boundaryRef.current.delivered) return;
+    if (engineActiveRef.current) return;
+    if (ttsActiveRef?.current) return;
+    recognitionModeRef.current = 'open';
+    micSessionRef.current += 1;
+    const session = micSessionRef.current;
+    boundaryRef.current = applyReopenedNativeSession(boundaryRef.current, session);
+    if (boundaryRef.current.nativeSessionId !== session) return;
+    latestPartialRef.current = '';
+    speechStartedRef.current = false;
+    clearReadyTimeout();
+    listeningReadyRef.current = false;
+    try {
+      speechLifecycleLog('RECOGNITION_REQUESTED', {
+        session,
+        mode: recognitionModeRef.current,
+        entryPoint: 'open_speech_continuation',
+      });
+      requestNativeStart(session);
+    } catch (e) {
+      engineActiveRef.current = false;
+      executeBoundaryEffects(applyBoundary({
+        type: 'recognition_error',
+        nativeSessionId: session,
+      }));
+    }
+  };
+
+  const executeBoundaryEffects = (effects: OpenSpeechEffect[]) => {
+    for (const fx of effects) {
+      if (fx.type === 'clear_continuation_gap') clearContinuationTimer();
+      if (fx.type === 'clear_max_turn') clearHeraldMaxTurnTimer();
+      if (fx.type === 'arm_continuation_gap') {
+        clearContinuationTimer();
+        const generation = fx.generation;
+        continuationTimerRef.current = setTimeout(() => {
+          continuationTimerRef.current = null;
+          executeBoundaryEffects(applyBoundary({ type: 'continuation_gap_elapsed', generation }));
+        }, OPEN_SPEECH_CONTINUATION_GAP_MS);
+      }
+      if (fx.type === 'arm_max_turn') {
+        clearHeraldMaxTurnTimer();
+        heraldMaxTurnTimerRef.current = setTimeout(() => {
+          heraldMaxTurnTimerRef.current = null;
+          executeBoundaryEffects(applyBoundary({ type: 'max_turn_elapsed' }));
+        }, OPEN_SPEECH_MAX_TURN_MS);
+      }
+      if (fx.type === 'reopen_native') {
+        startContinuationNative();
+      }
+      if (fx.type === 'abort_native') {
+        engineActiveRef.current = false;
+        try { ExpoSpeechRecognitionModule.abort(); } catch { /* already idle */ }
+      }
+      if (fx.type === 'deliver') {
+        deliverBufferWithoutNativeStop(fx.source, fx.utterance);
+      }
+    }
+  };
+
+  const deliverBufferWithoutNativeStop = (source: string, forcedText?: string) => {
+    const final = (forcedText ?? bufferRef.current).trim();
     bufferRef.current = '';
     // Any delivery (final OR partial-recovered) supersedes any retained
     // partial for this turn -- clear here so a guaranteed follow-up 'end'
@@ -191,6 +315,8 @@ export function useMic(
     turnActiveRef.current = false;
     speechStartedRef.current = false;
     if (maxTimer.current) { clearTimeout(maxTimer.current); maxTimer.current = null; }
+    clearContinuationTimer();
+    clearHeraldMaxTurnTimer();
     setIsRecording(false);
     if (final) {
       log('TRANSCRIPT_SELECTED', {
@@ -206,6 +332,34 @@ export function useMic(
       });
       onTranscript(final);
     }
+  };
+
+  const haltNativeMicAfterBoundary = (reason: 'user_talk_stop' | 'automated_teardown') => {
+    clearEmptySessionRecovery();
+    clearReadyTimeout();
+    listeningReadyRef.current = false;
+    turnActiveRef.current = false;
+    speechStartedRef.current = false;
+    if (bufferTimerRef.current) {
+      clearTimeout(bufferTimerRef.current);
+      bufferTimerRef.current = null;
+    }
+    if (maxTimer.current) { clearTimeout(maxTimer.current); maxTimer.current = null; }
+    latestPartialRef.current = '';
+    setPartialText('');
+    rlog('TEARDOWN_REQUESTED', { reason });
+    try {
+      ExpoSpeechRecognitionModule.stop();
+    } catch (e) {
+      console.error('[useMic] stop failed:', e);
+    }
+    setIsRecording(false);
+  };
+
+  // Empty-session recovery and 30s mic safety: abandon. Never submit buffer.
+  const abandonRecordingForAutomatedTeardown = () => {
+    executeBoundaryEffects(applyBoundary({ type: 'automated_teardown' }));
+    haltNativeMicAfterBoundary('automated_teardown');
   };
 
   useSpeechRecognitionEvent('start', () => {
@@ -237,6 +391,10 @@ export function useMic(
   useSpeechRecognitionEvent('speechstart', () => {
     rlog('NATIVE_SPEECH_START');
     speechStartedRef.current = true;
+    executeBoundaryEffects(applyBoundary({
+      type: 'speechstart',
+      nativeSessionId: micSessionRef.current,
+    }));
     if (shouldCancelEmptySessionRecoveryOnSpeechStart({ timerArmed: !!emptySessionTimerRef.current })) {
       log('EMPTY_SESSION_TIMER_CANCELLED_SPEECH_START');
       clearEmptySessionRecovery();
@@ -300,7 +458,7 @@ export function useMic(
             }
             log('EMPTY_SESSION_RECOVERY_FIRED');
             emptySessionTokenRef.current = null;
-            stopRecording();
+            abandonRecordingForAutomatedTeardown();
           }, 5000);
         }
         return; // noise segment - keep the mic hot, don't end the turn
@@ -316,6 +474,11 @@ export function useMic(
       bufferRef.current = bufferRef.current
         ? bufferRef.current + ' ' + text
         : text;
+      executeBoundaryEffects(applyBoundary({
+        type: 'native_result_final',
+        nativeSessionId: micSessionRef.current,
+        text,
+      }));
 
       if (bufferTimerRef.current) {
         clearTimeout(bufferTimerRef.current);
@@ -346,7 +509,7 @@ export function useMic(
     if (event.error === 'no-speech') {
       if (decideOneShotNoSpeech({ bufferHasContent: !!bufferRef.current.trim() }) === 'flush') {
         log('ONE_SHOT_FLUSH', { source: 'no_speech' });
-        deliverBufferWithoutNativeStop('no_speech');
+        executeBoundaryEffects(applyBoundary({ type: 'no_speech_error', nativeSessionId: micSessionRef.current }));
         return;
       }
       // Genuine content-free no-speech (teardown, not flush): no transcript
@@ -354,16 +517,27 @@ export function useMic(
       // so a caller with an active pending confirmation can advance its own
       // re-ask/budget ladder instead of this silently disappearing.
       log('NO_RECOGNIZABLE_SPEECH', { source: 'no_speech_error' });
+      executeBoundaryEffects(applyBoundary({
+        type: 'no_speech_error',
+        nativeSessionId: micSessionRef.current,
+      }));
       onNoRecognizableSpeech?.();
+      return;
     }
     if (event.error !== 'no-speech') {
       console.error('[useMic] Speech recognition error:', event.error);
     }
-    setIsRecording(false);
-    turnActiveRef.current = false;
-    if (maxTimer.current) { clearTimeout(maxTimer.current); maxTimer.current = null; }
-    if (bufferTimerRef.current) { clearTimeout(bufferTimerRef.current); bufferTimerRef.current = null; }
-    bufferRef.current = '';
+    executeBoundaryEffects(applyBoundary({
+      type: 'recognition_error',
+      nativeSessionId: micSessionRef.current,
+    }));
+    if (boundaryRef.current.phase === 'finalized' || boundaryRef.current.phase === 'abandoned') {
+      setIsRecording(false);
+      turnActiveRef.current = false;
+      if (maxTimer.current) { clearTimeout(maxTimer.current); maxTimer.current = null; }
+      if (bufferTimerRef.current) { clearTimeout(bufferTimerRef.current); bufferTimerRef.current = null; }
+      if (boundaryRef.current.delivered && !bufferRef.current.trim()) bufferRef.current = '';
+    }
   });
 
   useSpeechRecognitionEvent('end', () => {
@@ -378,39 +552,34 @@ export function useMic(
     // dispatched, including after errors -- the one reliable confirmation
     // point that a suspend request actually completed.
     suspendCoordinatorRef.current.onNativeEnd();
-    // One-shot: native 'end' is turn-over, not a mid-utterance pause.
-    const decision = decideOneShotEnd({
-      bufferHasContent: !!bufferRef.current.trim(),
+    const effects = applyBoundary({
+      type: 'native_end',
+      nativeSessionId: micSessionRef.current,
       speechStarted: speechStartedRef.current,
-      bestPartialHasContent: !!latestPartialRef.current.trim(),
+      partial: latestPartialRef.current,
+      nowMs: Date.now(),
     });
-    if (decision === 'flush') {
+    const willReopen = effects.some((e) => e.type === 'reopen_native');
+    const noSpeech = effects.find((e) => e.type === 'no_recognizable_speech');
+    if (effects.some((e) => e.type === 'deliver')) {
       log('ONE_SHOT_FLUSH', { source: 'native_end' });
       rlog('TEARDOWN_COMPLETED', { reason: 'one_shot_flush' });
-      deliverBufferWithoutNativeStop('native_end');
-      return;
     }
-    if (decision === 'flush_partial') {
-      // No genuine final ever arrived, but a contentful partial did --
-      // recover it through the SAME delivery path as a real final (copy
-      // into bufferRef, reuse deliverBufferWithoutNativeStop unchanged).
-      // No second routing path.
-      log('ONE_SHOT_FLUSH_PARTIAL', { source: 'native_end' });
-      rlog('TEARDOWN_COMPLETED', { reason: 'one_shot_flush_partial' });
-      bufferRef.current = latestPartialRef.current;
-      deliverBufferWithoutNativeStop('native_end_partial');
-      return;
-    }
-    if (decision === 'heard_unrecognized' || decision === 'silence') {
-      if (decision === 'heard_unrecognized') {
+    executeBoundaryEffects(effects);
+    if (noSpeech) {
+      if (noSpeech.reason === 'heard_unrecognized') {
         log('HEARD_UNRECOGNIZED');
         rlog('HEARD_UNRECOGNIZED');
       }
-      // Same content-free surfacing as the no-speech error branch above --
-      // no transcript, nothing fabricated, caller decides relevance via its
-      // own pending check.
-      log('NO_RECOGNIZABLE_SPEECH', { source: 'native_end', decision });
+      log('NO_RECOGNIZABLE_SPEECH', { source: 'native_end', decision: noSpeech.reason });
       onNoRecognizableSpeech?.();
+    }
+    if (willReopen || boundaryRef.current.phase === 'awaiting_continuation' || boundaryRef.current.phase === 'listening') {
+      if (boundaryRef.current.delivered) {
+        setIsRecording(false);
+        turnActiveRef.current = false;
+      }
+      return;
     }
     setIsRecording(false);
     turnActiveRef.current = false;
@@ -419,7 +588,7 @@ export function useMic(
     setPartialText('');
     if (maxTimer.current) { clearTimeout(maxTimer.current); maxTimer.current = null; }
     if (bufferTimerRef.current) { clearTimeout(bufferTimerRef.current); bufferTimerRef.current = null; }
-    bufferRef.current = '';
+    if (boundaryRef.current.delivered) bufferRef.current = '';
   });
 
   // Unmount: never leave a caller awaiting a suspend that will never resolve.
@@ -428,55 +597,15 @@ export function useMic(
       suspendCoordinatorRef.current.cancel();
       clearEmptySessionRecovery();
       clearReadyTimeout();
+      clearContinuationTimer();
+      clearHeraldMaxTurnTimer();
     };
   }, []);
 
-  // ── stopRecording memoized -- onTranscript is its only external dep ─────────
+  // Explicit Talk-button stop: may finalize a stitched utterance once.
   const stopRecording = useCallback(async () => {
-    clearEmptySessionRecovery();
-    clearReadyTimeout();
-    listeningReadyRef.current = false;
-    turnActiveRef.current = false; // manual stop: the resulting 'end' must NOT restart
-    speechStartedRef.current = false;
-    if (bufferTimerRef.current) {
-      clearTimeout(bufferTimerRef.current);
-      bufferTimerRef.current = null;
-    }
-    if (bufferRef.current.trim()) {
-      const final = bufferRef.current.trim();
-      bufferRef.current = '';
-      latestPartialRef.current = '';
-      setPartialText('');
-      if (maxTimer.current) { clearTimeout(maxTimer.current); maxTimer.current = null; }
-      rlog('TEARDOWN_REQUESTED', { reason: 'manual_stop' });
-      try { ExpoSpeechRecognitionModule.stop(); } catch (e) { console.error('[useMic] stop failed:', e); }
-      setIsRecording(false);
-      // TEMP DIAGNOSTIC — D1 structured-speech integrity, 2026-08-12.
-      // Metadata only, no transcript content. Remove after D1 is classified.
-      log('TRANSCRIPT_SELECTED', {
-        digitCount: (final.match(/\d/g) || []).length,
-        charCount: final.length,
-        source: 'manual_stop',
-      });
-      const turnId = beginTurn();
-      latLog('STT FINAL available', {
-        turnId,
-        charLen: final.length,
-        source: 'manual_stop',
-      });
-      onTranscript(final);
-      return;
-    }
-    if (maxTimer.current) { clearTimeout(maxTimer.current); maxTimer.current = null; }
-    latestPartialRef.current = '';
-    setPartialText('');
-    rlog('TEARDOWN_REQUESTED', { reason: 'manual_stop' });
-    try {
-      ExpoSpeechRecognitionModule.stop();
-    } catch (e) {
-      console.error('[useMic] stop failed:', e);
-    }
-    setIsRecording(false);
+    executeBoundaryEffects(applyBoundary({ type: 'user_stop' }));
+    haltNativeMicAfterBoundary('user_talk_stop');
   }, [onTranscript]);
 
   // ── startRecording memoized -- stopRecording is its only dep ───────────────
@@ -527,8 +656,13 @@ export function useMic(
         mode: recognitionModeRef.current,
         entryPoint,
       });
-      ExpoSpeechRecognitionModule.start(getStartConfig());
-      engineActiveRef.current = true;
+      executeBoundaryEffects(applyBoundary({
+        type: 'herald_start',
+        mode: recognitionModeRef.current,
+        nativeSessionId: session,
+        nowMs: Date.now(),
+      }));
+      requestNativeStart(session);
       log('NATIVE_START_CALLED');
       rlog('NATIVE_START_REQUESTED', { restart: false });
 
@@ -536,27 +670,7 @@ export function useMic(
       try { stateAfter = await ExpoSpeechRecognitionModule.getStateAsync(); } catch (e) { stateAfter = `error:${String(e)}`; }
       log('STATE_AFTER_START', { state: stateAfter });
 
-      readyTimeoutRef.current = setTimeout(() => {
-        readyTimeoutRef.current = null;
-        const decision = applyListeningReadyTimeout({
-          timeoutSession: session,
-          currentSession: micSessionRef.current,
-          requested: engineActiveRef.current,
-          nativeReady: listeningReadyRef.current,
-        });
-        if (decision !== 'fail_closed') return;
-        speechLifecycleLog('RECOGNITION_READY_TIMEOUT', { session });
-        log('READINESS_TIMEOUT');
-        rlog('READINESS_TIMEOUT', { session });
-        engineActiveRef.current = false;
-        listeningReadyRef.current = false;
-        setIsRecording(false);
-        try { ExpoSpeechRecognitionModule.abort(); } catch (e) {
-          console.error('[useMic] readiness abort failed:', e);
-        }
-      }, LISTENING_READY_TIMEOUT_MS);
-
-      maxTimer.current = setTimeout(() => stopRecording(), 30000);
+      maxTimer.current = setTimeout(() => abandonRecordingForAutomatedTeardown(), 30000);
     } catch (e) {
       log('START_FAILED', { error: String(e) });
       rlog('NATIVE_START_FAILED', { error: String(e), restart: false });

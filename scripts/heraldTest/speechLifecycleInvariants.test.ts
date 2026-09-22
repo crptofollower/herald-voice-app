@@ -146,11 +146,12 @@ export async function runSpeechLifecycleInvariantsV1Tests() {
     },
     'single setIsRecording(true) inside start event');
   assert('SLI-17 start() request does not set listening-ready',
-    startRecording,
+    micSrc,
     v => typeof v === 'string'
       && v.includes('RECOGNITION_REQUESTED')
       && v.includes('ExpoSpeechRecognitionModule.start')
-      && !v.includes('setIsRecording(true)')
+      && v.includes('requestNativeStart')
+      && !/const requestNativeStart[\s\S]*?setIsRecording\(true\)/.test(v.slice(v.indexOf('const requestNativeStart'), v.indexOf('const startContinuationNative')))
       && v.includes('applyListeningReadyTimeout')
       && v.includes('LISTENING_READY_TIMEOUT_MS'),
     'request + timeout, no setIsRecording(true)');
