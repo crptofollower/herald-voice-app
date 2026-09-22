@@ -18,6 +18,12 @@
 
 import { getDB } from "./schema";
 import { normalizePersonTarget, liftRelationshipName } from "../utils/personReference";
+import {
+  ensurePersonEntityNode,
+  hasPersonEntitiesTable,
+  linkContactToPersonEntity,
+  withContactPersonEntityTx,
+} from "./personEntityIdentity";
 
 export interface Contact {
   id: string;
@@ -74,42 +80,50 @@ export function writeContactRaw(
         );
 
     if (existing) {
-      db.runSync(
-        `UPDATE contacts SET
-           relationship  = relationship,
-           phone         = COALESCE(?, phone),
-           address       = COALESCE(?, address),
-           email         = COALESCE(?, email),
-           birthday      = COALESCE(?, birthday),
-           importance    = MAX(importance, ?),
-           notes         = COALESCE(?, notes),
-           is_emergency  = COALESCE(?, is_emergency),
-           updated_at    = ?
-         WHERE id = ?;`,
-        [
-          contact.phone ?? null, contact.address ?? null, contact.email ?? null,
-          contact.birthday ?? null, contact.importance ?? 5, contact.notes ?? null,
-          contact.is_emergency ?? null, now, existing.id,
-        ]
-      );
-      return existing.id;
+      return withContactPersonEntityTx(() => {
+        db.runSync(
+          `UPDATE contacts SET
+             relationship  = relationship,
+             phone         = COALESCE(?, phone),
+             address       = COALESCE(?, address),
+             email         = COALESCE(?, email),
+             birthday      = COALESCE(?, birthday),
+             importance    = MAX(importance, ?),
+             notes         = COALESCE(?, notes),
+             is_emergency  = COALESCE(?, is_emergency),
+             updated_at    = ?
+           WHERE id = ?;`,
+          [
+            contact.phone ?? null, contact.address ?? null, contact.email ?? null,
+            contact.birthday ?? null, contact.importance ?? 5, contact.notes ?? null,
+            contact.is_emergency ?? null, now, existing.id,
+          ]
+        );
+        ensurePersonEntityNode(existing.id, contact.name.trim());
+        linkContactToPersonEntity(existing.id);
+        return existing.id;
+      });
     }
 
     const id = `c_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-    db.runSync(
-      `INSERT INTO contacts
-         (id, name, relationship, phone, address, email, birthday, importance,
-          entity_id, os_contact_id, notes, is_emergency, last_contact, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
-      [
-        id, contact.name.trim(), contact.relationship ?? null, contact.phone ?? null,
-        contact.address ?? null, contact.email ?? null, contact.birthday ?? null,
-        contact.importance ?? 5, contact.entity_id ?? null, contact.os_contact_id ?? null,
-        contact.notes ?? null, contact.is_emergency ?? 0, contact.last_contact ?? null,
-        now, now,
-      ]
-    );
-    return id;
+    const entityId = hasPersonEntitiesTable() ? id : (contact.entity_id ?? null);
+    return withContactPersonEntityTx(() => {
+      ensurePersonEntityNode(id, contact.name.trim());
+      db.runSync(
+        `INSERT INTO contacts
+           (id, name, relationship, phone, address, email, birthday, importance,
+            entity_id, os_contact_id, notes, is_emergency, last_contact, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+        [
+          id, contact.name.trim(), contact.relationship ?? null, contact.phone ?? null,
+          contact.address ?? null, contact.email ?? null, contact.birthday ?? null,
+          contact.importance ?? 5, entityId, contact.os_contact_id ?? null,
+          contact.notes ?? null, contact.is_emergency ?? 0, contact.last_contact ?? null,
+          now, now,
+        ]
+      );
+      return id;
+    });
   } catch {
     return "";
   }
@@ -146,45 +160,53 @@ export function writeContactValidated(
         );
 
     if (existing) {
-      const result = db.runSync(
-        `UPDATE contacts SET
-           relationship  = relationship,
-           phone         = COALESCE(?, phone),
-           address       = COALESCE(?, address),
-           email         = COALESCE(?, email),
-           birthday      = COALESCE(?, birthday),
-           importance    = MAX(importance, ?),
-           notes         = COALESCE(?, notes),
-           is_emergency  = COALESCE(?, is_emergency),
-           updated_at    = ?
-         WHERE id = ?;`,
-        [
-          contact.phone ?? null, contact.address ?? null, contact.email ?? null,
-          contact.birthday ?? null, contact.importance ?? 5, contact.notes ?? null,
-          contact.is_emergency ?? null, now, existing.id,
-        ]
-      );
-      if (result.changes === 0) {
-        return { ok: false, reason: 'no_rows_updated' };
-      }
-      return { ok: true, action: 'updated', contactId: existing.id };
+      return withContactPersonEntityTx(() => {
+        const result = db.runSync(
+          `UPDATE contacts SET
+             relationship  = relationship,
+             phone         = COALESCE(?, phone),
+             address       = COALESCE(?, address),
+             email         = COALESCE(?, email),
+             birthday      = COALESCE(?, birthday),
+             importance    = MAX(importance, ?),
+             notes         = COALESCE(?, notes),
+             is_emergency  = COALESCE(?, is_emergency),
+             updated_at    = ?
+           WHERE id = ?;`,
+          [
+            contact.phone ?? null, contact.address ?? null, contact.email ?? null,
+            contact.birthday ?? null, contact.importance ?? 5, contact.notes ?? null,
+            contact.is_emergency ?? null, now, existing.id,
+          ]
+        );
+        if (result.changes === 0) {
+          return { ok: false, reason: 'no_rows_updated' };
+        }
+        ensurePersonEntityNode(existing.id, name);
+        linkContactToPersonEntity(existing.id);
+        return { ok: true, action: 'updated', contactId: existing.id };
+      });
     }
 
     const id = `c_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-    db.runSync(
-      `INSERT INTO contacts
-         (id, name, relationship, phone, address, email, birthday, importance,
-          entity_id, os_contact_id, notes, is_emergency, last_contact, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
-      [
-        id, name, contact.relationship ?? null, contact.phone ?? null,
-        contact.address ?? null, contact.email ?? null, contact.birthday ?? null,
-        contact.importance ?? 5, contact.entity_id ?? null, contact.os_contact_id ?? null,
-        contact.notes ?? null, contact.is_emergency ?? 0, contact.last_contact ?? null,
-        now, now,
-      ]
-    );
-    return { ok: true, action: 'inserted', contactId: id };
+    const entityId = hasPersonEntitiesTable() ? id : (contact.entity_id ?? null);
+    return withContactPersonEntityTx(() => {
+      ensurePersonEntityNode(id, name);
+      db.runSync(
+        `INSERT INTO contacts
+           (id, name, relationship, phone, address, email, birthday, importance,
+            entity_id, os_contact_id, notes, is_emergency, last_contact, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+        [
+          id, name, contact.relationship ?? null, contact.phone ?? null,
+          contact.address ?? null, contact.email ?? null, contact.birthday ?? null,
+          contact.importance ?? 5, entityId, contact.os_contact_id ?? null,
+          contact.notes ?? null, contact.is_emergency ?? 0, contact.last_contact ?? null,
+          now, now,
+        ]
+      );
+      return { ok: true, action: 'inserted', contactId: id };
+    });
   } catch {
     return { ok: false, reason: 'db_error' };
   }

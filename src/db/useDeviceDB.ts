@@ -63,6 +63,15 @@ export async function initDB(): Promise<void> {
         console.warn("[Herald] contacts backfill skipped:", e);
       }
 
+      // Rung 5 Step 2: live contacts ↔ person entities (shared id) + Me node.
+      // Idempotent. Does not write people, edges, or profile facts.
+      try {
+        const { ensureRung5PersonEntityIdentity } = await import("./personEntityIdentity");
+        ensureRung5PersonEntityIdentity();
+      } catch (e) {
+        console.warn("[Herald] person entity identity skipped:", e);
+      }
+
       _initialized = true;
       _initPromise = null;
     } catch (e) {
