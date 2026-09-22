@@ -23,6 +23,7 @@ import { detectHouseholdRead, type HouseholdReadIntent } from "../utils/househol
 import { detectServiceRemove, detectPhoneCapture } from "../utils/householdCapture";
 import { detectFamilyRead, answerFamilyRead } from "../utils/familyRead";
 import { detectPersonAssociationRead, answerPersonAssociationRead } from "../db/graphRead";
+import { detectEpisodeCapture } from "../utils/episodeCapture";
 import {
   REMINDER_SIGNALS,
   NOTE_CAPTURE_SIGNALS,
@@ -1295,7 +1296,9 @@ async function classifyQueryCore(message: string): Promise<TierDecision> {
   }
 
   // Device: note capture — write to SQLite, zero network
-  if (NOTE_CAPTURE_SIGNALS.some((p) => p.test(msg))) {
+  // Device: note capture — write to SQLite, zero network.
+  // Explicit episodic memory cues are owned by episode_capture (tier-3 floor).
+  if (NOTE_CAPTURE_SIGNALS.some((p) => p.test(msg)) && detectEpisodeCapture(msg).length === 0) {
     const bodyMatch =
       msg.match(/note that (.+)/i)?.[1] ??
       msg.match(/make a note to (.+)/i)?.[1] ??

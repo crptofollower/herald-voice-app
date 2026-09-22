@@ -44,6 +44,7 @@ export type IntentRecord =
   | { type: 'service_capture'; category: string; name: string; phone?: string }
   | { type: 'family_capture'; relation: string; name: string; location?: string; phone?: string }
   | { type: 'person_association_capture'; subjectName: string; possessorName: string; statedAs: string; raw: string }
+  | { type: 'episode_capture'; rawPhrase: string; raw: string }
   | { type: 'phone_capture'; name: string; phone: string; relationship?: string }
   | { type: 'address_capture'; name: string; address: string }
   | { type: 'emergency_contact'; name: string; phone?: string }
@@ -388,6 +389,8 @@ function isCaptureComplete(rec: IntentRecord): boolean {
     case 'family_capture':    return isRealName(rec.name) && !!rec.relation?.trim();
     case 'person_association_capture':
       return isRealName(rec.subjectName) && isRealName(rec.possessorName) && !!rec.statedAs?.trim();
+    case 'episode_capture':
+      return !!rec.rawPhrase?.trim();
     case 'medical_capture':   return !!rec.drug?.trim();
     case 'medical_visit':     return !!(rec.doctor_name?.trim() || rec.specialty?.trim());
     case 'list_add':          return Array.isArray(rec.items) && rec.items.some(i => !!i?.trim());
