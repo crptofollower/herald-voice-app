@@ -11,18 +11,30 @@ import { ingestAuthorizedCalendarEvent } from '../db/calendarEvidenceIngest';
 import { setNow, resetNow } from '../utils/heraldClock';
 import { useStore } from '../store/useStore';
 import { normalizeInput } from '../utils/normalizeInput';
+import {
+  resetSpeechLifecycleRing,
+  snapshotSpeechLifecycleRing,
+} from '../hooks/speechLifecycleInvariants';
 
 type SendMessageFn = (text: string, inputSource?: 'typed' | 'speech') => Promise<void>;
 type StartRecordingFn = (
   entryPoint?: 'manual_button' | 'post_tts_handoff' | 'unknown_entry',
   mode?: 'open' | 'control_confirmation',
 ) => Promise<void> | void;
+type TalkSessionPeek = {
+  phase: string;
+  generation: number;
+  pendingFollowupGeneration: number | null;
+};
 type JourneyRuntime = {
   sendMessage: SendMessageFn;
   peekPendingKey: () => string | null;
   resetConversation: () => void;
   startRecording?: StartRecordingFn;
   peekSpeaking?: () => boolean;
+  beginManualConversation?: () => void;
+  injectHeardTranscript?: (text: string) => void;
+  peekTalkSession?: () => TalkSessionPeek;
 };
 
 type NativeBridge = {
@@ -125,6 +137,7 @@ const SUBMIT_EVENT = 'DebugJourneySubmitTurn';
 const RESET_EVENT = 'DebugJourneyResetScenario';
 const TEARDOWN_EVENT = 'DebugJourneyTeardown';
 const SPEECH_PROBE_EVENT = 'DebugJourneySpeechProbe';
+const TALK_SESSION_HANDOFF_EVENT = 'DebugJourneyTalkSessionHandoff';
 const NATIVE_NAME = 'DebugJourneyBridge';
 
 let runtime: JourneyRuntime | null = null;
@@ -133,6 +146,7 @@ let subscription: { remove: () => void } | null = null;
 let resetSubscription: { remove: () => void } | null = null;
 let teardownSubscription: { remove: () => void } | null = null;
 let speechProbeSubscription: { remove: () => void } | null = null;
+let talkSessionHandoffSubscription: { remove: () => void } | null = null;
 let inFlightTurnId: string | null = null;
 let lastReportedOutcome: unknown = undefined;
 let lastReportedPendingKey: string | null = null;
@@ -644,6 +658,165 @@ async function runSpeechLifecycleProbe(): Promise<void> {
   });
 }
 
+function requestedEntry(event: { event: string; extra: Record<string, unknown> }): string | null {
+  if (event.event !== 'RECOGNITION_REQUESTED') return null;
+  return typeof event.extra.entryPoint === 'string' ? event.extra.entryPoint : 'unknown_entry';
+}
+
+async function runTalkSessionHandoffProbe(): Promise<void> {
+  const beginManual = runtime?.beginManualConversation;
+  const injectHeard = runtime?.injectHeardTranscript;
+  const peekTalk = runtime?.peekTalkSession;
+  const speakingNow = () => !!runtime?.peekSpeaking?.();
+  if (!beginManual || !injectHeard || !peekTalk) {
+    emitComplete({
+      schema: 'herald.journey.talk_session_handoff.v1',
+      status: 'FAIL',
+      failReason: 'talk_session_runtime_unbound',
+    });
+    return;
+  }
+
+  resetSpeechLifecycleRing();
+  const startedAtMs = Date.now();
+  const harnessActions: Array<{ ts: number; action: string; text?: string }> = [];
+
+  const snapshot = () => snapshotSpeechLifecycleRing();
+  const fail = (reason: string, extra: Record<string, unknown> = {}) => {
+    emitComplete({
+      schema: 'herald.journey.talk_session_handoff.v1',
+      status: 'FAIL',
+      failReason: reason,
+      startedAtMs,
+      finishedAtMs: Date.now(),
+      harnessStartRecordingCalls: 0,
+      harnessActions,
+      ring: snapshot(),
+      talkSession: peekTalk(),
+      ...extra,
+    });
+  };
+
+  beginManual();
+  harnessActions.push({ ts: Date.now(), action: 'begin_manual_conversation' });
+
+  const manualListen = await waitFor(
+    () => snapshot().some((e) => requestedEntry(e) === 'manual_button'),
+    8000,
+  );
+  if (!manualListen.met) {
+    fail('manual_listen_not_requested');
+    return;
+  }
+
+  injectHeard('hello kit');
+  harnessActions.push({ ts: Date.now(), action: 'inject_turn_1', text: 'hello kit' });
+
+  const tts1On = await waitFor(speakingNow, 20000);
+  if (!tts1On.met) {
+    fail('first_tts_did_not_begin');
+    return;
+  }
+  const tts1Off = await waitFor(() => !speakingNow(), 25000);
+  if (!tts1Off.met) {
+    fail('first_tts_did_not_complete');
+    return;
+  }
+
+  const auto1 = await waitFor(() => {
+    const ring = snapshot();
+    const fire = ring.some((e) => e.event === 'TALKSESSION_FOLLOWUP_FIRE');
+    const listen = ring.some((e) => requestedEntry(e) === 'post_tts_handoff');
+    return fire && listen;
+  }, 8000);
+  if (!auto1.met) {
+    fail('automatic_post_tts_handoff_missing');
+    return;
+  }
+
+  if (speakingNow()) {
+    fail('stt_requested_while_tts_active');
+    return;
+  }
+
+  const afterFirstAuto = snapshot();
+  const autoStartsAfterFirstTts = afterFirstAuto.filter((e) => requestedEntry(e) === 'post_tts_handoff');
+  if (autoStartsAfterFirstTts.length !== 1) {
+    fail('duplicate_or_missing_first_automatic_listen', { automaticStarts: autoStartsAfterFirstTts.length });
+    return;
+  }
+
+  injectHeard('what time is it');
+  harnessActions.push({ ts: Date.now(), action: 'inject_turn_2', text: 'what time is it' });
+
+  const tts2On = await waitFor(speakingNow, 20000);
+  if (!tts2On.met) {
+    fail('second_tts_did_not_begin');
+    return;
+  }
+  const tts2Off = await waitFor(() => !speakingNow(), 25000);
+  if (!tts2Off.met) {
+    fail('second_tts_did_not_complete');
+    return;
+  }
+
+  const auto2 = await waitFor(() => {
+    return snapshot().filter((e) => e.event === 'TALKSESSION_FOLLOWUP_FIRE').length >= 2
+      && snapshot().filter((e) => requestedEntry(e) === 'post_tts_handoff').length >= 2;
+  }, 8000);
+  if (!auto2.met) {
+    fail('second_automatic_followup_not_eligible');
+    return;
+  }
+
+  const idle = await waitFor(() => peekTalk().phase === 'idle', 35000);
+  if (!idle.met) {
+    fail('talk_session_did_not_terminate_on_silence');
+    return;
+  }
+  const idleAtMs = Date.now();
+  await sleep(2000);
+  const rearmAfterIdle = snapshot().some(
+    (e) => e.ts >= idleAtMs && (e.event === 'TALKSESSION_FOLLOWUP_FIRE' || requestedEntry(e) === 'post_tts_handoff'),
+  );
+  if (rearmAfterIdle) {
+    fail('automatic_rearm_after_termination');
+    return;
+  }
+
+  const ring = snapshot();
+  const requested = ring.filter((e) => e.event === 'RECOGNITION_REQUESTED');
+  const fires = ring.filter((e) => e.event === 'TALKSESSION_FOLLOWUP_FIRE');
+  const manualStarts = requested.filter((e) => requestedEntry(e) === 'manual_button');
+  const autoStarts = requested.filter((e) => requestedEntry(e) === 'post_tts_handoff');
+  const orderOk =
+    (manualStarts[0]?.ts ?? 0) < (fires[0]?.ts ?? 0)
+    && (fires[0]?.ts ?? 0) <= (autoStarts[0]?.ts ?? 0)
+    && (autoStarts[0]?.ts ?? 0) < (fires[1]?.ts ?? Number.POSITIVE_INFINITY);
+
+  emitComplete({
+    schema: 'herald.journey.talk_session_handoff.v1',
+    status: orderOk ? 'PASS' : 'FAIL',
+    failReason: orderOk ? null : 'event_order_invalid',
+    startedAtMs,
+    finishedAtMs: Date.now(),
+    harnessStartRecordingCalls: 0,
+    harnessActions,
+    recognitionRequested: requested.map((e) => ({
+      ts: e.ts,
+      entryPoint: requestedEntry(e),
+      session: e.extra.session ?? null,
+    })),
+    talkSessionFires: fires.map((e) => ({ ts: e.ts, generation: e.extra.generation ?? null })),
+    automaticFollowupStarts: autoStarts.length,
+    manualStarts: manualStarts.length,
+    overlappingTtsStt: false,
+    rearmAfterIdle: false,
+    talkSession: peekTalk(),
+    ring,
+  });
+}
+
 function runReset(scenarioId: string | null = null): void {
   try {
     if (!isDBReady()) {
@@ -679,6 +852,9 @@ export function bindJourneySendMessage(fn: SendMessageFn): void {
     resetConversation: runtime?.resetConversation ?? (() => {}),
     startRecording: runtime?.startRecording,
     peekSpeaking: runtime?.peekSpeaking,
+    beginManualConversation: runtime?.beginManualConversation,
+    injectHeardTranscript: runtime?.injectHeardTranscript,
+    peekTalkSession: runtime?.peekTalkSession,
   };
   if (native) {
     try { native.hostReady(); } catch { /* ignore */ }
@@ -724,6 +900,9 @@ export function onboardAndroidJourneyHost(): void {
   speechProbeSubscription = DeviceEventEmitter.addListener(SPEECH_PROBE_EVENT, () => {
     void runSpeechLifecycleProbe();
   });
+  talkSessionHandoffSubscription = DeviceEventEmitter.addListener(TALK_SESSION_HANDOFF_EVENT, () => {
+    void runTalkSessionHandoffProbe();
+  });
 }
 
 export function teardownAndroidJourneyHost(): void {
@@ -735,6 +914,8 @@ export function teardownAndroidJourneyHost(): void {
   teardownSubscription = null;
   speechProbeSubscription?.remove();
   speechProbeSubscription = null;
+  talkSessionHandoffSubscription?.remove();
+  talkSessionHandoffSubscription = null;
   runtime = null;
   native = null;
   inFlightTurnId = null;

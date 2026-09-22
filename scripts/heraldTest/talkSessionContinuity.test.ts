@@ -163,7 +163,7 @@ export async function runTalkSessionContinuityV1Tests() {
       && chatSrc.includes('evaluateFollowupFire')
       && chatSrc.includes('createTalkSession')
       && chatSrc.includes('activateFromManualTap')
-      && /if \(shouldStart\) startRecording\('post_tts_handoff'\)/.test(chatSrc),
+      && /if \(shouldStart\) \{[\s\S]*?startRecording\('post_tts_handoff'\)/.test(chatSrc),
     (v) => v === true, 'token-gated post_tts_handoff');
 
   assert('manual tap still uses startRecording manual_button and invalidates follow-up',

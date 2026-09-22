@@ -71,6 +71,26 @@ export function applyTtsTerminalFailsafe(opts: {
   });
 }
 
+export type SpeechLifecycleRingEvent = {
+  ts: number;
+  event: string;
+  extra: Record<string, unknown>;
+};
+
+const SPEECH_LIFECYCLE_RING_LIMIT = 80;
+const speechLifecycleRing: SpeechLifecycleRingEvent[] = [];
+
 export function speechLifecycleLog(event: string, extra: Record<string, unknown> = {}): void {
-  console.log(`[SPEECH-LIFECYCLE] ts=${Date.now()} event=${event} ${JSON.stringify(extra)}`);
+  const ts = Date.now();
+  speechLifecycleRing.push({ ts, event, extra: { ...extra } });
+  if (speechLifecycleRing.length > SPEECH_LIFECYCLE_RING_LIMIT) speechLifecycleRing.shift();
+  console.log(`[SPEECH-LIFECYCLE] ts=${ts} event=${event} ${JSON.stringify(extra)}`);
+}
+
+export function snapshotSpeechLifecycleRing(): SpeechLifecycleRingEvent[] {
+  return speechLifecycleRing.map((row) => ({ ts: row.ts, event: row.event, extra: { ...row.extra } }));
+}
+
+export function resetSpeechLifecycleRing(): void {
+  speechLifecycleRing.length = 0;
 }

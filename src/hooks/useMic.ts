@@ -522,7 +522,11 @@ export function useMic(
 
       micSessionRef.current += 1;
       const session = micSessionRef.current;
-      speechLifecycleLog('RECOGNITION_REQUESTED', { session, mode: recognitionModeRef.current });
+      speechLifecycleLog('RECOGNITION_REQUESTED', {
+        session,
+        mode: recognitionModeRef.current,
+        entryPoint,
+      });
       ExpoSpeechRecognitionModule.start(getStartConfig());
       engineActiveRef.current = true;
       log('NATIVE_START_CALLED');

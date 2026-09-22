@@ -192,6 +192,38 @@ object HeraldJourneyBridge {
     } else json
   }
 
+  fun probeTalkSessionHandoff(timeoutMs: Long = 120_000L): String {
+    if (!inFlight.compareAndSet(false, true)) {
+      return JSONObject().put("schema", "herald.journey.talk_session_handoff.v1").put("status", "FAIL").put("failReason", "duplicate_or_in_flight").toString()
+    }
+    lastJson.set(null)
+    expectedTurnId.set(null)
+    val latch = CountDownLatch(1)
+    waiter.set(latch)
+    val ctx = reactContext
+    if (ctx == null) {
+      inFlight.set(false)
+      waiter.set(null)
+      return JSONObject().put("schema", "herald.journey.talk_session_handoff.v1").put("status", "FAIL").put("failReason", "react_context_missing").toString()
+    }
+    try {
+      ctx
+        .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+        .emit("DebugJourneyTalkSessionHandoff", Arguments.createMap())
+    } catch (e: Exception) {
+      inFlight.set(false)
+      waiter.set(null)
+      return JSONObject().put("schema", "herald.journey.talk_session_handoff.v1").put("status", "FAIL").put("failReason", "emit_failed").toString()
+    }
+    val completed = latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+    val json = lastJson.get()
+    waiter.set(null)
+    inFlight.set(false)
+    return if (!completed || json == null) {
+      JSONObject().put("schema", "herald.journey.talk_session_handoff.v1").put("status", "FAIL").put("failReason", "timeout").toString()
+    } else json
+  }
+
   fun completeTurn(json: String) {
     val expected = expectedTurnId.get()
     if (expected != null) {

@@ -3111,7 +3111,13 @@ export default function ChatScreen() {
         return;
       }
       const { shouldStart } = talkSessionRef.current.evaluateFollowupFire(token, ctx);
-      if (shouldStart) startRecording('post_tts_handoff');
+      if (shouldStart) {
+        speechLifecycleLog('TALKSESSION_FOLLOWUP_FIRE', {
+          generation: token,
+          entryPoint: 'post_tts_handoff',
+        });
+        startRecording('post_tts_handoff');
+      }
     }, TALK_SESSION_FOLLOWUP_DELAY_MS);
   };
 
@@ -3152,11 +3158,28 @@ export default function ChatScreen() {
         startRecording: (entryPoint?: 'manual_button' | 'post_tts_handoff' | 'unknown_entry', mode?: 'open' | 'control_confirmation') =>
           startRecording(entryPoint ?? 'manual_button', mode ?? 'open'),
         peekSpeaking: () => isSpeakingRef.current,
+        beginManualConversation: () => {
+          const micMode = sessionRef.current.hasPending() ? 'control_confirmation' : 'open';
+          clearTalkSessionFollowupTimer();
+          talkSessionRef.current.activateFromManualTap();
+          speechLifecycleLog('TALKSESSION_MANUAL_ACTIVATE', {
+            generation: talkSessionRef.current.generation,
+          });
+          void startRecording('manual_button', micMode);
+        },
+        injectHeardTranscript: (text: string) => {
+          handleTranscript(text);
+        },
+        peekTalkSession: () => ({
+          phase: talkSessionRef.current.phase,
+          generation: talkSessionRef.current.generation,
+          pendingFollowupGeneration: talkSessionRef.current.pendingFollowupGeneration,
+        }),
       });
     } catch {
       /* journey host only */
     }
-  }, [sendMessage, startRecording]);
+  }, [sendMessage, startRecording, handleTranscript]);
 
   useRaiseToWake({
     aiName: aiName || 'Herald',
