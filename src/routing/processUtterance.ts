@@ -28,7 +28,12 @@ import {
   answerReferentUpcomingVisit,
   isReferentYearBoundedVisitQuestion,
   answerReferentYearBoundedVisit,
+  isReferentEpisodeTimeQuestion,
+  answerReferentEpisodeTime,
 } from './conversationalSubject';
+import { EPISODE_RECALL_LIMIT } from '../db/episodeRead';
+import { listActiveEpisodes } from '../db/episodesWriter';
+import { realizeEpisodePerspective } from '../utils/episodeCapture';
 import { isClosedActiveSubjectIdentityLookup, ACTIVE_SUBJECT_GROUNDING_ACK } from './activeSubjectReference';
 import { inspectHolds, formatHoldRecall } from './holdRecall';
 import { detectFamilyRead, resolveFamilyRead } from '../utils/familyRead';
@@ -244,6 +249,16 @@ function maybeEstablishConversationalSubject(
       holder.establishMedical({ entityId: name, displayName: name });
       return true;
     }
+  }
+  if (routeDecision.kind === 'device_read' && routeDecision.reason === 'episode:recall') {
+    const rows = listActiveEpisodes(EPISODE_RECALL_LIMIT);
+    if (rows.length !== 1) return false;
+    const row = rows[0];
+    holder.establishEpisode({
+      episodeId: row.id,
+      displayLabel: realizeEpisodePerspective(row.raw_phrase),
+    });
+    return true;
   }
   return false;
 }
@@ -1003,23 +1018,30 @@ export async function processUtterance(
     // or household) still returns null from every medical act below and
     // falls through unchanged -- never a fabricated cross-domain answer.
     const live = subject.peek();
+    if (live && isReferentEpisodeTimeQuestion(text)) {
+      const responseText = answerReferentEpisodeTime(live);
+      if (responseText) {
+        subject.clear();
+        return { handled: true, source: 'referent_resume', responseText, commits: [] };
+      }
+    }
     if (live && isReferentVisitDateQuestion(text)) {
       const responseText = await answerReferentVisitDate(live);
-      if (responseText) {
+      if (responseText && live.domain === 'medical_doctor') {
         subject.establishMedical({ entityId: live.entityId, displayName: live.displayName });
         return { handled: true, source: 'referent_resume', responseText, commits: [] };
       }
     }
     if (live && isReferentVisitOutcomeQuestion(text)) {
       const responseText = await answerReferentVisitOutcome(live);
-      if (responseText) {
+      if (responseText && live.domain === 'medical_doctor') {
         subject.establishMedical({ entityId: live.entityId, displayName: live.displayName });
         return { handled: true, source: 'referent_resume', responseText, commits: [] };
       }
     }
     if (live && isReferentUpcomingVisitQuestion(text)) {
       const responseText = await answerReferentUpcomingVisit(live);
-      if (responseText) {
+      if (responseText && live.domain === 'medical_doctor') {
         subject.establishMedical({ entityId: live.entityId, displayName: live.displayName });
         return { handled: true, source: 'referent_resume', responseText, commits: [] };
       }
@@ -1028,7 +1050,7 @@ export async function processUtterance(
       const yearMatch = isReferentYearBoundedVisitQuestion(text);
       if (yearMatch) {
         const responseText = await answerReferentYearBoundedVisit(live, yearMatch.year);
-        if (responseText) {
+        if (responseText && live.domain === 'medical_doctor') {
           subject.establishMedical({ entityId: live.entityId, displayName: live.displayName });
           return { handled: true, source: 'referent_resume', responseText, commits: [] };
         }
@@ -1041,7 +1063,7 @@ export async function processUtterance(
     if (unused?.domain === 'medical_doctor' && isClosedActiveSubjectIdentityLookup(text)) {
       // fall through to routeIntent / Active Subject; holder unchanged
     } else {
-      if (unused?.displayName) {
+      if (unused && unused.domain !== 'episode' && unused.displayName) {
         recordContinuationRecoveryCandidate(
           continuationRecoveryCandidates,
           'person',

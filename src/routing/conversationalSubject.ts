@@ -38,7 +38,10 @@ import {
   type CalendarEvidenceScope,
 } from '../conversation/calendarEvidenceRealization';
 import { findContactById } from '../db/contactsDB';
+import { getEpisodeById } from '../db/episodesWriter';
 import { getServiceProviderById } from '../utils/householdRead';
+import { now } from '../utils/heraldClock';
+import { formatSpokenDate } from '../utils/parseTime';
 import { formatPhoneForSpeech } from '../utils/phoneConfirm';
 
 export type FamilyConversationalSubject = {
@@ -68,10 +71,18 @@ export type MedicalConversationalSubject = {
   establishedAtTurn: number;
 };
 
+export type EpisodeConversationalSubject = {
+  domain: 'episode';
+  episodeId: string;
+  displayLabel: string;
+  establishedAtTurn: number;
+};
+
 export type ConversationalSubject =
   | FamilyConversationalSubject
   | HouseholdConversationalSubject
-  | MedicalConversationalSubject;
+  | MedicalConversationalSubject
+  | EpisodeConversationalSubject;
 
 // Closed first-slice speech act: phone-number question about a third-person
 // singular pronoun. Pronoun form is eligibility only — never a selector.
@@ -186,6 +197,15 @@ export class ConversationalSubjectHolder {
       entityId: match.entityId,
       displayName: match.displayName,
       category: match.category,
+      establishedAtTurn: this.turn,
+    };
+  }
+
+  establishEpisode(match: { episodeId: string; displayLabel: string }): void {
+    this.subject = {
+      domain: 'episode',
+      episodeId: match.episodeId,
+      displayLabel: match.displayLabel,
       establishedAtTurn: this.turn,
     };
   }
@@ -694,4 +714,70 @@ export async function answerReferentYearBoundedVisit(
     scope: { kind: 'year', year },
     dates,
   });
+}
+
+const EPISODE_TIME_REFERENT =
+  /^when\s+was\s+(?:that|this)(?:\s+again)?\s*[?.!]*$/i;
+
+const EPISODE_TIME_UNKNOWN = "You didn't say when that was.";
+const EPISODE_GONE = "I don't have that memory anymore.";
+
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+] as const;
+
+function foldEpisodeReferent(text: string): string {
+  return text.replace(/[\u2018\u2019\u02BC\u0060]/g, "'").trim();
+}
+
+export function isReferentEpisodeTimeQuestion(text: string): boolean {
+  const raw = foldEpisodeReferent(text);
+  if (!raw) return false;
+  return EPISODE_TIME_REFERENT.test(raw);
+}
+
+function parseOccurredDate(iso: string): { y: number; m: number; d: number } | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso.trim());
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  if (!y || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  return { y, m: mo, d };
+}
+
+function realizeEpisodeOccurredTime(
+  occurredAt: string | null,
+  occurredPrecision: string | null,
+): string {
+  const precision = (occurredPrecision ?? '').trim().toLowerCase();
+  if (precision === 'unknown' || !precision) return EPISODE_TIME_UNKNOWN;
+  const parts = occurredAt ? parseOccurredDate(occurredAt) : null;
+  if (!parts) return EPISODE_TIME_UNKNOWN;
+  if (precision === 'day') {
+    return `That was on ${formatSpokenDate(occurredAt!.trim())}.`;
+  }
+  if (precision === 'month') {
+    const monthName = MONTH_NAMES[parts.m - 1];
+    if (!monthName) return EPISODE_TIME_UNKNOWN;
+    const currentYear = now().getFullYear();
+    if (parts.y === currentYear) return `That was in ${monthName}.`;
+    return `That was in ${monthName} ${parts.y}.`;
+  }
+  if (precision === 'year') {
+    return `That was in ${parts.y}.`;
+  }
+  return EPISODE_TIME_UNKNOWN;
+}
+
+/**
+ * Live re-read of the episode subject. Identity only from the holder.
+ * Truth from getEpisodeById. Soft-removed/missing fails inside this path.
+ */
+export function answerReferentEpisodeTime(subject: ConversationalSubject): string | null {
+  if (subject.domain !== 'episode') return null;
+  const row = getEpisodeById(subject.episodeId);
+  if (!row || row.removed_at) return EPISODE_GONE;
+  return realizeEpisodeOccurredTime(row.occurred_at, row.occurred_precision);
 }
