@@ -27,6 +27,7 @@ import { generateCapabilityProposal, admitCapabilityProposal, WIRED_READ_CAPABIL
 import { evaluateSemanticDispatchEligibility } from './semanticDispatchEligibility';
 import { isClosedActiveSubjectIdentityLookup } from './activeSubjectReference';
 import { detectFamilyCapture } from '../utils/familyCapture';
+import { detectPersonAssociationCapture, addPersonAssociationCapture } from '../utils/personAssociationCapture';
 import { getDB } from '../db/schema';
 import { capturePerson } from '../db/capturePerson';
 import { findContactByName, setEmergencyContact, getEmergencyContact, retireRelationshipHolder, RELATIONSHIP_WORDS, resolvePersonIdentity, contactHasCapability, resolvePersonCapability, attachPhoneToContactById } from '../db/contactsDB';
@@ -179,6 +180,7 @@ const DETERMINISTIC_CAPTURERS: DeterministicCapturer[] = [
   (text, ctx) => detectPhoneCapture(text, ctx.contacts),
   (text) => detectDiagnosisCapture(text),
   (text) => detectFamilyCapture(text),
+  (text) => detectPersonAssociationCapture(text),
 ];
 
 export async function resolveContactCallIntent(
@@ -773,6 +775,17 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       }
     },
     async remove(item: string): Promise<CommitResult> {
+      return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
+    },
+    async clear(): Promise<CommitResult> {
+      return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
+    },
+  },
+  person_association_capture: {
+    async add(intent: IntentRecord, rawPhrase: string): Promise<CommitResult> {
+      return addPersonAssociationCapture(intent, rawPhrase);
+    },
+    async remove(_item: string): Promise<CommitResult> {
       return { status: 'noop', ack: "I can't take that off just yet — but I've still got it, and I won't lose it." };
     },
     async clear(): Promise<CommitResult> {
@@ -2441,6 +2454,7 @@ async function routeIntentCore(
     () => (phoneResult.kind === 'valid' ? [phoneResult.intent] : []),
     (text) => detectDiagnosisCapture(text),
     (text) => detectFamilyCapture(text),
+    (text) => detectPersonAssociationCapture(text),
   ];
   for (const capture of CAPTURERS_WITH_PHONE) {
     const intents = capture(text, capCtx);
