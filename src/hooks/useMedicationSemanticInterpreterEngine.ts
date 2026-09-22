@@ -43,7 +43,7 @@ import { semanticConsumersRequireContext } from '../utils/semanticProvisioningPo
 
 export type MedicationSemanticInterpreterEngineStatus = 'unavailable' | 'loading' | 'ready' | 'error';
 
-const MEDICATION_INTERPRETER_INIT = {
+export const MEDICATION_INTERPRETER_INIT = {
   n_ctx: 512,
   n_gpu_layers: 0,
 } as const;

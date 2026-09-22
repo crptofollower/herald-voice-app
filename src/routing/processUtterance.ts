@@ -48,6 +48,10 @@ import {
 } from '../utils/reminiscenceAdmission';
 import { nominateReminiscence } from '../utils/reminiscenceNominator';
 import {
+  observeRecollectionSemanticShadow,
+  shouldObserveRecollectionSemanticShadow,
+} from './recollectionSemanticNomination';
+import {
   getDefaultReminiscenceArc,
   type ReminiscenceArcHolder,
 } from './reminiscenceArc';
@@ -1572,6 +1576,15 @@ export async function processUtterance(
   logTodoCompletePendingProbe(text, session);
   if (isRecollectionNominationFallthrough(routeDecision)) {
     const disposition = nominateReminiscence(text, { arcOpen: arc.isOpen() });
+    const getSemanticCtx = deps.getMedicationSemanticInterpreterCtx ?? (() => null);
+    if (shouldObserveRecollectionSemanticShadow(getSemanticCtx)) {
+      await observeRecollectionSemanticShadow(
+        text,
+        { arcOpen: arc.isOpen() },
+        getSemanticCtx,
+        disposition,
+      );
+    }
     if (disposition === 'AUTOBIOGRAPHICAL' || disposition === 'CONTINUE_ARC') {
       return {
         handled: true,

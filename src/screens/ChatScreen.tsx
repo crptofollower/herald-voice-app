@@ -77,6 +77,8 @@ import { useRaiseToWake } from "../hooks/useRaiseToWake";
 import { useDeviceMemory } from "../hooks/useDeviceMemory";
 import { useLocalLLM } from '../hooks/useLocalLLM';
 import { useMedicationSemanticInterpreterEngine } from '../hooks/useMedicationSemanticInterpreterEngine';
+import { isRecollectionSemanticDeviceEvidenceTrigger } from '../dev/recollectionSemanticDeviceEvidenceTrigger';
+import { runRecollectionSemanticDeviceEvidence } from '../dev/recollectionSemanticDeviceEvidenceRun';
 import { classifyWithLLM } from '../hooks/llmLayers';
 import {
   selectConversationalWorker,
@@ -438,7 +440,10 @@ export default function ChatScreen() {
   const { status: llmStatus, activeModel, getCtx, getModelIdentity } = useLocalLLM();
   const { status: experimentalConvStatus, getCtx: getExperimentalCtx } = useExperimentalConversationalEngine();
   const { getCtx: getListRemoveShadowCtx } = useListRemoveInterpretationShadowEngine();
-  const { getCtx: getMedicationSemanticInterpreterCtx } = useMedicationSemanticInterpreterEngine();
+  const {
+    status: medicationSemanticInterpreterStatus,
+    getCtx: getMedicationSemanticInterpreterCtx,
+  } = useMedicationSemanticInterpreterEngine();
   void activeModel;
 
   type ResolveContactFn = (nameOrRelation: string) => Promise<{ phone: string; name: string; contactId?: string; source: 'herald' | 'device' } | { phone: null; name: string; source: 'device'; candidateNames: string[]; deviceCandidates: { name: string; phone: string }[] } | null>;
@@ -1397,6 +1402,36 @@ export default function ChatScreen() {
     // nothing downstream has to care which device produced the text.
     text = normalizeInput(text);
     if (!text) return;
+
+    if (isRecollectionSemanticDeviceEvidenceTrigger(text)) {
+      lastSentRef.current = now;
+      sendingRef.current = true;
+      setInputText('');
+      addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+      addMessage({
+        id: generateId('msg'),
+        role: 'assistant',
+        content: 'Running the recollection 3B matrix on the local semantic interpreter. When the share sheet appears, save the JSON. This is not a memory write.',
+        timestamp: Date.now(),
+      });
+      try {
+        const { summary } = await runRecollectionSemanticDeviceEvidence({
+          getCtx: getMedicationSemanticInterpreterCtx,
+          interpreterStatus: medicationSemanticInterpreterStatus,
+        });
+        addMessage({ id: generateId('msg'), role: 'assistant', content: summary, timestamp: Date.now() });
+      } catch (e) {
+        addMessage({
+          id: generateId('msg'),
+          role: 'assistant',
+          content: `Recollection 3B evidence failed: ${String(e)}`,
+          timestamp: Date.now(),
+        });
+      } finally {
+        sendingRef.current = false;
+      }
+      return;
+    }
 
     // Step 5a: monotonic turn identity; HOT peek (not take); authorization derived
     // from immediately adjacent peek entry — not ring-non-empty.
@@ -2961,7 +2996,7 @@ export default function ChatScreen() {
         );
       } catch { /* journey host only */ }
     }
-  }, [userId, messages, personaKey, lat, lng, locationLabel, getContextBlock, addMessage, setError, resetSpeech, enqueueSentence, resetStreamState, stop, llmStatus, getCtx, getModelIdentity, experimentalConvStatus, getExperimentalCtx, getListRemoveShadowCtx, getMedicationSemanticInterpreterCtx, dispatchLocalIntent, dispatchEmergency]);
+  }, [userId, messages, personaKey, lat, lng, locationLabel, getContextBlock, addMessage, setError, resetSpeech, enqueueSentence, resetStreamState, stop, llmStatus, getCtx, getModelIdentity, experimentalConvStatus, getExperimentalCtx, getListRemoveShadowCtx, getMedicationSemanticInterpreterCtx, medicationSemanticInterpreterStatus, dispatchLocalIntent, dispatchEmergency]);
 
   const handleSend = useCallback(() => {
     sendMessage(inputText.trim());
