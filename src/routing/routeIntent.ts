@@ -9,6 +9,7 @@ import { detectDiagnosisCapture, detectDoctorIntroCapture, detectMedicalEvent, i
 import type { LlamaContext } from 'llama.rn';
 import { MEDICATION_SEMANTIC_INTERPRETATION_ENABLED, CAPABILITY_READ_ROUTER_ENABLED, GROCERY_SEMANTIC_DECOMPOSITION_ENABLED, SEMANTIC_CAPABILITY_DISPATCH_ENABLED, NATURAL_MULTI_FACT_INTERPRETATION_ENABLED } from '../constants/features';
 import { tryNaturalMultiFactHold, type MultiFactProposalGenerationResult } from './naturalMultiFactInterpretation';
+import { listEstablishedFamilyRelationKeys } from '../utils/familyRead';
 import { answerHoldContinuityQa } from './holdContinuityQa';
 import type { InterpretationHoldSlot } from './discourseContinuity';
 import { generateMedicationSemanticProposal, admitMedicationSemanticProposal, medicationSemanticProposalFromDispatchWrite } from './medicationSemanticInterpretation';
@@ -2624,6 +2625,7 @@ async function routeIntentCore(
       enabled: multiFactOn,
       propose: deps.proposeNaturalMultiFact,
       intercept,
+      establishedFamilyRelations: multiFactOn ? listEstablishedFamilyRelationKeys() : [],
     });
     if (!hold) return null;
     return {

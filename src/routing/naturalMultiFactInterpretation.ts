@@ -293,16 +293,30 @@ function isAssertivePreference(sentence: string): boolean {
   return extractPreferenceObject(sentence) !== undefined;
 }
 
+function uniqueEstablishedCompatible(
+  established: readonly string[],
+  gender: PronounGender,
+): string | undefined {
+  const compatible = genderCompatibleFamily(established, gender);
+  if (compatible.length !== 1) return undefined;
+  return compatible[0];
+}
+
 function resolvePreferenceSubject(
   sentence: string,
   sentences: readonly string[],
   index: number,
+  raw: string,
+  established: readonly string[],
 ): string | undefined {
   const explicit = familySubject(sentence);
   if (explicit) return explicit;
   const gender = preferencePronounGender(sentence);
   if (!gender) return undefined;
-  return localFamilyAntecedent(sentences, index, gender);
+  const local = localFamilyAntecedent(sentences, index, gender);
+  if (local) return local;
+  if (uniqueFamilyKeysIn(raw).length > 0) return undefined;
+  return uniqueEstablishedCompatible(established, gender);
 }
 
 function extractHedge(sentence: string): string | undefined {
@@ -342,7 +356,16 @@ function splitMultiFactSentences(raw: string): string[] {
   return splitNarrativeSentences(protectedText).map((s) => s.replace(/\u2024/g, '.'));
 }
 
-export function proposeNaturalMultiFactFromUtterance(raw: string): MultiFactProposal {
+export type MultiFactInterpretationContext = {
+  /** Canonical family-relation keys already confirmed on contacts. */
+  establishedFamilyRelations?: readonly string[];
+};
+
+export function proposeNaturalMultiFactFromUtterance(
+  raw: string,
+  ctx?: MultiFactInterpretationContext,
+): MultiFactProposal {
+  const established = ctx?.establishedFamilyRelations ?? [];
   const episodeId = episodeIdFor(raw);
   const candidates: MultiFactProposedCandidate[] = [];
   const sentences = splitMultiFactSentences(raw);
@@ -356,7 +379,7 @@ export function proposeNaturalMultiFactFromUtterance(raw: string): MultiFactProp
       kind,
       value: preferenceObject ?? sentence,
       subject: kind === 'preference'
-        ? resolvePreferenceSubject(sentence, sentences, i)
+        ? resolvePreferenceSubject(sentence, sentences, i, raw, established)
         : familySubject(sentence),
       attribution: extractAttribution(sentence),
       hedge,
@@ -393,10 +416,29 @@ function groundOptional(raw: string, value: string | undefined): string | undefi
   return span ?? undefined;
 }
 
+/** Subject may be a current-utterance span, or a unique established family key. */
+function groundPreferenceSubject(
+  raw: string,
+  subject: string | undefined,
+  established: readonly string[],
+): string | undefined {
+  const spanned = groundOptional(raw, subject);
+  if (spanned) return spanned;
+  if (!subject) return undefined;
+  if (uniqueFamilyKeysIn(raw).length > 0) return undefined;
+  const gender = preferencePronounGender(raw);
+  if (!gender) return undefined;
+  const unique = uniqueEstablishedCompatible(established, gender);
+  if (!unique || unique !== subject.trim().toLowerCase()) return undefined;
+  return unique;
+}
+
 export function admitNaturalMultiFactProposal(
   raw: string,
   proposal: MultiFactProposal,
+  ctx?: MultiFactInterpretationContext,
 ): MultiFactAdmissionDecision {
+  const established = ctx?.establishedFamilyRelations ?? [];
   const admitted: AdmittedMultiFactCandidate[] = [];
   const episodeId = proposal.episodeId.trim();
   if (!episodeId) return { decision: 'DEFER', reason: 'missing_episode' };
@@ -414,7 +456,9 @@ export function admitNaturalMultiFactProposal(
     admitted.push({
       kind,
       value,
-      subject: groundOptional(raw, c.subject),
+      subject: kind === 'preference'
+        ? groundPreferenceSubject(raw, c.subject, established)
+        : groundOptional(raw, c.subject),
       attribution: groundOptional(raw, c.attribution) ?? (c.attribution === 'attributed' ? 'attributed' : undefined),
       hedge: groundOptional(raw, c.hedge) ?? extractHedge(value),
       temporal: groundOptional(raw, c.temporal),
@@ -427,7 +471,7 @@ export function admitNaturalMultiFactProposal(
   if (admitted.length >= 2) {
     return { decision: 'ADMIT', episodeId, candidates: admitted };
   }
-  if (admitted.length === 1 && isStandalonePreferenceEligible(raw, admitted[0])) {
+  if (admitted.length === 1 && isStandalonePreferenceEligible(raw, admitted[0], established)) {
     return { decision: 'ADMIT', episodeId, candidates: admitted };
   }
   return { decision: 'DEFER', reason: `below_threshold:${admitted.length}` };
@@ -436,6 +480,7 @@ export function admitNaturalMultiFactProposal(
 function isStandalonePreferenceEligible(
   raw: string,
   c: AdmittedMultiFactCandidate,
+  established: readonly string[],
 ): boolean {
   if (c.kind !== 'preference') return false;
   const subject = c.subject?.trim();
@@ -444,8 +489,16 @@ function isStandalonePreferenceEligible(
   if (c.attribution) return false;
   if (c.contradictGroupId) return false;
   const uniqueKeys = uniqueFamilyKeysIn(raw);
-  if (uniqueKeys.length !== 1) return false;
-  if (uniqueKeys[0] !== subject.toLowerCase()) return false;
+  if (uniqueKeys.length === 1) {
+    if (uniqueKeys[0] !== subject.toLowerCase()) return false;
+  } else if (uniqueKeys.length === 0) {
+    const gender = preferencePronounGender(raw);
+    if (!gender) return false;
+    const unique = uniqueEstablishedCompatible(established, gender);
+    if (!unique || unique !== subject.toLowerCase()) return false;
+  } else {
+    return false;
+  }
   const value = c.value.trim();
   if (!value) return false;
   if (value.toLowerCase() === raw.trim().toLowerCase()) return false;
@@ -469,14 +522,16 @@ export function tryNaturalMultiFactHold(
     enabled: boolean;
     propose?: (text: string) => MultiFactProposalGenerationResult;
     intercept: 'visit' | 'fallthrough';
+    establishedFamilyRelations?: readonly string[];
   },
 ): { episodeId: string; candidates: AdmittedMultiFactCandidate[] } | null {
   if (!opts.enabled) return null;
+  const establishedFamilyRelations = opts.establishedFamilyRelations ?? [];
   const generated = opts.propose
     ? opts.propose(raw)
-    : { status: 'ok' as const, proposal: proposeNaturalMultiFactFromUtterance(raw) };
+    : { status: 'ok' as const, proposal: proposeNaturalMultiFactFromUtterance(raw, { establishedFamilyRelations }) };
   if (generated.status !== 'ok') return null;
-  const admitted = admitNaturalMultiFactProposal(raw, generated.proposal);
+  const admitted = admitNaturalMultiFactProposal(raw, generated.proposal, { establishedFamilyRelations });
   if (admitted.decision !== 'ADMIT') return null;
   if (opts.intercept === 'visit' && !visitInterceptShouldYieldToMultiFact(admitted.candidates)) {
     return null;

@@ -52,6 +52,32 @@ export const FAMILY_SYNONYMS: Record<string, string[]> = {
 const FAMILY_RELATION_WORD =
   '(father-in-law|mother-in-law|brother-in-law|sister-in-law|son-in-law|daughter-in-law|wife|husband|spouse|partner|grandson|granddaughter|son|daughter|child|children|kids?|kid|mom|mother|dad|father|brother|sister)';
 
+const FAMILY_RELATION_KEYS = Object.keys(FAMILY_SYNONYMS);
+
+/**
+ * Distinct canonical family-relation keys already stored on contacts.
+ * Identity evidence only — not a preference reader.
+ */
+export function listEstablishedFamilyRelationKeys(): string[] {
+  const db = getDB();
+  try {
+    const rows = db.getAllSync<{ relationship: string | null }>(
+      `SELECT relationship FROM contacts WHERE removed_at IS NULL AND relationship IS NOT NULL;`,
+    );
+    const found = new Set<string>();
+    for (const row of rows) {
+      const rel = (row.relationship ?? '').trim().toLowerCase().replace(/\s+/g, '-');
+      if (!rel) continue;
+      const key = FAMILY_RELATION_KEYS.find((k) => k === rel)
+        ?? FAMILY_RELATION_KEYS.find((k) => (FAMILY_SYNONYMS[k] ?? []).includes(rel));
+      if (key) found.add(key);
+    }
+    return [...found];
+  } catch {
+    return [];
+  }
+}
+
 // Detect a family READ. Returns null for declarative statements ("my son is X"),
 // mirroring householdRead's statement guard (lines 165–167) so writes fall through
 // to familyCapture — this is the D2 fix.
