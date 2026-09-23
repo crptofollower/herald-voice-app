@@ -417,7 +417,7 @@ export async function runOrderedPresentationTests() {
     writeMedication({ name: 'Lisinopril', dosage: '10mg', frequency: 'daily', is_active: 1 });
     presentGrocery(ordered, subject, medication);
     await say('What medications am I taking?');
-    assert('OP79 medication summary clears grocery', ordered.hasLive(), v => v === false, 'cleared');
+    assert('OP79 medication summary keeps an eligible grocery set', ordered.hasLive(), v => v === true, 'live');
     assert('OP80 medication presentation established', medication.hasLive(), v => v === true, 'live');
   }
 

@@ -164,6 +164,11 @@ export class ConversationalSubjectHolder {
     this.subject = null;
   }
 
+  /** Put back a focus that a safe side activity must not have replaced. Not a new engagement. */
+  restore(previous: ConversationalSubject): void {
+    this.subject = { ...previous, establishedAtTurn: this.turn };
+  }
+
   establishFamily(match: {
     entityId: string;
     displayName: string;

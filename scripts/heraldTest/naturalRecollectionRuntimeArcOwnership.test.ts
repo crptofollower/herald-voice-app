@@ -87,8 +87,8 @@ export async function runNaturalRecollectionRuntimeArcOwnershipV1Tests(): Promis
     assert('production ChatScreen supplies an explicit reminiscenceArcRef at every processUtterance call',
       processCalls.length === 2
         && /const reminiscenceArcRef = useRef<ReminiscenceArcHolder>\(new ReminiscenceArcHolder\(\)\)/.test(chatSrc)
-        && chatSrc.includes('conversationLedgerRef.current, reminiscenceArcRef.current, recoveryObligationRef.current);')
-        && (chatSrc.match(/conversationLedgerRef\.current, reminiscenceArcRef\.current, recoveryObligationRef\.current\)/g) ?? []).length === 2,
+        && chatSrc.includes('conversationLedgerRef.current, reminiscenceArcRef.current, recoveryObligationRef.current, todoPresentationRef.current);')
+        && (chatSrc.match(/conversationLedgerRef\.current, reminiscenceArcRef\.current, recoveryObligationRef\.current, todoPresentationRef\.current\)/g) ?? []).length === 2,
       (v) => v === true, 'true');
 
     const law0Block = chatSrc.slice(chatSrc.indexOf('if (detectEmergency(text))'), chatSrc.indexOf('await dispatchEmergency(text)'));

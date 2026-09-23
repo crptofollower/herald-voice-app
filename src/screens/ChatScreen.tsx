@@ -679,28 +679,18 @@ export default function ChatScreen() {
           todoPresentationRef.current.clear();
         } else {
           todoPresentationRef.current.establish(presentedTodoIds);
-          orderedPresentationRef.current.clear();
         }
-      }
-    } else {
-      const groceryLive = orderedPresentationRef.current.peek();
-      if (groceryLive?.owner === 'grocery' && groceryLive.presentedIds.length > 0) {
-        todoPresentationRef.current.clear();
       }
     }
     if (groceryOutcomeIdentifiesSurface(outcome)) {
-      todoPresentationRef.current.clear();
       refreshGroceryCapabilitySurface({ resetOverlay: false });
       return;
     }
     if (todoOutcomeIdentifiesSurface(outcome)) {
-      orderedPresentationRef.current.clear();
       refreshTodoCapabilitySurface({ resetOverlay: false });
       return;
     }
     if (scheduleOutcomeIdentifiesSurface(outcome)) {
-      todoPresentationRef.current.clear();
-      orderedPresentationRef.current.clear();
       const presentedIds = outcome.handled
         ? (outcome.presentedCalendarEventIds ?? [])
         : (outcome.routeDecision.kind === 'device_read'
@@ -1854,7 +1844,7 @@ export default function ChatScreen() {
       },
       resolveContact: resolveContactPhoneRef.current ?? undefined,
       getMedicationSemanticInterpreterCtx,
-    }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current, calendarPresentationRef.current, calendarContinuationRef.current, discourseRef.current, conversationLedgerRef.current, reminiscenceArcRef.current, recoveryObligationRef.current);
+    }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current, calendarPresentationRef.current, calendarContinuationRef.current, discourseRef.current, conversationLedgerRef.current, reminiscenceArcRef.current, recoveryObligationRef.current, todoPresentationRef.current);
     journeyOutcome = outcome;
     syncSituationalListVisuals(outcome);
     const continuityFocus = !outcome.handled
@@ -3085,7 +3075,7 @@ export default function ChatScreen() {
         },
         resolveContact: resolveContactPhoneRef.current ?? undefined,
         getMedicationSemanticInterpreterCtx,
-      }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current, calendarPresentationRef.current, calendarContinuationRef.current, discourseRef.current, conversationLedgerRef.current, reminiscenceArcRef.current, recoveryObligationRef.current);
+      }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current, calendarPresentationRef.current, calendarContinuationRef.current, discourseRef.current, conversationLedgerRef.current, reminiscenceArcRef.current, recoveryObligationRef.current, todoPresentationRef.current);
       syncSituationalListVisuals(outcome);
       if (outcome.handled && outcome.source === 'pending_resume' && outcome.responseText) {
         addMessage({ id: generateId('msg'), role: 'assistant', content: outcome.responseText, timestamp: Date.now() });

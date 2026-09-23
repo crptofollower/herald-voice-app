@@ -35,6 +35,7 @@ import {
   answerReferentYearBoundedVisit,
   isReferentEpisodeTimeQuestion,
   answerReferentEpisodeTime,
+  type ConversationalSubject,
 } from './conversationalSubject';
 import { EPISODE_RECALL_LIMIT } from '../db/episodeRead';
 import { listActiveEpisodes } from '../db/episodesWriter';
@@ -128,6 +129,12 @@ import {
 } from './calendarPresentation';
 import { hasCalendarReadEvidence, readCalendarScope, scanResidualIntent } from './tierRouter';
 import { DiscourseContinuityHolder } from './discourseContinuity';
+import { TodoPresentationHolder } from './todoVisualPresentation';
+import {
+  admitStructuralOrdinal,
+  collectLivePresentedSets,
+  isFocusPreservingSideActivity,
+} from './canonicalConversationState';
 import {
   CLARIFY_OPERATIONAL_LIST_KEY,
   CLARIFY_LIST_ADD_ITEM_KEY,
@@ -305,44 +312,34 @@ function maybeEstablishConversationalSubject(
 function maybeEstablishMedicationPresentation(
   routeDecision: RouteDecision,
   holder: MedicationPresentationHolder,
-  subject: ConversationalSubjectHolder | null,
-  orderedPresentation?: OrderedPresentationHolder | null,
-  calendarPresentation?: CalendarPresentationHolder | null,
-): void {
+): boolean {
   if (routeDecision.kind !== 'device_read' || routeDecision.reason !== 'medical:summary') {
-    return;
+    return false;
   }
   const ids = routeDecision.presentedMedicationIds ?? [];
   if (ids.length === 0) {
     holder.clear();
-    return;
+    return false;
   }
-  // A live person-subject must not compete with medication ordinals.
-  subject?.clear();
-  orderedPresentation?.clear();
-  calendarPresentation?.clear();
   holder.establish(ids);
+  return true;
 }
 
 function maybeEstablishGroceryPresentation(
   routeDecision: RouteDecision,
   holder: OrderedPresentationHolder | null | undefined,
-  subject: ConversationalSubjectHolder | null,
-  medicationPresentation: MedicationPresentationHolder | null | undefined,
-  calendarPresentation?: CalendarPresentationHolder | null,
-): void {
+): boolean {
+  if (!holder) return false;
   if (routeDecision.kind !== 'device_read' || routeDecision.presentedGroceryIds === undefined) {
-    return;
+    return false;
   }
   const ids = routeDecision.presentedGroceryIds;
   if (ids.length === 0) {
-    holder?.clear();
-    return;
+    holder.clear();
+    return false;
   }
-  subject?.clear();
-  medicationPresentation?.clear();
-  calendarPresentation?.clear();
-  holder?.establish('grocery', ids);
+  holder.establish('grocery', ids);
+  return true;
 }
 
 function maybeEstablishCalendarContinuation(
@@ -358,23 +355,18 @@ function maybeEstablishCalendarContinuation(
 function maybeEstablishCalendarPresentation(
   routeDecision: RouteDecision,
   holder: CalendarPresentationHolder | null | undefined,
-  subject: ConversationalSubjectHolder | null,
-  medicationPresentation: MedicationPresentationHolder | null | undefined,
-  orderedPresentation: OrderedPresentationHolder | null | undefined,
-): void {
-  if (!holder) return;
-  if (routeDecision.kind !== 'device_read') return;
-  if (!routeDecision.reason.startsWith('calendar:')) return;
-  if (routeDecision.presentedCalendarEventIds === undefined) return;
+): boolean {
+  if (!holder) return false;
+  if (routeDecision.kind !== 'device_read') return false;
+  if (!routeDecision.reason.startsWith('calendar:')) return false;
+  if (routeDecision.presentedCalendarEventIds === undefined) return false;
   const ids = routeDecision.presentedCalendarEventIds;
   if (ids.length === 0) {
     holder.clear();
-    return;
+    return false;
   }
-  subject?.clear();
-  medicationPresentation?.clear();
-  orderedPresentation?.clear();
   holder.establish(ids);
+  return true;
 }
 
 /**
@@ -615,6 +607,7 @@ export async function processUtterance(
   ledger?: ConversationTurnLedger | null,
   reminiscenceArc?: ReminiscenceArcHolder | null,
   recoveryObligation?: RecoveryObligationHolder | null,
+  todoPresentation?: TodoPresentationHolder | null,
 ): Promise<UtteranceOutcome> {
   const turnId = getActiveTurnId();
   latLog('processUtterance START', { turnId });
@@ -643,6 +636,7 @@ export async function processUtterance(
     calendarContinuation?.clear();
     discourse?.clear();
     recoveryObligation?.clear();
+    todoPresentation?.clear();
     arc.clear();
     return { handled: true, source: 'emergency' };
   }
@@ -716,6 +710,7 @@ export async function processUtterance(
     orderedPresentation?.clear();
     calendarPresentation?.clear();
     calendarContinuation?.clear();
+    todoPresentation?.clear();
     const pendingKey = session.peekPendingKey();
     const result = await session.resolvePending(text);
     // Generic pending-resume hook: covers every resume closure uniformly
@@ -831,6 +826,51 @@ export async function processUtterance(
       calendarContinuation.clear();
     }
   }
+  const presentedOrdinal = admitStructuralOrdinal(
+    text,
+    collectLivePresentedSets({
+      medication: medicationPresentation,
+      ordered: orderedPresentation,
+      calendar: calendarPresentation,
+      todo: todoPresentation,
+    }),
+  );
+  const medicationNearMissOwnsTurn = presentedOrdinal.kind === 'unique'
+    && presentedOrdinal.domain === 'medication'
+    && isMedicationOrdinalNearMiss(text);
+  if (!medicationNearMissOwnsTurn && (presentedOrdinal.kind === 'clarify' || (presentedOrdinal.kind === 'unique' && presentedOrdinal.mutation && presentedOrdinal.domain !== 'grocery'))) {
+    return { handled: true, source: 'referent_resume', responseText: ORDERED_PRESENTATION_CONFUSION, commits: [] };
+  }
+  if (!medicationNearMissOwnsTurn && presentedOrdinal.kind === 'unique' && !presentedOrdinal.mutation && parseGroceryNamedCollectionRead(text).kind !== 'position') {
+    if (presentedOrdinal.domain === 'medication') {
+      const livePresentation = medicationPresentation?.peek();
+      if (livePresentation) {
+        const answered = answerMedicationOrdinal(livePresentation, presentedOrdinal.position - 1);
+        if (answered.kind !== 'oor') medicationPresentation?.renew();
+        return { handled: true, source: 'referent_resume', responseText: answered.responseText, commits: [] };
+      }
+    } else if (presentedOrdinal.domain === 'grocery') {
+      const row = getOpenListItemById(presentedOrdinal.memberId, 'grocery');
+      if (!row) {
+        return { handled: true, source: 'referent_resume', responseText: GROCERY_POSITION_STALE, commits: [] };
+      }
+      orderedPresentation?.renew();
+      return groceryHandled('referent_resume', formatGroceryItemReadback(row.body));
+    } else if (presentedOrdinal.domain === 'calendar') {
+      const livePresentation = calendarPresentation?.peek();
+      if (livePresentation) {
+        const answered = answerCalendarTimeInquiry(livePresentation, presentedOrdinal.position);
+        calendarPresentation?.clear();
+        return { handled: true, source: 'referent_resume', responseText: answered.responseText, commits: [] };
+      }
+    } else if (presentedOrdinal.domain === 'todo') {
+      return { handled: true, source: 'referent_resume', responseText: ORDERED_PRESENTATION_CONFUSION, commits: [] };
+    }
+  }
+  let medicationAwaitingUnusedClear = false;
+  let groceryAwaitingUnusedClear = false;
+  let calendarAwaitingUnusedClear = false;
+  let focusHeldForSideActivity: ConversationalSubject | null = null;
   // 1a-pres) Calendar ordinal time inquiry — one turn after authoritative calendar read.
   //     Fresh by-id reread only; not transcript replay.
   if (calendarPresentation?.canContinue()) {
@@ -846,7 +886,7 @@ export async function processUtterance(
       'calendar',
       CONTINUATION_RECOVERY_SAFE_LABEL.calendar,
     );
-    calendarPresentation.clear();
+    calendarAwaitingUnusedClear = true;
   }
   // 1a) Medication ordinal continuation — closed first/second-one speech act
   //     against the RAM presentation of ordered medication IDs. Not Flow C.
@@ -879,7 +919,7 @@ export async function processUtterance(
       'medication',
       CONTINUATION_RECOVERY_SAFE_LABEL.medication,
     );
-    medicationPresentation.clear();
+    medicationAwaitingUnusedClear = true;
   }
   // 1a2) Named grocery collection grant (F2) wins over live continuation.
   //      Explicit naming authorizes a fresh reread, not frozen live IDs.
@@ -900,8 +940,6 @@ export async function processUtterance(
         return groceryHandled('referent_resume', composeOpenListSpeech('grocery', items));
       }
       const presentedIds = items.map((i) => i.id);
-      subject?.clear();
-      medicationPresentation?.clear();
       orderedPresentation?.establish('grocery', presentedIds);
       const resolved = resolvePositions(presentedIds, [named.n]);
       if (!resolved.ok) {
@@ -953,10 +991,13 @@ export async function processUtterance(
         orderedPresentation.renew();
         return groceryHandled('referent_resume', formatGroceryItemReadback(row.body));
       }
-      if (interpreted.kind === 'ambiguous') {
+      const relativeWithoutListNoun = interpreted.kind === 'ambiguous'
+        && (interpreted.reason === 'relative' || interpreted.reason === 'other_anaphor')
+        && !/\b(?:one|thing|item)\b/i.test(text);
+      if (interpreted.kind === 'ambiguous' && !relativeWithoutListNoun) {
         return { handled: true, source: 'referent_resume', responseText: ORDERED_PRESENTATION_CONFUSION, commits: [] };
       }
-      if (interpreted.kind !== 'unsafe' && hasBoundedPositionEvidence(text)) {
+      if (interpreted.kind !== 'unsafe' && hasBoundedPositionEvidence(text) && !relativeWithoutListNoun) {
         return { handled: true, source: 'referent_resume', responseText: ORDERED_PRESENTATION_CONFUSION, commits: [] };
       }
       recordContinuationRecoveryCandidate(
@@ -964,7 +1005,7 @@ export async function processUtterance(
         'grocery',
         CONTINUATION_RECOVERY_SAFE_LABEL.grocery,
       );
-      orderedPresentation.clear();
+      groceryAwaitingUnusedClear = true;
     } else if (liveOrdered?.owner !== 'grocery') {
       orderedPresentation.clear();
     }
@@ -1005,8 +1046,6 @@ export async function processUtterance(
             return groceryHandled('referent_resume', composeOpenListSpeech('grocery', items));
           }
           presentedIds = items.map((i) => i.id);
-          subject?.clear();
-          medicationPresentation?.clear();
           orderedPresentation?.establish('grocery', presentedIds);
         } else if (liveGrocery) {
           presentedIds = liveGrocery.presentedIds;
@@ -1074,7 +1113,7 @@ export async function processUtterance(
         'grocery',
         CONTINUATION_RECOVERY_SAFE_LABEL.grocery,
       );
-      orderedPresentation.clear();
+      groceryAwaitingUnusedClear = true;
     }
   }
   // 1b) Flow C — closed pronoun-phone speech act against the one-turn
@@ -1153,6 +1192,7 @@ export async function processUtterance(
           unused.displayName,
         );
       }
+      focusHeldForSideActivity = { ...unused };
       subject.clear();
     }
   }
@@ -1306,6 +1346,14 @@ export async function processUtterance(
   });
   if (!isRecollectionNominationFallthrough(routeDecision)) {
     arc.close();
+  }
+  if (
+    focusHeldForSideActivity
+    && subject
+    && !subject.hasLive()
+    && isFocusPreservingSideActivity(routeDecision)
+  ) {
+    subject.restore(focusHeldForSideActivity);
   }
   // D-phone-repair, 2026-08-13: processUtterance is the sole boundary that
   // may call session.setPending (Spine §3a / Law 2) -- routeIntent itself
@@ -1558,43 +1606,37 @@ export async function processUtterance(
       },
     });
   }
-  // Flow C establishment — single owner. Immediately after routeIntent,
-  // before returning the route decision to ChatScreen. ChatScreen must
-  // not add family/household establishment fallbacks.
-  // Person subject and medication presentation are mutually exclusive.
-  // Establishing one clears the other so "the second one" cannot bind a
-  // doctor and "his number" cannot bind a medication ID.
+  // Working Focus and Presented Sets coexist. A new person engagement
+  // replaces focus only. It does not erase another domain's live set.
   const personEstablished = subject
     ? maybeEstablishConversationalSubject(text, routeDecision, subject)
     : false;
-  if (personEstablished) {
-    medicationPresentation?.clear();
-    orderedPresentation?.clear();
-    calendarPresentation?.clear();
-  } else if (medicationPresentation) {
-    maybeEstablishMedicationPresentation(
-      routeDecision,
-      medicationPresentation,
-      subject ?? null,
-      orderedPresentation,
-      calendarPresentation,
-    );
-  }
-  maybeEstablishGroceryPresentation(
-    routeDecision,
-    orderedPresentation,
-    subject ?? null,
-    medicationPresentation,
-    calendarPresentation,
-  );
+  const medicationRebound = medicationPresentation
+    ? maybeEstablishMedicationPresentation(routeDecision, medicationPresentation)
+    : false;
+  const groceryRebound = maybeEstablishGroceryPresentation(routeDecision, orderedPresentation);
   maybeEstablishCalendarContinuation(routeDecision, calendarContinuation);
-  maybeEstablishCalendarPresentation(
-    routeDecision,
-    calendarPresentation,
-    subject ?? null,
-    medicationPresentation,
-    orderedPresentation,
-  );
+  const calendarRebound = maybeEstablishCalendarPresentation(routeDecision, calendarPresentation);
+  const sideActivity = isFocusPreservingSideActivity(routeDecision);
+  if (
+    focusHeldForSideActivity
+    && subject
+    && !subject.hasLive()
+    && !personEstablished
+    && sideActivity
+  ) {
+    subject.restore(focusHeldForSideActivity);
+  }
+  const keepCoexistingSets = sideActivity || medicationRebound || groceryRebound || calendarRebound;
+  if (medicationAwaitingUnusedClear && !medicationRebound && !keepCoexistingSets) {
+    medicationPresentation?.clear();
+  }
+  if (groceryAwaitingUnusedClear && !groceryRebound && !keepCoexistingSets) {
+    orderedPresentation?.clear();
+  }
+  if (calendarAwaitingUnusedClear && !calendarRebound && !keepCoexistingSets) {
+    calendarPresentation?.clear();
+  }
   let continuityFocus: DomainFocusEnvelope | undefined;
   let continuityReferenceOnly: boolean | undefined;
   if (

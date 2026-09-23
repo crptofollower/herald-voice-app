@@ -506,17 +506,18 @@ export async function runMedicationOrdinalTests() {
       'no Metformin');
   }
 
-  // Bare "first one" without tell-about/what-was is unused, not a near-miss
+  // Bare "first one" is not the medication near-miss grammar. With one live
+  // medication set it is a structurally unique ordinal and resolves.
   {
     const { db, say, presentation } = fresh();
     seedOrderedPair(db);
     await say('What medications am I taking?');
     assert('MO54a "the first one" is not a near-miss', isMedicationOrdinalNearMiss('The first one.'), v => v === false, 'false');
     const t = await say('The first one.');
-    assert('MO54b unused fragment clears presentation', presentation.hasLive(), v => v === false, 'cleared');
-    assert('MO54c did not resolve a medication', t,
-      v => !(v.handled === true && 'responseText' in v && /Metformin/i.test(v.responseText)),
-      'no Metformin');
+    assert('MO54b unique medication set stays live', presentation.hasLive(), v => v === true, 'live');
+    assert('MO54c unique ordinal resolves the first medication', t,
+      v => v.handled === true && 'responseText' in v && /Metformin/i.test(v.responseText),
+      'Metformin');
   }
 
   const total = passed + failures.length;

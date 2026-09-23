@@ -293,7 +293,7 @@ export async function runConversationTurnLedgerCoverageTests() {
     const chatSrc = fs.readFileSync(chatPath, 'utf8');
 
     assertTrue('ChatScreen: ledger ref declared alongside the other continuity holders', /const conversationLedgerRef = useRef<ConversationTurnLedger>\(createConversationTurnLedger\(\)\)/.test(chatSrc));
-    assertTrue('ChatScreen: processUtterance call threads the ledger through', /discourseRef\.current, conversationLedgerRef\.current, reminiscenceArcRef\.current, recoveryObligationRef\.current\)/.test(chatSrc));
+    assertTrue('ChatScreen: processUtterance call threads the ledger through', /discourseRef\.current, conversationLedgerRef\.current, reminiscenceArcRef\.current, recoveryObligationRef\.current, todoPresentationRef\.current\)/.test(chatSrc));
     assertTrue(
       'ChatScreen: device_read (online tier-1) pushes a read/presented record',
       /noteDeterministicChitChatContext\(rdTier1Response\);\s*\n\s*conversationLedgerRef\.current\.push\(\{\s*\n\s*establishedAt: Date\.now\(\),\s*\n\s*utterance: text,\s*\n\s*intentType: null,\s*\n\s*operation: 'read',\s*\n\s*outcome: 'presented',/.test(chatSrc),
