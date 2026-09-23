@@ -441,7 +441,7 @@ export async function resolveActiveSubjectCandidate(
 // ─── Ambiguity -> existing ConversationSession pending authority ──────────
 
 /**
- * Builds a resume closure for ConversationSession.setPending(). Reuses
+ * Builds a resume closure for establishHardPending(). Reuses
  * conversationSession.ts's own generic matchCandidateToken — the same
  * exact/partial-token matcher every other domain's disambiguation already
  * uses — so "Dr. Smith." deterministically resolves the outstanding

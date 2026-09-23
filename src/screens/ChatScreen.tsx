@@ -134,6 +134,14 @@ import { allConverted, mapCallIntents, resolveContactCallIntent, isUnresolvedPer
 import { writeCalendarCore, buildCalendarCollectSlot } from '../routing/calendarWrite';
 import { runCommitEffects } from '../utils/commitEffects';
 import { ConversationSession } from '../routing/conversationSession';
+import {
+  armContactCollect,
+  CONTACT_COLLECT_PENDING_KEY,
+  contactCollectOwnsTurn,
+  establishActiveSubjectClarification,
+  establishHardPending,
+  releaseContactCollect,
+} from '../routing/hardPendingBoundary';
 import { classifyEmergencyCallReply } from '../utils/emergencyCallConfirm';
 import { ConversationalSubjectHolder } from '../routing/conversationalSubject';
 import { MedicationPresentationHolder } from '../routing/medicationPresentation';
@@ -1164,7 +1172,7 @@ export default function ChatScreen() {
             // the question (fails open — re-offered next cold mount).
             const { buildVisitOutcomeAskSlot } = require('../routing/medicalVisitOutcomeAsk');
             const slot = buildVisitOutcomeAskSlot(awaiting);
-            sessionRef.current.setPending({
+            establishHardPending(sessionRef.current, {
               pendingKey: slot.pendingKey,
               kind: slot.kind,
               budget: slot.budget,
@@ -1366,7 +1374,7 @@ export default function ChatScreen() {
     const emergencyContact = getEmergencyContact();
     if (!emergencyContact?.phone) {
       const reply = `I don't have an emergency contact set up yet — do you want me to call 911?`;
-      pendingContactCollectRef.current = { action: 'confirm_call', name: '911', phone: '911' };
+      armContactCollect(sessionRef.current, pendingContactCollectRef, { action: 'confirm_call', name: '911', phone: '911' });
       addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
       speak(reply);
       return;
@@ -1503,7 +1511,7 @@ export default function ChatScreen() {
     // that point processUtterance's own Law 0 check (below) is the single
     // consumer, as specced.
     if (detectEmergency(text)) {
-      pendingContactCollectRef.current = null;
+      releaseContactCollect(sessionRef.current, pendingContactCollectRef);
       if (sessionRef.current.hasPending()) sessionRef.current.clearPending();
       subjectRef.current.clear();
       medicationPresentationRef.current.clear();
@@ -1560,7 +1568,14 @@ export default function ChatScreen() {
     // Leftover collect-ref state must not intercept that job. 911 confirm_call
     // is emergency confirmation and stays on this ref.
     releaseOverlappingContactCollect(pendingContactCollectRef, sessionRef.current);
-    if (pendingContactCollectRef.current) {
+    if (
+      pendingContactCollectRef.current
+      && pendingContactCollectRef.current.action !== 'confirm_call'
+      && !contactCollectOwnsTurn(sessionRef.current, pendingContactCollectRef.current)
+    ) {
+      releaseContactCollect(sessionRef.current, pendingContactCollectRef);
+    }
+    if (contactCollectOwnsTurn(sessionRef.current, pendingContactCollectRef.current)) {
       subjectRef.current.clear();
       medicationPresentationRef.current.clear();
       orderedPresentationRef.current.clear();
@@ -1579,7 +1594,7 @@ export default function ChatScreen() {
         const reCheck = phoneMatch ? normalizePhone(phoneMatch[1]) : null;
         addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
         if (reCheck?.valid) {
-          pendingContactCollectRef.current = null;
+          releaseContactCollect(sessionRef.current, pendingContactCollectRef);
           try {
             const { capturePerson } = await import('../db/capturePerson');
             const existing = findContactByRelationship(pending.name) ?? findContactByName(pending.name);
@@ -1612,7 +1627,7 @@ export default function ChatScreen() {
         addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
         const replyClass = classifyEmergencyCallReply(text);
         if (replyClass === 'yes') {
-          pendingContactCollectRef.current = null;
+          releaseContactCollect(sessionRef.current, pendingContactCollectRef);
           // Persistence — best-effort, isolated so it can NEVER block the dial.
           // (§5: action authority is separate from persistence authority.)
           // writeContactValidated does not throw today; isolate anyway so a
@@ -1641,7 +1656,7 @@ export default function ChatScreen() {
           // to reach?" text after the classifier fix — merging the two
           // branches retires that response for both cases at once, since
           // the correct behavior was always identical.
-          pendingContactCollectRef.current = null;
+          releaseContactCollect(sessionRef.current, pendingContactCollectRef);
           const reply = `No problem — I won't call 911.`;
           addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
           speak(reply);
@@ -1658,7 +1673,7 @@ export default function ChatScreen() {
       if (pending.action === 'call' && phoneMatch) {
         const phone = phoneMatch[1].replace(/\D/g, '');
         addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-        pendingContactCollectRef.current = null;
+        releaseContactCollect(sessionRef.current, pendingContactCollectRef);
         try {
           const { capturePerson } = await import('../db/capturePerson');
           const existing = findContactByRelationship(pending.name) ?? findContactByName(pending.name);
@@ -1689,7 +1704,7 @@ export default function ChatScreen() {
       if (pending.action === 'navigate' && isLikelyAddressLoose) {
         const address = normalizeAddressInput(text);
         addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-        pendingContactCollectRef.current = null;
+        releaseContactCollect(sessionRef.current, pendingContactCollectRef);
         try {
           const { capturePerson } = await import('../db/capturePerson');
           const existing = findContactByRelationship(pending.name) ?? findContactByName(pending.name);
@@ -1714,7 +1729,7 @@ export default function ChatScreen() {
       if (pending.action === 'text' && phoneMatch) {
         const phone = phoneMatch[1].replace(/\D/g, '');
         addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-        pendingContactCollectRef.current = null;
+        releaseContactCollect(sessionRef.current, pendingContactCollectRef);
         try {
           const { capturePerson } = await import('../db/capturePerson');
           const existing = findContactByRelationship(pending.name) ?? findContactByName(pending.name);
@@ -1747,7 +1762,7 @@ export default function ChatScreen() {
           const device = await resolveContactPhone(osQuery);
           if (device?.phone && osNameFullyCovered(osQuery, device.name)) {
             addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-            pendingContactCollectRef.current = null;
+            releaseContactCollect(sessionRef.current, pendingContactCollectRef);
             try {
               const smsUrl = pending.body
                 ? `sms:${device.phone}?body=${encodeURIComponent(pending.body)}`
@@ -1769,7 +1784,7 @@ export default function ChatScreen() {
           }
           if (device && !device.phone && 'deviceCandidates' in device && device.deviceCandidates.length > 0) {
             addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-            pendingContactCollectRef.current = null;
+            releaseContactCollect(sessionRef.current, pendingContactCollectRef);
             const reachable = device.deviceCandidates.filter(c => !!c.phone?.trim());
             const names = reachable.map(c => c.name).join(', ');
             const body = pending.body ?? '';
@@ -1795,7 +1810,7 @@ export default function ChatScreen() {
                 }
               },
             );
-            sessionRef.current.setPending({
+            establishHardPending(sessionRef.current, {
               pendingKey: boundOs.pendingKey,
               kind: 'standard',
               budget: boundOs.budget,
@@ -1814,7 +1829,7 @@ export default function ChatScreen() {
       // Repair fragment — fail closed; never fall through to generative conversation.
       addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
       const abandonedAction = pendingContactCollectRef.current?.action;
-      pendingContactCollectRef.current = null;
+      releaseContactCollect(sessionRef.current, pendingContactCollectRef);
       const repairReleaseReply =
         abandonedAction === 'navigate' || abandonedAction === 'text'
           ? "Okay — let's come back to that. What can I help you with?"
@@ -1993,10 +2008,7 @@ export default function ChatScreen() {
           // pending. Its resume closure's CommitResult carries
           // referenceOnly:true, so the ledger record it produces is
           // recorded as tier:'conversational', never 'authoritative'.
-          sessionRef.current.setPending({
-            pendingKey: 'active_subject_clarify',
-            resume: activeSubjectOutcome.resume,
-          });
+          establishActiveSubjectClarification(sessionRef.current, activeSubjectOutcome.resume);
           ledgerOperation = 'clarify_request';
           ledgerOutcome = 'clarified';
           ledgerAuthorityTier = 'conversational';
@@ -3058,6 +3070,7 @@ export default function ChatScreen() {
   const handleNoRecognizableSpeech = useCallback(async () => {
     talkSessionRef.current.noteFollowupSilence();
     if (sendingRef.current || !sessionRef.current.hasPending()) return;
+    if (sessionRef.current.peekPendingKey() === CONTACT_COLLECT_PENDING_KEY) return;
     sendingRef.current = true;
     try {
       const outcome = await processUtterance('', sessionRef.current, {
@@ -3146,7 +3159,7 @@ export default function ChatScreen() {
         resetConversation: () => {
           lastSentRef.current = 0;
           sendingRef.current = false;
-          pendingContactCollectRef.current = null;
+          releaseContactCollect(sessionRef.current, pendingContactCollectRef);
           if (sessionRef.current.hasPending()) sessionRef.current.clearPending();
           sessionRef.current = new ConversationSession();
           subjectRef.current.clear();
@@ -3406,7 +3419,7 @@ export default function ChatScreen() {
       addMessage({ id: generateId("msg"), role: "assistant", content: plan.prompt, timestamp: Date.now() });
       speak(plan.prompt);
       setActionStatus("confirming");
-      sessionRef.current.setPending(plan.slot);
+      establishHardPending(sessionRef.current, plan.slot);
       return;
     }
     const result = await writeCalendarCore(title, dateStr, timeStr);

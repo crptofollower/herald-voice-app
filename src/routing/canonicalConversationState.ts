@@ -14,6 +14,8 @@ import type { CalendarPresentationHolder } from './calendarPresentation';
 import type { TodoPresentationHolder } from './todoVisualPresentation';
 import type { RouteDecision } from './routeIntent';
 
+export { readHardPendingReference } from './hardPendingBoundary';
+
 export type PresentedSetDomain = 'medication' | 'grocery' | 'calendar' | 'todo';
 
 export type PresentedSet = {

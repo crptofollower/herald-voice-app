@@ -42,6 +42,7 @@ import { guessMedicationName, deactivateMedicationByName } from '../../db/medica
 import { isMedicationCorroborated } from '../../db/factDB';
 import type { CommitResult } from '../../routing/routeIntent';
 import { matchCandidateToken } from '../../routing/conversationSession';
+import { armContactCollect, establishHardPending } from '../../routing/hardPendingBoundary';
 import { logRealizationDoneIfSemanticTurn } from '../../utils/latencyInstrument';
 import {
   bindCallTextRecovery,
@@ -304,7 +305,7 @@ export async function dispatchAction(
               completeReadySms,
               { resolveOsPhone: resolveOsPhoneForRecovery },
             );
-            session.setPending({
+            establishHardPending(session, {
               pendingKey: bound.pendingKey,
               resume: bound.resume,
               kind: 'standard',
@@ -353,7 +354,7 @@ export async function dispatchAction(
               completeReadySms,
               { resolveOsPhone: resolveOsPhoneForRecovery },
             );
-            session.setPending({
+            establishHardPending(session, {
               pendingKey: bound.pendingKey,
               resume: bound.resume,
               kind: 'standard',
@@ -423,7 +424,7 @@ export async function dispatchAction(
                   const reply = `I found more than one ${only.name} in your contacts — ${names}. Which one did you mean?`;
                   addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
                   speak(reply);
-                  session.setPending({
+                  establishHardPending(session, {
                     pendingKey: 'sms_disambiguate_os_capability',
                     kind: 'standard',
                     reaskPrompt: `I'm not sure I caught that — which one did you mean: ${names}?`,
@@ -498,7 +499,7 @@ export async function dispatchAction(
                   }
                 },
               );
-              session.setPending({
+              establishHardPending(session, {
                 pendingKey: boundOs.pendingKey,
                 kind: 'standard',
                 budget: boundOs.budget,
@@ -547,7 +548,7 @@ export async function dispatchAction(
           const { DOMAIN_WRITERS } = await import('../../routing/routeIntent');
           const result = await DOMAIN_WRITERS['medical_capture']!.clear();
           if (result.status === 'pending') {
-            session.setPending({
+            establishHardPending(session, {
               pendingKey: result.pendingKey,
               kind: result.kind ?? 'destructive',
               budget: 1,
@@ -665,7 +666,7 @@ export async function dispatchAction(
                 return { status: 'noop', ack: responseText };
               },
             );
-            session.setPending({
+            establishHardPending(session, {
               pendingKey: bound.pendingKey,
               resume: bound.resume,
               kind: 'standard',
@@ -745,7 +746,7 @@ export async function dispatchAction(
               addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
               speak(reply);
             }
-            pendingContactCollectRef.current = { action: 'navigate', name: contact.name };
+            armContactCollect(session, pendingContactCollectRef, { action: 'navigate', name: contact.name });
             return { status: 'noop', ack: reply };
           };
 
@@ -756,7 +757,7 @@ export async function dispatchAction(
             const reply = `I found more than one ${cleaned} in your contacts — ${names}. Which one did you mean?`;
             addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
             speak(reply);
-            session.setPending({
+            establishHardPending(session, {
               pendingKey: 'navigate_disambiguate_herald',
               kind: 'standard',
               reaskPrompt: `I'm not sure I caught that — which one did you mean: ${names}?`,
@@ -973,7 +974,7 @@ export async function dispatchAction(
             speak(reply);
             if (armPending) {
               const removeCandidates = pendingMatches.map(m => ({ label: m.body, ref: m.id }));
-              session.setPending({
+              establishHardPending(session, {
                 pendingKey: 'list_remove_disambiguate',
                 kind: 'standard',
                 reaskPrompt: `I'm not sure which one you meant — ${pendingMatches.map(m => m.body).join(', ')}?`,
@@ -1083,7 +1084,7 @@ export async function dispatchAction(
             speak(reply);
             if (armPending) {
               const updateCandidates = matches.map(m => ({ label: m.body, ref: m.id }));
-              session.setPending({
+              establishHardPending(session, {
                 pendingKey: 'list_update_disambiguate',
                 kind: 'standard',
                 reaskPrompt: `I'm not sure which one you meant — ${matches.map(m => m.body).join(', ')}?`,

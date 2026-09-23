@@ -10,6 +10,7 @@ import {
   followingTurnListReferentFailClosedSpeech,
 } from './followingTurnListReferent';
 import { ConversationSession, CONFIRM_YES_RE, CONFIRM_NO_RE } from './conversationSession';
+import { establishHardPending } from './hardPendingBoundary';
 import { CALL_TEXT_RECOVERY_KEY, shouldPreemptCallTextRecovery } from './callTextReadiness';
 import {
   conversationCarrySlice1OwnsReply,
@@ -581,7 +582,7 @@ export async function applyIntents(
     // instead of silently dropped, while ConversationSession still only
     // ever holds the one, single, authoritative pending slot Law 2 requires.
     const pending = pendings.length === 1 ? pendings[0] : chainPendingCandidates(pendings);
-    session.setPending({
+    establishHardPending(session, {
       pendingKey: pending.pendingKey,
       resume: pending.resume,
       kind: pending.kind,
@@ -1355,17 +1356,14 @@ export async function processUtterance(
   ) {
     subject.restore(focusHeldForSideActivity);
   }
-  // D-phone-repair, 2026-08-13: processUtterance is the sole boundary that
-  // may call session.setPending (Spine §3a / Law 2) -- routeIntent itself
-  // never touches session. This mirrors applyIntents' existing pending-arm
-  // pattern, just for a RouteDecision-originated signal instead of a
-  // DOMAIN_WRITER-originated one.
+  // D-phone-repair, 2026-08-13: hard pending is established only through
+  // establishHardPending. routeIntent itself never touches session.
   if (routeDecision.kind === 'phone_repair_needed') {
     subject?.clear();
     medicationPresentation?.clear();
     orderedPresentation?.clear();
     calendarPresentation?.clear();
-    session.setPending({
+    establishHardPending(session, {
       pendingKey: routeDecision.pending.pendingKey,
       resume: routeDecision.pending.resume,
       kind: routeDecision.pending.kind,
@@ -1381,7 +1379,7 @@ export async function processUtterance(
     medicationPresentation?.clear();
     orderedPresentation?.clear();
     calendarPresentation?.clear();
-    session.setPending({
+    establishHardPending(session, {
       pendingKey: routeDecision.pending.pendingKey,
       resume: routeDecision.pending.resume,
       kind: routeDecision.pending.kind,
@@ -1564,7 +1562,7 @@ export async function processUtterance(
         resume,
         reaskPrompt: prompt,
       };
-      session.setPending({
+      establishHardPending(session, {
         pendingKey: pending.pendingKey,
         resume: pending.resume,
         reaskPrompt: prompt,
@@ -1582,7 +1580,7 @@ export async function processUtterance(
     && /grocery list/i.test(routeDecision.response)
   ) {
     const prompt = routeDecision.response;
-    session.setPending({
+    establishHardPending(session, {
       pendingKey: CLARIFY_LIST_ADD_ITEM_KEY,
       reaskPrompt: prompt,
       ownsReply: (userText: string) => parseListAddItemClarificationAnswer(userText) != null,
