@@ -169,6 +169,10 @@ import { isGroceryListReadSummarySpeech } from '../conversation/groceryListReadR
 import { isTodoOpenListSpeech } from '../db/listRead';
 import { isCalendarAgendaSpeech } from '../db/calendarCacheDB';
 import { CalendarContinuationHolder } from '../routing/calendarContinuation';
+import {
+  RecoveryObligationHolder,
+  shouldEstablishRecoveryObligation,
+} from '../routing/recoveryObligation';
 import { DiscourseContinuityHolder } from '../routing/discourseContinuity';
 import { ReminiscenceArcHolder } from '../routing/reminiscenceArc';
 import { formatOperationalListClarification } from '../routing/operationalListContinuity';
@@ -609,6 +613,7 @@ export default function ChatScreen() {
   const todoPresentationRef = useRef<TodoPresentationHolder>(new TodoPresentationHolder());
   const calendarPresentationRef = useRef<CalendarPresentationHolder>(new CalendarPresentationHolder());
   const calendarContinuationRef = useRef<CalendarContinuationHolder>(new CalendarContinuationHolder());
+  const recoveryObligationRef = useRef<RecoveryObligationHolder>(new RecoveryObligationHolder());
   const discourseRef = useRef<DiscourseContinuityHolder>(new DiscourseContinuityHolder());
   const reminiscenceArcRef = useRef<ReminiscenceArcHolder>(new ReminiscenceArcHolder());
 
@@ -1516,6 +1521,7 @@ export default function ChatScreen() {
       todoPresentationRef.current.clear();
       calendarPresentationRef.current.clear();
       calendarContinuationRef.current.clear();
+      recoveryObligationRef.current.clear();
       discourseRef.current.clear();
       reminiscenceArcRef.current.clear();
       hotRingRef.current.clear();
@@ -1571,6 +1577,7 @@ export default function ChatScreen() {
       todoPresentationRef.current.clear();
       calendarPresentationRef.current.clear();
       calendarContinuationRef.current.clear();
+      recoveryObligationRef.current.clear();
       const pending = pendingContactCollectRef.current;
       const phoneMatch = text.match(/([\d\s\-\(\)\+\.]{7,})/);
       const isLikelyAddress = text.length > 8 && /\d/.test(text) && /\b(st|ave|blvd|rd|dr|ln|way|ct|pl|circle|drive|street|road|court|lane|avenue)\b/i.test(text);
@@ -1847,7 +1854,7 @@ export default function ChatScreen() {
       },
       resolveContact: resolveContactPhoneRef.current ?? undefined,
       getMedicationSemanticInterpreterCtx,
-    }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current, calendarPresentationRef.current, calendarContinuationRef.current, discourseRef.current, conversationLedgerRef.current, reminiscenceArcRef.current);
+    }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current, calendarPresentationRef.current, calendarContinuationRef.current, discourseRef.current, conversationLedgerRef.current, reminiscenceArcRef.current, recoveryObligationRef.current);
     journeyOutcome = outcome;
     syncSituationalListVisuals(outcome);
     const continuityFocus = !outcome.handled
@@ -2080,6 +2087,17 @@ export default function ChatScreen() {
           ledgerOperation = 'read';
           ledgerOutcome = 'presented';
           ledgerAuthorityTier = 'deterministic';
+        }
+        if (shouldEstablishRecoveryObligation({
+          processHandled: outcome.handled,
+          routeKind: outcome.routeDecision.kind,
+          routeReason: outcome.routeDecision.reason,
+          recapHandled: recapOutcome.handled,
+          activeSubjectHandled: activeSubjectOutcome.handled,
+          seamKind: seamOutcome.kind,
+          hasPending: sessionRef.current.hasPending(),
+        })) {
+          recoveryObligationRef.current.establish();
         }
       }
       conversationLedgerRef.current.push({
@@ -3067,7 +3085,7 @@ export default function ChatScreen() {
         },
         resolveContact: resolveContactPhoneRef.current ?? undefined,
         getMedicationSemanticInterpreterCtx,
-      }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current, calendarPresentationRef.current, calendarContinuationRef.current, discourseRef.current, conversationLedgerRef.current, reminiscenceArcRef.current);
+      }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current, calendarPresentationRef.current, calendarContinuationRef.current, discourseRef.current, conversationLedgerRef.current, reminiscenceArcRef.current, recoveryObligationRef.current);
       syncSituationalListVisuals(outcome);
       if (outcome.handled && outcome.source === 'pending_resume' && outcome.responseText) {
         addMessage({ id: generateId('msg'), role: 'assistant', content: outcome.responseText, timestamp: Date.now() });
@@ -3147,6 +3165,7 @@ export default function ChatScreen() {
           todoPresentationRef.current.clear();
           calendarPresentationRef.current.clear();
           calendarContinuationRef.current.clear();
+          recoveryObligationRef.current.clear();
           conversationLedgerRef.current = createConversationTurnLedger();
           discourseRef.current.clear();
           reminiscenceArcRef.current.clear();

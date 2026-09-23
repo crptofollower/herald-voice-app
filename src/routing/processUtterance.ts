@@ -117,6 +117,11 @@ import {
   parseCalendarTemporalFollowUp,
 } from './calendarContinuation';
 import {
+  RecoveryObligationHolder,
+  isRecoveryRepairSignal,
+  realizeRecoveryObligationConsume,
+} from './recoveryObligation';
+import {
   CalendarPresentationHolder,
   parseCalendarTimeInquiry,
   answerCalendarTimeInquiry,
@@ -157,7 +162,7 @@ export type RouteDeps = Parameters<typeof routeIntent>[1];
 export type UtteranceOutcome =
   | {
       handled: true;
-      source: 'pending_resume' | 'capture' | 'referent_resume' | 'interpretation' | 'hold_recall' | 'hold_continuity' | 'recent_add_recall' | 'recollection';
+      source: 'pending_resume' | 'capture' | 'referent_resume' | 'interpretation' | 'hold_recall' | 'hold_continuity' | 'recent_add_recall' | 'recollection' | 'recovery_obligation';
       responseText: string;
       commits: CommitResult[];
       /** Presentation hint only. Never speech-parsed. Never a conversational machine. */
@@ -609,6 +614,7 @@ export async function processUtterance(
   discourse?: DiscourseContinuityHolder | null,
   ledger?: ConversationTurnLedger | null,
   reminiscenceArc?: ReminiscenceArcHolder | null,
+  recoveryObligation?: RecoveryObligationHolder | null,
 ): Promise<UtteranceOutcome> {
   const turnId = getActiveTurnId();
   latLog('processUtterance START', { turnId });
@@ -621,6 +627,7 @@ export async function processUtterance(
   calendarPresentation?.beginUserTurn();
   calendarContinuation?.beginUserTurn();
   discourse?.beginUserTurn();
+  recoveryObligation?.beginUserTurn();
   const continuationRecoveryCandidates: ContinuationRecoveryCandidate[] = [];
   // 0) Law 0 — emergency preempts everything (Spine §3a). Checked before pending
   //    resolution, before routing, before any classifier. A held pending is
@@ -635,6 +642,7 @@ export async function processUtterance(
     calendarPresentation?.clear();
     calendarContinuation?.clear();
     discourse?.clear();
+    recoveryObligation?.clear();
     arc.clear();
     return { handled: true, source: 'emergency' };
   }
@@ -763,6 +771,19 @@ export async function processUtterance(
       return todoHandled('pending_resume', pendingResume.responseText, pendingResume.commits);
     }
     return groceryPending ? groceryHandled('pending_resume', pendingResume.responseText, pendingResume.commits) : pendingResume;
+  }
+  if (recoveryObligation?.canContinue()) {
+    if (isRecoveryRepairSignal(text)) {
+      const realized = realizeRecoveryObligationConsume(text);
+      recoveryObligation.clear();
+      return {
+        handled: true,
+        source: 'recovery_obligation',
+        responseText: realized.responseText,
+        commits: [],
+      };
+    }
+    recoveryObligation.clear();
   }
   const holdRecall = inspectHolds(text, discourse?.peekInterpretationHold() ?? null);
   const holdRecallText = formatHoldRecall(holdRecall);
