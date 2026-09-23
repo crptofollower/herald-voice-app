@@ -210,7 +210,8 @@ export async function runSemanticLatencyInstrumentationTests() {
       && /logSemanticSpecialistInferenceEnd\('grocery'/.test(grocery),
       (v) => v === true, 'timeout|error');
     assert('realization marker sits immediately before speak/dispatchRead handoff',
-      /logRealizationDoneIfSemanticTurn\(\);[\s\S]{0,80}speak\(outcome\.responseText\)/.test(chat)
+      /const realized = projectRealization\(outcome\.responseAct, outcome\.responseText\)/.test(chat)
+      && /logRealizationDoneIfSemanticTurn\(\);\s*speak\(realized\.speech\)/.test(chat)
       && /logRealizationDoneIfSemanticTurn\(\);[\s\S]{0,80}speak\(response\)/.test(dispatch),
       (v) => v === true, 'before speak');
   }

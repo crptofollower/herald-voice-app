@@ -296,7 +296,7 @@ export async function runConversationTurnLedgerCoverageTests() {
     assertTrue('ChatScreen: processUtterance call threads the ledger through', /discourseRef\.current, conversationLedgerRef\.current, reminiscenceArcRef\.current, recoveryObligationRef\.current, todoPresentationRef\.current\)/.test(chatSrc));
     assertTrue(
       'ChatScreen: device_read (online tier-1) pushes a read/presented record',
-      /noteDeterministicChitChatContext\(rdTier1Response\);\s*\n\s*conversationLedgerRef\.current\.push\(\{\s*\n\s*establishedAt: Date\.now\(\),\s*\n\s*utterance: text,\s*\n\s*intentType: null,\s*\n\s*operation: 'read',\s*\n\s*outcome: 'presented',/.test(chatSrc),
+      /const readSpeech = projectRealization\(outcome\.responseAct, rdTier1Response\)\.speech;\s*\n\s*await dispatchRead\(\s*\n\s*readSpeech,[\s\S]*?noteDeterministicChitChatContext\(readSpeech\);\s*\n\s*conversationLedgerRef\.current\.push\(\{\s*\n\s*establishedAt: Date\.now\(\),\s*\n\s*utterance: text,\s*\n\s*intentType: null,\s*\n\s*operation: 'read',\s*\n\s*outcome: 'presented',[\s\S]*?assistantReplySummary: readSpeech,/.test(chatSrc),
     );
     assertTrue(
       'ChatScreen: device_action pushes an action/presented record',
@@ -308,7 +308,7 @@ export async function runConversationTurnLedgerCoverageTests() {
     );
     assertTrue(
       'ChatScreen: offline_fallback ephemeral path also pushes a record',
-      /offlineReply = seamOutcome\.reply;[\s\S]*?conversationLedgerRef\.current\.push\(\{\s*\n\s*establishedAt: Date\.now\(\),\s*\n\s*utterance: text,\s*\n\s*intentType: null,\s*\n\s*operation: ledgerOperation,/.test(chatSrc),
+      /offlineReply = projectRealization\(outcome\.responseAct, seamOutcome\.reply\)\.speech;[\s\S]*?conversationLedgerRef\.current\.push\(\{\s*\n\s*establishedAt: Date\.now\(\),\s*\n\s*utterance: text,\s*\n\s*intentType: null,\s*\n\s*operation: ledgerOperation,[\s\S]*?assistantReplySummary: offlineReply,/.test(chatSrc),
     );
     assertTrue(
       'ChatScreen: all 5 direct applyIntents call sites thread the ledger through',

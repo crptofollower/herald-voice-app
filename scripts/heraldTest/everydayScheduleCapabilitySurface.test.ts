@@ -217,7 +217,9 @@ export async function runEverydayScheduleCapabilitySurfaceTests() {
     && /isCalendarAgendaSpeech\(item\.content\)/.test(chatSrc)
     && /isGroceryListReadSummarySpeech\(item\.content\)/.test(chatSrc)
     && /isTodoOpenListSpeech\(item\.content\)/.test(chatSrc)
-    && /speak\(outcome\.responseText\)/.test(chatSrc),
+    && /const realized = projectRealization\(outcome\.responseAct, outcome\.responseText\)/.test(chatSrc)
+    && /content: realized\.speech/.test(chatSrc)
+    && /speak\(realized\.speech\)/.test(chatSrc),
     (v) => v === true, 'true');
   {
     const week = 'This week you have: Flight to Chicago on Monday, and Dinner on Tuesday.';

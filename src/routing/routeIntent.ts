@@ -142,7 +142,7 @@ export type CommitResult =
       /** Proposed semantic identity, pre-confirmation — see DomainFocusEnvelope. */
       focus?: DomainFocusEnvelope;
       referenceOnly?: boolean }
-  | { status: 'noop';      ack: string; focus?: DomainFocusEnvelope; referenceOnly?: boolean }
+  | { status: 'noop';      ack: string; focus?: DomainFocusEnvelope; referenceOnly?: boolean; exit?: 'cancelled' }
   | { status: 'failed';    ack: string; focus?: DomainFocusEnvelope; referenceOnly?: boolean };
 
 export type ResolveContactFn = (n: string) => Promise<{phone:string;name:string;contactId?:string;source:'herald'|'device'}|{phone:null;name:string;source:'device';candidateNames:string[];deviceCandidates:{name:string;phone:string}[]}|null>;

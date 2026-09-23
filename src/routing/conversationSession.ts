@@ -178,7 +178,7 @@ export class ConversationSession {
     // Cancel escape — checked first, from any budget state.
     if (CANCEL_RE.test(userText.trim())) {
       this.pending = null;
-      return { status: 'noop', ack: "No problem — I won't do that." };
+      return { status: 'noop', ack: "No problem — I won't do that.", exit: 'cancelled' };
     }
 
     // Rung 1 of the escalation ladder: the domain's own resume parser.

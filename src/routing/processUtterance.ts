@@ -11,6 +11,15 @@ import {
 } from './followingTurnListReferent';
 import { ConversationSession, CONFIRM_YES_RE, CONFIRM_NO_RE } from './conversationSession';
 import { establishHardPending } from './hardPendingBoundary';
+import {
+  acknowledgeAct,
+  actForCommits,
+  actForPendingResolution,
+  actForRoute,
+  clarifyReferenceAct,
+  requestConfirmationAct,
+  type ResponseAct,
+} from './responseAct';
 import { CALL_TEXT_RECOVERY_KEY, shouldPreemptCallTextRecovery } from './callTextReadiness';
 import {
   conversationCarrySlice1OwnsReply,
@@ -178,6 +187,7 @@ export type UtteranceOutcome =
       presentedCalendarEventIds?: string[];
       presentedCalendarEvents?: Array<{ id: string; title: string; start_ms: number; all_day: number }>;
       calendarReadReason?: string;
+      responseAct?: ResponseAct;
     }
   | { handled: true; source: 'emergency' }
   | {
@@ -187,22 +197,25 @@ export type UtteranceOutcome =
       /** Orchestration publishes this on the turn's existing ledger write. */
       continuityFocus?: DomainFocusEnvelope;
       continuityReferenceOnly?: boolean;
+      responseAct?: ResponseAct;
     };
 
 function groceryHandled(
   source: 'pending_resume' | 'capture' | 'referent_resume',
   responseText: string,
   commits: CommitResult[] = [],
+  responseAct?: ResponseAct,
 ): Extract<UtteranceOutcome, { handled: true; source: 'pending_resume' | 'capture' | 'referent_resume' }> {
-  return { handled: true, source, responseText, commits, capabilitySurface: 'grocery' };
+  return { handled: true, source, responseText, commits, capabilitySurface: 'grocery', ...(responseAct ? { responseAct } : {}) };
 }
 
 function todoHandled(
   source: 'pending_resume' | 'capture' | 'referent_resume',
   responseText: string,
   commits: CommitResult[] = [],
+  responseAct?: ResponseAct,
 ): Extract<UtteranceOutcome, { handled: true; source: 'pending_resume' | 'capture' | 'referent_resume' }> {
-  return { handled: true, source, responseText, commits, capabilitySurface: 'todo' };
+  return { handled: true, source, responseText, commits, capabilitySurface: 'todo', ...(responseAct ? { responseAct } : {}) };
 }
 
 function captureWithOptionalCapabilitySurface(
@@ -219,12 +232,13 @@ function captureWithOptionalCapabilitySurface(
   const pendingTodoComplete = commits.some(
     (commit) => commit.status === 'pending' && commit.pendingKey === 'todo_complete',
   );
-  if (groceryAdd && wrote) return groceryHandled('capture', responseText, commits);
-  if (todoAdd && wrote) return todoHandled('capture', responseText, commits);
+  const responseAct = actForCommits(commits, responseText);
+  if (groceryAdd && wrote) return groceryHandled('capture', responseText, commits, responseAct);
+  if (todoAdd && wrote) return todoHandled('capture', responseText, commits, responseAct);
   if (todoComplete && (pendingTodoComplete || wrote)) {
-    return todoHandled('capture', responseText, commits);
+    return todoHandled('capture', responseText, commits, responseAct);
   }
-  return { handled: true, source: 'capture', responseText, commits };
+  return { handled: true, source: 'capture', responseText, commits, ...(responseAct ? { responseAct } : {}) };
 }
 
 function logTodoCompletePendingProbe(text: string, session: ConversationSession): void {
@@ -751,11 +765,13 @@ export async function processUtterance(
       // this is a no-op for them (undefined, same as before).
       focus: buildCommitLedgerFocus(result, { source: 'deterministic', referenceOnly: result.referenceOnly }),
     });
+    const pendingAct = actForPendingResolution(result);
     const pendingResume = {
       handled: true as const,
       source: 'pending_resume' as const,
       responseText: composeAck([result]),
       commits: [result] as CommitResult[],
+      ...(pendingAct ? { responseAct: pendingAct } : {}),
     };
     const groceryPending =
       (result.status === 'committed' || result.status === 'noop')
@@ -840,7 +856,7 @@ export async function processUtterance(
     && presentedOrdinal.domain === 'medication'
     && isMedicationOrdinalNearMiss(text);
   if (!medicationNearMissOwnsTurn && (presentedOrdinal.kind === 'clarify' || (presentedOrdinal.kind === 'unique' && presentedOrdinal.mutation && presentedOrdinal.domain !== 'grocery'))) {
-    return { handled: true, source: 'referent_resume', responseText: ORDERED_PRESENTATION_CONFUSION, commits: [] };
+    return { handled: true, source: 'referent_resume', responseText: ORDERED_PRESENTATION_CONFUSION, commits: [], responseAct: clarifyReferenceAct(ORDERED_PRESENTATION_CONFUSION) };
   }
   if (!medicationNearMissOwnsTurn && presentedOrdinal.kind === 'unique' && !presentedOrdinal.mutation && parseGroceryNamedCollectionRead(text).kind !== 'position') {
     if (presentedOrdinal.domain === 'medication') {
@@ -865,7 +881,7 @@ export async function processUtterance(
         return { handled: true, source: 'referent_resume', responseText: answered.responseText, commits: [] };
       }
     } else if (presentedOrdinal.domain === 'todo') {
-      return { handled: true, source: 'referent_resume', responseText: ORDERED_PRESENTATION_CONFUSION, commits: [] };
+      return { handled: true, source: 'referent_resume', responseText: ORDERED_PRESENTATION_CONFUSION, commits: [], responseAct: clarifyReferenceAct(ORDERED_PRESENTATION_CONFUSION) };
     }
   }
   let medicationAwaitingUnusedClear = false;
@@ -913,7 +929,7 @@ export async function processUtterance(
       } else {
         medicationPresentation.clear();
       }
-      return { handled: true, source: 'referent_resume', responseText, commits: [] };
+      return { handled: true, source: 'referent_resume', responseText, commits: [], responseAct: clarifyReferenceAct(responseText) };
     }
     recordContinuationRecoveryCandidate(
       continuationRecoveryCandidates,
@@ -996,10 +1012,10 @@ export async function processUtterance(
         && (interpreted.reason === 'relative' || interpreted.reason === 'other_anaphor')
         && !/\b(?:one|thing|item)\b/i.test(text);
       if (interpreted.kind === 'ambiguous' && !relativeWithoutListNoun) {
-        return { handled: true, source: 'referent_resume', responseText: ORDERED_PRESENTATION_CONFUSION, commits: [] };
+        return { handled: true, source: 'referent_resume', responseText: ORDERED_PRESENTATION_CONFUSION, commits: [], responseAct: clarifyReferenceAct(ORDERED_PRESENTATION_CONFUSION) };
       }
       if (interpreted.kind !== 'unsafe' && hasBoundedPositionEvidence(text) && !relativeWithoutListNoun) {
-        return { handled: true, source: 'referent_resume', responseText: ORDERED_PRESENTATION_CONFUSION, commits: [] };
+        return { handled: true, source: 'referent_resume', responseText: ORDERED_PRESENTATION_CONFUSION, commits: [], responseAct: clarifyReferenceAct(ORDERED_PRESENTATION_CONFUSION) };
       }
       recordContinuationRecoveryCandidate(
         continuationRecoveryCandidates,
@@ -1370,7 +1386,7 @@ export async function processUtterance(
       reaskPrompt: routeDecision.pending.reaskPrompt,
       correctable: routeDecision.pending.correctable,
     });
-    return { handled: true, source: 'capture', responseText: routeDecision.pending.prompt, commits: [routeDecision.pending] };
+    return { handled: true, source: 'capture', responseText: routeDecision.pending.prompt, commits: [routeDecision.pending], responseAct: requestConfirmationAct(routeDecision.pending.prompt, routeDecision.pending.pendingKey) };
   }
   // NEW — second occurrence of this exact arm pattern (phone_repair_needed
   // is the first). Not factored out yet — rule of three not met.
@@ -1386,7 +1402,7 @@ export async function processUtterance(
       reaskPrompt: routeDecision.pending.reaskPrompt,
       correctable: routeDecision.pending.correctable,
     });
-    return { handled: true, source: 'capture', responseText: routeDecision.pending.prompt, commits: [routeDecision.pending] };
+    return { handled: true, source: 'capture', responseText: routeDecision.pending.prompt, commits: [routeDecision.pending], responseAct: requestConfirmationAct(routeDecision.pending.prompt, routeDecision.pending.pendingKey) };
   }
   if (routeDecision.kind === 'device_read' && routeDecision.reason.startsWith('hold_continuity:')) {
     return {
@@ -1408,6 +1424,7 @@ export async function processUtterance(
       source: 'interpretation',
       responseText: ACTIVE_SUBJECT_GROUNDING_ACK,
       commits: [],
+      responseAct: acknowledgeAct(ACTIVE_SUBJECT_GROUNDING_ACK),
     };
   }
   // 3) Converted-domain capture → commit loop.
@@ -1568,7 +1585,7 @@ export async function processUtterance(
         reaskPrompt: prompt,
         ownsReply: (userText: string) => parseClarificationDomainAnswer(userText) != null,
       });
-      return { handled: true, source: 'capture', responseText: prompt, commits: [pending] };
+      return { handled: true, source: 'capture', responseText: prompt, commits: [pending], responseAct: requestConfirmationAct(prompt, pending.pendingKey) };
     }
   }
   if (
@@ -1709,10 +1726,12 @@ export async function processUtterance(
     }
     arc.close();
   }
+  const routeAct = actForRoute(routeDecision);
   return {
     handled: false,
     routeDecision,
     continuationRecoveryCandidates,
+    ...(routeAct ? { responseAct: routeAct } : {}),
     ...(continuityFocus
       ? { continuityFocus, continuityReferenceOnly: continuityReferenceOnly === true }
       : {}),

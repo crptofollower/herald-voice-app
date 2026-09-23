@@ -142,6 +142,7 @@ import {
   establishHardPending,
   releaseContactCollect,
 } from '../routing/hardPendingBoundary';
+import { projectRealization } from '../routing/responseAct';
 import { classifyEmergencyCallReply } from '../utils/emergencyCallConfirm';
 import { ConversationalSubjectHolder } from '../routing/conversationalSubject';
 import { MedicationPresentationHolder } from '../routing/medicationPresentation';
@@ -1886,6 +1887,7 @@ export default function ChatScreen() {
       return;
     }
     if (outcome.handled) {
+      const realized = projectRealization(outcome.responseAct, outcome.responseText);
       addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
       const recoveryChoices =
         outcome.source === 'pending_resume'
@@ -1897,7 +1899,7 @@ export default function ChatScreen() {
       addMessage({
         id: generateId('msg'),
         role: 'assistant',
-        content: outcome.responseText,
+        content: realized.speech,
         timestamp: Date.now(),
         recoveryChoices,
       });
@@ -1906,7 +1908,7 @@ export default function ChatScreen() {
         source: outcome.source,
       });
       logRealizationDoneIfSemanticTurn();
-      speak(outcome.responseText);
+      speak(realized.speech);
       await runCommitEffects(outcome.commits, {
         openURL: (url) => Linking.openURL(url),
         handleMapsAction,
@@ -1921,9 +1923,10 @@ export default function ChatScreen() {
     }
     if (outcome.routeDecision.kind === 'not_ready') {
       const notReadyReply = "Give me a moment — I'm still waking up. Say that again?";
+      const realizedNotReady = projectRealization(outcome.responseAct, notReadyReply);
       addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-      addMessage({ id: generateId('msg'), role: 'assistant', content: notReadyReply, timestamp: Date.now() });
-      speak(notReadyReply);
+      addMessage({ id: generateId('msg'), role: 'assistant', content: realizedNotReady.speech, timestamp: Date.now() });
+      speak(realizedNotReady.speech);
       sendingRef.current = false;
       setInputText('');
       return;
@@ -2102,6 +2105,7 @@ export default function ChatScreen() {
           recoveryObligationRef.current.establish();
         }
       }
+      const realizedClarification = projectRealization(outcome.responseAct, reply);
       conversationLedgerRef.current.push({
         establishedAt: Date.now(),
         utterance: text,
@@ -2109,7 +2113,7 @@ export default function ChatScreen() {
         operation: ledgerOperation,
         outcome: ledgerOutcome,
         authorityTier: ledgerAuthorityTier,
-        assistantReplySummary: reply,
+        assistantReplySummary: realizedClarification.speech,
         // Active Subject / Reference Continuity V1: [] for every existing
         // path (unchanged); a resolved 'grounding' outcome attaches its
         // tier:'conversational' focus here — the ONE ledger push this whole
@@ -2117,7 +2121,7 @@ export default function ChatScreen() {
         focus: groundedFocus.length > 0 ? groundedFocus : continuityFocus,
       });
       addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-      addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+      addMessage({ id: generateId('msg'), role: 'assistant', content: realizedClarification.speech, timestamp: Date.now() });
       logFinalResponsePath({
         pathKind: recapOutcome.handled
           ? 'needs_clarification_recap'
@@ -2129,7 +2133,7 @@ export default function ChatScreen() {
         routeReason: outcome.routeDecision.reason,
       });
       logRealizationDoneIfSemanticTurn();
-      speak(reply);
+      speak(realizedClarification.speech);
       sendingRef.current = false;
       setInputText('');
       return;
@@ -2381,12 +2385,13 @@ export default function ChatScreen() {
           // intentionally falls through to the Tier 1 action handler below — it
           // needs no network. Do NOT add a return here.
         } else if (rdTier1Response) {
+          const readSpeech = projectRealization(outcome.responseAct, rdTier1Response).speech;
           await dispatchRead(
-            rdTier1Response,
+            readSpeech,
             text,
             buildDispatchDeps(),
           );
-          noteDeterministicChitChatContext(rdTier1Response);
+          noteDeterministicChitChatContext(readSpeech);
           conversationLedgerRef.current.push({
             establishedAt: Date.now(),
             utterance: text,
@@ -2394,7 +2399,7 @@ export default function ChatScreen() {
             operation: 'read',
             outcome: 'presented',
             authorityTier: 'deterministic',
-            assistantReplySummary: rdTier1Response,
+            assistantReplySummary: readSpeech,
             focus: continuityFocus,
           });
           setInputText('');
@@ -2537,7 +2542,10 @@ export default function ChatScreen() {
             "No connection at the moment. I can still help with anything on your phone — what do you need?",
             "I'm offline but still here. Calendar, contacts, medications, lists — what do you need?",
           ];
-          offlineReply = offlineReplies[Math.floor(Math.random() * offlineReplies.length)];
+          offlineReply = projectRealization(
+            outcome.responseAct,
+            offlineReplies[Math.floor(Math.random() * offlineReplies.length)],
+          ).speech;
         } else {
           // EPHEMERAL CONVERSATION SEAM (Constitution §2) — shared resolveEphemeralSeam.
           const liveTopic = discourseRef.current.peekTopic();
@@ -2579,7 +2587,7 @@ export default function ChatScreen() {
               getInterpreterCtx: getMedicationSemanticInterpreterCtx,
             }),
           });
-          offlineReply = seamOutcome.reply;
+          offlineReply = projectRealization(outcome.responseAct, seamOutcome.reply).speech;
           if (seamOutcome.kind === 'generative' && seamOutcome.grantContinuation) {
             hotRingRef.current.push({
               turnIndex: turnIndexRef.current,
@@ -2676,12 +2684,13 @@ export default function ChatScreen() {
       }
       // Tier 1 read response — calendar, medical, profile
       if (rdTier1Response) {
+        const readSpeech = projectRealization(outcome.responseAct, rdTier1Response).speech;
         await dispatchRead(
-          rdTier1Response,
+          readSpeech,
           text,
           buildDispatchDeps(),
         );
-        noteDeterministicChitChatContext(rdTier1Response);
+        noteDeterministicChitChatContext(readSpeech);
         conversationLedgerRef.current.push({
           establishedAt: Date.now(),
           utterance: text,
@@ -2689,7 +2698,7 @@ export default function ChatScreen() {
           operation: 'read',
           outcome: 'presented',
           authorityTier: 'deterministic',
-          assistantReplySummary: rdTier1Response,
+          assistantReplySummary: readSpeech,
           focus: continuityFocus,
         });
         sendingRef.current = false;
@@ -3091,8 +3100,9 @@ export default function ChatScreen() {
       }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current, calendarPresentationRef.current, calendarContinuationRef.current, discourseRef.current, conversationLedgerRef.current, reminiscenceArcRef.current, recoveryObligationRef.current, todoPresentationRef.current);
       syncSituationalListVisuals(outcome);
       if (outcome.handled && outcome.source === 'pending_resume' && outcome.responseText) {
-        addMessage({ id: generateId('msg'), role: 'assistant', content: outcome.responseText, timestamp: Date.now() });
-        speak(outcome.responseText);
+        const realizedPending = projectRealization(outcome.responseAct, outcome.responseText);
+        addMessage({ id: generateId('msg'), role: 'assistant', content: realizedPending.speech, timestamp: Date.now() });
+        speak(realizedPending.speech);
       }
     } finally {
       sendingRef.current = false;
