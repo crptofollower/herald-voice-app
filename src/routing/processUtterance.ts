@@ -1321,7 +1321,7 @@ export async function processUtterance(
     });
     return { handled: true, source: 'capture', responseText: routeDecision.pending.prompt, commits: [routeDecision.pending] };
   }
-  if (routeDecision.kind === 'device_read' && routeDecision.reason === 'hold_continuity:preference') {
+  if (routeDecision.kind === 'device_read' && routeDecision.reason.startsWith('hold_continuity:')) {
     return {
       handled: true,
       source: 'hold_continuity',

@@ -10,7 +10,7 @@ import type { LlamaContext } from 'llama.rn';
 import { MEDICATION_SEMANTIC_INTERPRETATION_ENABLED, CAPABILITY_READ_ROUTER_ENABLED, GROCERY_SEMANTIC_DECOMPOSITION_ENABLED, SEMANTIC_CAPABILITY_DISPATCH_ENABLED, NATURAL_MULTI_FACT_INTERPRETATION_ENABLED } from '../constants/features';
 import { tryNaturalMultiFactHold, type MultiFactProposalGenerationResult } from './naturalMultiFactInterpretation';
 import { listEstablishedFamilyRelationKeys } from '../utils/familyRead';
-import { answerHoldContinuityQa } from './holdContinuityQa';
+import { matchHoldContinuityQa } from './holdContinuityQa';
 import type { InterpretationHoldSlot } from './discourseContinuity';
 import { generateMedicationSemanticProposal, admitMedicationSemanticProposal, medicationSemanticProposalFromDispatchWrite } from './medicationSemanticInterpretation';
 import {
@@ -156,18 +156,18 @@ export interface DomainWriter {
 export type CaptureContext = { contacts: string[]; lists: string[]; name?: string };
 export type DeterministicCapturer = (text: string, ctx: CaptureContext) => IntentRecord[];
 
-/** Unique live preference answer only. Does not invent, guess, or outrank identity reads. */
+/** Unique live hold answer only. Does not invent, guess, or outrank identity reads. */
 function tryHoldContinuityPreferenceRead(
   text: string,
   peek?: () => InterpretationHoldSlot | null,
 ): Extract<RouteDecision, { kind: 'device_read'; reason: string }> | null {
-  const response = answerHoldContinuityQa(text, peek?.() ?? null);
-  if (!response) return null;
+  const match = matchHoldContinuityQa(text, peek?.() ?? null);
+  if (match.kind !== 'answer') return null;
   return {
     kind: 'device_read',
     tier: 1,
-    response,
-    reason: 'hold_continuity:preference',
+    response: match.response,
+    reason: match.channel === 'intention' ? 'hold_continuity:intention' : 'hold_continuity:preference',
   };
 }
 

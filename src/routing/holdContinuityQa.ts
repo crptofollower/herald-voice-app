@@ -1,7 +1,9 @@
-// Hold Continuity Q&A V1 — read-only preference answers from live interpretation holds.
-// Explicit my <kin> wins. Unique she/he bind is a read-side fallback over live
-// preference-hold subjects only. No SQLite, pending, writer, promotion, or TTL refresh.
+// Hold Continuity Q&A V1 — read-only answers from live interpretation holds.
+// Preference: explicit my <kin> wins; unique she/he bind over live preference
+// subjects. Intention: unique live intention whose value already contains the
+// question's action span. No SQLite, pending, writer, promotion, or TTL refresh.
 
+import { findStandardSpan } from '../hooks/llmLayers';
 import { FAMILY_SYNONYMS } from '../utils/familyRead';
 import type { InterpretationHoldSlot } from './discourseContinuity';
 import type { AdmittedMultiFactCandidate } from './naturalMultiFactInterpretation';
@@ -9,13 +11,14 @@ import type { AdmittedMultiFactCandidate } from './naturalMultiFactInterpretatio
 export type HoldContinuityQuestion =
   | { kind: 'not_question' }
   | { kind: 'preference'; subject: string; category?: string }
-  | { kind: 'preference_pronoun'; gender: 'feminine' | 'masculine'; category?: string };
+  | { kind: 'preference_pronoun'; gender: 'feminine' | 'masculine'; category?: string }
+  | { kind: 'intention'; predicate: string };
 
 export type HoldContinuityMatch =
   | { kind: 'not_question' }
   | { kind: 'no_match' }
   | { kind: 'ambiguous' }
-  | { kind: 'answer'; subject: string; value: string; response: string };
+  | { kind: 'answer'; subject: string; value: string; response: string; channel: 'preference' | 'intention' };
 
 const FAMILY_KEYS = Object.keys(FAMILY_SYNONYMS).sort((a, b) => b.length - a.length);
 const REL_ALT = FAMILY_KEYS.map((k) => k.replace(/-/g, '[- ]')).join('|');
@@ -50,6 +53,13 @@ const CLOSED_CATEGORY = new Set([
   'name', 'names', 'number', 'phone', 'address', 'age', 'birthday',
 ]);
 
+const INTENTION_GOING_TO_RE =
+  /^\s*what\s+(?:was|am)\s+i\s+(?:going\s+to|gonna)\s+(.+?)\s*\??\s*$/i;
+
+const CLOSED_INTENTION_PREDICATE = new Set([
+  'do', 'be', 'it', 'that', 'this', 'something', 'stuff', 'things',
+]);
+
 function canonicalFamilyKey(raw: string): string | undefined {
   const t = raw.trim().toLowerCase().replace(/\s+/g, '-');
   return FAMILY_KEYS.find((k) => k === t);
@@ -63,6 +73,17 @@ function inspectablePreferences(hold: InterpretationHoldSlot | null): AdmittedMu
       && c.disposition === 'hold'
       && typeof c.subject === 'string'
       && c.subject.trim().length > 0
+      && typeof c.value === 'string'
+      && c.value.trim().length > 0,
+  );
+}
+
+function inspectableIntentions(hold: InterpretationHoldSlot | null): AdmittedMultiFactCandidate[] {
+  if (!hold) return [];
+  return hold.candidates.filter(
+    (c) =>
+      c.kind === 'intention'
+      && c.disposition === 'hold'
       && typeof c.value === 'string'
       && c.value.trim().length > 0,
   );
@@ -100,6 +121,24 @@ function pronounFor(subject: string): { pronoun: string; verb: string } {
 function formatPreferenceAnswer(subject: string, value: string): string {
   const { pronoun, verb } = pronounFor(subject);
   return `You said ${pronoun} ${verb} ${value}.`;
+}
+
+function formatIntentionAnswer(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  return /[.!?]$/.test(trimmed) ? `You said ${trimmed}` : `You said ${trimmed}.`;
+}
+
+export function classifyHoldContinuityIntentionQuestion(utterance: string): HoldContinuityQuestion {
+  const t = utterance.trim();
+  if (!t) return { kind: 'not_question' };
+  if (/\bwhat\s+did\s+i\b/i.test(t)) return { kind: 'not_question' };
+  const going = t.match(INTENTION_GOING_TO_RE);
+  const predicate = going?.[1]?.trim().replace(/[.?!]+$/g, '').trim().toLowerCase();
+  if (!predicate) return { kind: 'not_question' };
+  if (predicate.length < 3) return { kind: 'not_question' };
+  if (CLOSED_INTENTION_PREDICATE.has(predicate)) return { kind: 'not_question' };
+  return { kind: 'intention', predicate };
 }
 
 export function classifyHoldContinuityPreferenceQuestion(utterance: string): HoldContinuityQuestion {
@@ -172,13 +211,10 @@ function matchesCategory(value: string, category: string | undefined): boolean {
   return value.toLowerCase().includes(category.toLowerCase());
 }
 
-export function matchHoldContinuityQa(
-  utterance: string,
+function matchPreferenceHoldContinuity(
+  question: Extract<HoldContinuityQuestion, { kind: 'preference' | 'preference_pronoun' }>,
   holdSet: InterpretationHoldSlot | null,
 ): HoldContinuityMatch {
-  const question = classifyHoldContinuityPreferenceQuestion(utterance);
-  if (question.kind === 'not_question') return { kind: 'not_question' };
-
   const inspectable = inspectablePreferences(holdSet);
   let subject: string | undefined;
   if (question.kind === 'preference') {
@@ -202,6 +238,7 @@ export function matchHoldContinuityQa(
       subject,
       value,
       response: formatPreferenceAnswer(subject, value),
+      channel: 'preference',
     };
   }
 
@@ -215,11 +252,46 @@ export function matchHoldContinuityQa(
         subject,
         value,
         response: formatPreferenceAnswer(subject, value),
+        channel: 'preference',
       };
     }
   }
 
   return { kind: 'ambiguous' };
+}
+
+function matchIntentionHoldContinuity(
+  question: Extract<HoldContinuityQuestion, { kind: 'intention' }>,
+  holdSet: InterpretationHoldSlot | null,
+): HoldContinuityMatch {
+  const inspectable = inspectableIntentions(holdSet);
+  const hits = inspectable.filter((c) => findStandardSpan(c.value, question.predicate) !== null);
+  if (hits.length === 0) return { kind: 'no_match' };
+  const values = uniqueValues(hits);
+  if (values.length !== 1) return { kind: 'ambiguous' };
+  const value = values[0];
+  return {
+    kind: 'answer',
+    subject: question.predicate,
+    value,
+    response: formatIntentionAnswer(value),
+    channel: 'intention',
+  };
+}
+
+export function matchHoldContinuityQa(
+  utterance: string,
+  holdSet: InterpretationHoldSlot | null,
+): HoldContinuityMatch {
+  const preference = classifyHoldContinuityPreferenceQuestion(utterance);
+  if (preference.kind !== 'not_question') {
+    return matchPreferenceHoldContinuity(preference, holdSet);
+  }
+  const intention = classifyHoldContinuityIntentionQuestion(utterance);
+  if (intention.kind === 'intention') {
+    return matchIntentionHoldContinuity(intention, holdSet);
+  }
+  return { kind: 'not_question' };
 }
 
 export function answerHoldContinuityQa(
