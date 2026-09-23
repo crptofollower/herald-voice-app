@@ -944,6 +944,18 @@ if (TOTAL + contractTotal !== EXPECTED_TOTAL) {
   process.exit(1);
 }
 
+// Composition Contract V1 is a separate characterization report.
+// Expected architectural failures must not change EXPECTED_TOTAL or contractFailed.
+try {
+  const { runCompositionContractV1 } = await import('./compositionContractV1.ts');
+  await runCompositionContractV1();
+} catch (err) {
+  console.log(`${RED}${BOLD}COMPOSITION CONTRACT HARNESS CRASH${RESET}`);
+  console.log(err);
+  console.log(`${RED}${BOLD}STOP — HARNESS CANNOT EXPRESS REQUIRED CONTRACT${RESET}`);
+  process.exit(1);
+}
+
 if (failures.length || contractFailed) {
   if (failures.length) {
     console.log(`${RED}${BOLD}FAILURES — fix these before building:${RESET}\n`);
