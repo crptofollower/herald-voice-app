@@ -76,6 +76,18 @@ export async function runRecoveryObligationV1Tests() {
   );
   assert('bare No is not repair', !isRecoveryRepairSignal('No.'));
   assert('bare Yes is not repair', !isRecoveryRepairSignal('Yes.'));
+  assert(
+    'A exact calendar realization',
+    formatRecoveryDomainClarification('calendar') === 'Got it — your calendar. What did you want to ask?',
+  );
+  assert(
+    'B exact medications realization',
+    formatRecoveryDomainClarification('medications') === 'Got it — your medications. What did you want to ask?',
+  );
+  assert(
+    'C exact ambiguous realization',
+    formatRecoveryAmbiguousClarification() === "Got it — I'm not sure which one you meant. What did you want to ask?",
+  );
 
   const { session, deps } = openJourneyDb();
   const discourse = new DiscourseContinuityHolder();
@@ -138,7 +150,8 @@ export async function runRecoveryObligationV1Tests() {
       'O Monday or Tuesday remains unsupported default',
       !monday.handled
         && monday.routeDecision.kind === 'needs_clarification'
-        && monday.routeDecision.reason === 'default',
+        && monday.routeDecision.reason === 'default'
+        && !String(monday.routeDecision.reason).startsWith('calendar:'),
     );
   }
 
@@ -279,6 +292,88 @@ export async function runRecoveryObligationV1Tests() {
     await armCannedDefault('xyzzy unexplained blarg');
     recovery.clear();
     assert('N reset/clear drops obligation', recovery.peek() === null);
+  }
+
+  {
+    await armCannedDefault('xyzzy unexplained blarg');
+    const aligned = await say('I meant my calendar.');
+    assert(
+      'E aligned calendar line then Monday calendar read',
+      aligned.handled
+        && aligned.responseText === 'Got it — your calendar. What did you want to ask?',
+    );
+    const mondayRead = await say("What's on my calendar Monday?");
+    assert(
+      'E What\'s on my calendar Monday? is calendar:specific_day',
+      !mondayRead.handled
+        && mondayRead.routeDecision.kind === 'device_read'
+        && mondayRead.routeDecision.reason === 'calendar:specific_day',
+    );
+  }
+
+  {
+    await armCannedDefault('xyzzy unexplained blarg');
+    const aligned = await say('I meant my calendar.');
+    assert(
+      'F aligned before tomorrow read',
+      aligned.handled && aligned.responseText === 'Got it — your calendar. What did you want to ask?',
+    );
+    const tomorrow = await say("What's on my calendar tomorrow?");
+    assert(
+      'F What\'s on my calendar tomorrow? is calendar:tomorrow',
+      !tomorrow.handled
+        && tomorrow.routeDecision.kind === 'device_read'
+        && tomorrow.routeDecision.reason === 'calendar:tomorrow',
+    );
+  }
+
+  {
+    await armCannedDefault('xyzzy unexplained blarg');
+    const aligned = await say('I meant my medications.');
+    assert(
+      'G aligned medications line',
+      aligned.handled
+        && aligned.responseText === 'Got it — your medications. What did you want to ask?',
+    );
+    const catalog = await say('What medications am I taking?');
+    assert(
+      'G What medications am I taking? is medical:summary',
+      !catalog.handled
+        && catalog.routeDecision.kind === 'device_read'
+        && catalog.routeDecision.reason === 'medical:summary',
+    );
+  }
+
+  {
+    await armCannedDefault('xyzzy unexplained blarg');
+    await say('I meant my calendar.');
+    const fragment = await say('Monday.');
+    assert(
+      'H Monday. remains default unsupported',
+      !fragment.handled
+        && fragment.routeDecision.kind === 'needs_clarification'
+        && fragment.routeDecision.reason === 'default',
+    );
+    assert(
+      'H Monday. is not a calendar read',
+      !String(fragment.routeDecision.reason).startsWith('calendar:'),
+    );
+  }
+
+  {
+    await armCannedDefault('xyzzy unexplained blarg');
+    await say('I meant my calendar.');
+    const fragment = await say('Monday or Tuesday.');
+    assert(
+      'I Monday or Tuesday. remains default unsupported',
+      !fragment.handled
+        && fragment.routeDecision.kind === 'needs_clarification'
+        && fragment.routeDecision.reason === 'default',
+    );
+    assert(
+      'I Monday or Tuesday. is not a calendar read',
+      !String(fragment.routeDecision.reason).startsWith('calendar:'),
+    );
   }
 
   return { passed, failed: failures.length, total: passed + failures.length, failures };

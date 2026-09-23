@@ -49,13 +49,13 @@ export function isRecoveryRepairSignal(text: string): boolean {
 
 export function formatRecoveryDomainClarification(family: 'calendar' | 'medications'): string {
   if (family === 'medications') {
-    return 'Got it — your medications. What did you want to know about them?';
+    return 'Got it — your medications. What did you want to ask?';
   }
-  return 'Got it — your calendar. What did you want to know about it?';
+  return 'Got it — your calendar. What did you want to ask?';
 }
 
 export function formatRecoveryAmbiguousClarification(): string {
-  return "Got it — I'm not sure which of those you meant. Can you say it again?";
+  return "Got it — I'm not sure which one you meant. What did you want to ask?";
 }
 
 export function realizeRecoveryObligationConsume(text: string): {
