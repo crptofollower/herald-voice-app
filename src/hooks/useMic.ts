@@ -23,6 +23,7 @@ import {
   LISTENING_READY_TIMEOUT_MS,
   applyListeningReadyTimeout,
   speechLifecycleLog,
+  noteOpenSpeechTurnDeviceEvidence,
 } from './speechLifecycleInvariants';
 
 export { evaluateEmptySessionRecovery } from './emptySessionRecoveryDecision';
@@ -205,6 +206,73 @@ export function useMic(
   const applyBoundary = (event: OpenSpeechEvent): OpenSpeechEffect[] => {
     const out = reduceOpenSpeechTurn(boundaryRef.current, event);
     boundaryRef.current = out.state;
+    const deliver = out.effects.find((e) => e.type === 'deliver');
+    const noSpeechFx = out.effects.find((e) => e.type === 'no_recognizable_speech');
+    if (event.type === 'herald_start') {
+      noteOpenSpeechTurnDeviceEvidence({
+        resetTurn: true,
+        heraldTurnId: out.state.heraldTurnId,
+        nativeSessionId: event.nativeSessionId,
+        segmentCount: 0,
+        terminalDeliverySource: null,
+      });
+      speechLifecycleLog('OPEN_SPEECH_HERALD_START', {
+        heraldTurnId: out.state.heraldTurnId,
+        nativeSessionId: event.nativeSessionId,
+      });
+    }
+    if (event.type === 'native_end') {
+      const emptyContinuation = out.effects.some((e) => e.type === 'reopen_native')
+        && out.state.segments.length > 0
+        && out.state.segments.length === out.state.segmentsAtSessionStart;
+      noteOpenSpeechTurnDeviceEvidence({
+        nativeSessionId: event.nativeSessionId,
+        segmentCount: out.state.segments.length,
+        priorNativeEndAtMs: event.nowMs,
+        turnElapsedMs: out.state.turnStartedAtMs ? event.nowMs - out.state.turnStartedAtMs : null,
+        ...(emptyContinuation ? { emptyOrNoSpeech: 'empty_end' } : {}),
+      });
+      speechLifecycleLog('OPEN_SPEECH_NATIVE_END', {
+        heraldTurnId: out.state.heraldTurnId,
+        nativeSessionId: event.nativeSessionId,
+        segmentCount: out.state.segments.length,
+        reopened: out.effects.some((e) => e.type === 'reopen_native'),
+        delivered: !!deliver,
+      });
+    }
+    if (event.type === 'no_speech_error') {
+      noteOpenSpeechTurnDeviceEvidence({ emptyOrNoSpeech: 'no_speech' });
+      speechLifecycleLog('OPEN_SPEECH_NO_SPEECH', {
+        heraldTurnId: out.state.heraldTurnId,
+        nativeSessionId: event.nativeSessionId,
+        segmentCount: out.state.segments.length,
+      });
+    }
+    if (event.type === 'recognition_error') {
+      noteOpenSpeechTurnDeviceEvidence({ emptyOrNoSpeech: 'recognition_error' });
+      speechLifecycleLog('OPEN_SPEECH_ERROR', {
+        heraldTurnId: out.state.heraldTurnId,
+        nativeSessionId: event.nativeSessionId,
+      });
+    }
+    if (deliver) {
+      noteOpenSpeechTurnDeviceEvidence({
+        terminalDeliverySource: deliver.source,
+        segmentCount: out.state.segments.length,
+      });
+      speechLifecycleLog('OPEN_SPEECH_DELIVER', {
+        heraldTurnId: out.state.heraldTurnId,
+        source: deliver.source,
+        segmentCount: out.state.segments.length,
+      });
+    } else if (out.state.phase === 'abandoned' && (
+      event.type === 'automated_teardown' || event.type === 'tts_preempt' || event.type === 'user_stop'
+    )) {
+      noteOpenSpeechTurnDeviceEvidence({ terminalDeliverySource: event.type });
+    }
+    if (noSpeechFx) {
+      noteOpenSpeechTurnDeviceEvidence({ emptyOrNoSpeech: noSpeechFx.reason });
+    }
     return out.effects;
   };
 
@@ -239,27 +307,44 @@ export function useMic(
   };
 
   const startContinuationNative = () => {
-    if (boundaryRef.current.delivered) return;
-    if (engineActiveRef.current) return;
-    if (ttsActiveRef?.current) return;
+    const skip = (reason: string) => {
+      noteOpenSpeechTurnDeviceEvidence({ reopenSkippedReason: reason });
+      speechLifecycleLog('OPEN_SPEECH_REOPEN_SKIPPED', {
+        heraldTurnId: boundaryRef.current.heraldTurnId,
+        reason,
+      });
+    };
+    if (boundaryRef.current.delivered) { skip('delivered'); return; }
+    if (engineActiveRef.current) { skip('engineActive'); return; }
+    if (ttsActiveRef?.current) { skip('ttsActive'); return; }
     recognitionModeRef.current = 'open';
     micSessionRef.current += 1;
     const session = micSessionRef.current;
     boundaryRef.current = applyReopenedNativeSession(boundaryRef.current, session);
-    if (boundaryRef.current.nativeSessionId !== session) return;
+    if (boundaryRef.current.nativeSessionId !== session) { skip('session_rejected'); return; }
     latestPartialRef.current = '';
     speechStartedRef.current = false;
     clearReadyTimeout();
     listeningReadyRef.current = false;
+    const requestedAt = Date.now();
+    noteOpenSpeechTurnDeviceEvidence({
+      nativeSessionId: session,
+      continuationStartRequestedAtMs: requestedAt,
+    });
     try {
       speechLifecycleLog('RECOGNITION_REQUESTED', {
         session,
         mode: recognitionModeRef.current,
         entryPoint: 'open_speech_continuation',
       });
+      speechLifecycleLog('OPEN_SPEECH_CONTINUATION_START', {
+        heraldTurnId: boundaryRef.current.heraldTurnId,
+        nativeSessionId: session,
+      });
       requestNativeStart(session);
     } catch (e) {
       engineActiveRef.current = false;
+      skip('start_threw');
       executeBoundaryEffects(applyBoundary({
         type: 'recognition_error',
         nativeSessionId: session,
@@ -372,7 +457,17 @@ export function useMic(
     clearReadyTimeout();
     listeningReadyRef.current = true;
     setIsRecording(true);
+    const readyAt = Date.now();
+    noteOpenSpeechTurnDeviceEvidence({
+      nativeSessionId: micSessionRef.current,
+      nativeListeningReadyAtMs: readyAt,
+    });
     speechLifecycleLog('RECOGNITION_NATIVE_READY', { session: micSessionRef.current });
+    executeBoundaryEffects(applyBoundary({
+      type: 'native_listening_ready',
+      nativeSessionId: micSessionRef.current,
+      nowMs: readyAt,
+    }));
   });
 
   // Empty-session recovery gap, 2026-08-13: onset alone (before any
@@ -391,6 +486,14 @@ export function useMic(
   useSpeechRecognitionEvent('speechstart', () => {
     rlog('NATIVE_SPEECH_START');
     speechStartedRef.current = true;
+    noteOpenSpeechTurnDeviceEvidence({
+      nativeSessionId: micSessionRef.current,
+      speechstartAtMs: Date.now(),
+    });
+    speechLifecycleLog('OPEN_SPEECH_SPEECHSTART', {
+      heraldTurnId: boundaryRef.current.heraldTurnId,
+      nativeSessionId: micSessionRef.current,
+    });
     executeBoundaryEffects(applyBoundary({
       type: 'speechstart',
       nativeSessionId: micSessionRef.current,

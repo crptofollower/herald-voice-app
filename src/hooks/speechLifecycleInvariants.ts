@@ -80,6 +80,95 @@ export type SpeechLifecycleRingEvent = {
 const SPEECH_LIFECYCLE_RING_LIMIT = 80;
 const speechLifecycleRing: SpeechLifecycleRingEvent[] = [];
 
+/** Last Herald open-speech turn only. No transcripts. Not memory / R / T. */
+export type OpenSpeechTurnDeviceEvidence = {
+  heraldTurnId: number;
+  nativeSessionIds: number[];
+  terminalDeliverySource: string | null;
+  segmentCount: number;
+  turnElapsedMs: number | null;
+  priorNativeEndAtMs: number | null;
+  continuationStartRequestedAtMs: number | null;
+  nativeListeningReadyAtMs: number | null;
+  speechstartAtMs: number | null;
+  emptyOrNoSpeech: string | null;
+  reopenSkippedReason: string | null;
+};
+
+function emptyOpenSpeechTurnEvidence(): OpenSpeechTurnDeviceEvidence {
+  return {
+    heraldTurnId: 0,
+    nativeSessionIds: [],
+    terminalDeliverySource: null,
+    segmentCount: 0,
+    turnElapsedMs: null,
+    priorNativeEndAtMs: null,
+    continuationStartRequestedAtMs: null,
+    nativeListeningReadyAtMs: null,
+    speechstartAtMs: null,
+    emptyOrNoSpeech: null,
+    reopenSkippedReason: null,
+  };
+}
+
+let lastOpenSpeechTurnEvidence: OpenSpeechTurnDeviceEvidence = emptyOpenSpeechTurnEvidence();
+
+export function peekOpenSpeechTurnDeviceEvidence(): OpenSpeechTurnDeviceEvidence {
+  return {
+    ...lastOpenSpeechTurnEvidence,
+    nativeSessionIds: [...lastOpenSpeechTurnEvidence.nativeSessionIds],
+  };
+}
+
+export function resetOpenSpeechTurnDeviceEvidence(): void {
+  lastOpenSpeechTurnEvidence = emptyOpenSpeechTurnEvidence();
+}
+
+export function noteOpenSpeechTurnDeviceEvidence(
+  patch: Partial<OpenSpeechTurnDeviceEvidence> & {
+    resetTurn?: boolean;
+    nativeSessionId?: number;
+  } = {},
+): void {
+  if (patch.resetTurn) {
+    lastOpenSpeechTurnEvidence = emptyOpenSpeechTurnEvidence();
+  }
+  const nativeSessionIds = [...lastOpenSpeechTurnEvidence.nativeSessionIds];
+  if (typeof patch.nativeSessionId === 'number' && !nativeSessionIds.includes(patch.nativeSessionId)) {
+    nativeSessionIds.push(patch.nativeSessionId);
+  }
+  lastOpenSpeechTurnEvidence = {
+    ...lastOpenSpeechTurnEvidence,
+    heraldTurnId: patch.heraldTurnId ?? lastOpenSpeechTurnEvidence.heraldTurnId,
+    terminalDeliverySource: patch.terminalDeliverySource !== undefined
+      ? patch.terminalDeliverySource
+      : lastOpenSpeechTurnEvidence.terminalDeliverySource,
+    segmentCount: patch.segmentCount ?? lastOpenSpeechTurnEvidence.segmentCount,
+    turnElapsedMs: patch.turnElapsedMs !== undefined
+      ? patch.turnElapsedMs
+      : lastOpenSpeechTurnEvidence.turnElapsedMs,
+    priorNativeEndAtMs: patch.priorNativeEndAtMs !== undefined
+      ? patch.priorNativeEndAtMs
+      : lastOpenSpeechTurnEvidence.priorNativeEndAtMs,
+    continuationStartRequestedAtMs: patch.continuationStartRequestedAtMs !== undefined
+      ? patch.continuationStartRequestedAtMs
+      : lastOpenSpeechTurnEvidence.continuationStartRequestedAtMs,
+    nativeListeningReadyAtMs: patch.nativeListeningReadyAtMs !== undefined
+      ? patch.nativeListeningReadyAtMs
+      : lastOpenSpeechTurnEvidence.nativeListeningReadyAtMs,
+    speechstartAtMs: patch.speechstartAtMs !== undefined
+      ? patch.speechstartAtMs
+      : lastOpenSpeechTurnEvidence.speechstartAtMs,
+    emptyOrNoSpeech: patch.emptyOrNoSpeech !== undefined
+      ? patch.emptyOrNoSpeech
+      : lastOpenSpeechTurnEvidence.emptyOrNoSpeech,
+    reopenSkippedReason: patch.reopenSkippedReason !== undefined
+      ? patch.reopenSkippedReason
+      : lastOpenSpeechTurnEvidence.reopenSkippedReason,
+    nativeSessionIds: patch.nativeSessionIds ?? nativeSessionIds,
+  };
+}
+
 export function speechLifecycleLog(event: string, extra: Record<string, unknown> = {}): void {
   const ts = Date.now();
   speechLifecycleRing.push({ ts, event, extra: { ...extra } });
@@ -93,4 +182,5 @@ export function snapshotSpeechLifecycleRing(): SpeechLifecycleRingEvent[] {
 
 export function resetSpeechLifecycleRing(): void {
   speechLifecycleRing.length = 0;
+  resetOpenSpeechTurnDeviceEvidence();
 }

@@ -14,6 +14,7 @@ import { normalizeInput } from '../utils/normalizeInput';
 import {
   resetSpeechLifecycleRing,
   snapshotSpeechLifecycleRing,
+  peekOpenSpeechTurnDeviceEvidence,
 } from '../hooks/speechLifecycleInvariants';
 
 type SendMessageFn = (text: string, inputSource?: 'typed' | 'speech') => Promise<void>;
@@ -655,6 +656,8 @@ async function runSpeechLifecycleProbe(): Promise<void> {
     rearmBlocked,
     ttsAssertWaitMs: ttsAssert.waitedMs,
     ttsClearWaitMs: ttsClear.waitedMs,
+    openSpeechTurn: peekOpenSpeechTurnDeviceEvidence(),
+    ring: snapshotSpeechLifecycleRing(),
   });
 }
 

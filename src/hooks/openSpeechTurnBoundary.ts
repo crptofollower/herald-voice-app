@@ -1,15 +1,16 @@
-// Natural Speech Turn Boundary V1 — open speech only.
+// Natural Speech Turn Boundary V1.1 — open speech only.
 // Native one-shot end is a provisional segment boundary, not the Herald turn.
+// Empty continuation silence is not Herald-turn completion.
 // continuous:false is unchanged. control_confirmation keeps native-end = Herald turn.
 
 import type { RecognitionMode } from './recognitionModeConfig';
 import { decideOneShotEnd } from './oneShotEndDecision';
 
-/** Provisional. Time after a contentful native end to accept another one-shot session. Not device-tuned. */
+/** Provisional. User-facing continuation window after native listening-ready. Not device-tuned. */
 export const OPEN_SPEECH_CONTINUATION_GAP_MS = 1200;
 /** Provisional. Safety cap on one open Herald turn wall-clock. Not device-tuned. */
 export const OPEN_SPEECH_MAX_TURN_MS = 20_000;
-/** Provisional. Safety cap on one-shot sessions stitched into one Herald turn. Not device-tuned. */
+/** Provisional. Safety cap on contentful segments and empty continuation ends. Not device-tuned. */
 export const OPEN_SPEECH_MAX_SEGMENTS = 5;
 
 export type OpenSpeechPhase =
@@ -31,6 +32,10 @@ export type OpenSpeechTurnState = {
   turnStartedAtMs: number;
   /** True after speechstart on the live native session until that session ends. */
   speechInProgress: boolean;
+  /** Reopened session must become listening-ready before the user gap is armed. */
+  awaitingReadyAnchoredGap: boolean;
+  continuationGapArmed: boolean;
+  emptyContinuationCount: number;
 };
 
 export type OpenSpeechEffect =
@@ -47,6 +52,7 @@ export type OpenSpeechEvent =
   | { type: 'herald_start'; mode: RecognitionMode; nativeSessionId: number; nowMs: number }
   | { type: 'native_result_final'; nativeSessionId: number; text: string }
   | { type: 'speechstart'; nativeSessionId: number }
+  | { type: 'native_listening_ready'; nativeSessionId: number; nowMs: number }
   | { type: 'native_end'; nativeSessionId: number; speechStarted: boolean; partial: string; nowMs: number }
   | { type: 'continuation_gap_elapsed'; generation: number }
   | { type: 'no_speech_error'; nativeSessionId: number }
@@ -74,6 +80,9 @@ export function createIdleOpenSpeechTurnState(): OpenSpeechTurnState {
     delivered: false,
     turnStartedAtMs: 0,
     speechInProgress: false,
+    awaitingReadyAnchoredGap: false,
+    continuationGapArmed: false,
+    emptyContinuationCount: 0,
   };
 }
 
@@ -92,8 +101,16 @@ function live(state: OpenSpeechTurnState, nativeSessionId: number): boolean {
 
 function atOpenCap(state: OpenSpeechTurnState, nowMs: number): boolean {
   if (state.segments.length >= OPEN_SPEECH_MAX_SEGMENTS) return true;
+  if (state.emptyContinuationCount >= OPEN_SPEECH_MAX_SEGMENTS) return true;
   if (state.heraldTurnId > 0 && nowMs - state.turnStartedAtMs >= OPEN_SPEECH_MAX_TURN_MS) return true;
   return false;
+}
+
+function capSource(state: OpenSpeechTurnState, nowMs: number): string {
+  if (state.segments.length >= OPEN_SPEECH_MAX_SEGMENTS) return 'max_segments';
+  if (state.emptyContinuationCount >= OPEN_SPEECH_MAX_SEGMENTS) return 'max_segments';
+  if (state.heraldTurnId > 0 && nowMs - state.turnStartedAtMs >= OPEN_SPEECH_MAX_TURN_MS) return 'max_turn';
+  return 'max_segments';
 }
 
 function finalize(
@@ -108,6 +125,9 @@ function finalize(
     ...state,
     phase: 'finalized',
     delivered: true,
+    awaitingReadyAnchoredGap: false,
+    continuationGapArmed: false,
+    speechInProgress: false,
   };
   const effects: OpenSpeechEffect[] = [
     { type: 'clear_continuation_gap' },
@@ -122,7 +142,14 @@ function abandon(state: OpenSpeechTurnState): { state: OpenSpeechTurnState; effe
     return { state, effects: [] };
   }
   return {
-    state: { ...state, phase: 'abandoned', delivered: true },
+    state: {
+      ...state,
+      phase: 'abandoned',
+      delivered: true,
+      awaitingReadyAnchoredGap: false,
+      continuationGapArmed: false,
+      speechInProgress: false,
+    },
     effects: [
       { type: 'clear_continuation_gap' },
       { type: 'clear_max_turn' },
@@ -137,19 +164,37 @@ function appendSegment(state: OpenSpeechTurnState, text: string): OpenSpeechTurn
   return { ...state, segments: [...state.segments, trimmed] };
 }
 
-function armContinuation(state: OpenSpeechTurnState): { state: OpenSpeechTurnState; effects: OpenSpeechEffect[] } {
-  const continuationGeneration = state.continuationGeneration + 1;
+function reopenAfterContent(state: OpenSpeechTurnState): { state: OpenSpeechTurnState; effects: OpenSpeechEffect[] } {
+  return {
+    state: {
+      ...state,
+      phase: 'awaiting_continuation',
+      speechInProgress: false,
+      awaitingReadyAnchoredGap: true,
+      continuationGapArmed: false,
+      emptyContinuationCount: 0,
+    },
+    effects: [
+      { type: 'clear_continuation_gap' },
+      { type: 'reopen_native' },
+    ],
+  };
+}
+
+function reopenAfterEmptyContinuation(
+  state: OpenSpeechTurnState,
+): { state: OpenSpeechTurnState; effects: OpenSpeechEffect[] } {
+  const emptyContinuationCount = state.emptyContinuationCount + 1;
   const next: OpenSpeechTurnState = {
     ...state,
     phase: 'awaiting_continuation',
-    continuationGeneration,
+    speechInProgress: false,
+    emptyContinuationCount,
+    awaitingReadyAnchoredGap: state.continuationGapArmed ? false : true,
   };
   return {
     state: next,
-    effects: [
-      { type: 'arm_continuation_gap', generation: continuationGeneration },
-      { type: 'reopen_native' },
-    ],
+    effects: [{ type: 'reopen_native' }],
   };
 }
 
@@ -180,6 +225,9 @@ export function reduceOpenSpeechTurn(
         delivered: false,
         turnStartedAtMs: event.nowMs,
         speechInProgress: false,
+        awaitingReadyAnchoredGap: false,
+        continuationGapArmed: false,
+        emptyContinuationCount: 0,
       };
       return { state: started, effects: [{ type: 'arm_max_turn' }] };
     }
@@ -191,17 +239,33 @@ export function reduceOpenSpeechTurn(
 
     case 'speechstart': {
       if (!live(state, event.nativeSessionId)) return { state, effects: [] };
-      // Invalidate any armed continuation-gap generation. Reopen moves phase
-      // to listening before speechstart, so clearing only in
-      // awaiting_continuation lets a stale gap finalize mid-utterance.
       return {
         state: {
           ...state,
           phase: 'listening',
           continuationGeneration: state.continuationGeneration + 1,
           speechInProgress: true,
+          awaitingReadyAnchoredGap: false,
+          continuationGapArmed: false,
         },
         effects: [{ type: 'clear_continuation_gap' }],
+      };
+    }
+
+    case 'native_listening_ready': {
+      if (!live(state, event.nativeSessionId)) return { state, effects: [] };
+      if (state.mode !== 'open') return { state, effects: [] };
+      if (!state.awaitingReadyAnchoredGap || state.continuationGapArmed) return { state, effects: [] };
+      if (state.segments.length === 0) return { state, effects: [] };
+      const continuationGeneration = state.continuationGeneration + 1;
+      return {
+        state: {
+          ...state,
+          continuationGeneration,
+          awaitingReadyAnchoredGap: false,
+          continuationGapArmed: true,
+        },
+        effects: [{ type: 'arm_continuation_gap', generation: continuationGeneration }],
       };
     }
 
@@ -215,7 +279,7 @@ export function reduceOpenSpeechTurn(
 
       let withPartial: OpenSpeechTurnState = { ...state, speechInProgress: false };
       if (state.segments.length === state.segmentsAtSessionStart && event.partial.trim()) {
-        withPartial = appendSegment(state, event.partial);
+        withPartial = appendSegment(withPartial, event.partial);
       }
 
       if (state.mode === 'control_confirmation') {
@@ -227,7 +291,13 @@ export function reduceOpenSpeechTurn(
         if (decision === 'flush' || decision === 'flush_partial') {
           return finalize(withPartial, 'control_confirmation_native_end');
         }
-        const abandoned: OpenSpeechTurnState = { ...withPartial, phase: 'abandoned', delivered: true };
+        const abandoned: OpenSpeechTurnState = {
+          ...withPartial,
+          phase: 'abandoned',
+          delivered: true,
+          awaitingReadyAnchoredGap: false,
+          continuationGapArmed: false,
+        };
         return {
           state: abandoned,
           effects: [
@@ -242,7 +312,13 @@ export function reduceOpenSpeechTurn(
       }
 
       if (withPartial.segments.length === 0) {
-        const abandoned: OpenSpeechTurnState = { ...withPartial, phase: 'abandoned', delivered: true };
+        const abandoned: OpenSpeechTurnState = {
+          ...withPartial,
+          phase: 'abandoned',
+          delivered: true,
+          awaitingReadyAnchoredGap: false,
+          continuationGapArmed: false,
+        };
         return {
           state: abandoned,
           effects: [
@@ -256,23 +332,33 @@ export function reduceOpenSpeechTurn(
         };
       }
 
-      if (!sessionAddedContent(withPartial, event.partial)) {
-        return finalize(withPartial, 'continuation_session_empty');
+      if (sessionAddedContent(withPartial, event.partial)) {
+        if (atOpenCap(withPartial, event.nowMs)) {
+          return finalize(withPartial, capSource(withPartial, event.nowMs));
+        }
+        return reopenAfterContent(withPartial);
       }
 
-      if (atOpenCap(withPartial, event.nowMs)) {
-        return finalize(withPartial, withPartial.segments.length >= OPEN_SPEECH_MAX_SEGMENTS
-          ? 'max_segments'
-          : 'max_turn');
+      // Empty continuation: provider silence is not Herald-turn completion.
+      const emptied: OpenSpeechTurnState = {
+        ...withPartial,
+        emptyContinuationCount: withPartial.emptyContinuationCount,
+      };
+      if (atOpenCap({ ...emptied, emptyContinuationCount: emptied.emptyContinuationCount + 1 }, event.nowMs)
+        || emptied.emptyContinuationCount + 1 >= OPEN_SPEECH_MAX_SEGMENTS
+        || (emptied.heraldTurnId > 0 && event.nowMs - emptied.turnStartedAtMs >= OPEN_SPEECH_MAX_TURN_MS)
+        || emptied.segments.length >= OPEN_SPEECH_MAX_SEGMENTS) {
+        const counted = { ...emptied, emptyContinuationCount: emptied.emptyContinuationCount + 1 };
+        return finalize(counted, capSource(counted, event.nowMs));
       }
-
-      return armContinuation(withPartial);
+      return reopenAfterEmptyContinuation(emptied);
     }
 
     case 'continuation_gap_elapsed': {
       if (event.generation !== state.continuationGeneration) return { state, effects: [] };
       if (state.delivered) return { state, effects: [] };
       if (state.speechInProgress) return { state, effects: [] };
+      if (!state.continuationGapArmed) return { state, effects: [] };
       if (state.phase !== 'awaiting_continuation' && state.phase !== 'listening') {
         return { state, effects: [] };
       }
@@ -291,7 +377,13 @@ export function reduceOpenSpeechTurn(
       if (event.nativeSessionId !== state.nativeSessionId) return { state, effects: [] };
       if (state.mode === 'control_confirmation') {
         if (state.segments.length > 0) return finalize(state, 'control_confirmation_no_speech');
-        const abandoned: OpenSpeechTurnState = { ...state, phase: 'abandoned', delivered: true };
+        const abandoned: OpenSpeechTurnState = {
+          ...state,
+          phase: 'abandoned',
+          delivered: true,
+          awaitingReadyAnchoredGap: false,
+          continuationGapArmed: false,
+        };
         return {
           state: abandoned,
           effects: [
@@ -301,8 +393,17 @@ export function reduceOpenSpeechTurn(
           ],
         };
       }
-      if (state.segments.length > 0) return finalize(state, 'continuation_no_speech');
-      const abandoned: OpenSpeechTurnState = { ...state, phase: 'abandoned', delivered: true };
+      if (state.segments.length > 0) {
+        // Continuation no-speech is not independently authority to finalize.
+        return { state, effects: [] };
+      }
+      const abandoned: OpenSpeechTurnState = {
+        ...state,
+        phase: 'abandoned',
+        delivered: true,
+        awaitingReadyAnchoredGap: false,
+        continuationGapArmed: false,
+      };
       return {
         state: abandoned,
         effects: [

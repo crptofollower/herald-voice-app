@@ -104,6 +104,7 @@ export async function runOpenSpeechTurnBoundaryV1Tests() {
       { type: 'herald_start', mode: 'open', nativeSessionId: 1, nowMs: 0 },
       { type: 'native_result_final', nativeSessionId: 1, text: 'Hello there.' },
       { type: 'native_end', nativeSessionId: 1, speechStarted: true, partial: '', nowMs: 400 },
+      { type: 'native_listening_ready', nativeSessionId: 2, nowMs: 450 },
       { type: 'continuation_gap_elapsed', generation: 1 },
     ]);
     assert('open: one short utterance → one final delivery',
@@ -120,8 +121,10 @@ export async function runOpenSpeechTurnBoundaryV1Tests() {
       { type: 'herald_start', mode: 'open', nativeSessionId: 1, nowMs: 0 },
       { type: 'native_result_final', nativeSessionId: 1, text: 'When I was a kid,' },
       { type: 'native_end', nativeSessionId: 1, speechStarted: true, partial: '', nowMs: 300 },
+      { type: 'native_listening_ready', nativeSessionId: 2, nowMs: 320 },
       { type: 'native_result_final', nativeSessionId: 2, text: 'we spent summers at the lake.' },
       { type: 'native_end', nativeSessionId: 2, speechStarted: true, partial: '', nowMs: 900 },
+      { type: 'native_listening_ready', nativeSessionId: 3, nowMs: 920 },
       { type: 'continuation_gap_elapsed', generation: 2 },
     ]);
     assert('open: clause → native end → continuation clause → one stitched delivery',
@@ -137,10 +140,13 @@ export async function runOpenSpeechTurnBoundaryV1Tests() {
       { type: 'herald_start', mode: 'open', nativeSessionId: 1, nowMs: 0 },
       { type: 'native_result_final', nativeSessionId: 1, text: 'One' },
       { type: 'native_end', nativeSessionId: 1, speechStarted: true, partial: '', nowMs: 100 },
+      { type: 'native_listening_ready', nativeSessionId: 2, nowMs: 110 },
       { type: 'native_result_final', nativeSessionId: 2, text: 'two' },
       { type: 'native_end', nativeSessionId: 2, speechStarted: true, partial: '', nowMs: 200 },
+      { type: 'native_listening_ready', nativeSessionId: 3, nowMs: 210 },
       { type: 'native_result_final', nativeSessionId: 3, text: 'three' },
       { type: 'native_end', nativeSessionId: 3, speechStarted: true, partial: '', nowMs: 300 },
+      { type: 'native_listening_ready', nativeSessionId: 4, nowMs: 310 },
       { type: 'continuation_gap_elapsed', generation: 3 },
     ]);
     assert('open: three segments → one delivery',
@@ -156,11 +162,31 @@ export async function runOpenSpeechTurnBoundaryV1Tests() {
       { type: 'native_end', nativeSessionId: 1, speechStarted: true, partial: '', nowMs: 200 },
       { type: 'native_end', nativeSessionId: 2, speechStarted: false, partial: '', nowMs: 500 },
     ]);
-    assert('open: continuation session receives no speech → one delivery',
+    assert('segment → provider end → reopen → empty continuation end while budget remains → zero delivery',
+      run.deliveries.length === 0
+        && run.reopenCount === 2
+        && !run.effects.some((e) => e.type === 'deliver')
+        && run.state.phase !== 'finalized',
+      (v) => v === true, 'empty continuation does not finalize');
+  }
+
+  {
+    resetOpenSpeechTurnIdsForTests();
+    const run = drive([
+      { type: 'herald_start', mode: 'open', nativeSessionId: 1, nowMs: 0 },
+      { type: 'native_result_final', nativeSessionId: 1, text: 'There was a lake.' },
+      { type: 'native_end', nativeSessionId: 1, speechStarted: true, partial: '', nowMs: 200 },
+      { type: 'native_end', nativeSessionId: 2, speechStarted: false, partial: '', nowMs: 500 },
+      { type: 'native_listening_ready', nativeSessionId: 3, nowMs: 520 },
+      { type: 'native_result_final', nativeSessionId: 3, text: 'We packed sandwiches.' },
+      { type: 'native_end', nativeSessionId: 3, speechStarted: true, partial: '', nowMs: 900 },
+      { type: 'native_listening_ready', nativeSessionId: 4, nowMs: 920 },
+      { type: 'continuation_gap_elapsed', generation: 2 },
+    ]);
+    assert('empty continuation then speech resumes → eventual one stitched delivery',
       run.deliveries.length === 1
-        && run.deliveries[0] === 'There was a lake.'
-        && run.effects.some((e) => e.type === 'deliver' && e.source === 'continuation_session_empty'),
-      (v) => v === true, 'empty continuation finalizes');
+        && run.deliveries[0] === 'There was a lake. We packed sandwiches.',
+      (v) => v === true, 'resume stitch');
   }
 
   {
@@ -169,6 +195,7 @@ export async function runOpenSpeechTurnBoundaryV1Tests() {
       { type: 'herald_start', mode: 'open', nativeSessionId: 1, nowMs: 0 },
       { type: 'native_result_final', nativeSessionId: 1, text: 'We packed sandwiches.' },
       { type: 'native_end', nativeSessionId: 1, speechStarted: true, partial: '', nowMs: 200 },
+      { type: 'native_listening_ready', nativeSessionId: 2, nowMs: 220 },
       { type: 'continuation_gap_elapsed', generation: 1 },
     ]);
     assert('open: provisional end → no continuation → one delivery',
@@ -293,6 +320,7 @@ export async function runOpenSpeechTurnBoundaryV1Tests() {
       { type: 'native_result_final', nativeSessionId: 99, text: 'STALE CONTAMINATION' },
       { type: 'native_end', nativeSessionId: 99, speechStarted: true, partial: 'also stale', nowMs: 100 },
       { type: 'native_end', nativeSessionId: 1, speechStarted: true, partial: '', nowMs: 200 },
+      { type: 'native_listening_ready', nativeSessionId: 2, nowMs: 220 },
       { type: 'continuation_gap_elapsed', generation: 1 },
     ]);
     assert('stale callback from prior native session cannot contaminate the current Herald turn',
@@ -308,12 +336,14 @@ export async function runOpenSpeechTurnBoundaryV1Tests() {
       { type: 'herald_start', mode: 'open', nativeSessionId: 1, nowMs: 0 },
       { type: 'native_result_final', nativeSessionId: 1, text: 'First turn' },
       { type: 'native_end', nativeSessionId: 1, speechStarted: true, partial: '', nowMs: 100 },
+      { type: 'native_listening_ready', nativeSessionId: 2, nowMs: 120 },
       { type: 'continuation_gap_elapsed', generation: 1 },
     ]);
     const second = drive([
       { type: 'herald_start', mode: 'open', nativeSessionId: 1, nowMs: 5000 },
       { type: 'native_result_final', nativeSessionId: 1, text: 'Second turn' },
       { type: 'native_end', nativeSessionId: 1, speechStarted: true, partial: '', nowMs: 5200 },
+      { type: 'native_listening_ready', nativeSessionId: 2, nowMs: 5220 },
       { type: 'continuation_gap_elapsed', generation: 1 },
     ]);
     assert('never stitch across genuinely separate Herald turns',
@@ -398,11 +428,13 @@ export async function runOpenSpeechTurnBoundaryV1Tests() {
     apply({ type: 'herald_start', mode: 'open', nativeSessionId: 1, nowMs: 0 });
     apply({ type: 'native_result_final', nativeSessionId: 1, text: 'When I was a kid,' });
     const afterEnd = apply({ type: 'native_end', nativeSessionId: 1, speechStarted: true, partial: '', nowMs: 300 });
-    const armedGen = afterEnd.find((e) => e.type === 'arm_continuation_gap')?.generation;
+    const afterReady = apply({ type: 'native_listening_ready', nativeSessionId: 2, nowMs: 320 });
+    const armedGen = afterReady.find((e) => e.type === 'arm_continuation_gap')?.generation;
     apply({ type: 'speechstart', nativeSessionId: 2 });
     const staleGapEffects = apply({ type: 'continuation_gap_elapsed', generation: armedGen ?? 1 });
     assert('continuation speechstart invalidates/neutralizes the old continuation-gap terminal path',
       deliveries.length === 0
+        && !afterEnd.some((e) => e.type === 'arm_continuation_gap')
         && !staleGapEffects.some((e) => e.type === 'deliver')
         && !staleGapEffects.some((e) => e.type === 'abort_native')
         && state.phase === 'listening'
@@ -412,6 +444,7 @@ export async function runOpenSpeechTurnBoundaryV1Tests() {
 
     apply({ type: 'native_result_final', nativeSessionId: 2, text: 'we spent summers at the lake.' });
     apply({ type: 'native_end', nativeSessionId: 2, speechStarted: true, partial: '', nowMs: 900 });
+    apply({ type: 'native_listening_ready', nativeSessionId: 3, nowMs: 920 });
     apply({ type: 'continuation_gap_elapsed', generation: state.continuationGeneration });
     assert('continuation native end later produces exactly one stitched delivery',
       deliveries.length === 1
@@ -452,6 +485,113 @@ export async function runOpenSpeechTurnBoundaryV1Tests() {
         && !/EMPTY_SESSION_RECOVERY_FIRED[\s\S]{0,80}stopRecording\(\)/.test(micSrc)
         && !/setTimeout\(\(\) => stopRecording\(\), 30000\)/.test(micSrc),
       (v) => v === true, 'user_stop vs automated_teardown wired');
+  }
+
+  {
+    resetOpenSpeechTurnIdsForTests();
+    const run = drive([
+      { type: 'herald_start', mode: 'open', nativeSessionId: 1, nowMs: 0 },
+      { type: 'native_result_final', nativeSessionId: 1, text: 'There was a lake.' },
+      { type: 'native_end', nativeSessionId: 1, speechStarted: true, partial: '', nowMs: 200 },
+      { type: 'no_speech_error', nativeSessionId: 2 },
+    ]);
+    assert('continuation no-speech while budget remains → zero delivery',
+      run.deliveries.length === 0 && run.state.delivered === false,
+      (v) => v === true, 'no_speech does not finalize continuation');
+  }
+
+  {
+    resetOpenSpeechTurnIdsForTests();
+    let state = createIdleOpenSpeechTurnState();
+    const apply = (event: OpenSpeechEvent) => {
+      const out = reduceOpenSpeechTurn(state, event);
+      state = out.state;
+      for (const fx of out.effects) {
+        if (fx.type === 'reopen_native') {
+          state = applyReopenedNativeSession(state, state.nativeSessionId + 1);
+        }
+      }
+      return out.effects;
+    };
+    apply({ type: 'herald_start', mode: 'open', nativeSessionId: 1, nowMs: 0 });
+    apply({ type: 'native_result_final', nativeSessionId: 1, text: 'Hello there.' });
+    const endFx = apply({ type: 'native_end', nativeSessionId: 1, speechStarted: true, partial: '', nowMs: 100 });
+    const readyFx = apply({ type: 'native_listening_ready', nativeSessionId: 2, nowMs: 800 });
+    assert('continuation budget starts from listening-ready, not previous native end',
+      endFx.some((e) => e.type === 'reopen_native')
+        && !endFx.some((e) => e.type === 'arm_continuation_gap')
+        && readyFx.some((e) => e.type === 'arm_continuation_gap' && e.generation === 1),
+      (v) => v === true, 'arm gap only on ready');
+  }
+
+  {
+    resetOpenSpeechTurnIdsForTests();
+    const run = drive([
+      { type: 'herald_start', mode: 'open', nativeSessionId: 1, nowMs: 0 },
+      { type: 'native_result_final', nativeSessionId: 1, text: 'Hello there.' },
+      { type: 'native_end', nativeSessionId: 1, speechStarted: true, partial: '', nowMs: 0 },
+      { type: 'continuation_gap_elapsed', generation: 1 },
+      { type: 'native_listening_ready', nativeSessionId: 2, nowMs: 5000 },
+      { type: 'continuation_gap_elapsed', generation: 1 },
+    ]);
+    assert('delayed native-ready does not consume the user 1200ms continuation opportunity',
+      run.deliveries.length === 1
+        && run.deliveries[0] === 'Hello there.'
+        && run.effects.filter((e) => e.type === 'deliver').length === 1,
+      (v) => v === true, 'pre-ready gap is a no-op; post-ready gap delivers once');
+  }
+
+  {
+    resetOpenSpeechTurnIdsForTests();
+    const events: OpenSpeechEvent[] = [
+      { type: 'herald_start', mode: 'open', nativeSessionId: 1, nowMs: 0 },
+      { type: 'native_result_final', nativeSessionId: 1, text: 'Hello there.' },
+      { type: 'native_end', nativeSessionId: 1, speechStarted: true, partial: '', nowMs: 50 },
+    ];
+    for (let i = 0; i < OPEN_SPEECH_MAX_SEGMENTS; i++) {
+      events.push({
+        type: 'native_end',
+        nativeSessionId: i + 2,
+        speechStarted: false,
+        partial: '',
+        nowMs: 100 * (i + 1),
+      });
+    }
+    const run = drive(events);
+    assert('max-segment cap bounds repeated empty continuation sessions',
+      run.deliveries.length === 1
+        && run.deliveries[0] === 'Hello there.'
+        && run.effects.some((e) => e.type === 'deliver' && e.source === 'max_segments'),
+      (v) => v === true, 'empty loop capped');
+  }
+
+  {
+    resetOpenSpeechTurnIdsForTests();
+    const run = drive([
+      { type: 'herald_start', mode: 'open', nativeSessionId: 1, nowMs: 0 },
+      { type: 'native_result_final', nativeSessionId: 1, text: 'Hello there.' },
+      { type: 'native_end', nativeSessionId: 1, speechStarted: true, partial: '', nowMs: 10 },
+      { type: 'native_end', nativeSessionId: 2, speechStarted: false, partial: '', nowMs: OPEN_SPEECH_MAX_TURN_MS },
+    ]);
+    assert('max-turn cap bounds repeated empty continuation sessions',
+      run.deliveries.length === 1
+        && run.deliveries[0] === 'Hello there.'
+        && run.effects.some((e) => e.type === 'deliver' && e.source === 'max_turn'),
+      (v) => v === true, 'empty loop max-turn');
+  }
+
+  {
+    const micSrc = fs.readFileSync(path.join(root, 'src/hooks/useMic.ts'), 'utf8');
+    const invSrc = fs.readFileSync(path.join(root, 'src/hooks/speechLifecycleInvariants.ts'), 'utf8');
+    const hostSrc = fs.readFileSync(path.join(root, 'src/dev/androidJourneyHost.ts'), 'utf8');
+    assert('device evidence is bounded diagnostic peek without transcripts',
+      invSrc.includes('peekOpenSpeechTurnDeviceEvidence')
+        && invSrc.includes('noteOpenSpeechTurnDeviceEvidence')
+        && !/noteOpenSpeechTurnDeviceEvidence[\s\S]{0,400}transcript/.test(invSrc)
+        && micSrc.includes('OPEN_SPEECH_NATIVE_END')
+        && micSrc.includes('native_listening_ready')
+        && hostSrc.includes('openSpeechTurn: peekOpenSpeechTurnDeviceEvidence()'),
+      (v) => v === true, 'journey peek + ring events, no transcript store');
   }
 
   const total = passed + failures.length;
