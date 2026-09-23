@@ -11,6 +11,11 @@ import {
 } from './followingTurnListReferent';
 import { ConversationSession, CONFIRM_YES_RE, CONFIRM_NO_RE } from './conversationSession';
 import { CALL_TEXT_RECOVERY_KEY, shouldPreemptCallTextRecovery } from './callTextReadiness';
+import {
+  conversationCarrySlice1OwnsReply,
+  decideConversationCarryPendingYield,
+  isConversationCarrySlice1PendingKey,
+} from './pendingYieldPreserve';
 import { detectEmergency } from './emergencySignals';
 import {
   logTodoCompleteAdmit,
@@ -650,7 +655,30 @@ export async function processUtterance(
   let preserveClarificationRead = false;
   if (session.hasPending()) {
     const pendingKey = session.peekPendingKey();
-    if (pendingKey === CALL_TEXT_RECOVERY_KEY || isClarificationPendingKey(pendingKey)) {
+    if (isConversationCarrySlice1PendingKey(pendingKey)) {
+      const owns = conversationCarrySlice1OwnsReply({
+        pendingKey,
+        text,
+        sessionOwns: session.pendingOwnsReply(text),
+      });
+      if (!owns) {
+        routedClarificationInterrupt = await routeIntent(text, {
+          ...deps,
+          peekInterpretationHold: () => discourse?.peekInterpretationHold() ?? null,
+        });
+        const carry = decideConversationCarryPendingYield({
+          ownsReply: owns,
+          decision: routedClarificationInterrupt,
+        });
+        if (carry === 'preserve_read') {
+          preserveClarificationRead = true;
+        } else if (carry === 'supersede') {
+          session.clearPending();
+        } else {
+          routedClarificationInterrupt = undefined;
+        }
+      }
+    } else if (pendingKey === CALL_TEXT_RECOVERY_KEY || isClarificationPendingKey(pendingKey)) {
       const owns = session.pendingOwnsReply(text);
       if (isClarificationPendingKey(pendingKey) && !owns) {
         routedClarificationInterrupt = await routeIntent(text, {

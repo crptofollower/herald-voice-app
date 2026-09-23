@@ -253,10 +253,10 @@ export async function runHoldContinuityQaV1Tests() {
     });
     const outcome = await processUtterance(normalizeInput(WIFE_Q), session, deps, null, null, null, null, null, discourse);
     assert(
-      'already-live pending retains authority',
-      outcome.handled && outcome.source === 'pending_resume',
+      'medical_visit yields a separate preference read and stays armed',
+      outcome.handled && outcome.source === 'hold_continuity' && session.peekPendingKey() === 'medical_visit',
       (v) => v === true,
-      'pending_resume',
+      'hold_continuity + medical_visit preserved',
     );
   }
 
@@ -463,10 +463,10 @@ export async function runHoldContinuityQaV1Tests() {
     });
     const outcome = await processUtterance(normalizeInput(HUSBAND_FAVORITE_Q), session, deps, null, null, null, null, null, discourse);
     assert(
-      'pending retains authority over favorite question',
-      outcome.handled && outcome.source === 'pending_resume',
+      'medical_visit yields a separate favorite read and stays armed',
+      outcome.handled && outcome.source === 'hold_continuity' && session.peekPendingKey() === 'medical_visit',
       (v) => v === true,
-      'pending_resume',
+      'hold_continuity + medical_visit preserved',
     );
   }
 

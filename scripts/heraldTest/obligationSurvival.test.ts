@@ -220,9 +220,9 @@ export async function runObligationSurvivalV1Tests() {
     });
     const budget0 = session.peekPendingBudget();
     const time = await say('What time is it?');
-    assert('7 confirm does not leak to clock routing', time.handled === true && time.source === 'pending_resume');
-    assert('7 confirm still pending', session.peekPendingKey() === 'llm_confirm:list_add');
-    assert('7 confirm retry consumed', session.peekPendingBudget() === (budget0 ?? 2) - 1);
+    assert('7 confirm list_add yields read_only clock (Carry Slice 1 representative)', clockKind(time) === 'time');
+    assert('7 confirm still pending after clock', session.peekPendingKey() === 'llm_confirm:list_add');
+    assert('7 confirm retry not consumed by read', session.peekPendingBudget() === budget0);
   }
 
   // 8 — non-actionIntent completed read (family)

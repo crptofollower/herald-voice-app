@@ -608,11 +608,11 @@ export async function runConversationalSubjectTests() {
     assert('S3-6b pending clears subject before next turn', subject.hasLive(), v => v === false, 'cleared by pending arm');
     subject.establishMedical({ entityId: 'Dr. Smith', displayName: 'Dr. Smith' });
     const t3 = await say('When did I see him?');
-    assert('S3-6c PendingSlot owns the visit-date pronoun', t3,
-      v => v.handled === true && v.source === 'pending_resume'
-        && !/You last saw/i.test(v.responseText),
-      'pending_resume, not a visit-history read');
-    assert('S3-6d Flow C resolver was not evaluated', subject.didEvaluateReferent(), v => v === false, 'not evaluated');
+    assert('S3-6c visit-date pronoun is a read_only escape, pending preserved', t3,
+      v => !(v.handled === true && v.source === 'pending_resume')
+        && session.peekPendingKey() === 'medical_visit_outcome_read_disambiguate',
+      'not pending_resume; doctor pending preserved');
+    assert('S3-6d Flow C may evaluate after pending yielded the read', subject.didEvaluateReferent(), v => v === true, 'evaluated');
   }
 
   {
