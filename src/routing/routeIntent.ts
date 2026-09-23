@@ -167,7 +167,11 @@ function tryHoldContinuityPreferenceRead(
     kind: 'device_read',
     tier: 1,
     response: match.response,
-    reason: match.channel === 'intention' ? 'hold_continuity:intention' : 'hold_continuity:preference',
+    reason: match.channel === 'intention'
+      ? 'hold_continuity:intention'
+      : match.channel === 'temporal'
+        ? 'hold_continuity:temporal'
+        : 'hold_continuity:preference',
   };
 }
 

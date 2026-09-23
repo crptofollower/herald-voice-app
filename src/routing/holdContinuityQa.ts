@@ -1,7 +1,9 @@
 // Hold Continuity Q&A V1 — read-only answers from live interpretation holds.
 // Preference: explicit my <kin> wins; unique she/he bind over live preference
 // subjects. Intention: unique live intention whose value already contains the
-// question's action span. No SQLite, pending, writer, promotion, or TTL refresh.
+// question's action span. Temporal: unique live temporal whose value already
+// contains the question's event span; answer from .temporal only.
+// No SQLite, pending, writer, promotion, or TTL refresh.
 
 import { findStandardSpan } from '../hooks/llmLayers';
 import { FAMILY_SYNONYMS } from '../utils/familyRead';
@@ -12,13 +14,14 @@ export type HoldContinuityQuestion =
   | { kind: 'not_question' }
   | { kind: 'preference'; subject: string; category?: string }
   | { kind: 'preference_pronoun'; gender: 'feminine' | 'masculine'; category?: string }
-  | { kind: 'intention'; predicate: string };
+  | { kind: 'intention'; predicate: string }
+  | { kind: 'temporal'; eventSpan: string };
 
 export type HoldContinuityMatch =
   | { kind: 'not_question' }
   | { kind: 'no_match' }
   | { kind: 'ambiguous' }
-  | { kind: 'answer'; subject: string; value: string; response: string; channel: 'preference' | 'intention' };
+  | { kind: 'answer'; subject: string; value: string; response: string; channel: 'preference' | 'intention' | 'temporal' };
 
 const FAMILY_KEYS = Object.keys(FAMILY_SYNONYMS).sort((a, b) => b.length - a.length);
 const REL_ALT = FAMILY_KEYS.map((k) => k.replace(/-/g, '[- ]')).join('|');
@@ -60,6 +63,13 @@ const CLOSED_INTENTION_PREDICATE = new Set([
   'do', 'be', 'it', 'that', 'this', 'something', 'stuff', 'things',
 ]);
 
+const TEMPORAL_WHEN_RE =
+  /^\s*when(?:'s|\s+is)\s+(.+?)\s*\??\s*$/i;
+
+const CLOSED_TEMPORAL_EVENT = new Set([
+  'it', 'that', 'this', 'now', 'then', 'something', 'stuff', 'things',
+]);
+
 function canonicalFamilyKey(raw: string): string | undefined {
   const t = raw.trim().toLowerCase().replace(/\s+/g, '-');
   return FAMILY_KEYS.find((k) => k === t);
@@ -86,6 +96,20 @@ function inspectableIntentions(hold: InterpretationHoldSlot | null): AdmittedMul
       && c.disposition === 'hold'
       && typeof c.value === 'string'
       && c.value.trim().length > 0,
+  );
+}
+
+function inspectableTemporals(hold: InterpretationHoldSlot | null): AdmittedMultiFactCandidate[] {
+  if (!hold) return [];
+  return hold.candidates.filter(
+    (c) =>
+      c.kind === 'temporal'
+      && c.disposition === 'hold'
+      && !c.contradictGroupId
+      && typeof c.value === 'string'
+      && c.value.trim().length > 0
+      && typeof c.temporal === 'string'
+      && c.temporal.trim().length > 0,
   );
 }
 
@@ -129,6 +153,12 @@ function formatIntentionAnswer(value: string): string {
   return /[.!?]$/.test(trimmed) ? `You said ${trimmed}` : `You said ${trimmed}.`;
 }
 
+function formatTemporalAnswer(temporal: string): string {
+  const trimmed = temporal.trim();
+  if (!trimmed) return '';
+  return /[.!?]$/.test(trimmed) ? `You said ${trimmed}` : `You said ${trimmed}.`;
+}
+
 export function classifyHoldContinuityIntentionQuestion(utterance: string): HoldContinuityQuestion {
   const t = utterance.trim();
   if (!t) return { kind: 'not_question' };
@@ -139,6 +169,18 @@ export function classifyHoldContinuityIntentionQuestion(utterance: string): Hold
   if (predicate.length < 3) return { kind: 'not_question' };
   if (CLOSED_INTENTION_PREDICATE.has(predicate)) return { kind: 'not_question' };
   return { kind: 'intention', predicate };
+}
+
+export function classifyHoldContinuityTemporalQuestion(utterance: string): HoldContinuityQuestion {
+  const t = utterance.trim();
+  if (!t) return { kind: 'not_question' };
+  if (/\bwhat\s+did\s+i\b/i.test(t)) return { kind: 'not_question' };
+  const when = t.match(TEMPORAL_WHEN_RE);
+  const eventSpan = when?.[1]?.trim().replace(/[.?!]+$/g, '').trim().toLowerCase();
+  if (!eventSpan) return { kind: 'not_question' };
+  if (eventSpan.length < 3) return { kind: 'not_question' };
+  if (CLOSED_TEMPORAL_EVENT.has(eventSpan)) return { kind: 'not_question' };
+  return { kind: 'temporal', eventSpan };
 }
 
 export function classifyHoldContinuityPreferenceQuestion(utterance: string): HoldContinuityQuestion {
@@ -192,6 +234,19 @@ export function classifyHoldContinuityPreferenceQuestion(utterance: string): Hol
   }
 
   return { kind: 'not_question' };
+}
+
+function uniqueTemporals(candidates: AdmittedMultiFactCandidate[]): string[] {
+  const seen = new Set<string>();
+  const dates: string[] = [];
+  for (const c of candidates) {
+    const raw = (c.temporal ?? '').trim();
+    const key = raw.toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    dates.push(raw);
+  }
+  return dates;
 }
 
 function uniqueValues(candidates: AdmittedMultiFactCandidate[]): string[] {
@@ -279,6 +334,25 @@ function matchIntentionHoldContinuity(
   };
 }
 
+function matchTemporalHoldContinuity(
+  question: Extract<HoldContinuityQuestion, { kind: 'temporal' }>,
+  holdSet: InterpretationHoldSlot | null,
+): HoldContinuityMatch {
+  const inspectable = inspectableTemporals(holdSet);
+  const hits = inspectable.filter((c) => findStandardSpan(c.value, question.eventSpan) !== null);
+  if (hits.length === 0) return { kind: 'no_match' };
+  const dates = uniqueTemporals(hits);
+  if (dates.length !== 1) return { kind: 'ambiguous' };
+  const temporal = dates[0];
+  return {
+    kind: 'answer',
+    subject: question.eventSpan,
+    value: temporal,
+    response: formatTemporalAnswer(temporal),
+    channel: 'temporal',
+  };
+}
+
 export function matchHoldContinuityQa(
   utterance: string,
   holdSet: InterpretationHoldSlot | null,
@@ -290,6 +364,10 @@ export function matchHoldContinuityQa(
   const intention = classifyHoldContinuityIntentionQuestion(utterance);
   if (intention.kind === 'intention') {
     return matchIntentionHoldContinuity(intention, holdSet);
+  }
+  const temporal = classifyHoldContinuityTemporalQuestion(utterance);
+  if (temporal.kind === 'temporal') {
+    return matchTemporalHoldContinuity(temporal, holdSet);
   }
   return { kind: 'not_question' };
 }

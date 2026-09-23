@@ -107,9 +107,11 @@ export async function runConversationCarryHoldTargetedReadV1Tests() {
     );
 
     const t4 = await say(ANNIVERSARY_Q);
+    // Slice 3 encoded T4 as out-of-slice (no temporal reader). Slice 4
+    // supersedes that miss; this file only requires T4 not to clobber T3.
     assert(
-      'T4 anniversary remains outside Slice 3',
-      !(t4.handled && t4.source === 'hold_continuity'),
+      'T4 does not replace the gardenia hold',
+      discourse.peekInterpretationHold()?.episodeId === episode,
     );
   }
 
