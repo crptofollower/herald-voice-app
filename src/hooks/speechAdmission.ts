@@ -16,18 +16,20 @@ export type SpeechAdmissionDecision = 'hold' | 'admit' | 'recover';
 export function decideSpeechAdmission(input: {
   trigger: SpeechAdmissionTrigger;
   proposal: SpeechCompletionProposal | null;
+  /** True when this exact committed stitch already received its one incomplete extension. */
+  extensionConsumed?: boolean;
 }): SpeechAdmissionDecision {
   if (
     input.trigger === 'control_confirmation'
     || input.trigger === 'user_stop'
     || input.trigger === 'recognition_error'
+    || input.trigger === 'max_turn'
+    || input.trigger === 'max_segments'
   ) {
     return 'admit';
   }
-  if (input.trigger === 'max_turn' || input.trigger === 'max_segments') {
-    return input.proposal === 'complete' ? 'admit' : 'recover';
-  }
-  return input.proposal === 'complete' ? 'admit' : 'hold';
+  if (input.proposal === 'incomplete' && !input.extensionConsumed) return 'hold';
+  return 'admit';
 }
 
 export function parseSpeechCompletionProposal(raw: unknown): SpeechCompletionProposal {

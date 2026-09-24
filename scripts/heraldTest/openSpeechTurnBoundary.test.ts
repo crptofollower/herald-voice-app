@@ -68,7 +68,7 @@ function drive(events: OpenSpeechEvent[]): {
 }
 
 function completeAdmission(text: string, trigger: 'continuation_gap' | 'max_turn' | 'max_segments' = 'continuation_gap'): OpenSpeechEvent {
-  return { type: 'admission_evaluated', trigger, proposal: 'complete', text };
+  return { type: 'admission_evaluated', trigger, proposal: 'complete', text, epoch: 1, heraldTurnId: 1 };
 }
 
 export async function runOpenSpeechTurnBoundaryV1Tests() {
@@ -302,10 +302,11 @@ export async function runOpenSpeechTurnBoundaryV1Tests() {
     }
     const run = drive(events);
     assert('max-segment cap → exactly one delivery',
-      run.deliveries.length === 0
-        && run.effects.some((e) => e.type === 'evaluate_admission' && e.trigger === 'max_segments')
+      run.deliveries.length === 1
+        && run.deliveries[0] === 'seg1 seg2 seg3 seg4 seg5'
+        && !run.effects.some((e) => e.type === 'bounded_recovery')
         && run.reopenCount === OPEN_SPEECH_MAX_SEGMENTS - 1,
-      (v) => v === true, 'cap requests admission');
+      (v) => v === true, 'contentful segment cap delivers once');
   }
 
   {
@@ -316,9 +317,11 @@ export async function runOpenSpeechTurnBoundaryV1Tests() {
       { type: 'native_end', nativeSessionId: 1, speechStarted: true, partial: '', nowMs: OPEN_SPEECH_MAX_TURN_MS },
     ]);
     assert('max-turn cap → exactly one delivery',
-      run.deliveries.length === 0
-        && run.effects.some((e) => e.type === 'evaluate_admission' && e.trigger === 'max_turn'),
-      (v) => v === true, 'max turn requests admission');
+      run.deliveries.length === 1
+        && run.deliveries[0] === 'Long story'
+        && run.effects.some((e) => e.type === 'deliver' && e.source === 'max_turn')
+        && !run.effects.some((e) => e.type === 'bounded_recovery'),
+      (v) => v === true, 'contentful duration cap delivers once');
   }
 
   {
@@ -571,9 +574,10 @@ export async function runOpenSpeechTurnBoundaryV1Tests() {
     }
     const run = drive(events);
     assert('max-segment cap bounds repeated empty continuation sessions',
-      run.deliveries.length === 0
-        && run.effects.some((e) => e.type === 'evaluate_admission' && e.trigger === 'max_segments' && e.text === 'Hello there.'),
-      (v) => v === true, 'empty loop capped');
+      run.deliveries.length === 1
+        && run.deliveries[0] === 'Hello there.'
+        && !run.effects.some((e) => e.type === 'bounded_recovery'),
+      (v) => v === true, 'contentful empty-loop cap delivers once');
   }
 
   {
@@ -585,9 +589,11 @@ export async function runOpenSpeechTurnBoundaryV1Tests() {
       { type: 'native_end', nativeSessionId: 2, speechStarted: false, partial: '', nowMs: OPEN_SPEECH_MAX_TURN_MS },
     ]);
     assert('max-turn cap bounds repeated empty continuation sessions',
-      run.deliveries.length === 0
-        && run.effects.some((e) => e.type === 'evaluate_admission' && e.trigger === 'max_turn' && e.text === 'Hello there.'),
-      (v) => v === true, 'empty loop max-turn');
+      run.deliveries.length === 1
+        && run.deliveries[0] === 'Hello there.'
+        && run.effects.some((e) => e.type === 'deliver' && e.source === 'max_turn')
+        && !run.effects.some((e) => e.type === 'bounded_recovery'),
+      (v) => v === true, 'contentful duration cap delivers the stitch');
   }
 
   {

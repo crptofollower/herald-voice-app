@@ -393,15 +393,22 @@ export function useMic(
       if (fx.type === 'evaluate_admission') {
         const trigger = fx.trigger;
         const text = fx.text;
+        const epoch = fx.epoch;
+        const heraldTurnId = fx.heraldTurnId;
         const resolve = resolveSpeechAdmissionRef.current;
-        void Promise.resolve(resolve ? resolve(text) : Promise.resolve(null)).then((proposal) => {
-          executeBoundaryEffects(applyBoundary({
-            type: 'admission_evaluated',
-            trigger,
-            proposal: proposal ?? null,
-            text,
-          }));
-        });
+        void Promise.resolve()
+          .then(() => (resolve ? resolve(text) : null))
+          .catch(() => null)
+          .then((proposal) => {
+            executeBoundaryEffects(applyBoundary({
+              type: 'admission_evaluated',
+              trigger,
+              proposal: proposal ?? null,
+              text,
+              epoch,
+              heraldTurnId,
+            }));
+          });
       }
       if (fx.type === 'bounded_recovery') {
         onBoundedSpeechRecoveryRef.current?.();

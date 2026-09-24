@@ -41,6 +41,10 @@ export type OpenSpeechTurnState = {
   awaitingReadyAnchoredGap: boolean;
   continuationGapArmed: boolean;
   emptyContinuationCount: number;
+  /** Stitch that already used its single incomplete extension. Episode-local. */
+  extendedStitch: string | null;
+  admissionEpoch: number;
+  lastAppliedAdmissionEpoch: number;
 };
 
 export type OpenSpeechEffect =
@@ -52,7 +56,7 @@ export type OpenSpeechEffect =
   | { type: 'clear_max_turn' }
   | { type: 'abort_native' }
   | { type: 'no_recognizable_speech'; reason: 'silence' | 'heard_unrecognized' }
-  | { type: 'evaluate_admission'; trigger: SpeechAdmissionTrigger; text: string }
+  | { type: 'evaluate_admission'; trigger: SpeechAdmissionTrigger; text: string; epoch: number; heraldTurnId: number }
   | { type: 'bounded_recovery' };
 
 export type OpenSpeechEvent =
@@ -73,6 +77,8 @@ export type OpenSpeechEvent =
       trigger: SpeechAdmissionTrigger;
       proposal: SpeechCompletionProposal | null;
       text: string;
+      epoch: number;
+      heraldTurnId: number;
     };
 
 let nextHeraldTurnId = 1;
@@ -96,6 +102,9 @@ export function createIdleOpenSpeechTurnState(): OpenSpeechTurnState {
     awaitingReadyAnchoredGap: false,
     continuationGapArmed: false,
     emptyContinuationCount: 0,
+    extendedStitch: null,
+    admissionEpoch: 0,
+    lastAppliedAdmissionEpoch: 0,
   };
 }
 
@@ -124,16 +133,18 @@ function requestAdmission(
   trigger: SpeechAdmissionTrigger,
 ): { state: OpenSpeechTurnState; effects: OpenSpeechEffect[] } {
   const text = stitchOpenSpeechSegments(state.segments);
+  const admissionEpoch = state.admissionEpoch + 1;
   return {
     state: {
       ...state,
       phase: 'awaiting_continuation',
       continuationGapArmed: false,
       speechInProgress: false,
+      admissionEpoch,
     },
     effects: [
       { type: 'clear_continuation_gap' },
-      { type: 'evaluate_admission', trigger, text },
+      { type: 'evaluate_admission', trigger, text, epoch: admissionEpoch, heraldTurnId: state.heraldTurnId },
     ],
   };
 }
@@ -143,22 +154,33 @@ function applyAdmission(
   trigger: SpeechAdmissionTrigger,
   proposal: SpeechCompletionProposal | null,
   text: string,
+  epoch: number,
+  heraldTurnId: number,
 ): { state: OpenSpeechTurnState; effects: OpenSpeechEffect[] } {
-  if (state.delivered || state.phase === 'finalized' || state.phase === 'abandoned') {
-    return { state, effects: [] };
+  if (heraldTurnId !== state.heraldTurnId || epoch !== state.admissionEpoch) return { state, effects: [] };
+  if (epoch === state.lastAppliedAdmissionEpoch) return { state, effects: [] };
+  const stamped = { ...state, lastAppliedAdmissionEpoch: epoch };
+  if (stamped.delivered || stamped.phase === 'finalized' || stamped.phase === 'abandoned') {
+    return { state: stamped, effects: [] };
   }
-  if (state.speechInProgress) return { state, effects: [] };
-  if (stitchOpenSpeechSegments(state.segments) !== text) return { state, effects: [] };
-  const decision = decideSpeechAdmission({ trigger, proposal });
-  if (decision === 'admit') return finalize(state, `admission:${trigger}`);
+  if (stamped.speechInProgress) return { state: stamped, effects: [] };
+  const stitch = stitchOpenSpeechSegments(stamped.segments);
+  if (stitch !== text) return { state: stamped, effects: [] };
+  const decision = decideSpeechAdmission({
+    trigger,
+    proposal,
+    extensionConsumed: stamped.extendedStitch === stitch,
+  });
+  if (decision === 'admit') return finalize(stamped, `admission:${trigger}`);
   if (decision === 'recover') {
-    const abandoned = abandon(state);
+    if (stitch) return finalize(stamped, `admission:${trigger}`);
+    const abandoned = abandon(stamped);
     return {
       state: abandoned.state,
       effects: [...abandoned.effects, { type: 'bounded_recovery' }],
     };
   }
-  return reopenAfterContent(state);
+  return reopenAfterContent({ ...stamped, extendedStitch: stitch });
 }
 
 function capSource(state: OpenSpeechTurnState, nowMs: number): string {
@@ -283,6 +305,9 @@ export function reduceOpenSpeechTurn(
         awaitingReadyAnchoredGap: false,
         continuationGapArmed: false,
         emptyContinuationCount: 0,
+        extendedStitch: null,
+        admissionEpoch: 0,
+        lastAppliedAdmissionEpoch: 0,
       };
       return { state: started, effects: [{ type: 'arm_max_turn' }] };
     }
@@ -389,7 +414,7 @@ export function reduceOpenSpeechTurn(
 
       if (sessionAddedContent(withPartial, event.partial)) {
         if (atOpenCap(withPartial, event.nowMs)) {
-          return requestAdmission(withPartial, capSource(withPartial, event.nowMs) === 'max_turn' ? 'max_turn' : 'max_segments');
+          return finalize(withPartial, capSource(withPartial, event.nowMs) === 'max_turn' ? 'max_turn' : 'max_segments');
         }
         return reopenAfterContent(withPartial);
       }
@@ -404,7 +429,7 @@ export function reduceOpenSpeechTurn(
         || (emptied.heraldTurnId > 0 && event.nowMs - emptied.turnStartedAtMs >= OPEN_SPEECH_MAX_TURN_MS)
         || emptied.segments.length >= OPEN_SPEECH_MAX_SEGMENTS) {
         const counted = { ...emptied, emptyContinuationCount: emptied.emptyContinuationCount + 1 };
-        return requestAdmission(counted, capSource(counted, event.nowMs) === 'max_turn' ? 'max_turn' : 'max_segments');
+        return finalize(counted, capSource(counted, event.nowMs) === 'max_turn' ? 'max_turn' : 'max_segments');
       }
       return reopenAfterEmptyContinuation(emptied);
     }
@@ -489,12 +514,12 @@ export function reduceOpenSpeechTurn(
 
     case 'max_turn_elapsed': {
       if (state.delivered) return { state, effects: [] };
-      if (state.segments.length > 0) return requestAdmission(state, 'max_turn');
+      if (state.segments.length > 0) return finalize(state, 'max_turn');
       return abandon(state);
     }
 
     case 'admission_evaluated':
-      return applyAdmission(state, event.trigger, event.proposal, event.text);
+      return applyAdmission(state, event.trigger, event.proposal, event.text, event.epoch, event.heraldTurnId);
 
     default:
       return { state, effects: [] };

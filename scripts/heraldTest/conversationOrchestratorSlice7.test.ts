@@ -76,17 +76,19 @@ export async function runConversationOrchestratorSlice7Tests() {
     { type: 'native_end', nativeSessionId: 1, speechStarted: true, partial: '', nowMs: 300 },
     { type: 'native_listening_ready', nativeSessionId: 2, nowMs: 320 },
     { type: 'continuation_gap_elapsed', generation: 1 },
-    { type: 'admission_evaluated', trigger: 'continuation_gap', proposal: 'incomplete', text: 'I was talking to' },
+    { type: 'admission_evaluated', trigger: 'continuation_gap', proposal: 'incomplete', text: 'I was talking to', epoch: 1, heraldTurnId: 2 },
   ]);
   assert('an ordinary continuation gap does not admit',
     gapped.deliveries.length === 0 && projectSpeechTurnEnvelope(gapped.state).conversationalStatus === 'provisional',
     (v) => v === true, 'held after gap');
-  assert('silence is not completion authority',
-    decideSpeechAdmission({ trigger: 'continuation_gap', proposal: null }) === 'hold'
-      && decideSpeechAdmission({ trigger: 'continuation_gap', proposal: 'uncertain' }) === 'hold'
-      && decideSpeechAdmission({ trigger: 'continuation_gap', proposal: 'incomplete' }) === 'hold'
-      && decideSpeechAdmission({ trigger: 'continuation_gap', proposal: 'complete' }) === 'admit',
-    (v) => v === true, 'gap evaluates');
+  assert('only the first incomplete may hold; failure and completion admit',
+    decideSpeechAdmission({ trigger: 'continuation_gap', proposal: 'incomplete' }) === 'hold'
+      && decideSpeechAdmission({ trigger: 'continuation_gap', proposal: 'incomplete', extensionConsumed: true }) === 'admit'
+      && decideSpeechAdmission({ trigger: 'continuation_gap', proposal: null }) === 'admit'
+      && decideSpeechAdmission({ trigger: 'continuation_gap', proposal: 'uncertain' }) === 'admit'
+      && decideSpeechAdmission({ trigger: 'continuation_gap', proposal: 'complete' }) === 'admit'
+      && decideSpeechAdmission({ trigger: 'max_turn', proposal: 'uncertain' }) === 'admit',
+    (v) => v === true, 'convergence');
 
   const continued = drive([
     { type: 'herald_start', mode: 'open', nativeSessionId: 1, nowMs: 0 },
@@ -94,12 +96,12 @@ export async function runConversationOrchestratorSlice7Tests() {
     { type: 'native_end', nativeSessionId: 1, speechStarted: true, partial: '', nowMs: 300 },
     { type: 'native_listening_ready', nativeSessionId: 2, nowMs: 320 },
     { type: 'continuation_gap_elapsed', generation: 1 },
-    { type: 'admission_evaluated', trigger: 'continuation_gap', proposal: 'incomplete', text: 'I was talking to' },
+    { type: 'admission_evaluated', trigger: 'continuation_gap', proposal: 'incomplete', text: 'I was talking to', epoch: 1, heraldTurnId: 3 },
     { type: 'native_result_final', nativeSessionId: 3, text: 'Martin about Ireland' },
     { type: 'native_end', nativeSessionId: 3, speechStarted: true, partial: '', nowMs: 900 },
     { type: 'native_listening_ready', nativeSessionId: 4, nowMs: 920 },
     { type: 'continuation_gap_elapsed', generation: 2 },
-    { type: 'admission_evaluated', trigger: 'continuation_gap', proposal: 'complete', text: 'I was talking to Martin about Ireland' },
+    { type: 'admission_evaluated', trigger: 'continuation_gap', proposal: 'complete', text: 'I was talking to Martin about Ireland', epoch: 2, heraldTurnId: 3 },
   ]);
   const admitted = projectSpeechTurnEnvelope(continued.state, 'continuation_gap');
   assert('the same session continues in order and admits once',
@@ -133,11 +135,12 @@ export async function runConversationOrchestratorSlice7Tests() {
     { type: 'herald_start', mode: 'open', nativeSessionId: 1, nowMs: 0 },
     { type: 'native_result_final', nativeSessionId: 1, text: 'I was talking to' },
     { type: 'max_turn_elapsed' },
-    { type: 'admission_evaluated', trigger: 'max_turn', proposal: 'uncertain', text: 'I was talking to' },
   ]);
-  assert('the hard deadline recovers without delivering the fragment',
-    deadline.deliveries.length === 0 && projectSpeechTurnEnvelope(deadline.state).conversationalStatus === 'abandoned',
-    (v) => v === true, 'recover');
+  assert('a contentful duration cap delivers the stitch once',
+    deadline.deliveries.length === 1
+      && deadline.deliveries[0] === 'I was talking to'
+      && projectSpeechTurnEnvelope(deadline.state).conversationalStatus === 'admitted',
+    (v) => v === true, 'admit at cap');
 
   assert('control confirmation still admits on the provider end',
     confirm.deliveries.length === 1 && confirm.deliveries[0] === 'yes' && projectSpeechTurnEnvelope(confirm.state, 'control_confirmation_native_end').conversationalStatus === 'admitted',
