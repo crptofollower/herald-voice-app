@@ -45,6 +45,7 @@ export async function runConversationOrchestratorSlice6Tests() {
     'src/routing/activeSubjectReference.ts',
     'src/routing/immediateSemanticRecap.ts',
     'src/routing/recollectionSemanticNomination.ts',
+    'src/routing/recollectionConversationFlow.ts',
   ].map((file) => fs.readFileSync(path.join(root, file), 'utf8'));
   assert('specialists reach the model only through the provider',
     specialists.every((src) => (src.includes('runSpecialistInference(') || src.includes('completeBoundedInterpretation(')) && !src.includes('runSharedSemanticCompletion') && !src.includes('.completion(') && !src.includes('classifyWithLLM')),

@@ -140,7 +140,8 @@ export async function runNaturalConversationFlowV1aTests() {
 
   assert('Flow prompt forbids invented facts and has no writer imports',
     flowSrc.includes('Do not invent an unstated event')
-      && flowSrc.includes('runSharedSemanticCompletion')
+      && flowSrc.includes("runSpecialistInference('recollection_flow'")
+      && !flowSrc.includes('runSharedSemanticCompletion')
       && !flowSrc.includes('persistEvidence')
       && !flowSrc.includes('admitReminiscenceVerbatim')
       && !/medicalDB|contactsDB|calendar|entity_relationships|list_items/.test(flowSrc)

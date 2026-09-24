@@ -3,7 +3,7 @@
 
 import { getEvidenceById } from '../db/evidenceDB';
 import { REMINISCENCE_SOURCE_KIND } from '../db/recollectionRead';
-import { runSharedSemanticCompletion } from '../utils/semanticCompletionLifecycle';
+import { runSpecialistInference } from './semanticProvider';
 import { RECOLLECTION_SEMANTIC_TIMEOUT_MS } from './recollectionSemanticNomination';
 import type { ReminiscenceArcHolder } from './reminiscenceArc';
 
@@ -77,7 +77,7 @@ export async function generateRecollectionConversationFlow(
     precedingKitAct,
     arcRows,
   });
-  const run = await runSharedSemanticCompletion(getCtx, {
+  const run = await runSpecialistInference('recollection_flow', () => getCtx?.() ?? null, {
     messages: [
       { role: 'system', content: RECOLLECTION_FLOW_SYSTEM_PROMPT },
       { role: 'user', content: userContent },

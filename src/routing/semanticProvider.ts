@@ -11,6 +11,7 @@ export type SpecialistInferenceKind =
   | 'todo'
   | 'capability'
   | 'recollection_nomination'
+  | 'recollection_flow'
   | 'active_reference'
   | 'recap';
 
@@ -114,6 +115,7 @@ export async function runSpecialistInference(
     case 'todo':
     case 'capability':
     case 'recollection_nomination':
+    case 'recollection_flow':
       return runSharedSemanticCompletion(getCtx, params, opts);
     default:
       return { status: 'unavailable' as const, reason: 'no_ctx' as const };
