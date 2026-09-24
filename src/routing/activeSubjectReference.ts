@@ -359,10 +359,9 @@ export type ActiveSubjectResolutionDiagSink = {
  *     the grounding continuation gate):
  *     exactly 1 candidate -> 'resolved' via the deterministic fast path, no
  *       model call
- *     >1 candidates -> Stage B selects WHICH candidate (applicability is
- *       not re-litigated — it was already confirmed structurally); no
- *       interpreter available -> 'ambiguous' (existing clarification
- *       authority), never a silent pick
+ *     >1 candidates -> clarification. The model does not choose among
+ *       them, and confidence does not break the tie. No interpreter
+ *       required: the eligible set is already ambiguous.
  *   NOT `actConfirmed` (only a broad, verb-agnostic structural PRE-FILTER
  *     matched — unseen wording that might or might not actually be this
  *     act): the fast path is NEVER used, regardless of candidate count.
@@ -398,7 +397,7 @@ export async function resolveActiveSubjectCandidate(
     if (diagSink) { diagSink.fastPathUsed = true; diagSink.semanticStageInvoked = false; }
     return { kind: 'resolved', candidate: candidates[0]! };
   }
-  if (actConfirmed && kinds.length === 1 && kinds[0] === 'thing' && candidates.length > 1) {
+  if (actConfirmed && candidates.length > 1) {
     if (diagSink) { diagSink.fastPathUsed = false; diagSink.semanticStageInvoked = false; diagSink.semanticResult = 'ambiguous'; }
     return { kind: 'ambiguous', candidates };
   }
@@ -420,22 +419,20 @@ export async function resolveActiveSubjectCandidate(
     return actConfirmed ? { kind: 'ambiguous', candidates } : { kind: 'none' };
   }
   const { proposal } = generation;
-  if (!actConfirmed && !proposal.applicable) {
+  if (!proposal.applicable) {
     if (diagSink) diagSink.semanticResult = 'not_applicable';
     return { kind: 'none' };
   }
-  if (proposal.ambiguous || proposal.selectedIndex === null || proposal.confidence < ACTIVE_SUBJECT_SELECTION_CONFIDENCE_THRESHOLD) {
+  // The act is proposed. Identity admission is the eligible set, not the
+  // model's index. Two or more candidates clarify. One candidate may be
+  // admitted. Low confidence downgrades that unique candidate; it does
+  // not point at a different one.
+  if (candidates.length !== 1 || proposal.confidence < ACTIVE_SUBJECT_SELECTION_CONFIDENCE_THRESHOLD) {
     if (diagSink) diagSink.semanticResult = 'ambiguous';
     return { kind: 'ambiguous', candidates };
   }
-  const selected = candidates[proposal.selectedIndex];
-  if (!selected) {
-    // defensive; parseActiveSubjectSelectionProposal already bounds-checks
-    if (diagSink) diagSink.semanticResult = actConfirmed ? 'ambiguous' : 'none';
-    return actConfirmed ? { kind: 'ambiguous', candidates } : { kind: 'none' };
-  }
   if (diagSink) diagSink.semanticResult = 'selected';
-  return { kind: 'resolved', candidate: selected };
+  return { kind: 'resolved', candidate: candidates[0]! };
 }
 
 // ─── Ambiguity -> existing ConversationSession pending authority ──────────

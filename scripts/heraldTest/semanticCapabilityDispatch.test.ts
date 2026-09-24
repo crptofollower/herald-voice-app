@@ -350,13 +350,11 @@ export async function runSemanticCapabilityDispatchTests() {
     freshDB();
     const { ctx, counts } = countingCtx([DISPATCH_LIST_READ, GROCERY_OK, MED_OK]);
     const decision = await routeIntent('We need to clean the garage.', baseDeps(ctx));
-    assert('LIST.READ high is device_read', decision.kind, (v) => v === 'device_read', 'device_read');
-    assert('LIST.READ high uses grocery list reader speech',
-      (decision as any).response, (v) => v === 'Your grocery list is empty.', 'Your grocery list is empty.');
-    assert('LIST.READ high includes presentedGroceryIds',
-      Array.isArray((decision as any).presentedGroceryIds), (v) => v === true, 'array');
-    assert('LIST.READ high reason matches deterministic grocery read',
-      (decision as any).reason, (v) => v === 'action:list_read', 'action:list_read');
+    assert('LIST.READ high on a non-list utterance is not a grocery read', decision.kind, (v) => v !== 'device_read', 'not device_read');
+    assert('LIST.READ high on a non-list utterance does not present grocery ids',
+      (decision as any).presentedGroceryIds, (v) => v === undefined, 'undefined');
+    assert('LIST.READ high on a non-list utterance is not a list_read reason',
+      (decision as any).reason, (v) => v !== 'action:list_read', 'not action:list_read');
     assert('LIST.READ high does not invoke write interpreters',
       counts.medication + counts.grocery, (v) => v === 0, '0');
     assert('LIST.READ high dispatch once', counts.dispatch, (v) => v === 1, '1');
@@ -366,7 +364,7 @@ export async function runSemanticCapabilityDispatchTests() {
     freshDB();
     const { ctx, counts } = countingCtx([DISPATCH_LIST_READ_MED, GROCERY_OK, MED_OK]);
     const decision = await routeIntent('We need to clean the garage.', baseDeps(ctx));
-    assert('LIST.READ medium is device_read', decision.kind, (v) => v === 'device_read', 'device_read');
+    assert('LIST.READ medium on a non-list utterance is not a grocery read', decision.kind, (v) => v !== 'device_read', 'not device_read');
     assert('LIST.READ medium does not invoke write interpreters',
       counts.medication + counts.grocery, (v) => v === 0, '0');
   }

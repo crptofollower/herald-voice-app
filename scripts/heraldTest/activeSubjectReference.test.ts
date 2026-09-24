@@ -226,8 +226,8 @@ export async function runActiveSubjectReferenceTests() {
     });
     assertTrue('held-out: Stage B was actually invoked', ctxCalls === 1);
     assertTrue('held-out: handled', heldOutOutcome.handled === true);
-    assert('held-out: kind', heldOutOutcome.handled ? heldOutOutcome.kind : null, 'identity');
-    assertTrue('held-out: resolves correctly via Stage B', heldOutOutcome.handled && heldOutOutcome.kind === 'identity' && heldOutOutcome.reply.includes('Dr. Smith'));
+    assert('held-out: kind', heldOutOutcome.handled ? heldOutOutcome.kind : null, 'ambiguous');
+    assertTrue('held-out: two eligible people clarify; the model index does not bind Dr. Smith', heldOutOutcome.handled && heldOutOutcome.kind === 'ambiguous' && /Dr\. Smith/.test(heldOutOutcome.reply) && /Paul/.test(heldOutOutcome.reply));
 
     // Structural proof, not a bare word search (the module's own comments
     // legitimately discuss why these words are excluded from matching): no
@@ -320,18 +320,13 @@ export async function runActiveSubjectReferenceTests() {
       noInterpreterOutcome.handled === true && noInterpreterOutcome.kind === 'ambiguous',
     );
 
-    // With the bounded semantic selector available, Stage B — not recency —
-    // decides. The mock simulates the model correctly favoring Dr. Smith
-    // (medical/appointment context) over Paul (incidental "drove me there").
-    let capturedPrompt = '';
-    // buildRecapCandidates scans newest-first, so the candidate LIST (and
-    // therefore the prompt's numbering) is [Paul(0), Dr. Smith(1)] — Paul
-    // is the newer mention. selectedIndex:1 simulates the model correctly
-    // favoring the OLDER, semantically-relevant Dr. Smith over the newer,
-    // incidental Paul.
+    // A high-confidence model index favoring Dr. Smith must not bind.
+    // Two eligible people clarify, and the confirmed grounding act does
+    // not consult the model to break the tie.
+    let modelCalls = 0;
     const mockCtx = {
-      completion: async (args: any) => {
-        capturedPrompt = args.messages[1].content;
+      completion: async () => {
+        modelCalls++;
         return { text: '{"applicable":true,"selectedIndex":1,"ambiguous":false,"confidence":0.85}' };
       },
     } as any;
@@ -339,12 +334,11 @@ export async function runActiveSubjectReferenceTests() {
       ledgerEntries: ledgerCompeting,
       getInterpreterCtx: () => mockCtx,
     });
-    assertTrue('competing: Stage B was consulted with both candidates present', capturedPrompt.includes('Dr. Smith') && capturedPrompt.includes('Paul'));
-    assertTrue('competing: resolves via grounding, kind correct', withInterpreterOutcome.handled === true && withInterpreterOutcome.kind === 'grounding');
-    assert(
-      'competing: resolved to Dr. Smith per Stage B judgment, not Paul the newer mention',
-      withInterpreterOutcome.handled && withInterpreterOutcome.kind === 'grounding' ? withInterpreterOutcome.focus[0]?.resolverKey : null,
-      'Dr. Smith',
+    assertTrue('competing: model ranking is not consulted', modelCalls === 0);
+    assertTrue('competing: clarifies instead of grounding one person', withInterpreterOutcome.handled === true && withInterpreterOutcome.kind === 'ambiguous');
+    assertTrue(
+      'competing: clarification names both people',
+      withInterpreterOutcome.handled && withInterpreterOutcome.kind === 'ambiguous' && /Dr\. Smith/.test(withInterpreterOutcome.reply) && /Paul/.test(withInterpreterOutcome.reply),
     );
   }
 

@@ -24,7 +24,8 @@ import {
   admitTodoSemanticP2,
   todoSemanticProposalFromDispatchWrite,
 } from './todoSemanticCapture';
-import { generateCapabilityProposal, admitCapabilityProposal, WIRED_READ_CAPABILITY, CAPABILITY_RISK_CLASS, type CapabilityId, type CapabilityProposal, logSemanticDispatchDiag, type SemanticDispatchDiag } from './capabilityRouting';
+import { generateCapabilityProposal, admitCapabilityProposal, WIRED_READ_CAPABILITY, type CapabilityId, type CapabilityProposal, logSemanticDispatchDiag, type SemanticDispatchDiag } from './capabilityRouting';
+import { admitDispatchedSemanticRead } from './semanticAdmission';
 import { evaluateSemanticDispatchEligibility } from './semanticDispatchEligibility';
 import { isClosedActiveSubjectIdentityLookup } from './activeSubjectReference';
 import { detectFamilyCapture } from '../utils/familyCapture';
@@ -2686,11 +2687,8 @@ async function routeIntentCore(
           return readDecision;
         }
       }
-      if (
-        dispatchSelected === 'list.read'
-        && CAPABILITY_RISK_CLASS['list.read'] === 'read'
-        && capGen.proposal.confidence !== 'low'
-      ) {
+      const readAdmission = admitDispatchedSemanticRead(capGen.proposal, eligibility, text);
+      if (readAdmission.decision === 'ADMIT_READ' && readAdmission.capability === 'list.read') {
         const { getPresentedOpenListItems, composeOpenListSpeech } = await import('../db/listRead');
         const listName = 'grocery';
         const items = getPresentedOpenListItems(listName);
@@ -2703,11 +2701,7 @@ async function routeIntentCore(
           presentedGroceryIds: items.map((i) => i.id),
         };
       }
-      if (
-        dispatchSelected === 'todo.read'
-        && CAPABILITY_RISK_CLASS['todo.read'] === 'read'
-        && capGen.proposal.confidence !== 'low'
-      ) {
+      if (readAdmission.decision === 'ADMIT_READ' && readAdmission.capability === 'todo.read') {
         const { getPresentedOpenListItems, composeTodoOpenSpeech } = await import('../db/listRead');
         const items = getPresentedOpenListItems('todos');
         dispatchDiag.finalOutcome = 'read_admit';
