@@ -7,6 +7,7 @@ import { processUtterance } from '../../src/routing/processUtterance.ts';
 import { ConversationSession } from '../../src/routing/conversationSession.ts';
 import { DiscourseContinuityHolder } from '../../src/routing/discourseContinuity.ts';
 import { RecoveryObligationHolder } from '../../src/routing/recoveryObligation.ts';
+import { ConversationalSubjectHolder } from '../../src/routing/conversationalSubject.ts';
 import { admitReferentResolution } from '../../src/routing/canonicalConversationState.ts';
 import { resolveBoundedPhoneReferent } from '../../src/routing/referentPhoneClarification.ts';
 
@@ -214,6 +215,79 @@ export async function runReferentsInPlayTests() {
   assert('pending does not erase a still-valid referent set',
     pendingDiscourse.peekReferentsInPlay()?.candidateIds.join(',') === 'j_a,j_b' && pendingRecovery.peek()?.scope.kind === 'referents_in_play',
     (v) => v === true, 'kept');
+
+  seed(db, 'd1', 'Maya', '5125550111', 8, 'daughter');
+  seed(db, 'd2', 'Priya', '5125550122', 4, 'daughter');
+  const familyDiscourse = new DiscourseContinuityHolder();
+  const familyRecovery = new RecoveryObligationHolder();
+  const familySession = new ConversationSession();
+  const familySubject = new ConversationalSubjectHolder();
+  await processUtterance("What's Jordan's number?", familySession, deps, familySubject, null, null, null, null, familyDiscourse, null, null, familyRecovery);
+  const daughters = await processUtterance('Who is my daughter?', familySession, deps, familySubject, null, null, null, null, familyDiscourse, null, null, familyRecovery);
+  const presented = familyDiscourse.peekReferentsInPlay();
+  assert('a plural family read keeps both contact ids and does not ask for a choice',
+    daughters.handled === false
+      && daughters.responseAct?.kind === 'ANSWER_WITH_PROVENANCE'
+      && /Maya/.test(daughters.routeDecision.kind === 'device_read' ? daughters.routeDecision.response : '')
+      && /Priya/.test(daughters.routeDecision.kind === 'device_read' ? daughters.routeDecision.response : '')
+      && presented?.purpose.kind === 'presented_people'
+      && presented.candidateIds.join(',') === 'd1,d2'
+      && familyRecovery.peek() === null
+      && familySession.peekPendingKey() === null
+      && familySubject.peek() === null,
+    (v) => v === true, 'presented people');
+
+  const seenPrompts: string[] = [];
+  const applicableDeps = {
+    ...deps,
+    getMedicationSemanticInterpreterCtx: () => ({
+      completion: async (params: { prompt: string }) => {
+        seenPrompts.push(params.prompt);
+        return { text: 'applicable' };
+      },
+    }),
+  };
+  const her = await processUtterance("What's her number?", familySession, applicableDeps, familySubject, null, null, null, null, familyDiscourse, null, null, familyRecovery);
+  const blocked = familyDiscourse.peekReferentsInPlay();
+  assert('a reference proposal clarifies both daughters without a number or their private facts in the packet',
+    her.responseAct?.kind === 'CLARIFY_REFERENCE'
+      && /Maya/.test(her.responseText ?? '')
+      && /Priya/.test(her.responseText ?? '')
+      && !/0111|0122|555|0101|0199/.test(her.responseText ?? '')
+      && blocked?.purpose.kind === 'read_phone'
+      && blocked.candidateIds.join(',') === 'd1,d2'
+      && familyRecovery.peek()?.scope.kind === 'referents_in_play'
+      && familyRecovery.peek()?.scope.kind === 'referents_in_play'
+      && familyRecovery.peek()?.scope.setId === blocked.setId
+      && familySession.peekPendingKey() === null
+      && seenPrompts.some((prompt) => !/Maya|Priya|daughter|512|0111|0122/.test(prompt)),
+    (v) => v === true, 'clarify daughters');
+
+  const picked = await processUtterance('Maya', familySession, deps, familySubject, null, null, null, null, familyDiscourse, null, null, familyRecovery);
+  assert('the named daughter is read from stored contact data',
+    picked.responseAct?.kind === 'ANSWER'
+      && picked.responseText.includes('0111')
+      && !picked.responseText.includes('0122')
+      && familyDiscourse.peekReferentsInPlay() === null
+      && familySession.peekPendingKey() === null,
+    (v) => v === true, 'maya number');
+
+  seed(db, 'evan', 'Evan', '5125550130', 5, 'son');
+  const oneSubject = new ConversationalSubjectHolder();
+  const oneDiscourse = new DiscourseContinuityHolder();
+  const oneSon = await processUtterance('Who is my son?', new ConversationSession(), deps, oneSubject, null, null, null, null, oneDiscourse, null, null, new RecoveryObligationHolder());
+  assert('one family match still establishes working focus and no referent set',
+    oneSon.routeDecision.kind === 'device_read'
+      && /Evan/.test(oneSon.routeDecision.response)
+      && oneSubject.peek()?.entityId === 'evan'
+      && oneDiscourse.peekReferentsInPlay() === null,
+    (v) => v === true, 'one son');
+
+  const noneFamily = await processUtterance('Who is my brother?', new ConversationSession(), deps, null, null, null, null, null, new DiscourseContinuityHolder(), null, null, new RecoveryObligationHolder());
+  assert('zero family matches invent no person',
+    noneFamily.routeDecision.kind === 'device_read'
+      && /don't have your brother/i.test(noneFamily.routeDecision.response),
+    (v) => v === true, 'no brother');
 
   const total = passed + failures.length;
   console.log(`\n${BOLD}ReferentsInPlay: ${passed}/${total} passed — ${failures.length === 0 ? `${GREEN}all green` : `${RED}${failures.length} failed`}${RESET}${RESET}\n`);

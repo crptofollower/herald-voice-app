@@ -21,7 +21,7 @@ export type ReferentsInPlay = {
   kind: 'person';
   domain: 'contacts';
   candidateIds: readonly string[];
-  purpose: { kind: 'read_phone' };
+  purpose: { kind: 'read_phone' } | { kind: 'presented_people' };
   establishedAtTurn: number;
 };
 

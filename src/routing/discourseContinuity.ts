@@ -182,16 +182,33 @@ export class WorkingConversationState {
     return { ...this.referentsInPlay, candidateIds: [...this.referentsInPlay.candidateIds] };
   }
 
-  establishReferentsInPlay(candidateIds: readonly string[]): import('./canonicalConversationState').ReferentsInPlay | null {
+  establishReferentsInPlay(
+    candidateIds: readonly string[],
+    purposeKind: 'read_phone' | 'presented_people' = 'read_phone',
+  ): import('./canonicalConversationState').ReferentsInPlay | null {
     const ids = [...new Set(candidateIds.map((id) => id.trim()).filter(Boolean))].sort();
     if (ids.length < 2) return null;
     const set = {
-      setId: `contacts:read_phone:${ids.join('|')}`,
+      setId: `contacts:${purposeKind}:${ids.join('|')}`,
       kind: 'person' as const,
       domain: 'contacts' as const,
       candidateIds: ids,
-      purpose: { kind: 'read_phone' as const },
+      purpose: { kind: purposeKind },
       establishedAtTurn: this.turn,
+    };
+    this.referentsInPlay = set;
+    return { ...set, candidateIds: [...ids] };
+  }
+
+  /** Same membership. The blocked phone read replaces a completed presentation. */
+  transitionReferentsToReadPhone(): import('./canonicalConversationState').ReferentsInPlay | null {
+    const current = this.referentsInPlay;
+    if (!current || current.candidateIds.length < 2) return null;
+    const ids = [...current.candidateIds];
+    const set = {
+      ...current,
+      setId: `contacts:read_phone:${ids.join('|')}`,
+      purpose: { kind: 'read_phone' as const },
     };
     this.referentsInPlay = set;
     return { ...set, candidateIds: [...ids] };

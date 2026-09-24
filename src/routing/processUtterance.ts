@@ -79,7 +79,7 @@ import {
 } from './reminiscenceArc';
 import { answerLiveReminiscenceRecall } from '../db/recollectionRead';
 import { inspectHolds, formatHoldRecall } from './holdRecall';
-import { detectFamilyRead, resolveFamilyRead } from '../utils/familyRead';
+import { detectFamilyRead, resolveFamilyRead, listFamilyReadMatches } from '../utils/familyRead';
 import { resolveHouseholdProvider } from '../utils/householdRead';
 import { getLastVisit } from '../db/medicalDB';
 import { extractDoctorName } from '../utils/detectMedicalEvent';
@@ -935,6 +935,56 @@ export async function processUtterance(
         commits: [],
         responseAct: clarifyReferenceAct(responseText),
       };
+    }
+  }
+  const presentedPeople = discourse?.peekReferentsInPlay() ?? null;
+  if (presentedPeople?.purpose.kind === 'presented_people' && !session.hasPending()) {
+    const proposal = await proposeReferenceContinuation(
+      text,
+      deps.getMedicationSemanticInterpreterCtx?.() ?? null,
+      { groundedPeople: true },
+    );
+    if (proposal?.applicable && isReferentPhoneQuestion(text)) {
+      const { findContactById, contactHasCapability } = await import('../db/contactsDB');
+      const { projectPhoneReadClarification } = await import('./referentPhoneClarification');
+      const contacts = presentedPeople.candidateIds
+        .map((id) => findContactById(id))
+        .filter((contact): contact is NonNullable<typeof contact> => !!contact && contactHasCapability(contact, 'phone'));
+      if (contacts.length === 1) {
+        const contact = contacts[0]!;
+        const digits = contact.phone.replace(/\D/g, '');
+        const formatted = /^\d{10}$/.test(digits)
+          ? `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`
+          : contact.phone;
+        discourse?.clearReferentsInPlay();
+        const responseText = `${contact.name}'s number is ${formatted}.`;
+        return {
+          handled: true,
+          source: 'referent_resume',
+          responseText,
+          commits: [],
+          responseAct: { kind: 'ANSWER', text: responseText, epistemic: 'deterministic_read' },
+        };
+      }
+      if (contacts.length > 1) {
+        const transitioned = discourse?.transitionReferentsToReadPhone();
+        if (transitioned) {
+          recoveryObligation?.establishJob('clarify_reference', { kind: 'referents_in_play', setId: transitioned.setId });
+          const responseText = projectPhoneReadClarification(contacts.map((contact) => ({
+            id: contact.id,
+            name: contact.name,
+            relationship: contact.relationship,
+            location: (contact as { location?: string | null }).location,
+          }))).speech;
+          return {
+            handled: true,
+            source: 'referent_resume',
+            responseText,
+            commits: [],
+            responseAct: clarifyReferenceAct(responseText),
+          };
+        }
+      }
     }
   }
   const holdRecall = inspectHolds(text, discourse?.peekInterpretationHold() ?? null);
@@ -1921,6 +1971,14 @@ export async function processUtterance(
     arc.close();
   }
   const routeAct = actForRoute(routeDecision);
+  if (routeDecision.kind === 'device_read' && routeDecision.reason === 'family:read') {
+    const intent = detectFamilyRead(text);
+    const matches = intent ? listFamilyReadMatches(intent) : [];
+    if (matches.length >= 2) {
+      const set = discourse?.establishReferentsInPlay(matches.map((match) => match.entityId), 'presented_people');
+      if (set && recoveryObligation?.peek()?.scope.kind === 'referents_in_play') recoveryObligation.clear();
+    }
+  }
   if (
     routeDecision.kind === 'device_read'
     && routeDecision.reason === 'contact:phone_lookup:ambiguous'
