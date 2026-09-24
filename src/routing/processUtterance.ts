@@ -9,7 +9,7 @@ import {
   bindFollowingTurnListReferent,
   followingTurnListReferentFailClosedSpeech,
 } from './followingTurnListReferent';
-import { ConversationSession, CONFIRM_YES_RE, CONFIRM_NO_RE } from './conversationSession';
+import { ConversationSession, CONFIRM_YES_RE, CONFIRM_NO_RE, CANCEL_RE } from './conversationSession';
 import { establishHardPending } from './hardPendingBoundary';
 import {
   acknowledgeAct,
@@ -130,6 +130,7 @@ import {
 import {
   RecoveryObligationHolder,
   isRecoveryRepairSignal,
+  isSoftObligationEligible,
   realizeRecoveryObligationConsume,
 } from './recoveryObligation';
 import {
@@ -144,6 +145,7 @@ import {
   admitStructuralOrdinal,
   collectLivePresentedSets,
   isFocusPreservingSideActivity,
+  presentedSet,
 } from './canonicalConversationState';
 import {
   CLARIFY_OPERATIONAL_LIST_KEY,
@@ -636,6 +638,39 @@ export async function processUtterance(
   calendarContinuation?.beginUserTurn();
   discourse?.beginUserTurn();
   recoveryObligation?.beginUserTurn();
+  const softView = () => ({
+    liveSetIds: collectLivePresentedSets({
+      medication: medicationPresentation,
+      ordered: orderedPresentation,
+      calendar: calendarPresentation,
+      todo: todoPresentation,
+    }).map((set) => set.setId),
+    focusKey: subject?.hasLive()
+      ? `${subject.peek()!.domain}:${subject.peek()!.entityId}`
+      : null,
+  });
+  const syncSoft = () => {
+    const obligation = recoveryObligation?.peek();
+    if (!obligation || obligation.job === 'failed_understanding') return;
+    if (!isSoftObligationEligible(obligation, softView())) recoveryObligation?.clear();
+  };
+  syncSoft();
+  const armSoft = (act: ResponseAct): ResponseAct => {
+    if (act.kind === 'CLARIFY_REFERENCE') {
+      recoveryObligation?.establishJob('clarify_reference', {
+        kind: 'presented_sets',
+        setIds: softView().liveSetIds,
+      });
+    } else if (act.kind === 'CLARIFY_INTENT') {
+      recoveryObligation?.establishJob('clarify_intent', {
+        kind: 'intent_context',
+        domains: ['grocery', 'todo'],
+      });
+    } else if (act.kind === 'INVITE_CONTINUATION') {
+      recoveryObligation?.establishJob('invite_continuation', { kind: 'turn_local' });
+    }
+    return act;
+  };
   const continuationRecoveryCandidates: ContinuationRecoveryCandidate[] = [];
   // 0) Law 0 — emergency preempts everything (Spine §3a). Checked before pending
   //    resolution, before routing, before any classifier. A held pending is
@@ -720,12 +755,35 @@ export async function processUtterance(
     }
   }
   if (session.hasPending() && !preserveClarificationRead) {
-    subject?.clear();
-    medicationPresentation?.clear();
-    orderedPresentation?.clear();
-    calendarPresentation?.clear();
+    const protectedIds = new Set(
+      recoveryObligation?.peek()?.scope.kind === 'presented_sets'
+        && isSoftObligationEligible(recoveryObligation.peek()!, softView())
+        ? recoveryObligation.peek()!.scope.setIds
+        : [],
+    );
+    const liveFocus = recoveryObligation?.peek();
+    const protectFocus = liveFocus?.scope.kind === 'working_focus'
+      && isSoftObligationEligible(liveFocus, softView());
+    if (!protectFocus) subject?.clear();
+    const medicationSetId = medicationPresentation?.hasLive()
+      ? presentedSet('medication', medicationPresentation.peek()!.medicationIds).setId
+      : null;
+    const groceryPeek = orderedPresentation?.hasLive() ? orderedPresentation.peek() : null;
+    const grocerySetId = groceryPeek?.owner === 'grocery'
+      ? presentedSet('grocery', groceryPeek.presentedIds).setId
+      : null;
+    const calendarPeek = calendarPresentation?.hasLive() ? calendarPresentation.peek() : null;
+    const calendarSetId = calendarPeek
+      ? presentedSet('calendar', calendarPeek.eventIds).setId
+      : null;
+    const todoIds = todoPresentation?.hasLive() ? todoPresentation.peek() : null;
+    const todoSetId = todoIds && todoIds.length > 0 ? presentedSet('todo', todoIds).setId : null;
+    if (!(medicationSetId && protectedIds.has(medicationSetId))) medicationPresentation?.clear();
+    if (!(grocerySetId && protectedIds.has(grocerySetId))) orderedPresentation?.clear();
+    if (!(calendarSetId && protectedIds.has(calendarSetId))) calendarPresentation?.clear();
+    if (!(todoSetId && protectedIds.has(todoSetId))) todoPresentation?.clear();
     calendarContinuation?.clear();
-    todoPresentation?.clear();
+    syncSoft();
     const pendingKey = session.peekPendingKey();
     const result = await session.resolvePending(text);
     // Generic pending-resume hook: covers every resume closure uniformly
@@ -797,6 +855,17 @@ export async function processUtterance(
     }
     recoveryObligation.clear();
   }
+  if (recoveryObligation?.isOpenSoft() && isSoftObligationEligible(recoveryObligation.peek()!, softView()) && !session.hasPending() && CANCEL_RE.test(text.trim())) {
+    recoveryObligation.clear();
+    const responseText = "No problem — I won't do that.";
+    return {
+      handled: true,
+      source: 'recovery_obligation',
+      responseText,
+      commits: [],
+      responseAct: { kind: 'CANCELLED', text: responseText },
+    };
+  }
   const holdRecall = inspectHolds(text, discourse?.peekInterpretationHold() ?? null);
   const holdRecallText = formatHoldRecall(holdRecall);
   if (holdRecallText !== null) {
@@ -855,10 +924,14 @@ export async function processUtterance(
   const medicationNearMissOwnsTurn = presentedOrdinal.kind === 'unique'
     && presentedOrdinal.domain === 'medication'
     && isMedicationOrdinalNearMiss(text);
+  if (presentedOrdinal.kind === 'unique' && !medicationNearMissOwnsTurn && recoveryObligation?.peek()?.job === 'clarify_reference') {
+    recoveryObligation.clear();
+  }
   if (!medicationNearMissOwnsTurn && (presentedOrdinal.kind === 'clarify' || (presentedOrdinal.kind === 'unique' && presentedOrdinal.mutation && presentedOrdinal.domain !== 'grocery'))) {
-    return { handled: true, source: 'referent_resume', responseText: ORDERED_PRESENTATION_CONFUSION, commits: [], responseAct: clarifyReferenceAct(ORDERED_PRESENTATION_CONFUSION) };
+    return { handled: true, source: 'referent_resume', responseText: ORDERED_PRESENTATION_CONFUSION, commits: [], responseAct: armSoft(clarifyReferenceAct(ORDERED_PRESENTATION_CONFUSION)) };
   }
   if (!medicationNearMissOwnsTurn && presentedOrdinal.kind === 'unique' && !presentedOrdinal.mutation && parseGroceryNamedCollectionRead(text).kind !== 'position') {
+    if (recoveryObligation?.peek()?.job === 'clarify_reference') recoveryObligation.clear();
     if (presentedOrdinal.domain === 'medication') {
       const livePresentation = medicationPresentation?.peek();
       if (livePresentation) {
@@ -881,7 +954,7 @@ export async function processUtterance(
         return { handled: true, source: 'referent_resume', responseText: answered.responseText, commits: [] };
       }
     } else if (presentedOrdinal.domain === 'todo') {
-      return { handled: true, source: 'referent_resume', responseText: ORDERED_PRESENTATION_CONFUSION, commits: [], responseAct: clarifyReferenceAct(ORDERED_PRESENTATION_CONFUSION) };
+      return { handled: true, source: 'referent_resume', responseText: ORDERED_PRESENTATION_CONFUSION, commits: [], responseAct: armSoft(clarifyReferenceAct(ORDERED_PRESENTATION_CONFUSION)) };
     }
   }
   let medicationAwaitingUnusedClear = false;
@@ -929,7 +1002,7 @@ export async function processUtterance(
       } else {
         medicationPresentation.clear();
       }
-      return { handled: true, source: 'referent_resume', responseText, commits: [], responseAct: clarifyReferenceAct(responseText) };
+      return { handled: true, source: 'referent_resume', responseText, commits: [], responseAct: armSoft(clarifyReferenceAct(responseText)) };
     }
     recordContinuationRecoveryCandidate(
       continuationRecoveryCandidates,
@@ -1012,10 +1085,10 @@ export async function processUtterance(
         && (interpreted.reason === 'relative' || interpreted.reason === 'other_anaphor')
         && !/\b(?:one|thing|item)\b/i.test(text);
       if (interpreted.kind === 'ambiguous' && !relativeWithoutListNoun) {
-        return { handled: true, source: 'referent_resume', responseText: ORDERED_PRESENTATION_CONFUSION, commits: [], responseAct: clarifyReferenceAct(ORDERED_PRESENTATION_CONFUSION) };
+        return { handled: true, source: 'referent_resume', responseText: ORDERED_PRESENTATION_CONFUSION, commits: [], responseAct: armSoft(clarifyReferenceAct(ORDERED_PRESENTATION_CONFUSION)) };
       }
       if (interpreted.kind !== 'unsafe' && hasBoundedPositionEvidence(text) && !relativeWithoutListNoun) {
-        return { handled: true, source: 'referent_resume', responseText: ORDERED_PRESENTATION_CONFUSION, commits: [], responseAct: clarifyReferenceAct(ORDERED_PRESENTATION_CONFUSION) };
+        return { handled: true, source: 'referent_resume', responseText: ORDERED_PRESENTATION_CONFUSION, commits: [], responseAct: armSoft(clarifyReferenceAct(ORDERED_PRESENTATION_CONFUSION)) };
       }
       recordContinuationRecoveryCandidate(
         continuationRecoveryCandidates,
@@ -1643,15 +1716,33 @@ export async function processUtterance(
     subject.restore(focusHeldForSideActivity);
   }
   const keepCoexistingSets = sideActivity || medicationRebound || groceryRebound || calendarRebound;
-  if (medicationAwaitingUnusedClear && !medicationRebound && !keepCoexistingSets) {
+  const pinned = new Set(
+    recoveryObligation?.peek()?.scope.kind === 'presented_sets'
+      && isSoftObligationEligible(recoveryObligation.peek()!, softView())
+      ? recoveryObligation.peek()!.scope.setIds
+      : [],
+  );
+  const medicationSetId = medicationPresentation?.hasLive()
+    ? presentedSet('medication', medicationPresentation.peek()!.medicationIds).setId
+    : null;
+  const groceryPeek = orderedPresentation?.hasLive() ? orderedPresentation.peek() : null;
+  const grocerySetId = groceryPeek?.owner === 'grocery'
+    ? presentedSet('grocery', groceryPeek.presentedIds).setId
+    : null;
+  const calendarPeek = calendarPresentation?.hasLive() ? calendarPresentation.peek() : null;
+  const calendarSetId = calendarPeek
+    ? presentedSet('calendar', calendarPeek.eventIds).setId
+    : null;
+  if (medicationAwaitingUnusedClear && !medicationRebound && !keepCoexistingSets && !(medicationSetId && pinned.has(medicationSetId))) {
     medicationPresentation?.clear();
   }
-  if (groceryAwaitingUnusedClear && !groceryRebound && !keepCoexistingSets) {
+  if (groceryAwaitingUnusedClear && !groceryRebound && !keepCoexistingSets && !(grocerySetId && pinned.has(grocerySetId))) {
     orderedPresentation?.clear();
   }
-  if (calendarAwaitingUnusedClear && !calendarRebound && !keepCoexistingSets) {
+  if (calendarAwaitingUnusedClear && !calendarRebound && !keepCoexistingSets && !(calendarSetId && pinned.has(calendarSetId))) {
     calendarPresentation?.clear();
   }
+  syncSoft();
   let continuityFocus: DomainFocusEnvelope | undefined;
   let continuityReferenceOnly: boolean | undefined;
   if (
@@ -1727,6 +1818,7 @@ export async function processUtterance(
     arc.close();
   }
   const routeAct = actForRoute(routeDecision);
+  if (routeAct) armSoft(routeAct);
   return {
     handled: false,
     routeDecision,
