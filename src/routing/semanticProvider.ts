@@ -2,6 +2,7 @@
 // The packet is closed. Personal values stay in the local handle map.
 
 import { classifyWithLLM, type ClassifyOutcome } from '../hooks/llmLayers';
+import { noteReferenceInvocation } from '../dev/semanticJourneyEvidence';
 import { runSharedSemanticCompletion, type SemanticCompletionRunOptions } from '../utils/semanticCompletionLifecycle';
 import type { LlamaContext } from 'llama.rn';
 
@@ -169,7 +170,21 @@ export async function proposeReferenceContinuation(
   options?: { groundedPeople?: boolean; groundedPresentedSets?: boolean },
 ): Promise<{ applicable: boolean } | null> {
   const packet = buildSemanticPacket({ userText, riskTier: 'none' });
-  if (!ctx || typeof ctx.completion !== 'function' || !packet.userText.trim()) return null;
+  const hasCurrentUtterance = packet.userText.trim().length > 0;
+  const note = (status: 'applicable' | 'not' | 'unavailable' | 'error', unavailableReason: string | null) => {
+    noteReferenceInvocation({
+      status,
+      unavailableReason,
+      hasCurrentUtterance,
+      groundedPeople: options?.groundedPeople,
+      groundedPresentedMaterial: options?.groundedPresentedSets,
+    });
+  };
+  if (!hasCurrentUtterance) return null;
+  if (!ctx || typeof ctx.completion !== 'function') {
+    note('unavailable', 'ctx_missing');
+    return null;
+  }
   const availability = [
     options?.groundedPeople ? 'Grounded people are available for reference.' : '',
     options?.groundedPresentedSets ? 'Grounded presented material is available for reference.' : '',
@@ -180,15 +195,26 @@ export async function proposeReferenceContinuation(
       prompt: `Reply with one word, applicable or not.\n${contextLine}${packet.userText}`,
       n_predict: 8,
     });
-    if (value.status !== 'ok') return null;
+    if (value.status !== 'ok') {
+      note('unavailable', 'error');
+      return null;
+    }
     const raw = typeof value.value === 'string'
       ? value.value
       : (value.value as { text?: string } | null)?.text;
     const token = String(raw ?? '').trim().toLowerCase().split(/\s+/)[0] ?? '';
-    if (token === 'applicable') return { applicable: true };
-    if (token === 'not') return { applicable: false };
+    if (token === 'applicable') {
+      note('applicable', null);
+      return { applicable: true };
+    }
+    if (token === 'not') {
+      note('not', null);
+      return { applicable: false };
+    }
+    note('unavailable', 'unrecognized');
     return null;
   } catch {
+    note('error', 'error');
     return null;
   }
 }

@@ -1,0 +1,45 @@
+{
+  "schema": "herald.android.semantic.proof.v1",
+  "scenarios": [
+    {
+      "id": "semantic_c",
+      "turns": [
+        { "input": "When did I last see Dr. Patel?" },
+        { "input": "Add milk to my grocery list." },
+        { "input": "What about him?" }
+      ]
+    },
+    {
+      "id": "semantic_f",
+      "turns": [
+        { "input": "What medications am I taking?" },
+        { "input": "the blue one" }
+      ]
+    },
+    {
+      "id": "semantic_h",
+      "turns": [
+        { "input": "Who is my daughter?" },
+        { "input": "What's her number?" }
+      ]
+    },
+    {
+      "id": "semantic_e",
+      "turns": [
+        { "input": "How's my pill situation looking?" },
+        { "input": "Have I got anything with the doctor coming up?" },
+        { "input": "Remind me who I married" }
+      ]
+    },
+    {
+      "id": "semantic_negative",
+      "turns": [
+        { "input": "What medications am I taking?" },
+        { "input": "the blue one" },
+        { "input": "Who is my daughter?" },
+        { "input": "What's her number?" },
+        { "input": "What about him?" }
+      ]
+    }
+  ]
+}

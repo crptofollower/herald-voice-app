@@ -52,6 +52,7 @@ import { listActiveEpisodes } from '../db/episodesWriter';
 import { realizeEpisodePerspective } from '../utils/episodeCapture';
 import { isClosedActiveSubjectIdentityLookup, ACTIVE_SUBJECT_GROUNDING_ACK } from './activeSubjectReference';
 import { admitWorkingFocusReference } from './workingFocusReference';
+import { noteSemanticAdmission } from '../dev/semanticJourneyEvidence';
 import { proposeReferenceContinuation } from './semanticProvider';
 import {
   admitReminiscenceVerbatim,
@@ -945,6 +946,18 @@ export async function processUtterance(
       deps.getMedicationSemanticInterpreterCtx?.() ?? null,
       { groundedPeople: true },
     );
+    if (!proposal?.applicable) {
+      noteSemanticAdmission({
+        mechanism: 'referents_in_play',
+        eligibleCount: presentedPeople.candidateIds.length,
+        resolution: 'none',
+        candidateAdmitted: false,
+        admittedInGroundedSet: null,
+        clarificationRequired: false,
+        capabilityDecision: null,
+        capabilityReason: null,
+      });
+    }
     if (proposal?.applicable && isReferentPhoneQuestion(text)) {
       const { findContactById, contactHasCapability } = await import('../db/contactsDB');
       const { projectPhoneReadClarification } = await import('./referentPhoneClarification');
@@ -952,6 +965,16 @@ export async function processUtterance(
         .map((id) => findContactById(id))
         .filter((contact): contact is NonNullable<typeof contact> => !!contact && contactHasCapability(contact, 'phone'));
       if (contacts.length === 1) {
+        noteSemanticAdmission({
+          mechanism: 'referents_in_play',
+          eligibleCount: 1,
+          resolution: 'unique',
+          candidateAdmitted: true,
+          admittedInGroundedSet: true,
+          clarificationRequired: false,
+          capabilityDecision: null,
+          capabilityReason: null,
+        });
         const contact = contacts[0]!;
         const digits = contact.phone.replace(/\D/g, '');
         const formatted = /^\d{10}$/.test(digits)
@@ -968,6 +991,16 @@ export async function processUtterance(
         };
       }
       if (contacts.length > 1) {
+        noteSemanticAdmission({
+          mechanism: 'referents_in_play',
+          eligibleCount: contacts.length,
+          resolution: 'ambiguous',
+          candidateAdmitted: false,
+          admittedInGroundedSet: false,
+          clarificationRequired: true,
+          capabilityDecision: null,
+          capabilityReason: null,
+        });
         const transitioned = discourse?.transitionReferentsToReadPhone();
         if (transitioned) {
           recoveryObligation?.establishJob('clarify_reference', { kind: 'referents_in_play', setId: transitioned.setId });
@@ -1092,6 +1125,16 @@ export async function processUtterance(
         deps.getMedicationSemanticInterpreterCtx?.() ?? null,
         { groundedPresentedSets: true },
       );
+      noteSemanticAdmission({
+        mechanism: 'presented_set',
+        eligibleCount: liveSets.length === 1 ? liveSets[0]!.orderedMemberIds.length : liveSets.length,
+        resolution: proposal?.applicable ? 'ambiguous' : 'none',
+        candidateAdmitted: false,
+        admittedInGroundedSet: false,
+        clarificationRequired: proposal?.applicable === true,
+        capabilityDecision: null,
+        capabilityReason: null,
+      });
       if (proposal?.applicable) {
         const medicationSet = liveSets.length === 1 && liveSets[0]?.domain === 'medication' ? liveSets[0] : null;
         const responseText = medicationSet
@@ -1423,10 +1466,18 @@ export async function processUtterance(
         text,
         deps.getMedicationSemanticInterpreterCtx?.() ?? null,
       );
-      const decision = admitWorkingFocusReference(
-        proposal,
-        live.domain === 'medical_doctor' ? [live] : [],
-      );
+      const compatible = live.domain === 'medical_doctor' ? [live] : [];
+      const decision = admitWorkingFocusReference(proposal, compatible);
+      noteSemanticAdmission({
+        mechanism: 'working_focus',
+        eligibleCount: compatible.length,
+        resolution: decision.kind === 'admit' ? 'unique' : decision.kind === 'clarify' ? 'ambiguous' : proposal?.applicable ? 'rejected' : 'none',
+        candidateAdmitted: decision.kind === 'admit',
+        admittedInGroundedSet: decision.kind === 'admit' ? true : null,
+        clarificationRequired: decision.kind === 'clarify',
+        capabilityDecision: null,
+        capabilityReason: null,
+      });
       if (decision.kind === 'clarify') {
         return {
           handled: true,

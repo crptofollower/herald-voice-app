@@ -1846,6 +1846,26 @@ export default function ChatScreen() {
     // Deterministic-first routing: the regex/SQL classifier runs FIRST and always wins.
     // Tier-1 reads and actions are handled by the dispatch below. The on-device LLM only
     // attempts a capture when deterministic routing found nothing actionable (tier 3 gap).
+    const noteProofState = (phase: 'before' | 'after') => {
+      try {
+        const proof = require('../dev/semanticJourneyEvidence');
+        if (!proof.semanticProofAttached()) return;
+        const { collectLivePresentedSets } = require('../routing/canonicalConversationState');
+        proof.noteCanonicalState(phase, proof.canonicalProofFromHolders({
+          focus: subjectRef.current.peek(),
+          presentedSets: collectLivePresentedSets({
+            medication: medicationPresentationRef.current,
+            ordered: orderedPresentationRef.current,
+            calendar: calendarPresentationRef.current,
+            todo: todoPresentationRef.current,
+          }),
+          referents: discourseRef.current.peekReferentsInPlay(),
+          pendingKey: sessionRef.current.peekPendingKey(),
+          obligation: recoveryObligationRef.current.peek(),
+        }));
+      } catch { /* proof only */ }
+    };
+    noteProofState('before');
     const outcome = await processUtterance(text, sessionRef.current, {
       classifyQuery,
       classifyLLM: async (t: string) => proposeLocalClassification(t, getCtx(), { modelIdentity: getModelIdentity() }),
@@ -1859,6 +1879,27 @@ export default function ChatScreen() {
       getMedicationSemanticInterpreterCtx,
     }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current, calendarPresentationRef.current, calendarContinuationRef.current, discourseRef.current, conversationLedgerRef.current, reminiscenceArcRef.current, recoveryObligationRef.current, todoPresentationRef.current);
     journeyOutcome = outcome;
+    noteProofState('after');
+    try {
+      const proof = require('../dev/semanticJourneyEvidence');
+      if (proof.semanticProofAttached()) {
+        const act = 'responseAct' in outcome ? outcome.responseAct : undefined;
+        const commits = outcome.handled && 'commits' in outcome ? outcome.commits : [];
+        const pendingKey = commits.find((commit) => commit.status === 'pending' && commit.pendingKey)?.pendingKey
+          ?? sessionRef.current.peekPendingKey();
+        const route = outcome.handled ? null : outcome.routeDecision;
+        const external = pendingKey === 'contact_call' || pendingKey === 'contact_sms' || route?.kind === 'device_action';
+        proof.noteSemanticExecution({
+          responseActKind: act?.kind ?? null,
+          authoritativeRead: (act?.kind === 'ANSWER' && 'epistemic' in act && act.epistemic === 'deterministic_read')
+            || route?.kind === 'device_read',
+          writeOccurred: commits.some((commit) => commit.status === 'committed'),
+          externalActionArmed: external,
+          routeKind: outcome.handled ? outcome.source : route?.kind ?? null,
+          capabilityId: null,
+        });
+      }
+    } catch { /* proof only */ }
     syncSituationalListVisuals(outcome);
     const continuityFocus = !outcome.handled
       ? continuityLedgerFocus(outcome.continuityFocus, outcome.continuityReferenceOnly === true)

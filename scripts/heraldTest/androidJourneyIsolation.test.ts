@@ -117,9 +117,10 @@ export async function runAndroidJourneyIsolationV1Tests() {
     (v) => v === true,
     'probe beside sendMessage',
   );
+  const snapshot = host.slice(host.indexOf('function snapshotAuthoritative'), host.indexOf('function diffSnapshots'));
   assert(
     'JS host snapshots lists/medications/medical_records/evidence read-only',
-    host.includes('FROM medications') && host.includes('FROM medical_records') && host.includes('FROM evidence') && host.includes('event_at') && !host.includes('FROM contacts') && !host.includes('FROM facts'),
+    snapshot.includes('FROM medications') && snapshot.includes('FROM medical_records') && snapshot.includes('FROM evidence') && snapshot.includes('event_at') && !snapshot.includes('FROM contacts') && !snapshot.includes('FROM facts'),
     (v) => v === true,
     'V1 sqlite domains',
   );

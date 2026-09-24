@@ -3,6 +3,7 @@
  * sendMessage remains the application front door.
  */
 import { DeviceEventEmitter, NativeModules, Platform } from 'react-native';
+import { beginSemanticProof, finishSemanticProof } from './semanticJourneyEvidence';
 import { initDB, isDBReady } from '../db/useDeviceDB';
 import { getDB } from '../db/schema';
 import { setProfileField } from '../db/profileDB';
@@ -507,6 +508,37 @@ function applyMedicalTemporalFixture(scenarioId: string | null): void {
   }
 }
 
+function applySemanticProofFixture(scenarioId: string | null): void {
+  if (!scenarioId || !scenarioId.startsWith('semantic_')) return;
+  const db = getDB();
+  const now = '2026-09-01T15:00:00.000Z';
+  if (scenarioId === 'semantic_c' || scenarioId === 'semantic_e') {
+    writeMedicalRecord({ doctor_name: 'Dr. Patel', visit_date: '2026-09-01', status: 'noted' });
+  }
+  if (scenarioId === 'semantic_f' || scenarioId === 'semantic_e' || scenarioId === 'semantic_negative') {
+    db.execSync(
+      `INSERT INTO medications (id, name, dosage, frequency, is_active, created_at, removed_at)
+       VALUES ('med_metoprolol', 'metoprolol', '50mg', 'daily', 1, '${now}', NULL),
+              ('med_lisinopril', 'lisinopril', '50mg', 'daily', 1, '${now}', NULL);`,
+    );
+  }
+  if (scenarioId === 'semantic_h' || scenarioId === 'semantic_e' || scenarioId === 'semantic_negative') {
+    db.execSync('DELETE FROM contacts;');
+    db.execSync(
+      `INSERT INTO contacts (id, name, relationship, phone, importance, created_at, updated_at, removed_at) VALUES
+       ('d1', 'Maya', 'daughter', '5125550111', 8, '${now}', '${now}', NULL),
+       ('d2', 'Priya', 'daughter', '5125550122', 4, '${now}', '${now}', NULL);`,
+    );
+  }
+  if (scenarioId === 'semantic_e') {
+    db.execSync('DELETE FROM contacts;');
+    db.execSync(
+      `INSERT INTO contacts (id, name, relationship, phone, importance, created_at, updated_at, removed_at) VALUES
+       ('c_shannon', 'Shannon', 'wife', '5125550140', 8, '${now}', '${now}', NULL);`,
+    );
+  }
+}
+
 function resetAuthoritativeLists(): void {
   if (!isDBReady()) return;
   const db = getDB();
@@ -553,7 +585,13 @@ async function runTurn(payload: {
     prepareInstrumentationSession();
     const pendingBefore = runtime.peekPendingKey();
     const before = snapshotAuthoritative();
-    await runtime.sendMessage(text, 'typed');
+    beginSemanticProof(turnId);
+    let semantic: ReturnType<typeof finishSemanticProof> = null;
+    try {
+      await runtime.sendMessage(text, 'typed');
+    } finally {
+      semantic = finishSemanticProof();
+    }
     const after = snapshotAuthoritative();
     const delta = diffSnapshots(before, after);
     const pendingAfter = lastReportedPendingKey ?? runtime.peekPendingKey();
@@ -582,6 +620,7 @@ async function runTurn(payload: {
         after: { ...after, items: after.list_items.filter((i) => i.list_name === 'grocery') },
         delta,
       },
+      semantic,
     });
   } catch (e) {
     emitComplete(
@@ -829,6 +868,7 @@ function runReset(scenarioId: string | null = null): void {
     resetAuthoritativeLists();
     runtime?.resetConversation();
     applyMedicalTemporalFixture(scenarioId);
+    applySemanticProofFixture(scenarioId);
     seenTurnIds.clear();
     inFlightTurnId = null;
     lastReportedOutcome = undefined;

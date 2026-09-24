@@ -29,6 +29,7 @@
 
 import type { LlamaContext } from 'llama.rn';
 import { hasMedicationDomainEvidence } from '../utils/detectMedicalEvent';
+import { noteCapabilityInvocation } from '../dev/semanticJourneyEvidence';
 import { runSpecialistInference } from './semanticProvider';
 import {
   logSemanticDispatchInferenceEnd,
@@ -410,6 +411,11 @@ export async function generateCapabilityProposal(
     onAcquired: () => logSemanticDispatchInferenceStart(),
   });
   if (run.status === 'unavailable') {
+    noteCapabilityInvocation({
+      status: run.reason === 'timeout' ? 'timeout' : run.reason === 'error' ? 'error' : 'unavailable',
+      unavailableReason: run.reason === 'no_ctx' ? 'ctx_missing' : run.reason,
+      hasCurrentUtterance: raw.trim().length > 0,
+    });
     if (run.reason === 'error') {
       logSemanticDispatchInferenceEnd(latMono() - t0, undefined, 'error');
     }
@@ -428,5 +434,10 @@ export async function generateCapabilityProposal(
     result,
     proposal ? 'ok' : 'parse_fail',
   );
+  noteCapabilityInvocation({
+    status: proposal ? 'ok' : 'parse_fail',
+    hasCurrentUtterance: raw.trim().length > 0,
+    proposedCapability: proposal?.capability ?? null,
+  });
   return proposal ? { status: 'ok', proposal } : { status: 'parse_fail', raw: text };
 }

@@ -24,6 +24,7 @@ import {
   admitTodoSemanticP2,
   todoSemanticProposalFromDispatchWrite,
 } from './todoSemanticCapture';
+import { noteSemanticAdmission } from '../dev/semanticJourneyEvidence';
 import { generateCapabilityProposal, admitCapabilityProposal, WIRED_READ_CAPABILITY, type CapabilityId, type CapabilityProposal, logSemanticDispatchDiag, type SemanticDispatchDiag } from './capabilityRouting';
 import { admitDispatchedSemanticRead } from './semanticAdmission';
 import { evaluateSemanticDispatchEligibility } from './semanticDispatchEligibility';
@@ -2266,6 +2267,16 @@ async function admitWiredMedicationRead(
   utterance: string,
 ): Promise<RouteDecision | null> {
   const admission = admitCapabilityProposal(proposal, utterance);
+  noteSemanticAdmission({
+    mechanism: 'capability',
+    eligibleCount: admission.decision === 'ADMIT_READ' ? 1 : 0,
+    resolution: admission.decision === 'ADMIT_READ' ? 'admitted' : 'rejected',
+    candidateAdmitted: admission.decision === 'ADMIT_READ',
+    admittedInGroundedSet: null,
+    clarificationRequired: false,
+    capabilityDecision: admission.decision,
+    capabilityReason: admission.decision === 'ABSTAIN' ? admission.reason : null,
+  });
   if (admission.decision === 'ADMIT_READ') {
     const { composeMedicalSummary } = await import('../db/medicalDB');
     const summary = composeMedicalSummary();
@@ -2854,6 +2865,16 @@ async function routeIntentCore(
     const capGen = await generateCapabilityProposal(text, getSemanticCtx);
     if (capGen.status === 'ok') {
       const admission = admitCapabilityProposal(capGen.proposal, text);
+      noteSemanticAdmission({
+        mechanism: 'capability',
+        eligibleCount: admission.decision === 'ADMIT_READ' ? 1 : 0,
+        resolution: admission.decision === 'ADMIT_READ' ? 'admitted' : 'rejected',
+        candidateAdmitted: admission.decision === 'ADMIT_READ',
+        admittedInGroundedSet: null,
+        clarificationRequired: false,
+        capabilityDecision: admission.decision,
+        capabilityReason: admission.decision === 'ABSTAIN' ? admission.reason : null,
+      });
       if (admission.decision === 'ADMIT_READ') {
         const { composeMedicalSummary } = await import('../db/medicalDB');
         const summary = composeMedicalSummary();
