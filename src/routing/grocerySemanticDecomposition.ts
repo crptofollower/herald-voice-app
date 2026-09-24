@@ -21,7 +21,7 @@ import {
 } from '../utils/latencyInstrument';
 import { isReadShapedUtterance } from '../utils/detectMedicalEvent';
 import { shouldRefuseLlmCaptureProposal } from './speechActAuthority';
-import { runSharedSemanticCompletion } from '../utils/semanticCompletionLifecycle';
+import { runSpecialistInference } from './semanticProvider';
 import type { CapabilityProposal } from './capabilityRouting';
 
 export const GROCERY_SEMANTIC_CAPABILITIES = ['grocery_capture', 'not_grocery_capture', 'uncertain'] as const;
@@ -271,7 +271,7 @@ export async function generateGrocerySemanticProposal(
 ): Promise<GroceryProposalGenerationResult> {
   logGrocerySemantic('interpreter_invoke');
   const t0 = latMono();
-  const run = await runSharedSemanticCompletion(getCtx, {
+  const run = await runSpecialistInference('grocery', getCtx, {
     messages: [
       { role: 'system', content: GROCERY_SEMANTIC_PROPOSAL_SYSTEM_PROMPT },
       { role: 'user', content: raw },

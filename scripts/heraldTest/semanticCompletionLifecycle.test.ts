@@ -167,7 +167,9 @@ export async function runSemanticCompletionLifecycleV1Tests() {
   ].map((rel) => ({ rel, src: fs.readFileSync(path.join(root, rel), 'utf8') }));
 
   assert('consumers use the shared primitive and recollection/grocery/todo do not Promise.race native completion',
-    files.every((f) => f.rel.endsWith('semanticCompletionLifecycle.ts') || f.src.includes('runSharedSemanticCompletion'))
+    files.every((f) => f.rel.endsWith('semanticCompletionLifecycle.ts')
+      || f.src.includes('runSharedSemanticCompletion')
+      || f.src.includes('runSpecialistInference'))
       && !files.filter((f) => /recollection|grocery|todo/.test(f.rel)).some((f) => f.src.includes('Promise.race')),
     (v) => v === true, 'shared owner, no consumer race');
 

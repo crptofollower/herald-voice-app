@@ -83,7 +83,8 @@ import { useLocalLLM } from '../hooks/useLocalLLM';
 import { useMedicationSemanticInterpreterEngine } from '../hooks/useMedicationSemanticInterpreterEngine';
 import { isRecollectionSemanticDeviceEvidenceTrigger } from '../dev/recollectionSemanticDeviceEvidenceTrigger';
 import { runRecollectionSemanticDeviceEvidence } from '../dev/recollectionSemanticDeviceEvidenceRun';
-import { classifyWithLLM } from '../hooks/llmLayers';
+import { proposeLocalClassification } from '../routing/semanticProvider';
+import { applyWorldContext } from '../routing/worldContextNeed';
 import {
   selectConversationalWorker,
   generateViaSelectedWorker,
@@ -130,7 +131,7 @@ import { parseTimeFromText } from '../utils/parseTime';
 import { detectFamilyRead, answerFamilyRead } from '../utils/familyRead';
 import { writeTurnObservation } from '../utils/personaContext';
 import { classifyQuery, scanResidualIntent } from "../routing/tierRouter";
-import { allConverted, mapCallIntents, resolveContactCallIntent, isUnresolvedPersonalCapture } from '../routing/routeIntent';
+import { resolveContactCallIntent, isUnresolvedPersonalCapture } from '../routing/routeIntent';
 import { writeCalendarCore, buildCalendarCollectSlot } from '../routing/calendarWrite';
 import { runCommitEffects } from '../utils/commitEffects';
 import { ConversationSession } from '../routing/conversationSession';
@@ -188,7 +189,7 @@ import { formatOperationalListClarification } from '../routing/operationalListCo
 import { CalendarPresentationHolder } from '../routing/calendarPresentation';
 import { processUtterance, applyIntents, type UtteranceOutcome } from '../routing/processUtterance';
 import { continuityLedgerFocus } from '../routing/conversationTurnLedgerWrite';
-import { alreadyClassifiedByRouteIntent, mayInvokeBackendStream } from '../utils/llmClassificationOwnership';
+import { mayInvokeBackendStream } from '../utils/llmClassificationOwnership';
 import {
   beginChatScreenMount,
   beginTurn,
@@ -1847,11 +1848,7 @@ export default function ChatScreen() {
     // attempts a capture when deterministic routing found nothing actionable (tier 3 gap).
     const outcome = await processUtterance(text, sessionRef.current, {
       classifyQuery,
-      classifyLLM: async (t: string) => classifyWithLLM(t, getCtx(), {
-        contacts: getKnownContactNames(),
-        lists: getKnownListNames(),
-        name: undefined,
-      }, { modelIdentity: getModelIdentity() }),
+      classifyLLM: async (t: string) => proposeLocalClassification(t, getCtx(), { modelIdentity: getModelIdentity() }),
       llmReady: llmStatus === 'ready',
       llmStatus,
       captureContext: {
@@ -2178,77 +2175,9 @@ export default function ChatScreen() {
     // authorization (routeDecision.kind === 'backend').
     const isPersonalCaptureRisk = isUnresolvedPersonalCapture(routeDecision);
 
-    // LLM capture — fallback classifier for the ambiguous tier-3 gap ONLY.
-    // LAT-ARC-B: skip if routeIntent already ran a real classifyWithLLM
-    // completion for this exact utterance (proven duplicate paths:
-    // 'backend'/live:data, and 'capture' source:'llm' with an unconverted
-    // intent type). Deterministic classifier — a second call reproduces
-    // the first call's result at pure latency cost, no new information.
-    if (llmStatus === 'ready' && rdTier === 3 && !alreadyClassifiedByRouteIntent(routeDecision)) {
-      try {
-        const llmOut = await classifyWithLLM(text, getCtx(), {
-          contacts: getKnownContactNames(),
-          lists: getKnownListNames(),
-          name: undefined,
-        }, { modelIdentity: getModelIdentity() });
-        const llmCaptures = await mapCallIntents(
-          llmOut.status === 'ok' ? llmOut.intents : [],
-          text,
-          { resolveContact: resolveContactPhoneRef.current ?? undefined },
-        );
-                if (llmCaptures.length > 0) {
-          if (allConverted(llmCaptures)) {
-            const { responseText, commits } = await applyIntents(llmCaptures, text, sessionRef.current, { resolveContact: resolveContactPhoneRef.current ?? undefined }, 'llm', undefined, conversationLedgerRef.current);
-            addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-            addMessage({ id: generateId('msg'), role: 'assistant', content: responseText, timestamp: Date.now() });
-            speak(responseText);
-            await runCommitEffects(commits, {
-              openURL: (url) => Linking.openURL(url),
-              handleMapsAction,
-              onEffectFailure: (failAck) => {
-                addMessage({ id: generateId('msg'), role: 'assistant', content: failAck, timestamp: Date.now() });
-                speak(failAck);
-              },
-            });
-            sendingRef.current = false;
-            setInputText('');
-            return;
-          }
-          // PRE-B F2: unconverted classifier capture — fail-closed locally (never
-          // dispatchLocalIntent; never fall through toward askHeraldStream).
-          const unconvertedReply = "I'm not sure I'm following you — can you help me understand?";
-          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-          addMessage({ id: generateId('msg'), role: 'assistant', content: unconvertedReply, timestamp: Date.now() });
-          speak(unconvertedReply);
-          sendingRef.current = false;
-          setInputText('');
-          return;
-        }
-        if (llmOut.status === 'ok' && (llmOut.readLabeled || (llmOut.readIntents?.length ?? 0) > 0)) {
-          heldReadMeta = {
-            readIntents: llmOut.readIntents ?? [],
-            readLabeled: llmOut.readLabeled ?? false,
-          };
-        }
-      } catch {
-        // Law 5 fail-closed fence: an exception while reclassifying an
-        // unresolved PERSONAL capture must terminate locally — never fall
-        // through toward askHeraldStream. Explicit live-data authorizations
-        // (routeDecision.kind === 'backend') are unaffected and continue to
-        // the existing online/offline path below, unchanged.
-        if (isPersonalCaptureRisk) {
-          const reply = "I'm not sure I'm following you — can you help me understand?";
-          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-          addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
-          speak(reply);
-          sendingRef.current = false;
-          setInputText('');
-          return;
-        }
-        // Not a personal capture (e.g. live-data authorization) — fall
-        // through to the existing online/offline path unchanged.
-      }
-    }
+    // Slice 6: no second classification after processUtterance. The
+    // orchestrator's single proposeLocalClassification is the only
+    // conversation-interpretation call for this turn.
 
     // ── Offline check -- skip network, answer from device or give warm message ──
     const networkState = await Network.getNetworkStateAsync();
@@ -2454,75 +2383,6 @@ export default function ChatScreen() {
           sendingRef.current = false;
           setInputText('');
           return;
-        }
-
-        // Tier 1.5: on-device LLM capture — ONLY for the tier-3 gap (deterministic-first).
-        // A tier-1 read/action must never be re-captured here (e.g. "who is my wife" is a
-        // family READ, not a family_capture). Matches the online gate.
-        // LAT-ARC-B: same skip as the online site above -- this offline
-        // fallback is reachable AFTER the online site already ran and found
-        // nothing (llmCaptures.length===0), so without this guard an
-        // offline 'backend'/unconverted-capture turn could pay for a THIRD
-        // classifyWithLLM call on the identical utterance.
-        if (llmStatus === 'ready' && rdTier === 3 && !alreadyClassifiedByRouteIntent(routeDecision)) {
-          try {
-            const contacts = getKnownContactNames();
-            const lists = getKnownListNames();
-            const offlineOut = await classifyWithLLM(text, getCtx(), {
-              contacts,
-              lists,
-              name: undefined,
-            }, { modelIdentity: getModelIdentity() });
-            const results = await mapCallIntents(
-              offlineOut.status === 'ok' ? offlineOut.intents : [],
-              text,
-              { resolveContact: resolveContactPhoneRef.current ?? undefined },
-            );
-                        if (results.length > 0) {
-              if (allConverted(results)) {
-                const { responseText, commits } = await applyIntents(results, text, sessionRef.current, undefined, 'llm', undefined, conversationLedgerRef.current);
-                addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-                addMessage({ id: generateId('msg'), role: 'assistant', content: responseText, timestamp: Date.now() });
-                speak(responseText);
-                await runCommitEffects(commits, {
-                  openURL: (url) => Linking.openURL(url),
-                  handleMapsAction,
-                  onEffectFailure: (failAck) => {
-                    addMessage({ id: generateId('msg'), role: 'assistant', content: failAck, timestamp: Date.now() });
-                    speak(failAck);
-                  },
-                });
-                sendingRef.current = false;
-                setInputText('');
-                return;
-              }
-              // PRE-B F2: unconverted classifier capture — fail-closed locally (never
-              // dispatchLocalIntent; never fall through toward offline/network tail).
-              const unconvertedReply = "I'm not sure I'm following you — can you help me understand?";
-              addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-              addMessage({ id: generateId('msg'), role: 'assistant', content: unconvertedReply, timestamp: Date.now() });
-              speak(unconvertedReply);
-              sendingRef.current = false;
-              setInputText('');
-              return;
-            }
-            if (offlineOut.status === 'ok') {
-              const offlineRead = tryReadIntentFromMeta({
-                readIntents: offlineOut.readIntents ?? [],
-                readLabeled: offlineOut.readLabeled ?? false,
-              });
-              if (offlineRead) {
-                addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
-                addMessage({ id: generateId('msg'), role: 'assistant', content: offlineRead, timestamp: Date.now() });
-                speak(offlineRead);
-                sendingRef.current = false;
-                setInputText('');
-                return;
-              }
-            }
-          } catch {
-            // fall through to honest fallback
-          }
         }
 
         // Honest offline fallback
@@ -2876,20 +2736,24 @@ export default function ChatScreen() {
     const activeTopicsParam =
       activeTopicsList.length > 0 ? activeTopicsList.join(",") : undefined;
 
+    const world = applyWorldContext(
+      routeDecision.kind === 'backend' ? (routeDecision.worldContextNeed ?? { time: 'none', location: 'none' }) : { time: 'none', location: 'none' },
+      { localTime: local_time, localDate: local_date, lat: lat ?? undefined, lng: lng ?? undefined, locationLabel: locationLabel ?? undefined },
+    );
     const abortController = askHeraldStream(
       {
         user_id: userId,
         message: text,
         history: historySnapshot,
-        local_time,
-        local_date,
+        local_time: world.local_time,
+        local_date: world.local_date,
         device_context: rdTier === 2 && rdLocalContext
           ? buildTier2DeviceContext(rdLocalContext)
           : buildAmbientDeviceContext(getContextBlock() || undefined),
         persona: personaKey,
-        lat: lat ?? undefined,
-        lng: lng ?? undefined,
-        location_label: locationLabel ?? undefined,
+        lat: world.lat,
+        lng: world.lng,
+        location_label: world.location_label,
         active_topics: activeTopicsParam,
       },
       {
@@ -3084,11 +2948,7 @@ export default function ChatScreen() {
     try {
       const outcome = await processUtterance('', sessionRef.current, {
         classifyQuery,
-        classifyLLM: async (t: string) => classifyWithLLM(t, getCtx(), {
-          contacts: getKnownContactNames(),
-          lists: getKnownListNames(),
-          name: undefined,
-        }, { modelIdentity: getModelIdentity() }),
+        classifyLLM: async (t: string) => proposeLocalClassification(t, getCtx(), { modelIdentity: getModelIdentity() }),
         llmReady: llmStatus === 'ready',
         llmStatus,
         captureContext: {

@@ -311,8 +311,9 @@ export async function runConversationTurnLedgerCoverageTests() {
       /offlineReply = projectRealization\(outcome\.responseAct, seamOutcome\.reply\)\.speech;[\s\S]*?conversationLedgerRef\.current\.push\(\{\s*\n\s*establishedAt: Date\.now\(\),\s*\n\s*utterance: text,\s*\n\s*intentType: null,\s*\n\s*operation: ledgerOperation,[\s\S]*?assistantReplySummary: offlineReply,/.test(chatSrc),
     );
     assertTrue(
-      'ChatScreen: all 5 direct applyIntents call sites thread the ledger through',
-      (chatSrc.match(/conversationLedgerRef\.current\)/g) || []).length + (chatSrc.match(/conversationLedgerRef\.current,\s*\n\s*\);/g) || []).length >= 5,
+      'ChatScreen: remaining direct applyIntents call sites thread the ledger through',
+      (chatSrc.match(/applyIntents\(/g) || []).length === 3
+        && (chatSrc.match(/conversationLedgerRef\.current\)/g) || []).length + (chatSrc.match(/conversationLedgerRef\.current,\s*\n\s*\);/g) || []).length >= 3,
     );
     assertTrue('ChatScreen: emergency clear path untouched (Slice 2 does not wire Law 0)', !/hotRingRef\.current\.clear\(\);\s*\n\s*conversationLedgerRef/.test(chatSrc));
   }

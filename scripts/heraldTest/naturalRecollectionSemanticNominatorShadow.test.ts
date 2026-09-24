@@ -218,8 +218,7 @@ export async function runNaturalRecollectionSemanticNominatorShadowV1Tests(): Pr
     );
     assert('semantic nomination has no remote provider path',
       !/openrouter|railway|\/ask\b|fetch\(|XMLHttpRequest/i.test(nominatorSrc)
-        && nominatorSrc.includes('runSharedSemanticCompletion')
-        && nominatorSrc.includes('getCtx()'),
+        && nominatorSrc.includes("runSpecialistInference('recollection_nomination'"),
       (v) => v === true, 'true');
 
     assert('authoritative nominator remains synchronous; C4 still follows routeIntent',

@@ -11,6 +11,7 @@ import { VISIT_HISTORY_SPECIALTY_RE, visitHistorySpecialtyPrompt } from "./visit
 import { calendarWriteIsRecent } from "../db/calendarState";
 import { getFactsSummary } from "../db/factDB";
 import { normalizeInput } from "../utils/normalizeInput";
+import { worldContextForLiveSignal } from "./worldContextNeed";
 import { getProfileSummary, getProfileField } from "../db/profileDB";
 import { getMedicalSummary, composeMedicalSummary, getMedicalRecords, getDiagnosisSummary, getDoctorsSummary } from "../db/medicalDB";
 import { getRecentMentions, formatRecentMentions } from "../db/recallDB";
@@ -100,6 +101,7 @@ export interface TierDecision {
     | { type: 'profile_update'; field: string; value: string };
   localContext?: LocalContext;
   reason: string;
+  worldContextNeed?: import('./worldContextNeed').WorldContextNeed;
   /** Ordered IDs from the same getActiveMedications() array that produced medical:summary speech. IDs only. */
   presentedMedicationIds?: string[];
   /** Ordered IDs from the same calendar event rows that produced tier-1 calendar speech. IDs only. */
@@ -2312,9 +2314,10 @@ async function classifyQueryCore(message: string): Promise<TierDecision> {
     return { tier: 2, localContext, reason: "memory:probe" };
   }
 
-  // Tier 3: explicit live data
-  if (TIER3_SIGNALS.some((p) => p.test(msg))) {
-    return { tier: 3, reason: "live:data" };
+  // Tier 3: explicit live data. The matched signal sets world-context need.
+  const liveSignal = TIER3_SIGNALS.findIndex((p) => p.test(msg));
+  if (liveSignal >= 0) {
+    return { tier: 3, reason: "live:data", worldContextNeed: worldContextForLiveSignal(liveSignal) };
   }
 
   // Default: Tier 3

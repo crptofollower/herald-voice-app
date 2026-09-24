@@ -29,7 +29,7 @@
 
 import type { LlamaContext } from 'llama.rn';
 import { hasMedicationDomainEvidence } from '../utils/detectMedicalEvent';
-import { runSharedSemanticCompletion } from '../utils/semanticCompletionLifecycle';
+import { runSpecialistInference } from './semanticProvider';
 import {
   logSemanticDispatchInferenceEnd,
   logSemanticDispatchInferenceStart,
@@ -395,7 +395,7 @@ export async function generateCapabilityProposal(
   getCtx: () => LlamaContext | null,
 ): Promise<CapabilityGenerationResult> {
   const t0 = latMono();
-  const run = await runSharedSemanticCompletion(getCtx, {
+  const run = await runSpecialistInference('capability', getCtx, {
     messages: [
       { role: 'system', content: CAPABILITY_PROPOSAL_SYSTEM_PROMPT },
       { role: 'user', content: raw },

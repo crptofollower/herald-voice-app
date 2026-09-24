@@ -3,7 +3,7 @@
 // On-device ctx.completion only. Unknown/malformed/unavailable → UNCERTAIN.
 
 import { isLlamaContextBusy } from '../utils/llamaContextExclusive';
-import { runSharedSemanticCompletion } from '../utils/semanticCompletionLifecycle';
+import { runSpecialistInference } from './semanticProvider';
 import { hasSensitiveRecollectionBackstop } from '../utils/reminiscenceAdmission';
 import {
   REMINISCENCE_DISPOSITIONS,
@@ -127,7 +127,7 @@ export async function generateRecollectionSemanticProposal(
 ): Promise<RecollectionSemanticGeneration> {
   const started = Date.now();
   logRecollectionSemantic('interpreter_invoke');
-  const run = await runSharedSemanticCompletion(getCtx, {
+  const run = await runSpecialistInference('recollection_nomination', getCtx, {
     messages: [
       { role: 'system', content: RECOLLECTION_SEMANTIC_PROPOSAL_SYSTEM_PROMPT },
       {

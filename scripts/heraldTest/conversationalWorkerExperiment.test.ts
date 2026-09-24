@@ -140,7 +140,7 @@ export async function runConversationalWorkerExperimentTests() {
   assert(
     'CWX-I classifier still uses production llmStatus, not experiment ready',
     /llmReady: llmStatus === 'ready'/.test(CHAT)
-      && /if \(llmStatus === 'ready' && rdTier === 3/.test(CHAT),
+      && !/proposeLocalClassification[\s\S]{0,120}experimentalConvStatus/.test(CHAT),
   );
   assert(
     'CWX-J adapter has no writer/action API',

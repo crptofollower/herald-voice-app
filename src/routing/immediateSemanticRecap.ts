@@ -30,6 +30,7 @@
 // adding one more registry entry, not changing any function above it.
 
 import type { LlamaContext } from 'llama.rn';
+import { completeBoundedInterpretation } from './semanticProvider';
 import type { ConversationTurnFocusEntry, ConversationTurnRecord } from './conversationTurnLedger';
 import {
   logSemanticRecapInferenceEnd,
@@ -297,7 +298,7 @@ export async function generateRecapInterpretationProposal(
   const t0 = latMono();
   logSemanticRecapInferenceStart();
   try {
-    const result = await ctx.completion({
+    const run = await completeBoundedInterpretation('recap', ctx, {
       messages: [
         { role: 'system', content: RECAP_INTERPRETATION_SYSTEM_PROMPT },
         { role: 'user', content: buildRecapInterpretationUserPrompt(raw, candidates) },
@@ -308,6 +309,11 @@ export async function generateRecapInterpretationProposal(
       top_k: 20,
       min_p: 0,
     } as any);
+    if (run.status !== 'ok') {
+      logSemanticRecapInferenceEnd(latMono() - t0, undefined, 'error');
+      return { status: 'unavailable' };
+    }
+    const result = run.value;
     const text = String((result as any)?.content || (result as any)?.text || '').trim();
     const proposal = parseRecapInterpretationProposal(text, candidates.length);
     logSemanticRecapInferenceEnd(latMono() - t0, result, proposal ? 'ok' : 'parse_fail');

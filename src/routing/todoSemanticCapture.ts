@@ -22,7 +22,7 @@ import {
 } from '../utils/latencyInstrument';
 import { isReadShapedUtterance } from '../utils/detectMedicalEvent';
 import { shouldRefuseLlmCaptureProposal } from './speechActAuthority';
-import { runSharedSemanticCompletion } from '../utils/semanticCompletionLifecycle';
+import { runSpecialistInference } from './semanticProvider';
 import type { CapabilityProposal } from './capabilityRouting';
 
 export const TODO_SEMANTIC_CAPABILITIES = ['todo_capture', 'not_todo_capture', 'uncertain'] as const;
@@ -239,7 +239,7 @@ export async function generateTodoSemanticProposal(
 ): Promise<TodoProposalGenerationResult> {
   logTodoSemantic('interpreter_invoke');
   const t0 = latMono();
-  const run = await runSharedSemanticCompletion(getCtx, {
+  const run = await runSpecialistInference('todo', getCtx, {
     messages: [
       { role: 'system', content: TODO_SEMANTIC_PROPOSAL_SYSTEM_PROMPT },
       { role: 'user', content: raw },

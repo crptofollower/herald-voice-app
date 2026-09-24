@@ -73,7 +73,7 @@ export type RouteDecision =
   | { kind: 'medical_read_pending'; pending: Extract<CommitResult, { status: 'pending' }>; reason: string }
   | { kind: 'not_ready'; reason: string }
   | { kind: 'memory_probe'; tier: 2; context: LocalContext; reason: string }
-  | { kind: 'backend'; tier: 3; reason: string; llmAlreadyClassified?: boolean; readMeta?: ReadIntentMeta }
+  | { kind: 'backend'; tier: 3; reason: string; llmAlreadyClassified?: boolean; readMeta?: ReadIntentMeta; worldContextNeed?: import('./worldContextNeed').WorldContextNeed }
   | { kind: 'needs_clarification'; guess?: string; reason: string; readMeta?: ReadIntentMeta }
 
 // ─── Routing authority scaffolding (Commit 1) ────────────────────────────────
@@ -3118,7 +3118,7 @@ async function routeIntentCore(
   }
 
   if (decision.reason === 'live:data') {
-    return { kind: 'backend', tier: 3, reason: decision.reason, llmAlreadyClassified, readMeta };
+    return { kind: 'backend', tier: 3, reason: decision.reason, llmAlreadyClassified, readMeta, worldContextNeed: decision.worldContextNeed };
   }
   // Deferred-ready window: local LLM is loading/warming. Do not misattribute
   // as needs_clarification ("I'm not sure I'm following you"). live:data above

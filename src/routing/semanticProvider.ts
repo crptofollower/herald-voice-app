@@ -1,0 +1,148 @@
+// Slice 6 — one semantic proposal seam. Proposals are not authority.
+// The packet is closed. Personal values stay in the local handle map.
+
+import { classifyWithLLM, type ClassifyOutcome } from '../hooks/llmLayers';
+import { runSharedSemanticCompletion, type SemanticCompletionRunOptions } from '../utils/semanticCompletionLifecycle';
+import type { LlamaContext } from 'llama.rn';
+
+export type SpecialistInferenceKind =
+  | 'medication'
+  | 'grocery'
+  | 'todo'
+  | 'capability'
+  | 'recollection_nomination'
+  | 'active_reference'
+  | 'recap';
+
+export type OpaqueTypeTag =
+  | 'person'
+  | 'medication_list'
+  | 'grocery_list'
+  | 'todo_list'
+  | 'calendar_set'
+  | 'focus';
+
+export type OpaqueRef = {
+  handle: string;
+  typeTag: OpaqueTypeTag;
+};
+
+export type SemanticRiskTier = 'none' | 'read' | 'write' | 'external';
+
+export type SemanticPacket = {
+  userText: string;
+  refs: readonly OpaqueRef[];
+  hardPending: boolean;
+  riskTier: SemanticRiskTier;
+};
+
+export type SemanticProposal =
+  | { status: 'abstain' }
+  | { status: 'failed'; reason: string }
+  | { status: 'proposal'; capabilityId?: string; handle?: string; typeTag?: OpaqueTypeTag };
+
+export type LocalHandleMap = ReadonlyMap<string, { localId: string; typeTag: OpaqueTypeTag }>;
+
+const HANDLE_RE = /^ref_[1-9][0-9]*$/;
+
+export function buildOpaqueHandleMap(
+  entries: readonly { localId: string; typeTag: OpaqueTypeTag }[],
+): { refs: OpaqueRef[]; local: Map<string, { localId: string; typeTag: OpaqueTypeTag }> } {
+  const local = new Map<string, { localId: string; typeTag: OpaqueTypeTag }>();
+  const refs: OpaqueRef[] = [];
+  entries.forEach((entry, index) => {
+    const handle = `ref_${index + 1}`;
+    local.set(handle, { localId: entry.localId, typeTag: entry.typeTag });
+    refs.push({ handle, typeTag: entry.typeTag });
+  });
+  return { refs, local };
+}
+
+/** Closed packet. Extra personal fields are not part of the type and are dropped. */
+export function buildSemanticPacket(input: {
+  userText: string;
+  refs?: readonly OpaqueRef[];
+  hardPending?: boolean;
+  riskTier?: SemanticRiskTier;
+}): SemanticPacket {
+  return {
+    userText: input.userText,
+    refs: input.refs ?? [],
+    hardPending: input.hardPending === true,
+    riskTier: input.riskTier ?? 'none',
+  };
+}
+
+export function packetContainsPersonalDump(packet: SemanticPacket): boolean {
+  const dumped = JSON.stringify(packet);
+  return dumped.includes('recentEvidence')
+    || dumped.includes('phone')
+    || dumped.includes('transcript');
+}
+
+export function resolveProposedHandle(
+  proposal: SemanticProposal,
+  local: LocalHandleMap,
+  expectedType?: OpaqueTypeTag,
+): { ok: true; localId: string; typeTag: OpaqueTypeTag } | { ok: false; reason: 'abstain' | 'failed' | 'unknown_handle' | 'domain_mismatch' | 'malformed' } {
+  if (proposal.status === 'abstain') return { ok: false, reason: 'abstain' };
+  if (proposal.status === 'failed') return { ok: false, reason: 'failed' };
+  if (!proposal.handle) return { ok: false, reason: 'malformed' };
+  if (!HANDLE_RE.test(proposal.handle)) return { ok: false, reason: 'unknown_handle' };
+  const row = local.get(proposal.handle);
+  if (!row) return { ok: false, reason: 'unknown_handle' };
+  if (expectedType && row.typeTag !== expectedType) return { ok: false, reason: 'domain_mismatch' };
+  if (proposal.typeTag && proposal.typeTag !== row.typeTag) return { ok: false, reason: 'domain_mismatch' };
+  return { ok: true, localId: row.localId, typeTag: row.typeTag };
+}
+
+/**
+ * The one conversation-classification call. The model sees the utterance
+ * and structural list tags only. Contact names and the user name do not
+ * enter the packet.
+ */
+/** Closed specialist kinds. The provider owns the completion runtime. */
+export async function runSpecialistInference(
+  kind: SpecialistInferenceKind,
+  getCtx: () => LlamaContext | null,
+  params: unknown,
+  opts?: SemanticCompletionRunOptions,
+) {
+  switch (kind) {
+    case 'medication':
+    case 'grocery':
+    case 'todo':
+    case 'capability':
+    case 'recollection_nomination':
+      return runSharedSemanticCompletion(getCtx, params, opts);
+    default:
+      return { status: 'unavailable' as const, reason: 'no_ctx' as const };
+  }
+}
+
+/** Direct completion for proposal modules that already hold a context. */
+export async function completeBoundedInterpretation(
+  kind: 'active_reference' | 'recap',
+  ctx: { completion: (params: any) => Promise<unknown> } | null,
+  params: unknown,
+): Promise<{ status: 'ok'; value: unknown } | { status: 'unavailable' }> {
+  if (kind !== 'active_reference' && kind !== 'recap') return { status: 'unavailable' };
+  if (!ctx || typeof ctx.completion !== 'function') return { status: 'unavailable' };
+  try {
+    return { status: 'ok', value: await ctx.completion(params) };
+  } catch {
+    return { status: 'unavailable' };
+  }
+}
+
+export async function proposeLocalClassification(
+  userText: string,
+  ctx: LlamaContext | null,
+  opts?: Parameters<typeof classifyWithLLM>[3],
+): Promise<ClassifyOutcome> {
+  const packet = buildSemanticPacket({ userText, riskTier: 'none' });
+  return classifyWithLLM(packet.userText, ctx, {
+    contacts: [],
+    lists: ['grocery', 'todo'],
+  }, opts);
+}

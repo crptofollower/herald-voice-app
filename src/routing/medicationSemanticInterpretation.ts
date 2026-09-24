@@ -48,7 +48,7 @@ import {
   isReadShapedUtterance,
   isMedicationQuestionShape,
 } from '../utils/detectMedicalEvent';
-import { runSharedSemanticCompletion } from '../utils/semanticCompletionLifecycle';
+import { runSpecialistInference } from './semanticProvider';
 import {
   boundDiagnosticStrings,
   logSemanticAdmissionDone,
@@ -360,7 +360,7 @@ export async function generateMedicationSemanticProposal(
   getCtx: () => LlamaContext | null,
 ): Promise<ProposalGenerationResult> {
   const t0 = latMono();
-  const run = await runSharedSemanticCompletion(getCtx, {
+  const run = await runSpecialistInference('medication', getCtx, {
     messages: [
       { role: 'system', content: MEDICATION_SEMANTIC_PROPOSAL_SYSTEM_PROMPT },
       { role: 'user', content: raw },

@@ -62,6 +62,7 @@
 // ConversationTurnLedger.
 
 import type { LlamaContext } from 'llama.rn';
+import { completeBoundedInterpretation } from './semanticProvider';
 import type { ConversationTurnFocusEntry, ConversationTurnRecord } from './conversationTurnLedger';
 import { buildRecapCandidates, type RecapCandidate } from './immediateSemanticRecap';
 import {
@@ -315,7 +316,7 @@ export async function generateActiveSubjectSelectionProposal(
   const t0 = latMono();
   logActiveSubjectInferenceStart();
   try {
-    const result = await ctx.completion({
+    const run = await completeBoundedInterpretation('active_reference', ctx, {
       messages: [
         { role: 'system', content: ACTIVE_SUBJECT_SELECTION_SYSTEM_PROMPT },
         { role: 'user', content: buildActiveSubjectSelectionUserPrompt(raw, candidates) },
@@ -326,6 +327,11 @@ export async function generateActiveSubjectSelectionProposal(
       top_k: 20,
       min_p: 0,
     } as any);
+    if (run.status !== 'ok') {
+      logActiveSubjectInferenceEnd(latMono() - t0, undefined, 'error');
+      return { status: 'unavailable' };
+    }
+    const result = run.value;
     const text = String((result as any)?.content || (result as any)?.text || '').trim();
     const proposal = parseActiveSubjectSelectionProposal(text, candidates.length);
     logActiveSubjectInferenceEnd(latMono() - t0, result, proposal ? 'ok' : 'parse_fail');
