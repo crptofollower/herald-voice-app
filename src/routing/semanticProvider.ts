@@ -122,11 +122,13 @@ export async function runSpecialistInference(
 
 /** Direct completion for proposal modules that already hold a context. */
 export async function completeBoundedInterpretation(
-  kind: 'active_reference' | 'recap',
+  kind: 'active_reference' | 'recap' | 'reference_continuation',
   ctx: { completion: (params: any) => Promise<unknown> } | null,
   params: unknown,
 ): Promise<{ status: 'ok'; value: unknown } | { status: 'unavailable' }> {
-  if (kind !== 'active_reference' && kind !== 'recap') return { status: 'unavailable' };
+  if (kind !== 'active_reference' && kind !== 'recap' && kind !== 'reference_continuation') {
+    return { status: 'unavailable' };
+  }
   if (!ctx || typeof ctx.completion !== 'function') return { status: 'unavailable' };
   try {
     return { status: 'ok', value: await ctx.completion(params) };
@@ -155,6 +157,31 @@ export async function proposeSpeechCompletion(
     return 'uncertain';
   } catch {
     return 'uncertain';
+  }
+}
+
+/** Reference intent only. The model does not name a person or supply a fact. */
+export async function proposeReferenceContinuation(
+  userText: string,
+  ctx: { completion: (params: { prompt: string; n_predict: number }) => Promise<{ text?: string } | string> } | null,
+): Promise<{ applicable: boolean } | null> {
+  const packet = buildSemanticPacket({ userText, riskTier: 'none' });
+  if (!ctx || typeof ctx.completion !== 'function' || !packet.userText.trim()) return null;
+  try {
+    const value = await completeBoundedInterpretation('reference_continuation', ctx, {
+      prompt: `Reply with one word, applicable or not.\n${packet.userText}`,
+      n_predict: 8,
+    });
+    if (value.status !== 'ok') return null;
+    const raw = typeof value.value === 'string'
+      ? value.value
+      : (value.value as { text?: string } | null)?.text;
+    const token = String(raw ?? '').trim().toLowerCase().split(/\s+/)[0] ?? '';
+    if (token === 'applicable') return { applicable: true };
+    if (token === 'not') return { applicable: false };
+    return null;
+  } catch {
+    return null;
   }
 }
 

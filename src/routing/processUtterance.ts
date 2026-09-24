@@ -51,6 +51,8 @@ import { EPISODE_RECALL_LIMIT } from '../db/episodeRead';
 import { listActiveEpisodes } from '../db/episodesWriter';
 import { realizeEpisodePerspective } from '../utils/episodeCapture';
 import { isClosedActiveSubjectIdentityLookup, ACTIVE_SUBJECT_GROUNDING_ACK } from './activeSubjectReference';
+import { admitWorkingFocusReference } from './workingFocusReference';
+import { proposeReferenceContinuation } from './semanticProvider';
 import {
   admitReminiscenceVerbatim,
   suppressCurrentReminiscenceArc,
@@ -1265,6 +1267,38 @@ export async function processUtterance(
         if (responseText && live.domain === 'medical_doctor') {
           subject.establishMedical({ entityId: live.entityId, displayName: live.displayName });
           return { handled: true, source: 'referent_resume', responseText, commits: [] };
+        }
+      }
+    }
+    if (live) {
+      const proposal = await proposeReferenceContinuation(
+        text,
+        deps.getMedicationSemanticInterpreterCtx?.() ?? null,
+      );
+      const decision = admitWorkingFocusReference(
+        proposal,
+        live.domain === 'medical_doctor' ? [live] : [],
+      );
+      if (decision.kind === 'clarify') {
+        return {
+          handled: true,
+          source: 'referent_resume',
+          responseText: ORDERED_PRESENTATION_CONFUSION,
+          commits: [],
+          responseAct: clarifyReferenceAct(ORDERED_PRESENTATION_CONFUSION),
+        };
+      }
+      if (decision.kind === 'admit' && live.domain === 'medical_doctor') {
+        const responseText = await answerReferentVisitDate(live);
+        if (responseText) {
+          subject.establishMedical({ entityId: live.entityId, displayName: live.displayName });
+          return {
+            handled: true,
+            source: 'referent_resume',
+            responseText,
+            commits: [],
+            responseAct: { kind: 'ANSWER', text: responseText, epistemic: 'deterministic_read' },
+          };
         }
       }
     }
