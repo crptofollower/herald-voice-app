@@ -3124,6 +3124,14 @@ export default function ChatScreen() {
           const { peekSemanticEngineDiagnostic } = require('../hooks/useMedicationSemanticInterpreterEngine');
           return peekSemanticEngineDiagnostic();
         },
+        peekJourneyTurnReadiness: () => {
+          const { classifyJourneyTurnReadiness } = require('../dev/journeyTurnReadiness');
+          return classifyJourneyTurnReadiness({
+            nowMs: Date.now(),
+            lastSentAtMs: lastSentRef.current,
+            sendInFlight: sendingRef.current,
+          });
+        },
       });
     } catch {
       /* journey host only */

@@ -5,6 +5,12 @@
 import { DeviceEventEmitter, NativeModules, Platform } from 'react-native';
 import { beginSemanticProof, finishSemanticProof } from './semanticJourneyEvidence';
 import { classifySemanticEngineReadiness, emptySemanticEngineDiagnostic } from './semanticEngineReadiness';
+import {
+  JOURNEY_TURN_READINESS_POLL_MS,
+  JOURNEY_TURN_READINESS_TIMEOUT_MS,
+  pollUntilJourneyTurnReady,
+  type JourneyTurnReadiness,
+} from './journeyTurnReadiness';
 import { initDB, isDBReady } from '../db/useDeviceDB';
 import { getDB } from '../db/schema';
 import { setProfileField } from '../db/profileDB';
@@ -39,6 +45,7 @@ type JourneyRuntime = {
   injectHeardTranscript?: (text: string) => void;
   peekTalkSession?: () => TalkSessionPeek;
   peekSemanticEngine?: () => import('./semanticEngineReadiness').SemanticEngineDiagnostic;
+  peekJourneyTurnReadiness?: () => JourneyTurnReadiness;
 };
 
 type NativeBridge = {
@@ -580,6 +587,26 @@ async function runTurn(payload: {
     return;
   }
 
+  const scenarioId = typeof payload.scenarioId === 'string' ? payload.scenarioId : null;
+  const turnIndex = typeof payload.turnIndex === 'number' ? payload.turnIndex : null;
+  if (scenarioId?.startsWith('semantic_') && turnIndex !== null && turnIndex > 1) {
+    const peek = runtime.peekJourneyTurnReadiness;
+    if (!peek) {
+      emitComplete({ ...failEnvelope(turnId, text, 'journey_turn_readiness_unbound'), scenarioId, turnIndex });
+      return;
+    }
+    const waited = await pollUntilJourneyTurnReady({
+      peek,
+      timeoutMs: JOURNEY_TURN_READINESS_TIMEOUT_MS,
+      pollMs: JOURNEY_TURN_READINESS_POLL_MS,
+      sleep,
+    });
+    if (!waited.ready) {
+      emitComplete({ ...failEnvelope(turnId, text, 'journey_turn_not_ready'), scenarioId, turnIndex });
+      return;
+    }
+  }
+
   seenTurnIds.add(turnId);
   inFlightTurnId = turnId;
   lastReportedOutcome = undefined;
@@ -902,6 +929,8 @@ export function bindJourneySendMessage(fn: SendMessageFn): void {
     beginManualConversation: runtime?.beginManualConversation,
     injectHeardTranscript: runtime?.injectHeardTranscript,
     peekTalkSession: runtime?.peekTalkSession,
+    peekSemanticEngine: runtime?.peekSemanticEngine,
+    peekJourneyTurnReadiness: runtime?.peekJourneyTurnReadiness,
   };
   if (native) {
     try { native.hostReady(); } catch { /* ignore */ }
