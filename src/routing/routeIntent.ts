@@ -833,6 +833,34 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       if (!isRealName(famName)) {
         return { status: 'failed', ack: `I didn't catch the name — who is your ${relation}?` };
       }
+      const commitNamed = async (personName: string): Promise<CommitResult> => {
+        try {
+          const { capturePerson } = await import('../db/capturePerson');
+          const { findContactByName, liveContactsByRelationships } = await import('../db/contactsDB');
+          const { exclusiveStatedRelationshipPeers } = await import('../utils/personAssociationCapture');
+          const wrote = capturePerson({ name: personName, relationship: relation, location });
+          if (!wrote.ok) {
+            return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
+          }
+          const peers = exclusiveStatedRelationshipPeers(relation);
+          if (peers) {
+            const holders = liveContactsByRelationships(peers);
+            const sole = holders.length === 1
+              && holders[0].name.trim().toLowerCase() === personName.trim().toLowerCase();
+            if (!sole) {
+              return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
+            }
+          } else if (!findContactByName(personName)) {
+            return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
+          }
+          const ack = composeCaptureAck('family_capture', location
+            ? `I'll remember ${personName} is your ${relation} in ${location}.`
+            : `I'll remember ${personName} is your ${relation}.`);
+          return { status: 'committed', ack };
+        } catch {
+          return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
+        }
+      };
       const confirmPrompt = location
         ? `${famName}, your ${relation}, in ${location} — that right?`
         : `${famName}, your ${relation} — that right?`;
@@ -853,42 +881,14 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
                 if (!isRealName(correctedName)) {
                   return { status: 'noop', ack: '' };
                 }
-                try {
-                  const { capturePerson } = await import('../db/capturePerson');
-                  const { findContactByName } = await import('../db/contactsDB');
-                  capturePerson({ name: correctedName, relationship: relation, location });
-                  const saved = findContactByName(correctedName);
-                  if (!saved) {
-                    return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
-                  }
-                  const ack = composeCaptureAck('family_capture', location
-                    ? `I'll remember ${correctedName} is your ${relation} in ${location}.`
-                    : `I'll remember ${correctedName} is your ${relation}.`);
-                  return { status: 'committed', ack };
-                } catch {
-                  return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
-                }
+                return commitNamed(correctedName);
               },
             };
           }
           if (!YES.test(userText.trim())) {
             return { status: 'noop', ack: '' };
           }
-          try {
-            const { capturePerson } = await import('../db/capturePerson');
-            const { findContactByName } = await import('../db/contactsDB');
-            capturePerson({ name: famName, relationship: relation, location });
-            const saved = findContactByName(famName);
-            if (!saved) {
-              return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
-            }
-            const ack = composeCaptureAck('family_capture', location
-              ? `I'll remember ${famName} is your ${relation} in ${location}.`
-              : `I'll remember ${famName} is your ${relation}.`);
-            return { status: 'committed', ack };
-          } catch {
-            return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
-          }
+          return commitNamed(famName);
         },
         correctable: {
           currentValue: famName,
@@ -910,21 +910,7 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
                 if (!CONFIRM_YES_RE.test(t)) {
                   return { status: 'noop', ack: '' };
                 }
-                try {
-                  const { capturePerson } = await import('../db/capturePerson');
-                  const { findContactByName } = await import('../db/contactsDB');
-                  capturePerson({ name: newValue, relationship: relation, location });
-                  const saved = findContactByName(newValue);
-                  if (!saved) {
-                    return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
-                  }
-                  const ack = composeCaptureAck('family_capture', location
-                    ? `I'll remember ${newValue} is your ${relation} in ${location}.`
-                    : `I'll remember ${newValue} is your ${relation}.`);
-                  return { status: 'committed', ack };
-                } catch {
-                  return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
-                }
+                return commitNamed(newValue);
               },
               correctable: {
                 currentValue: newValue,

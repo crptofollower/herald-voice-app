@@ -1,4 +1,5 @@
 import { writeContactValidated, ContactWriteResult } from './contactsDB';
+import { exclusiveStatedRelationshipPeers } from '../utils/personAssociationCapture';
 
 export function capturePerson(p: {
   name: string;
@@ -17,5 +18,7 @@ export function capturePerson(p: {
     phone: p.phone,
     address: p.address,
     importance: p.importance ?? (relationship ? 7 : 5),
+  }, {
+    exclusiveLabels: relationship ? exclusiveStatedRelationshipPeers(relationship) : null,
   });
 }

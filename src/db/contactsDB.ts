@@ -129,8 +129,26 @@ export function writeContactRaw(
   }
 }
 
+export function liveContactsByRelationships(labels: string[]): Contact[] {
+  const normalized = labels.map((label) => label.trim().toLowerCase()).filter(Boolean);
+  if (normalized.length === 0) return [];
+  const db = getDB();
+  const placeholders = normalized.map(() => '?').join(',');
+  try {
+    return db.getAllSync<Contact>(
+      `SELECT * FROM contacts
+       WHERE removed_at IS NULL AND LOWER(relationship) IN (${placeholders})
+       ORDER BY importance DESC, name ASC;`,
+      normalized,
+    );
+  } catch {
+    return [];
+  }
+}
+
 export function writeContactValidated(
-  contact: Omit<Contact, "id" | "created_at" | "updated_at">
+  contact: Omit<Contact, "id" | "created_at" | "updated_at">,
+  options?: { exclusiveLabels?: string[] | null },
 ): ContactWriteResult {
   const name = stripRelationshipLead((contact.name ?? '').trim());
 
@@ -146,6 +164,30 @@ export function writeContactValidated(
 
   const db = getDB();
   const now = new Date().toISOString();
+  const exclusiveLabels = (options?.exclusiveLabels ?? [])
+    .map((label) => label.trim().toLowerCase())
+    .filter(Boolean);
+
+  const enforceExclusiveHolder = () => {
+    if (exclusiveLabels.length === 0) return;
+    const placeholders = exclusiveLabels.map(() => '?').join(',');
+    db.runSync(
+      `UPDATE contacts SET relationship = NULL, updated_at = ?
+       WHERE removed_at IS NULL
+         AND LOWER(name) != ?
+         AND LOWER(relationship) IN (${placeholders});`,
+      [now, name.toLowerCase(), ...exclusiveLabels],
+    );
+    const rows = db.getAllSync<{ name: string }>(
+      `SELECT name FROM contacts
+       WHERE removed_at IS NULL AND LOWER(relationship) IN (${placeholders});`,
+      exclusiveLabels,
+    );
+    const live = rows.map((row) => row.name.trim().toLowerCase());
+    if (live.length !== 1 || live[0] !== name.toLowerCase()) {
+      throw new Error('exclusive_holder_unverified');
+    }
+  };
 
   try {
     const rel = contact.relationship?.trim().toLowerCase() || null;
@@ -184,6 +226,7 @@ export function writeContactValidated(
         }
         ensurePersonEntityNode(existing.id, name);
         linkContactToPersonEntity(existing.id);
+        enforceExclusiveHolder();
         return { ok: true, action: 'updated', contactId: existing.id };
       });
     }
@@ -205,6 +248,7 @@ export function writeContactValidated(
           now, now,
         ]
       );
+      enforceExclusiveHolder();
       return { ok: true, action: 'inserted', contactId: id };
     });
   } catch {

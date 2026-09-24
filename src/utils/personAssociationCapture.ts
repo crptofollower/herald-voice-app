@@ -6,7 +6,7 @@ import type { IntentRecord } from '../hooks/llmLayers';
 import type { CommitResult } from '../routing/routeIntent';
 import { CONFIRM_NO_RE, CONFIRM_YES_RE } from '../routing/conversationSession';
 import { resolvePersonIdentity } from '../db/contactsDB';
-import { writeRelationshipEdge } from '../db/entityRelationshipsWriter';
+import { CANONICAL_RELATIONS, writeRelationshipEdge } from '../db/entityRelationshipsWriter';
 
 const POSSESSIVE_ASSOCIATION =
   /^([A-Za-z][A-Za-z'-]*)\s+is\s+([A-Za-z][A-Za-z'-]*)'s\s+(.+?)\s*[.!?]*$/i;
@@ -38,6 +38,21 @@ export function mapStatedAssociation(statedAs: string): {
   if (SPOUSE_STATED.has(word)) return { relation: 'spouse_of', direction: 'symmetric' };
   if (word === 'partner') return { relation: 'partner_of', direction: 'subject_to_possessor' };
   return { relation: 'related_to', direction: 'subject_to_possessor' };
+}
+
+/**
+ * Contact relationship labels that already share one supersedable canonical
+ * relation. The related_to fallback is not a declared class. Plural kinship
+ * (parent_of, sibling_of) is not supersedable and returns null.
+ */
+export function exclusiveStatedRelationshipPeers(stated: string): string[] | null {
+  const mapped = mapStatedAssociation(stated);
+  if (mapped.relation === 'related_to') return null;
+  const meta = CANONICAL_RELATIONS[mapped.relation];
+  if (!meta?.supersedable) return null;
+  if (mapped.relation === 'spouse_of') return [...SPOUSE_STATED];
+  if (mapped.relation === 'partner_of') return ['partner'];
+  return null;
 }
 
 function foldApostrophes(text: string): string {
