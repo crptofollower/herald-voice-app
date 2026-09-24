@@ -16,6 +16,40 @@ import type { RouteDecision } from './routeIntent';
 
 export { readHardPendingReference } from './hardPendingBoundary';
 
+export type ReferentsInPlay = {
+  setId: string;
+  kind: 'person';
+  domain: 'contacts';
+  candidateIds: readonly string[];
+  purpose: { kind: 'read_phone' };
+  establishedAtTurn: number;
+};
+
+export type ReferentResolution =
+  | { kind: 'none' }
+  | { kind: 'hold' }
+  | { kind: 'resolved'; candidateId: string };
+
+/** Ordinal only when the spoken choices were distinguishable. An id outside the set is not admitted. */
+export function admitReferentResolution(
+  text: string,
+  set: ReferentsInPlay,
+  resolvedId: string | null,
+  ordinalEligible: boolean,
+): ReferentResolution {
+  const detected = detectStructuralOrdinal(text);
+  if (detected === 'ambiguous') return { kind: 'hold' };
+  if (detected && detected.mutation === false) {
+    if (!ordinalEligible) return { kind: 'hold' };
+    const memberId = set.candidateIds[detected.position - 1];
+    if (!memberId) return { kind: 'hold' };
+    return { kind: 'resolved', candidateId: memberId };
+  }
+  if (!resolvedId) return { kind: 'none' };
+  if (!set.candidateIds.includes(resolvedId)) return { kind: 'hold' };
+  return { kind: 'resolved', candidateId: resolvedId };
+}
+
 export type PresentedSetDomain = 'medication' | 'grocery' | 'calendar' | 'todo';
 
 export type PresentedSet = {

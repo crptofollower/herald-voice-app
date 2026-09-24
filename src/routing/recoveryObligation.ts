@@ -23,11 +23,13 @@ export type SoftObligationScope =
   | { kind: 'presented_sets'; setIds: readonly string[] }
   | { kind: 'working_focus'; focusKey: string }
   | { kind: 'intent_context'; domains: readonly string[] }
-  | { kind: 'turn_local' };
+  | { kind: 'turn_local' }
+  | { kind: 'referents_in_play'; setId: string };
 
 export type SoftObligationView = {
   liveSetIds: readonly string[];
   focusKey: string | null;
+  referentSetId?: string | null;
 };
 
 export type RecoveryObligationState = {
@@ -55,6 +57,9 @@ export function isSoftObligationEligible(
   }
   if (obligation.scope.kind === 'working_focus') {
     return state.focusKey !== null && state.focusKey === obligation.scope.focusKey;
+  }
+  if (obligation.scope.kind === 'referents_in_play') {
+    return !!obligation.scope.setId && state.referentSetId === obligation.scope.setId;
   }
   return false;
 }

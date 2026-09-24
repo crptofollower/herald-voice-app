@@ -145,6 +145,7 @@ import { DiscourseContinuityHolder } from './discourseContinuity';
 import { TodoPresentationHolder } from './todoVisualPresentation';
 import {
   admitStructuralOrdinal,
+  admitReferentResolution,
   collectLivePresentedSets,
   isFocusPreservingSideActivity,
   presentedSet,
@@ -650,6 +651,7 @@ export async function processUtterance(
     focusKey: subject?.hasLive()
       ? `${subject.peek()!.domain}:${subject.peek()!.entityId}`
       : null,
+    referentSetId: discourse?.peekReferentsInPlay()?.setId ?? null,
   });
   const syncSoft = () => {
     const obligation = recoveryObligation?.peek();
@@ -858,6 +860,7 @@ export async function processUtterance(
     recoveryObligation.clear();
   }
   if (recoveryObligation?.isOpenSoft() && isSoftObligationEligible(recoveryObligation.peek()!, softView()) && !session.hasPending() && CANCEL_RE.test(text.trim())) {
+    if (recoveryObligation.peek()?.scope.kind === 'referents_in_play') discourse?.clearReferentsInPlay();
     recoveryObligation.clear();
     const responseText = "No problem — I won't do that.";
     return {
@@ -865,8 +868,74 @@ export async function processUtterance(
       source: 'recovery_obligation',
       responseText,
       commits: [],
-      responseAct: { kind: 'CANCELLED', text: responseText },
-    };
+    responseAct: { kind: 'CANCELLED', text: responseText },
+  };
+  }
+  const liveReferents = discourse?.peekReferentsInPlay() ?? null;
+  const referentObligation = recoveryObligation?.peek();
+  if (
+    liveReferents
+    && referentObligation?.scope.kind === 'referents_in_play'
+    && referentObligation.scope.setId === liveReferents.setId
+    && isSoftObligationEligible(referentObligation, softView())
+    && !session.hasPending()
+  ) {
+    const { findContactById, contactHasCapability } = await import('../db/contactsDB');
+    const { projectPhoneReadClarification, resolveBoundedPhoneReferent } = await import('./referentPhoneClarification');
+    const views = liveReferents.candidateIds.map((id) => {
+      const stored = findContactById(id);
+      return {
+        id,
+        name: stored?.name ?? '',
+        relationship: stored?.relationship,
+        location: (stored as { location?: string | null } | null)?.location,
+      };
+    });
+    const bounded = resolveBoundedPhoneReferent(text, views);
+    if (bounded.kind === 'ambiguous') {
+      const responseText = "I'm not sure which one you mean.";
+      return {
+        handled: true,
+        source: 'referent_resume',
+        responseText,
+        commits: [],
+        responseAct: clarifyReferenceAct(responseText),
+      };
+    }
+    const proposedId = bounded.kind === 'one' && liveReferents.candidateIds.includes(bounded.candidateId)
+      ? bounded.candidateId
+      : null;
+    const admitted = admitReferentResolution(text, liveReferents, proposedId, projectPhoneReadClarification(views).ordinalEligible);
+    if (admitted.kind === 'resolved') {
+      const contact = findContactById(admitted.candidateId);
+      if (contact && contactHasCapability(contact, 'phone') && liveReferents.candidateIds.includes(contact.id)) {
+        const digits = contact.phone.replace(/\D/g, '');
+        const formatted = /^\d{10}$/.test(digits)
+          ? `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`
+          : contact.phone;
+        discourse?.clearReferentsInPlay();
+        recoveryObligation?.clear();
+        const responseText = `${contact.name}'s number is ${formatted}.`;
+        return {
+          handled: true,
+          source: 'referent_resume',
+          responseText,
+          commits: [],
+          responseAct: { kind: 'ANSWER', text: responseText, epistemic: 'deterministic_read' },
+        };
+      }
+      discourse?.clearReferentsInPlay();
+      recoveryObligation?.clear();
+    } else if (admitted.kind === 'hold') {
+      const responseText = "I'm not sure which one you mean.";
+      return {
+        handled: true,
+        source: 'referent_resume',
+        responseText,
+        commits: [],
+        responseAct: clarifyReferenceAct(responseText),
+      };
+    }
   }
   const holdRecall = inspectHolds(text, discourse?.peekInterpretationHold() ?? null);
   const holdRecallText = formatHoldRecall(holdRecall);
@@ -1852,6 +1921,23 @@ export async function processUtterance(
     arc.close();
   }
   const routeAct = actForRoute(routeDecision);
+  if (
+    routeDecision.kind === 'device_read'
+    && routeDecision.reason === 'contact:phone_lookup:ambiguous'
+    && routeDecision.referentCandidateIds
+    && routeDecision.referentCandidateIds.length > 1
+  ) {
+    const set = discourse?.establishReferentsInPlay(routeDecision.referentCandidateIds);
+    if (set) recoveryObligation?.establishJob('clarify_reference', { kind: 'referents_in_play', setId: set.setId });
+    const responseText = routeDecision.response;
+    return {
+      handled: true,
+      source: 'referent_resume',
+      responseText,
+      commits: [],
+      responseAct: clarifyReferenceAct(responseText),
+    };
+  }
   if (routeAct) armSoft(routeAct);
   return {
     handled: false,

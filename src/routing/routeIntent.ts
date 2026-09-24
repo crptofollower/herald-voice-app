@@ -65,7 +65,7 @@ import { withRoutedEffect } from './routedOperationEffect';
 type ActionIntent = NonNullable<TierDecision['actionIntent']>;
 
 export type RouteDecision =
-  | { kind: 'device_read'; tier: 1; response: string; isMedical?: boolean; reason: string; presentedMedicationIds?: string[]; presentedGroceryIds?: string[]; presentedTodoIds?: string[]; presentedCalendarEventIds?: string[]; presentedCalendarEvents?: Array<{ id: string; title: string; start_ms: number; all_day: number }> }
+  | { kind: 'device_read'; tier: 1; response: string; isMedical?: boolean; reason: string; presentedMedicationIds?: string[]; presentedGroceryIds?: string[]; presentedTodoIds?: string[]; presentedCalendarEventIds?: string[]; presentedCalendarEvents?: Array<{ id: string; title: string; start_ms: number; all_day: number }>; referentCandidateIds?: string[] }
   | { kind: 'device_action'; tier: 1; actionIntent: ActionIntent; reason: string }
   | { kind: 'capture'; intents: IntentRecord[]; source: 'deterministic' | 'llm' | 'deterministic_recovery'; reason: string }
   | { kind: 'interpretation_hold'; reason: 'natural_multi_fact_v1'; episodeId: string; candidates: import('./naturalMultiFactInterpretation').AdmittedMultiFactCandidate[] }
@@ -2371,6 +2371,7 @@ async function routeIntentCore(
       presentedMedicationIds: decision.presentedMedicationIds,
       presentedCalendarEventIds: decision.presentedCalendarEventIds,
       presentedCalendarEvents: decision.presentedCalendarEvents,
+      referentCandidateIds: decision.referentCandidateIds,
     };
   }
 

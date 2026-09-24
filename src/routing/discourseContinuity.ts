@@ -155,6 +155,7 @@ export class WorkingConversationState {
   private domain: (DiscourseDomainSlot & { refreshedAtMs: number }) | null = null;
   private candidateSet: (CandidateSetSlot & { refreshedAtMs: number }) | null = null;
   private interpretationHold: (InterpretationHoldSlot & { refreshedAtMs: number }) | null = null;
+  private referentsInPlay: import('./canonicalConversationState').ReferentsInPlay | null = null;
   private turn = 0;
 
   constructor(private readonly now: () => number = () => Date.now()) {}
@@ -173,6 +174,31 @@ export class WorkingConversationState {
     this.domain = null;
     this.candidateSet = null;
     this.interpretationHold = null;
+    this.referentsInPlay = null;
+  }
+
+  peekReferentsInPlay(): import('./canonicalConversationState').ReferentsInPlay | null {
+    if (!this.referentsInPlay) return null;
+    return { ...this.referentsInPlay, candidateIds: [...this.referentsInPlay.candidateIds] };
+  }
+
+  establishReferentsInPlay(candidateIds: readonly string[]): import('./canonicalConversationState').ReferentsInPlay | null {
+    const ids = [...new Set(candidateIds.map((id) => id.trim()).filter(Boolean))].sort();
+    if (ids.length < 2) return null;
+    const set = {
+      setId: `contacts:read_phone:${ids.join('|')}`,
+      kind: 'person' as const,
+      domain: 'contacts' as const,
+      candidateIds: ids,
+      purpose: { kind: 'read_phone' as const },
+      establishedAtTurn: this.turn,
+    };
+    this.referentsInPlay = set;
+    return { ...set, candidateIds: [...ids] };
+  }
+
+  clearReferentsInPlay(): void {
+    this.referentsInPlay = null;
   }
 
   peekTopic(): DiscourseTopicSlot | null {

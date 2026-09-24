@@ -70,6 +70,7 @@ export type Tier = 1 | 2 | 3;
 export interface TierDecision {
   tier: Tier;
   tier1Response?: string;
+  referentCandidateIds?: string[];
   isMedical?: boolean;   // tier-1 medical reads — deterministic template only; no generative path exists (Spine §3)
   actionIntent?:
     | { type: 'alarm';    time: string;  label: string }
@@ -2264,9 +2265,15 @@ async function classifyQueryCore(message: string): Promise<TierDecision> {
     const lookupName = nameMatch?.[1]?.trim() ?? '';
     if (lookupName.length >= 2) {
       try {
-        const { findContactByName } = await import('../db/contactsDB');
-        const contact = findContactByName(lookupName);
-        if (contact?.phone) {
+        const { resolvePersonIdentity, contactHasCapability, findContactById } = await import('../db/contactsDB');
+        const identity = resolvePersonIdentity(lookupName);
+        const phoneCapable = identity.status === 'none'
+          ? []
+          : identity.status === 'single'
+            ? (contactHasCapability(identity.contact, 'phone') ? [identity.contact] : [])
+            : identity.candidates.filter((c) => contactHasCapability(c, 'phone'));
+        if (phoneCapable.length === 1) {
+          const contact = phoneCapable[0];
           const formatted = /^\d{10}$/.test(contact.phone.replace(/\D/g, ''))
             ? `(${contact.phone.replace(/\D/g,'').slice(0,3)}) ${contact.phone.replace(/\D/g,'').slice(3,6)}-${contact.phone.replace(/\D/g,'').slice(6)}`
             : contact.phone;
@@ -2274,6 +2281,24 @@ async function classifyQueryCore(message: string): Promise<TierDecision> {
             tier: 1,
             tier1Response: `${contact.name}'s number is ${formatted}.`,
             reason: 'contact:phone_lookup',
+          };
+        }
+        if (phoneCapable.length > 1) {
+          const { projectPhoneReadClarification } = await import('./referentPhoneClarification');
+          const views = phoneCapable.map((c) => {
+            const stored = findContactById(c.id) ?? c;
+            return {
+              id: stored.id,
+              name: stored.name,
+              relationship: stored.relationship,
+              location: (stored as { location?: string | null }).location,
+            };
+          });
+          return {
+            tier: 1,
+            tier1Response: projectPhoneReadClarification(views).speech,
+            reason: 'contact:phone_lookup:ambiguous',
+            referentCandidateIds: phoneCapable.map((c) => c.id),
           };
         }
       } catch { /* contactsDB unavailable — fall through */ }
