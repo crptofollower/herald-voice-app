@@ -103,6 +103,7 @@ import {
   isMedicationOrdinalNearMiss,
   parseMedicationOrdinalIndex,
   MEDICATION_ORDINAL_CONFUSION,
+  clarifyRetainedMedications,
 } from './medicationPresentation';
 import {
   OrderedPresentationHolder,
@@ -1076,6 +1077,34 @@ export async function processUtterance(
       }
     } else if (presentedOrdinal.domain === 'todo') {
       return { handled: true, source: 'referent_resume', responseText: ORDERED_PRESENTATION_CONFUSION, commits: [], responseAct: armSoft(clarifyReferenceAct(ORDERED_PRESENTATION_CONFUSION)) };
+    }
+  }
+  if (presentedOrdinal.kind === 'none') {
+    const liveSets = collectLivePresentedSets({
+      medication: medicationPresentation,
+      ordered: orderedPresentation,
+      calendar: calendarPresentation,
+      todo: todoPresentation,
+    });
+    if (liveSets.length > 0) {
+      const proposal = await proposeReferenceContinuation(
+        text,
+        deps.getMedicationSemanticInterpreterCtx?.() ?? null,
+        { groundedPresentedSets: true },
+      );
+      if (proposal?.applicable) {
+        const medicationSet = liveSets.length === 1 && liveSets[0]?.domain === 'medication' ? liveSets[0] : null;
+        const responseText = medicationSet
+          ? (clarifyRetainedMedications(medicationSet.orderedMemberIds) ?? ORDERED_PRESENTATION_CONFUSION)
+          : ORDERED_PRESENTATION_CONFUSION;
+        return {
+          handled: true,
+          source: 'referent_resume',
+          responseText,
+          commits: [],
+          responseAct: armSoft(clarifyReferenceAct(responseText)),
+        };
+      }
     }
   }
   let medicationAwaitingUnusedClear = false;

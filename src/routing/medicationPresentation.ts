@@ -110,3 +110,13 @@ export class MedicationPresentationHolder {
     };
   }
 }
+
+/** Names come from the stored rows. The presentation still holds ids only. */
+export function clarifyRetainedMedications(ids: readonly string[]): string | null {
+  const names = ids
+    .map((id) => getActiveMedicationById(id)?.name?.trim())
+    .filter((name): name is string => !!name);
+  if (names.length < 2) return null;
+  const spoken = names.length === 2 ? `${names[0]} or ${names[1]}` : names.join(', ');
+  return `I found more than one match — ${spoken}. Which one?`;
+}

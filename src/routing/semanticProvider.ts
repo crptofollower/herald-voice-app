@@ -164,14 +164,18 @@ export async function proposeSpeechCompletion(
 export async function proposeReferenceContinuation(
   userText: string,
   ctx: { completion: (params: { prompt: string; n_predict: number }) => Promise<{ text?: string } | string> } | null,
-  options?: { groundedPeople?: boolean },
+  options?: { groundedPeople?: boolean; groundedPresentedSets?: boolean },
 ): Promise<{ applicable: boolean } | null> {
   const packet = buildSemanticPacket({ userText, riskTier: 'none' });
   if (!ctx || typeof ctx.completion !== 'function' || !packet.userText.trim()) return null;
-  const availability = options?.groundedPeople ? 'Grounded people are available for reference.\n' : '';
+  const availability = [
+    options?.groundedPeople ? 'Grounded people are available for reference.' : '',
+    options?.groundedPresentedSets ? 'Grounded presented material is available for reference.' : '',
+  ].filter(Boolean).join('\n');
+  const contextLine = availability ? `${availability}\n` : '';
   try {
     const value = await completeBoundedInterpretation('reference_continuation', ctx, {
-      prompt: `Reply with one word, applicable or not.\n${availability}${packet.userText}`,
+      prompt: `Reply with one word, applicable or not.\n${contextLine}${packet.userText}`,
       n_predict: 8,
     });
     if (value.status !== 'ok') return null;
