@@ -26,6 +26,7 @@ class HeraldSemanticProofV1Test {
     private const val HOST_TIMEOUT_MS = 90_000L
     private const val TURN_TIMEOUT_MS = 120_000L
     private const val RESET_TIMEOUT_MS = 15_000L
+    private const val READINESS_TIMEOUT_MS = 25L * 60L * 1000L
   }
 
   @get:Rule
@@ -40,6 +41,12 @@ class HeraldSemanticProofV1Test {
   fun semanticProofV1_realProvider() {
     if (!HeraldJourneyBridge.awaitHostReady(HOST_TIMEOUT_MS)) {
       fail("RUNNER_FAIL JOURNEY_HOST_NOT_READY")
+    }
+    val readiness = JSONObject(HeraldJourneyBridge.awaitSemanticEngineReady(READINESS_TIMEOUT_MS))
+    emit("SEMANTIC_ENGINE_READINESS", readiness)
+    val gate = readiness.optString("gate")
+    if (gate != "READY") {
+      fail("$gate semantic engine did not reach ready")
     }
     val scenarios = loadContract().getJSONArray("scenarios")
     for (s in 0 until scenarios.length()) {

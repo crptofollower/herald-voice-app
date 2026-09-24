@@ -224,6 +224,54 @@ object HeraldJourneyBridge {
     } else json
   }
 
+  fun probeSemanticEngine(timeoutMs: Long = 5_000L): String {
+    if (!inFlight.compareAndSet(false, true)) {
+      return JSONObject().put("schema", "herald.journey.semantic_engine.v1").put("gate", "PENDING").put("failReason", "duplicate_or_in_flight").toString()
+    }
+    lastJson.set(null)
+    expectedTurnId.set(null)
+    val latch = CountDownLatch(1)
+    waiter.set(latch)
+    val ctx = reactContext
+    if (ctx == null) {
+      inFlight.set(false)
+      waiter.set(null)
+      return JSONObject().put("schema", "herald.journey.semantic_engine.v1").put("gate", "MODEL_UNAVAILABLE").put("failReason", "react_context_missing").toString()
+    }
+    try {
+      ctx
+        .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+        .emit("DebugJourneySemanticEngineProbe", Arguments.createMap())
+    } catch (e: Exception) {
+      inFlight.set(false)
+      waiter.set(null)
+      return JSONObject().put("schema", "herald.journey.semantic_engine.v1").put("gate", "MODEL_UNAVAILABLE").put("failReason", "emit_failed").toString()
+    }
+    val completed = latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+    val json = lastJson.get()
+    waiter.set(null)
+    inFlight.set(false)
+    return if (!completed || json == null) {
+      JSONObject().put("schema", "herald.journey.semantic_engine.v1").put("gate", "PENDING").put("failReason", "timeout").toString()
+    } else json
+  }
+
+  fun awaitSemanticEngineReady(timeoutMs: Long = 25L * 60L * 1000L): String {
+    val deadline = System.currentTimeMillis() + timeoutMs
+    var lastGate = "PENDING"
+    var last = JSONObject().put("schema", "herald.journey.semantic_engine.v1").put("gate", lastGate).toString()
+    while (System.currentTimeMillis() < deadline) {
+      last = probeSemanticEngine()
+      lastGate = JSONObject(last).optString("gate", "PENDING")
+      if (lastGate == "READY" || lastGate == "MODEL_DOWNLOAD_FAILED" || lastGate == "MODEL_INIT_FAILED" || lastGate == "MODEL_UNAVAILABLE") {
+        return last
+      }
+      Thread.sleep(2_000L)
+    }
+    val reason = if (lastGate == "PROVISIONING_WAITING_FOR_WIFI") "PROVISIONING_WAITING_FOR_WIFI" else "MODEL_NOT_READY_TIMEOUT"
+    return JSONObject(last).put("gate", reason).toString()
+  }
+
   fun completeTurn(json: String) {
     val expected = expectedTurnId.get()
     if (expected != null) {

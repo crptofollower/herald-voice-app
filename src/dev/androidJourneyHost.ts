@@ -4,6 +4,7 @@
  */
 import { DeviceEventEmitter, NativeModules, Platform } from 'react-native';
 import { beginSemanticProof, finishSemanticProof } from './semanticJourneyEvidence';
+import { classifySemanticEngineReadiness, emptySemanticEngineDiagnostic } from './semanticEngineReadiness';
 import { initDB, isDBReady } from '../db/useDeviceDB';
 import { getDB } from '../db/schema';
 import { setProfileField } from '../db/profileDB';
@@ -37,6 +38,7 @@ type JourneyRuntime = {
   beginManualConversation?: () => void;
   injectHeardTranscript?: (text: string) => void;
   peekTalkSession?: () => TalkSessionPeek;
+  peekSemanticEngine?: () => import('./semanticEngineReadiness').SemanticEngineDiagnostic;
 };
 
 type NativeBridge = {
@@ -140,6 +142,7 @@ const RESET_EVENT = 'DebugJourneyResetScenario';
 const TEARDOWN_EVENT = 'DebugJourneyTeardown';
 const SPEECH_PROBE_EVENT = 'DebugJourneySpeechProbe';
 const TALK_SESSION_HANDOFF_EVENT = 'DebugJourneyTalkSessionHandoff';
+const SEMANTIC_ENGINE_PROBE_EVENT = 'DebugJourneySemanticEngineProbe';
 const NATIVE_NAME = 'DebugJourneyBridge';
 
 let runtime: JourneyRuntime | null = null;
@@ -149,6 +152,7 @@ let resetSubscription: { remove: () => void } | null = null;
 let teardownSubscription: { remove: () => void } | null = null;
 let speechProbeSubscription: { remove: () => void } | null = null;
 let talkSessionHandoffSubscription: { remove: () => void } | null = null;
+let semanticEngineProbeSubscription: { remove: () => void } | null = null;
 let inFlightTurnId: string | null = null;
 let lastReportedOutcome: unknown = undefined;
 let lastReportedPendingKey: string | null = null;
@@ -946,6 +950,13 @@ export function onboardAndroidJourneyHost(): void {
   talkSessionHandoffSubscription = DeviceEventEmitter.addListener(TALK_SESSION_HANDOFF_EVENT, () => {
     void runTalkSessionHandoffProbe();
   });
+  semanticEngineProbeSubscription = DeviceEventEmitter.addListener(SEMANTIC_ENGINE_PROBE_EVENT, () => {
+    const diagnostic = runtime?.peekSemanticEngine?.() ?? emptySemanticEngineDiagnostic();
+    emitComplete({
+      ...diagnostic,
+      gate: classifySemanticEngineReadiness(diagnostic),
+    });
+  });
 }
 
 export function teardownAndroidJourneyHost(): void {
@@ -959,6 +970,8 @@ export function teardownAndroidJourneyHost(): void {
   speechProbeSubscription = null;
   talkSessionHandoffSubscription?.remove();
   talkSessionHandoffSubscription = null;
+  semanticEngineProbeSubscription?.remove();
+  semanticEngineProbeSubscription = null;
   runtime = null;
   native = null;
   inFlightTurnId = null;

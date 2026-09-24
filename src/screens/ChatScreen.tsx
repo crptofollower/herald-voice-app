@@ -3120,6 +3120,10 @@ export default function ChatScreen() {
           generation: talkSessionRef.current.generation,
           pendingFollowupGeneration: talkSessionRef.current.pendingFollowupGeneration,
         }),
+        peekSemanticEngine: () => {
+          const { peekSemanticEngineDiagnostic } = require('../hooks/useMedicationSemanticInterpreterEngine');
+          return peekSemanticEngineDiagnostic();
+        },
       });
     } catch {
       /* journey host only */

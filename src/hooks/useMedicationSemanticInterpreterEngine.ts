@@ -38,6 +38,10 @@ import {
   SEMANTIC_CAPABILITY_DISPATCH_ENABLED,
 } from '../constants/features';
 import { getModelDir, LARGE_MODEL } from '../utils/modelManager';
+import {
+  emptySemanticEngineDiagnostic,
+  type SemanticEngineDiagnostic,
+} from '../dev/semanticEngineReadiness';
 import { ensureSemanticLargeModel } from '../utils/semanticModelProvisioning';
 import { semanticConsumersRequireContext } from '../utils/semanticProvisioningPolicy';
 
@@ -56,6 +60,16 @@ const SEMANTIC_CONSUMERS = {
 
 function logInterpreterEngine(event: string, extra: Record<string, unknown> = {}) {
   console.warn('[medicationSemanticInterpreterEngine] ' + JSON.stringify({ event, ...extra }));
+}
+
+let semanticEngineDiagnostic: SemanticEngineDiagnostic = emptySemanticEngineDiagnostic();
+
+export function peekSemanticEngineDiagnostic(): SemanticEngineDiagnostic {
+  return semanticEngineDiagnostic;
+}
+
+function publishSemanticEngineDiagnostic(patch: Partial<SemanticEngineDiagnostic>): void {
+  semanticEngineDiagnostic = { ...semanticEngineDiagnostic, ...patch };
 }
 
 export function useMedicationSemanticInterpreterEngine(): {
@@ -85,19 +99,30 @@ export function useMedicationSemanticInterpreterEngine(): {
           consumers: SEMANTIC_CONSUMERS,
           signal: abort.signal,
           onAction: (action) => {
+            const nextStatus = action === 'wait' || action === 'none' ? 'unavailable' : 'loading';
+            publishSemanticEngineDiagnostic({
+              provisioningAction: action,
+              semanticEngineStatus: nextStatus,
+              modelFilePresent: action === 'ready',
+            });
             if (cancelled) return;
-            if (action === 'wait' || action === 'none') setStatus('unavailable');
-            else setStatus('loading');
+            setStatus(nextStatus);
           },
         });
         if (cancelled || abort.signal.aborted) {
           logInterpreterEngine('independent_ctx_cancelled', { at: 'after_ensure' });
           return;
         }
+        publishSemanticEngineDiagnostic({
+          ensureStatus: ensured.status,
+          modelFilePresent: ensured.status === 'ready' || semanticEngineDiagnostic.modelFilePresent,
+        });
         if (ensured.status !== 'ready') {
           logInterpreterEngine('independent_ctx_unavailable', { reason: ensured.status });
           if (!cancelled) {
-            setStatus(ensured.status === 'error' ? 'error' : 'unavailable');
+            const nextStatus = ensured.status === 'error' ? 'error' : 'unavailable';
+            publishSemanticEngineDiagnostic({ semanticEngineStatus: nextStatus });
+            setStatus(nextStatus);
           }
           return;
         }
@@ -113,10 +138,21 @@ export function useMedicationSemanticInterpreterEngine(): {
         }
         ctxRef.current = ctx;
         setStatus('ready');
+        publishSemanticEngineDiagnostic({
+          semanticEngineStatus: 'ready',
+          initLlama: 'succeeded',
+          contextHeld: true,
+          modelFilePresent: true,
+        });
         logInterpreterEngine('independent_ctx_ready');
       } catch (e) {
         logInterpreterEngine('independent_ctx_init_failed', { error: String(e) });
         ctxRef.current = null;
+        publishSemanticEngineDiagnostic({
+          semanticEngineStatus: 'error',
+          initLlama: 'failed',
+          contextHeld: false,
+        });
         if (!cancelled) setStatus('error');
       }
     })();
@@ -126,6 +162,7 @@ export function useMedicationSemanticInterpreterEngine(): {
       abort.abort();
       const ctx = ctxRef.current;
       ctxRef.current = null;
+      publishSemanticEngineDiagnostic({ contextHeld: false, semanticEngineStatus: 'unavailable' });
       if (ctx) void ctx.release().catch(() => {});
     };
   }, []);
