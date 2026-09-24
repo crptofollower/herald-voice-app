@@ -83,7 +83,7 @@ import { useLocalLLM } from '../hooks/useLocalLLM';
 import { useMedicationSemanticInterpreterEngine } from '../hooks/useMedicationSemanticInterpreterEngine';
 import { isRecollectionSemanticDeviceEvidenceTrigger } from '../dev/recollectionSemanticDeviceEvidenceTrigger';
 import { runRecollectionSemanticDeviceEvidence } from '../dev/recollectionSemanticDeviceEvidenceRun';
-import { proposeLocalClassification } from '../routing/semanticProvider';
+import { proposeLocalClassification, proposeSpeechCompletion } from '../routing/semanticProvider';
 import { applyWorldContext } from '../routing/worldContextNeed';
 import {
   selectConversationalWorker,
@@ -2969,7 +2969,19 @@ export default function ChatScreen() {
     }
   }, [classifyQuery, getCtx, getKnownContactNames, getKnownListNames, llmStatus, getModelIdentity, getMedicationSemanticInterpreterCtx, addMessage, speak]);
 
-  const { isRecording, startRecording, stopRecording, suspendForSpeech, partialText } = useMic(handleTranscript, isSpeakingRef, handleNoRecognizableSpeech);
+  const { isRecording, startRecording, stopRecording, suspendForSpeech, partialText } = useMic(
+    handleTranscript,
+    isSpeakingRef,
+    handleNoRecognizableSpeech,
+    (text) => proposeSpeechCompletion(text, getCtx()),
+    () => {
+      const cue = projectRealization(
+        { kind: 'CLARIFY_INTENT', text: "I didn't catch the rest of that." },
+        '',
+      );
+      if (cue.speech) enqueueSentence(cue.speech);
+    },
+  );
   suspendForSpeechRef.current = suspendForSpeech;
 
   const clearTalkSessionFollowupTimer = () => {

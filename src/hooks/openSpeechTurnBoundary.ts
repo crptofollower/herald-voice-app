@@ -5,6 +5,11 @@
 
 import type { RecognitionMode } from './recognitionModeConfig';
 import { decideOneShotEnd } from './oneShotEndDecision';
+import {
+  decideSpeechAdmission,
+  type SpeechAdmissionTrigger,
+  type SpeechCompletionProposal,
+} from './speechAdmission';
 
 /** Provisional. User-facing continuation window after native listening-ready. Not device-tuned. */
 export const OPEN_SPEECH_CONTINUATION_GAP_MS = 1200;
@@ -46,7 +51,9 @@ export type OpenSpeechEffect =
   | { type: 'arm_max_turn' }
   | { type: 'clear_max_turn' }
   | { type: 'abort_native' }
-  | { type: 'no_recognizable_speech'; reason: 'silence' | 'heard_unrecognized' };
+  | { type: 'no_recognizable_speech'; reason: 'silence' | 'heard_unrecognized' }
+  | { type: 'evaluate_admission'; trigger: SpeechAdmissionTrigger; text: string }
+  | { type: 'bounded_recovery' };
 
 export type OpenSpeechEvent =
   | { type: 'herald_start'; mode: RecognitionMode; nativeSessionId: number; nowMs: number }
@@ -60,7 +67,13 @@ export type OpenSpeechEvent =
   | { type: 'user_stop' }
   | { type: 'automated_teardown' }
   | { type: 'tts_preempt' }
-  | { type: 'max_turn_elapsed' };
+  | { type: 'max_turn_elapsed' }
+  | {
+      type: 'admission_evaluated';
+      trigger: SpeechAdmissionTrigger;
+      proposal: SpeechCompletionProposal | null;
+      text: string;
+    };
 
 let nextHeraldTurnId = 1;
 
@@ -104,6 +117,48 @@ function atOpenCap(state: OpenSpeechTurnState, nowMs: number): boolean {
   if (state.emptyContinuationCount >= OPEN_SPEECH_MAX_SEGMENTS) return true;
   if (state.heraldTurnId > 0 && nowMs - state.turnStartedAtMs >= OPEN_SPEECH_MAX_TURN_MS) return true;
   return false;
+}
+
+function requestAdmission(
+  state: OpenSpeechTurnState,
+  trigger: SpeechAdmissionTrigger,
+): { state: OpenSpeechTurnState; effects: OpenSpeechEffect[] } {
+  const text = stitchOpenSpeechSegments(state.segments);
+  return {
+    state: {
+      ...state,
+      phase: 'awaiting_continuation',
+      continuationGapArmed: false,
+      speechInProgress: false,
+    },
+    effects: [
+      { type: 'clear_continuation_gap' },
+      { type: 'evaluate_admission', trigger, text },
+    ],
+  };
+}
+
+function applyAdmission(
+  state: OpenSpeechTurnState,
+  trigger: SpeechAdmissionTrigger,
+  proposal: SpeechCompletionProposal | null,
+  text: string,
+): { state: OpenSpeechTurnState; effects: OpenSpeechEffect[] } {
+  if (state.delivered || state.phase === 'finalized' || state.phase === 'abandoned') {
+    return { state, effects: [] };
+  }
+  if (state.speechInProgress) return { state, effects: [] };
+  if (stitchOpenSpeechSegments(state.segments) !== text) return { state, effects: [] };
+  const decision = decideSpeechAdmission({ trigger, proposal });
+  if (decision === 'admit') return finalize(state, `admission:${trigger}`);
+  if (decision === 'recover') {
+    const abandoned = abandon(state);
+    return {
+      state: abandoned.state,
+      effects: [...abandoned.effects, { type: 'bounded_recovery' }],
+    };
+  }
+  return reopenAfterContent(state);
 }
 
 function capSource(state: OpenSpeechTurnState, nowMs: number): string {
@@ -334,7 +389,7 @@ export function reduceOpenSpeechTurn(
 
       if (sessionAddedContent(withPartial, event.partial)) {
         if (atOpenCap(withPartial, event.nowMs)) {
-          return finalize(withPartial, capSource(withPartial, event.nowMs));
+          return requestAdmission(withPartial, capSource(withPartial, event.nowMs) === 'max_turn' ? 'max_turn' : 'max_segments');
         }
         return reopenAfterContent(withPartial);
       }
@@ -349,7 +404,7 @@ export function reduceOpenSpeechTurn(
         || (emptied.heraldTurnId > 0 && event.nowMs - emptied.turnStartedAtMs >= OPEN_SPEECH_MAX_TURN_MS)
         || emptied.segments.length >= OPEN_SPEECH_MAX_SEGMENTS) {
         const counted = { ...emptied, emptyContinuationCount: emptied.emptyContinuationCount + 1 };
-        return finalize(counted, capSource(counted, event.nowMs));
+        return requestAdmission(counted, capSource(counted, event.nowMs) === 'max_turn' ? 'max_turn' : 'max_segments');
       }
       return reopenAfterEmptyContinuation(emptied);
     }
@@ -363,10 +418,7 @@ export function reduceOpenSpeechTurn(
         return { state, effects: [] };
       }
       if (state.segments.length > state.segmentsAtSessionStart) return { state, effects: [] };
-      if (state.segments.length > 0) {
-        const done = finalize(state, 'continuation_gap');
-        return { state: done.state, effects: [...done.effects, { type: 'abort_native' }] };
-      }
+      if (state.segments.length > 0) return requestAdmission(state, 'continuation_gap');
       return abandon(state);
     }
 
@@ -437,9 +489,12 @@ export function reduceOpenSpeechTurn(
 
     case 'max_turn_elapsed': {
       if (state.delivered) return { state, effects: [] };
-      if (state.segments.length > 0) return finalize(state, 'max_turn');
+      if (state.segments.length > 0) return requestAdmission(state, 'max_turn');
       return abandon(state);
     }
+
+    case 'admission_evaluated':
+      return applyAdmission(state, event.trigger, event.proposal, event.text);
 
     default:
       return { state, effects: [] };

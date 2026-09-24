@@ -206,7 +206,7 @@ export async function runNoRecognizableSpeechRecoveryTests() {
     const src = fs.readFileSync(chatScreenPath, 'utf8');
     assertTrue(
       'useMic(handleTranscript, isSpeakingRef, handleNoRecognizableSpeech) wired',
-      /useMic\(handleTranscript, isSpeakingRef, handleNoRecognizableSpeech\)/.test(src),
+      /useMic\(\s*handleTranscript,\s*isSpeakingRef,\s*handleNoRecognizableSpeech\b/.test(src),
     );
   }
 

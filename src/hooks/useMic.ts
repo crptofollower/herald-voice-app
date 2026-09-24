@@ -18,6 +18,8 @@ import {
   type OpenSpeechEvent,
   type OpenSpeechTurnState,
 } from './openSpeechTurnBoundary';
+import { admittedTurnText } from './speechTurnEnvelope';
+import type { SpeechCompletionProposal } from './speechAdmission';
 import { beginTurn, getActiveTurnId, log as latLog, mono as latMono } from '../utils/latencyInstrument';
 import {
   LISTENING_READY_TIMEOUT_MS,
@@ -43,6 +45,8 @@ export function useMic(
   // into the existing ConversationSession re-ask/budget/release ladder
   // instead of a pending state leaking indefinitely -- see oneShotEndDecision.ts.
   onNoRecognizableSpeech?: () => void,
+  resolveSpeechAdmission?: (text: string) => Promise<SpeechCompletionProposal | null>,
+  onBoundedSpeechRecovery?: () => void,
 ) {
   const [isRecording, setIsRecording] = useState(false);
   // Read-only mirror of latestPartialRef for presentation (live STT partial).
@@ -69,6 +73,10 @@ export function useMic(
   const boundaryRef = useRef<OpenSpeechTurnState>(createIdleOpenSpeechTurnState());
   const continuationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const heraldMaxTurnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const resolveSpeechAdmissionRef = useRef(resolveSpeechAdmission);
+  const onBoundedSpeechRecoveryRef = useRef(onBoundedSpeechRecovery);
+  resolveSpeechAdmissionRef.current = resolveSpeechAdmission;
+  onBoundedSpeechRecoveryRef.current = onBoundedSpeechRecovery;
 
   // Cancels/clears the empty-session recovery timer + its captured token.
   // Called on every path that means "this session is no longer a candidate
@@ -379,7 +387,24 @@ export function useMic(
         try { ExpoSpeechRecognitionModule.abort(); } catch { /* already idle */ }
       }
       if (fx.type === 'deliver') {
-        deliverBufferWithoutNativeStop(fx.source, fx.utterance);
+        const admitted = admittedTurnText(boundaryRef.current, fx.utterance, fx.source);
+        if (admitted) deliverBufferWithoutNativeStop(fx.source, admitted);
+      }
+      if (fx.type === 'evaluate_admission') {
+        const trigger = fx.trigger;
+        const text = fx.text;
+        const resolve = resolveSpeechAdmissionRef.current;
+        void Promise.resolve(resolve ? resolve(text) : Promise.resolve(null)).then((proposal) => {
+          executeBoundaryEffects(applyBoundary({
+            type: 'admission_evaluated',
+            trigger,
+            proposal: proposal ?? null,
+            text,
+          }));
+        });
+      }
+      if (fx.type === 'bounded_recovery') {
+        onBoundedSpeechRecoveryRef.current?.();
       }
     }
   };

@@ -135,6 +135,29 @@ export async function completeBoundedInterpretation(
   }
 }
 
+const SPEECH_COMPLETION_PROMPT = 'Reply with one word only: complete, incomplete, or uncertain.';
+
+/** Proposal only. Does not admit a turn or read personal memory. */
+export async function proposeSpeechCompletion(
+  userText: string,
+  ctx: { completion: (params: { prompt: string; n_predict: number }) => Promise<{ text?: string } | string> } | null,
+): Promise<'complete' | 'incomplete' | 'uncertain'> {
+  const packet = buildSemanticPacket({ userText, riskTier: 'none' });
+  if (!ctx || typeof ctx.completion !== 'function' || !packet.userText.trim()) return 'uncertain';
+  try {
+    const value = await ctx.completion({
+      prompt: `${SPEECH_COMPLETION_PROMPT}\n${packet.userText}`,
+      n_predict: 8,
+    });
+    const raw = typeof value === 'string' ? value : value?.text;
+    const token = String(raw ?? '').trim().toLowerCase().split(/\s+/)[0] ?? '';
+    if (token === 'complete' || token === 'incomplete' || token === 'uncertain') return token;
+    return 'uncertain';
+  } catch {
+    return 'uncertain';
+  }
+}
+
 export async function proposeLocalClassification(
   userText: string,
   ctx: LlamaContext | null,

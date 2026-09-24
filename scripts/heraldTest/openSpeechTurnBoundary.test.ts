@@ -67,6 +67,10 @@ function drive(events: OpenSpeechEvent[]): {
   return { state, deliveries, effects, reopenCount };
 }
 
+function completeAdmission(text: string, trigger: 'continuation_gap' | 'max_turn' | 'max_segments' = 'continuation_gap'): OpenSpeechEvent {
+  return { type: 'admission_evaluated', trigger, proposal: 'complete', text };
+}
+
 export async function runOpenSpeechTurnBoundaryV1Tests() {
   const failures: { label: string; got: unknown; expected: string }[] = [];
   let passed = 0;
@@ -106,13 +110,15 @@ export async function runOpenSpeechTurnBoundaryV1Tests() {
       { type: 'native_end', nativeSessionId: 1, speechStarted: true, partial: '', nowMs: 400 },
       { type: 'native_listening_ready', nativeSessionId: 2, nowMs: 450 },
       { type: 'continuation_gap_elapsed', generation: 1 },
+      completeAdmission('Hello there.'),
     ]);
     assert('open: one short utterance → one final delivery',
       run.deliveries.length === 1
         && run.deliveries[0] === 'Hello there.'
         && run.state.delivered === true
-        && run.state.phase === 'finalized',
-      (v) => v === true, 'one delivery');
+        && run.state.phase === 'finalized'
+        && run.effects.some((e) => e.type === 'evaluate_admission'),
+      (v) => v === true, 'one delivery after complete admission');
   }
 
   {
@@ -126,6 +132,7 @@ export async function runOpenSpeechTurnBoundaryV1Tests() {
       { type: 'native_end', nativeSessionId: 2, speechStarted: true, partial: '', nowMs: 900 },
       { type: 'native_listening_ready', nativeSessionId: 3, nowMs: 920 },
       { type: 'continuation_gap_elapsed', generation: 2 },
+      completeAdmission('When I was a kid, we spent summers at the lake.'),
     ]);
     assert('open: clause → native end → continuation clause → one stitched delivery',
       run.deliveries.length === 1
@@ -148,6 +155,7 @@ export async function runOpenSpeechTurnBoundaryV1Tests() {
       { type: 'native_end', nativeSessionId: 3, speechStarted: true, partial: '', nowMs: 300 },
       { type: 'native_listening_ready', nativeSessionId: 4, nowMs: 310 },
       { type: 'continuation_gap_elapsed', generation: 3 },
+      completeAdmission('One two three'),
     ]);
     assert('open: three segments → one delivery',
       run.deliveries.length === 1 && run.deliveries[0] === 'One two three',
@@ -182,6 +190,7 @@ export async function runOpenSpeechTurnBoundaryV1Tests() {
       { type: 'native_end', nativeSessionId: 3, speechStarted: true, partial: '', nowMs: 900 },
       { type: 'native_listening_ready', nativeSessionId: 4, nowMs: 920 },
       { type: 'continuation_gap_elapsed', generation: 2 },
+      completeAdmission('There was a lake. We packed sandwiches.'),
     ]);
     assert('empty continuation then speech resumes → eventual one stitched delivery',
       run.deliveries.length === 1
@@ -198,9 +207,11 @@ export async function runOpenSpeechTurnBoundaryV1Tests() {
       { type: 'native_listening_ready', nativeSessionId: 2, nowMs: 220 },
       { type: 'continuation_gap_elapsed', generation: 1 },
     ]);
-    assert('open: provisional end → no continuation → one delivery',
-      run.deliveries.length === 1 && run.deliveries[0] === 'We packed sandwiches.',
-      (v) => v === true, 'gap finalize');
+    assert('open: provisional end → continuation gap does not admit',
+      run.deliveries.length === 0
+        && run.effects.some((e) => e.type === 'evaluate_admission' && e.trigger === 'continuation_gap')
+        && run.state.phase !== 'finalized',
+      (v) => v === true, 'gap evaluates, does not deliver');
   }
 
   {
@@ -291,11 +302,10 @@ export async function runOpenSpeechTurnBoundaryV1Tests() {
     }
     const run = drive(events);
     assert('max-segment cap → exactly one delivery',
-      run.deliveries.length === 1
-        && run.deliveries[0] === 'seg1 seg2 seg3 seg4 seg5'
-        && run.effects.some((e) => e.type === 'deliver' && e.source === 'max_segments')
+      run.deliveries.length === 0
+        && run.effects.some((e) => e.type === 'evaluate_admission' && e.trigger === 'max_segments')
         && run.reopenCount === OPEN_SPEECH_MAX_SEGMENTS - 1,
-      (v) => v === true, 'cap finalize once');
+      (v) => v === true, 'cap requests admission');
   }
 
   {
@@ -306,10 +316,9 @@ export async function runOpenSpeechTurnBoundaryV1Tests() {
       { type: 'native_end', nativeSessionId: 1, speechStarted: true, partial: '', nowMs: OPEN_SPEECH_MAX_TURN_MS },
     ]);
     assert('max-turn cap → exactly one delivery',
-      run.deliveries.length === 1
-        && run.deliveries[0] === 'Long story'
-        && run.effects.some((e) => e.type === 'deliver' && e.source === 'max_turn'),
-      (v) => v === true, 'max turn finalize');
+      run.deliveries.length === 0
+        && run.effects.some((e) => e.type === 'evaluate_admission' && e.trigger === 'max_turn'),
+      (v) => v === true, 'max turn requests admission');
   }
 
   {
@@ -322,6 +331,7 @@ export async function runOpenSpeechTurnBoundaryV1Tests() {
       { type: 'native_end', nativeSessionId: 1, speechStarted: true, partial: '', nowMs: 200 },
       { type: 'native_listening_ready', nativeSessionId: 2, nowMs: 220 },
       { type: 'continuation_gap_elapsed', generation: 1 },
+      completeAdmission('Keep this'),
     ]);
     assert('stale callback from prior native session cannot contaminate the current Herald turn',
       run.deliveries.length === 1
@@ -347,8 +357,10 @@ export async function runOpenSpeechTurnBoundaryV1Tests() {
       { type: 'continuation_gap_elapsed', generation: 1 },
     ]);
     assert('never stitch across genuinely separate Herald turns',
-      first.deliveries[0] === 'First turn'
-        && second.deliveries[0] === 'Second turn'
+      first.deliveries.length === 0
+        && second.deliveries.length === 0
+        && first.state.segments.join(' ') === 'First turn'
+        && second.state.segments.join(' ') === 'Second turn'
         && first.state.heraldTurnId !== second.state.heraldTurnId,
       (v) => v === true, 'separate turns');
   }
@@ -446,6 +458,7 @@ export async function runOpenSpeechTurnBoundaryV1Tests() {
     apply({ type: 'native_end', nativeSessionId: 2, speechStarted: true, partial: '', nowMs: 900 });
     apply({ type: 'native_listening_ready', nativeSessionId: 3, nowMs: 920 });
     apply({ type: 'continuation_gap_elapsed', generation: state.continuationGeneration });
+    apply(completeAdmission('When I was a kid, we spent summers at the lake.'));
     assert('continuation native end later produces exactly one stitched delivery',
       deliveries.length === 1
         && deliveries[0] === 'When I was a kid, we spent summers at the lake.',
@@ -535,10 +548,9 @@ export async function runOpenSpeechTurnBoundaryV1Tests() {
       { type: 'continuation_gap_elapsed', generation: 1 },
     ]);
     assert('delayed native-ready does not consume the user 1200ms continuation opportunity',
-      run.deliveries.length === 1
-        && run.deliveries[0] === 'Hello there.'
-        && run.effects.filter((e) => e.type === 'deliver').length === 1,
-      (v) => v === true, 'pre-ready gap is a no-op; post-ready gap delivers once');
+      run.deliveries.length === 0
+        && run.effects.filter((e) => e.type === 'evaluate_admission').length === 1,
+      (v) => v === true, 'pre-ready gap is a no-op; post-ready gap evaluates once');
   }
 
   {
@@ -559,9 +571,8 @@ export async function runOpenSpeechTurnBoundaryV1Tests() {
     }
     const run = drive(events);
     assert('max-segment cap bounds repeated empty continuation sessions',
-      run.deliveries.length === 1
-        && run.deliveries[0] === 'Hello there.'
-        && run.effects.some((e) => e.type === 'deliver' && e.source === 'max_segments'),
+      run.deliveries.length === 0
+        && run.effects.some((e) => e.type === 'evaluate_admission' && e.trigger === 'max_segments' && e.text === 'Hello there.'),
       (v) => v === true, 'empty loop capped');
   }
 
@@ -574,9 +585,8 @@ export async function runOpenSpeechTurnBoundaryV1Tests() {
       { type: 'native_end', nativeSessionId: 2, speechStarted: false, partial: '', nowMs: OPEN_SPEECH_MAX_TURN_MS },
     ]);
     assert('max-turn cap bounds repeated empty continuation sessions',
-      run.deliveries.length === 1
-        && run.deliveries[0] === 'Hello there.'
-        && run.effects.some((e) => e.type === 'deliver' && e.source === 'max_turn'),
+      run.deliveries.length === 0
+        && run.effects.some((e) => e.type === 'evaluate_admission' && e.trigger === 'max_turn' && e.text === 'Hello there.'),
       (v) => v === true, 'empty loop max-turn');
   }
 
