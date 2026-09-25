@@ -52,9 +52,13 @@ export async function runUxPass1Tests() {
   assert(
     'UX1-3 useMic exports read-only partialText',
     micSrc,
-    (src) => typeof src === 'string'
-      && /const \[partialText, setPartialText\]/.test(src)
-      && /return \{ isRecording, startRecording, stopRecording, suspendForSpeech, partialText \}/.test(src),
+    (src) => {
+      if (typeof src !== 'string') return false;
+      const returned = src.match(/return \{\s*isRecording,\s*startRecording,\s*stopRecording,\s*suspendForSpeech,\s*partialText,\s*injectCommittedOpenSpeechSegment,\s*\}/);
+      return /const \[partialText, setPartialText\]/.test(src)
+        && returned != null
+        && !/setPartialText/.test(returned[0]);
+    },
     'partialText state mirrored and returned',
   );
 

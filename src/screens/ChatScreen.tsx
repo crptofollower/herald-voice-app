@@ -84,6 +84,17 @@ import { useMedicationSemanticInterpreterEngine } from '../hooks/useMedicationSe
 import { isRecollectionSemanticDeviceEvidenceTrigger } from '../dev/recollectionSemanticDeviceEvidenceTrigger';
 import { runRecollectionSemanticDeviceEvidence } from '../dev/recollectionSemanticDeviceEvidenceRun';
 import { proposeLocalClassification, proposeSpeechCompletion } from '../routing/semanticProvider';
+import {
+  noteClassifierSettled,
+  noteClassifierStarted,
+  noteSendProcessingReturned,
+  noteSpeechAdmissionRequested,
+  noteSpeechSemanticInvoked,
+  noteSpeechSemanticSettled,
+  noteSpeechSendStarted,
+  noteSpeechTranscriptDelivered,
+} from '../dev/speechProductionPathProof';
+import { getLastCtxCompletionObservation, getPrevCtxCompletionMeta } from '../utils/latencyInstrument';
 import { applyWorldContext } from '../routing/worldContextNeed';
 import {
   selectConversationalWorker,
@@ -1416,6 +1427,7 @@ export default function ChatScreen() {
     // nothing downstream has to care which device produced the text.
     text = normalizeInput(text);
     if (!text) return;
+    if (inputSource === 'speech') noteSpeechSendStarted();
 
     if (isRecollectionSemanticDeviceEvidenceTrigger(text)) {
       lastSentRef.current = now;
@@ -1868,7 +1880,25 @@ export default function ChatScreen() {
     noteProofState('before');
     const outcome = await processUtterance(text, sessionRef.current, {
       classifyQuery,
-      classifyLLM: async (t: string) => proposeLocalClassification(t, getCtx(), { modelIdentity: getModelIdentity() }),
+      classifyLLM: async (t: string) => {
+        const ctx = getCtx();
+        const beforeSeq = getPrevCtxCompletionMeta().prevCompletionSeq;
+        noteClassifierStarted(typeof ctx?.id === 'number' ? ctx.id : null);
+        const result = await proposeLocalClassification(t, ctx, { modelIdentity: getModelIdentity() });
+        const after = getPrevCtxCompletionMeta();
+        const observed = getLastCtxCompletionObservation();
+        const advanced = after.prevConsumer === 'classifier'
+          && typeof after.prevCompletionSeq === 'number'
+          && after.prevCompletionSeq !== beforeSeq;
+        const nativeError = observed?.consumer === 'classifier'
+          && observed.completionSeq === after.prevCompletionSeq
+          && observed.outcome === 'error';
+        noteClassifierSettled(
+          !advanced ? 'refused' : nativeError ? 'error' : 'ok',
+          advanced ? after.prevCompletionSeq : null,
+        );
+        return result;
+      },
       llmReady: llmStatus === 'ready',
       llmStatus,
       captureContext: {
@@ -1879,6 +1909,7 @@ export default function ChatScreen() {
       getMedicationSemanticInterpreterCtx,
     }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current, calendarPresentationRef.current, calendarContinuationRef.current, discourseRef.current, conversationLedgerRef.current, reminiscenceArcRef.current, recoveryObligationRef.current, todoPresentationRef.current);
     journeyOutcome = outcome;
+    noteSendProcessingReturned();
     noteProofState('after');
     try {
       const proof = require('../dev/semanticJourneyEvidence');
@@ -2958,6 +2989,7 @@ export default function ChatScreen() {
     const trimmed = transcript.trim().slice(0, 2000);
     if (trimmed) talkSessionRef.current.noteContentfulUtterance();
     if (!trimmed) return;
+    noteSpeechTranscriptDelivered();
     latLog('handleTranscript entry', { turnId: getActiveTurnId(), charLen: trimmed.length });
     // Brief display in input bar so user sees what was heard, then send
     setInputText(trimmed);
@@ -3010,11 +3042,32 @@ export default function ChatScreen() {
     }
   }, [classifyQuery, getCtx, getKnownContactNames, getKnownListNames, llmStatus, getModelIdentity, getMedicationSemanticInterpreterCtx, addMessage, speak]);
 
-  const { isRecording, startRecording, stopRecording, suspendForSpeech, partialText } = useMic(
+  const { isRecording, startRecording, stopRecording, suspendForSpeech, partialText, injectCommittedOpenSpeechSegment } = useMic(
     handleTranscript,
     isSpeakingRef,
     handleNoRecognizableSpeech,
-    (text) => proposeSpeechCompletion(text, getCtx()),
+    (text) => {
+      const ctx = getCtx();
+      const contextId = typeof ctx?.id === 'number' ? ctx.id : null;
+      const beforeSeq = getLastCtxCompletionObservation()?.completionSeq ?? null;
+      noteSpeechAdmissionRequested();
+      noteSpeechSemanticInvoked(contextId);
+      return proposeSpeechCompletion(text, ctx).then(
+        (proposal) => {
+          const observed = getLastCtxCompletionObservation();
+          const fresh = observed?.consumer === 'speech' && observed.completionSeq !== beforeSeq;
+          noteSpeechSemanticSettled(
+            fresh && observed?.outcome === 'ok' ? 'ok' : 'error',
+            fresh && observed?.outcome === 'ok' ? observed.completionSeq : null,
+          );
+          return proposal;
+        },
+        (error) => {
+          noteSpeechSemanticSettled('error', null);
+          throw error;
+        },
+      );
+    },
     () => {
       const cue = projectRealization(
         { kind: 'CLARIFY_INTENT', text: "I didn't catch the rest of that." },
@@ -3103,6 +3156,7 @@ export default function ChatScreen() {
         startRecording: (entryPoint?: 'manual_button' | 'post_tts_handoff' | 'unknown_entry', mode?: 'open' | 'control_confirmation') =>
           startRecording(entryPoint ?? 'manual_button', mode ?? 'open'),
         peekSpeaking: () => isSpeakingRef.current,
+        peekClassifierReady: () => llmStatus === 'ready',
         beginManualConversation: () => {
           const micMode = sessionRef.current.hasPending() ? 'control_confirmation' : 'open';
           clearTalkSessionFollowupTimer();
@@ -3114,6 +3168,9 @@ export default function ChatScreen() {
         },
         injectHeardTranscript: (text: string) => {
           handleTranscript(text);
+        },
+        injectCommittedSpeechSegment: (text: string) => {
+          injectCommittedOpenSpeechSegment(text);
         },
         peekTalkSession: () => ({
           phase: talkSessionRef.current.phase,
@@ -3136,7 +3193,7 @@ export default function ChatScreen() {
     } catch {
       /* journey host only */
     }
-  }, [sendMessage, startRecording, handleTranscript]);
+  }, [sendMessage, startRecording, handleTranscript, injectCommittedOpenSpeechSegment, llmStatus]);
 
   useRaiseToWake({
     aiName: aiName || 'Herald',
