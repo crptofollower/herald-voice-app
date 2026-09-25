@@ -123,21 +123,24 @@ export async function runSpecialistInference(
   }
 }
 
-/** Direct completion for proposal modules that already hold a context. */
+const REFERENCE_SEMANTIC_TIMEOUT_MS = 8000;
+
+/** Reference, recap, and continuation proposals. The shared lifecycle owns the native call. */
 export async function completeBoundedInterpretation(
   kind: 'active_reference' | 'recap' | 'reference_continuation',
   ctx: { completion: (params: any) => Promise<unknown> } | null,
   params: unknown,
+  opts?: { timeoutMs?: number },
 ): Promise<{ status: 'ok'; value: unknown } | { status: 'unavailable' }> {
   if (kind !== 'active_reference' && kind !== 'recap' && kind !== 'reference_continuation') {
     return { status: 'unavailable' };
   }
   if (!ctx || typeof ctx.completion !== 'function') return { status: 'unavailable' };
-  try {
-    return { status: 'ok', value: await ctx.completion(params) };
-  } catch {
-    return { status: 'unavailable' };
-  }
+  const run = await runSharedSemanticCompletion(() => ctx, params, {
+    callerDeadlineMs: opts?.timeoutMs ?? REFERENCE_SEMANTIC_TIMEOUT_MS,
+  });
+  if (run.status !== 'ok') return { status: 'unavailable' };
+  return { status: 'ok', value: run.value };
 }
 
 const SPEECH_COMPLETION_PROMPT = 'Reply with one word only: complete, incomplete, or uncertain.';
