@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import {
   OPEN_SPEECH_CONTINUATION_GAP_MS,
   applyReopenedNativeSession,
+  classifyNativeListeningReady,
   createIdleOpenSpeechTurnState,
   reduceOpenSpeechTurn,
   resetOpenSpeechTurnIdsForTests,
@@ -466,6 +467,85 @@ export async function runSpeechProductionPathJourneyTests(): Promise<{
   passDeterministic();
   noteDeterministicAdmissionRequested();
   assert('a second admission is an incomplete extension and fails', snapshotDeterministicSpeechPathProof().incompleteExtensionTaken === true && deterministicSpeechPathSatisfied(snapshotDeterministicSpeechPathProof()) === false, 'false', 'true');
+
+  resetOpenSpeechTurnIdsForTests();
+  let readyState = createIdleOpenSpeechTurnState();
+  for (const event of journeyCommittedSegmentEvents(7, SPEECH_PRODUCTION_PATH_FIXTURE, 8_000)) {
+    readyState = reduceOpenSpeechTurn(readyState, event).state;
+  }
+  readyState = applyReopenedNativeSession(readyState, 8);
+  const readyDisposition = classifyNativeListeningReady(readyState, 8);
+  const readyStep = reduceOpenSpeechTurn(readyState, { type: 'native_listening_ready', nativeSessionId: 8, nowMs: 8_100 });
+  assert(
+    'listening-ready acceptance arms the continuation gap',
+    readyDisposition === 'accepted' && readyStep.effects.some((fx) => fx.type === 'arm_continuation_gap'),
+    'accepted+arm',
+    `${readyDisposition}:${readyStep.effects.map((fx) => fx.type).join(',')}`,
+  );
+  const staleDisposition = classifyNativeListeningReady(readyState, 99);
+  const staleStep = reduceOpenSpeechTurn(readyState, { type: 'native_listening_ready', nativeSessionId: 99, nowMs: 8_100 });
+  assert(
+    'a stale session is ignored and does not arm the gap',
+    staleDisposition === 'ignored_stale_session' && staleStep.effects.length === 0 && staleStep.state === readyState,
+    'ignored_stale_session',
+    staleDisposition,
+  );
+  const idleDisposition = classifyNativeListeningReady(createIdleOpenSpeechTurnState(), 1);
+  assert('idle listening-ready is ignored_wrong_state', idleDisposition === 'ignored_wrong_state', 'ignored_wrong_state', idleDisposition);
+  const armed = readyStep.state;
+  const cleared = reduceOpenSpeechTurn(armed, { type: 'speechstart', nativeSessionId: 8 });
+  assert(
+    'an armed gap clears on speechstart without another decision',
+    armed.continuationGapArmed === true && cleared.effects.some((fx) => fx.type === 'clear_continuation_gap'),
+    'clear_continuation_gap',
+    cleared.effects.map((fx) => fx.type).join(','),
+  );
+  const elapsed = reduceOpenSpeechTurn(armed, { type: 'continuation_gap_elapsed', generation: armed.continuationGeneration });
+  const evalFx = elapsed.effects.find((fx) => fx.type === 'evaluate_admission');
+  assert('elapsed gap emits admission evaluation', evalFx?.type === 'evaluate_admission', 'evaluate_admission', elapsed.effects.map((fx) => fx.type).join(','));
+  const applied = evalFx && evalFx.type === 'evaluate_admission'
+    ? reduceOpenSpeechTurn(elapsed.state, {
+      type: 'admission_evaluated',
+      trigger: evalFx.trigger,
+      proposal: 'uncertain',
+      text: evalFx.text,
+      epoch: evalFx.epoch,
+      heraldTurnId: evalFx.heraldTurnId,
+    })
+    : null;
+  assert(
+    'admission result applies a single deliver',
+    applied?.effects.filter((fx) => fx.type === 'deliver').length === 1,
+    'one deliver',
+    applied?.effects.map((fx) => fx.type).join(',') ?? 'missing',
+  );
+  const journeyBranch = useMic.slice(useMic.indexOf('if (journeyProofActiveRef.current)'), useMic.indexOf('speechLifecycleLog(\'RECOGNITION_REQUESTED\''));
+  assert(
+    'journey ready dispatch is logged before the synthetic event and not on the real recognizer path',
+    journeyBranch.includes('OPEN_SPEECH_JOURNEY_READY_DISPATCH')
+      && journeyBranch.indexOf('OPEN_SPEECH_JOURNEY_READY_DISPATCH') < journeyBranch.indexOf("type: 'native_listening_ready'")
+      && !useMic.slice(useMic.indexOf('speechLifecycleLog(\'RECOGNITION_REQUESTED\'')).includes('OPEN_SPEECH_JOURNEY_READY_DISPATCH'),
+    'dispatch then event',
+    'missing',
+  );
+  const gapArm = useMic.slice(useMic.indexOf("fx.type === 'arm_continuation_gap'"), useMic.indexOf("fx.type === 'arm_max_turn'"));
+  assert(
+    'gap elapsed is the production timer callback and the delay is unchanged',
+    gapArm.includes('OPEN_SPEECH_GAP_ELAPSED')
+      && gapArm.includes('OPEN_SPEECH_GAP_ARMED')
+      && gapArm.includes('OPEN_SPEECH_CONTINUATION_GAP_MS')
+      && gapArm.indexOf('OPEN_SPEECH_GAP_ELAPSED') < gapArm.indexOf('continuation_gap_elapsed'),
+    'production timer',
+    'missing',
+  );
+  const boundarySrc = fs.readFileSync(path.join(root, 'src/hooks/openSpeechTurnBoundary.ts'), 'utf8');
+  assert(
+    'diagnostic classification does not change the reducer',
+    boundarySrc.includes('export function classifyNativeListeningReady')
+      && !boundarySrc.slice(boundarySrc.indexOf('export function reduceOpenSpeechTurn')).includes('speechLifecycleLog'),
+    'reducer untouched',
+    'logged inside reducer',
+  );
 
   console.log(`SpeechProductionPathJourney: ${passed} passed, ${failures.length} failed`);
   return { passed, failed: failures.length, total: passed + failures.length, failures };

@@ -115,6 +115,23 @@ export function stitchOpenSpeechSegments(segments: readonly string[]): string {
     .join(' ');
 }
 
+export type ListeningReadyDisposition = 'accepted' | 'ignored_wrong_state' | 'ignored_stale_session';
+
+/** Classifies native_listening_ready without changing reducer output. */
+export function classifyNativeListeningReady(
+  state: OpenSpeechTurnState,
+  nativeSessionId: number,
+): ListeningReadyDisposition {
+  if (state.delivered || state.phase === 'finalized' || state.phase === 'abandoned' || state.phase === 'idle') {
+    return 'ignored_wrong_state';
+  }
+  if (nativeSessionId !== state.nativeSessionId) return 'ignored_stale_session';
+  if (state.mode !== 'open') return 'ignored_wrong_state';
+  if (!state.awaitingReadyAnchoredGap || state.continuationGapArmed) return 'ignored_wrong_state';
+  if (state.segments.length === 0) return 'ignored_wrong_state';
+  return 'accepted';
+}
+
 function live(state: OpenSpeechTurnState, nativeSessionId: number): boolean {
   if (state.delivered) return false;
   if (state.phase === 'finalized' || state.phase === 'abandoned' || state.phase === 'idle') return false;

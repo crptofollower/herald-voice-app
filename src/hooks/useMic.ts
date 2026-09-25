@@ -12,6 +12,7 @@ import {
   OPEN_SPEECH_CONTINUATION_GAP_MS,
   OPEN_SPEECH_MAX_TURN_MS,
   applyReopenedNativeSession,
+  classifyNativeListeningReady,
   createIdleOpenSpeechTurnState,
   reduceOpenSpeechTurn,
   type OpenSpeechEffect,
@@ -214,7 +215,8 @@ export function useMic(
   };
 
   const applyBoundary = (event: OpenSpeechEvent): OpenSpeechEffect[] => {
-    const out = reduceOpenSpeechTurn(boundaryRef.current, event);
+    const before = boundaryRef.current;
+    const out = reduceOpenSpeechTurn(before, event);
     boundaryRef.current = out.state;
     const deliver = out.effects.find((e) => e.type === 'deliver');
     const noSpeechFx = out.effects.find((e) => e.type === 'no_recognizable_speech');
@@ -229,6 +231,28 @@ export function useMic(
       speechLifecycleLog('OPEN_SPEECH_HERALD_START', {
         heraldTurnId: out.state.heraldTurnId,
         nativeSessionId: event.nativeSessionId,
+      });
+    }
+    if (event.type === 'native_listening_ready') {
+      speechLifecycleLog('OPEN_SPEECH_LISTENING_READY', {
+        heraldTurnId: before.heraldTurnId,
+        nativeSessionId: event.nativeSessionId,
+        result: classifyNativeListeningReady(before, event.nativeSessionId),
+      });
+    }
+    if (event.type === 'admission_evaluated') {
+      const proposal = event.proposal === 'uncertain' || event.proposal === 'complete' || event.proposal === 'incomplete'
+        ? event.proposal
+        : 'null';
+      const result = out.effects.some((e) => e.type === 'deliver')
+        ? 'admit'
+        : out.effects.some((e) => e.type === 'reopen_native')
+          ? 'hold'
+          : 'ignored';
+      speechLifecycleLog('OPEN_SPEECH_ADMISSION_RESULT', {
+        heraldTurnId: before.heraldTurnId,
+        proposal,
+        result,
       });
     }
     if (event.type === 'native_end') {
@@ -342,6 +366,10 @@ export function useMic(
       continuationStartRequestedAtMs: requestedAt,
     });
     if (journeyProofActiveRef.current) {
+      speechLifecycleLog('OPEN_SPEECH_JOURNEY_READY_DISPATCH', {
+        heraldTurnId: boundaryRef.current.heraldTurnId,
+        nativeSessionId: session,
+      });
       executeBoundaryEffects(applyBoundary({
         type: 'native_listening_ready',
         nativeSessionId: session,
@@ -372,16 +400,30 @@ export function useMic(
 
   const executeBoundaryEffects = (effects: OpenSpeechEffect[]) => {
     for (const fx of effects) {
-      if (fx.type === 'clear_continuation_gap') clearContinuationTimer();
+      if (fx.type === 'clear_continuation_gap') {
+        clearContinuationTimer();
+        speechLifecycleLog('OPEN_SPEECH_GAP_CLEARED', {
+          heraldTurnId: boundaryRef.current.heraldTurnId,
+          reason: 'reducer_clear',
+        });
+      }
       if (fx.type === 'clear_max_turn') clearHeraldMaxTurnTimer();
       if (fx.type === 'arm_continuation_gap') {
         clearContinuationTimer();
         const generation = fx.generation;
         continuationTimerRef.current = setTimeout(() => {
           continuationTimerRef.current = null;
+          speechLifecycleLog('OPEN_SPEECH_GAP_ELAPSED', {
+            heraldTurnId: boundaryRef.current.heraldTurnId,
+            generation,
+          });
           noteDeterministicContinuationGapElapsed();
           executeBoundaryEffects(applyBoundary({ type: 'continuation_gap_elapsed', generation }));
         }, OPEN_SPEECH_CONTINUATION_GAP_MS);
+        speechLifecycleLog('OPEN_SPEECH_GAP_ARMED', {
+          heraldTurnId: boundaryRef.current.heraldTurnId,
+          generation,
+        });
       }
       if (fx.type === 'arm_max_turn') {
         clearHeraldMaxTurnTimer();
@@ -404,6 +446,10 @@ export function useMic(
         journeyProofActiveRef.current = false;
       }
       if (fx.type === 'evaluate_admission') {
+        speechLifecycleLog('OPEN_SPEECH_ADMISSION_EVALUATE', {
+          heraldTurnId: fx.heraldTurnId,
+          trigger: fx.trigger,
+        });
         const trigger = fx.trigger;
         const text = fx.text;
         const epoch = fx.epoch;
