@@ -9,9 +9,19 @@ export type LlamaContextExclusiveOwner =
   | 'ephemeral'
   | 'probe'
   | 'session-save'
-  | 'context-release';
+  | 'context-release'
+  | 'semantic';
+
+export type SemanticCompletionAdmission = {
+  token: number;
+  contextId: string;
+  operation: string;
+  generation: number;
+};
 
 let heldBy: LlamaContextExclusiveOwner | null = null;
+let semanticAdmission: SemanticCompletionAdmission | null = null;
+let semanticTokenSeq = 0;
 /** When true, try-acquire fails and only context-release may wait-acquire. */
 let retiring = false;
 const waitQueue: Array<() => void> = [];
@@ -36,6 +46,50 @@ function wakeWaiters(): void {
 
 function releaseHold(): void {
   heldBy = null;
+  semanticAdmission = null;
+  wakeWaiters();
+}
+
+/**
+ * Non-queuing process-wide admission for one native completion.
+ * The slot stays owned until releaseSemanticCompletion(token), not until
+ * the caller stops waiting.
+ */
+export function tryAdmitSemanticCompletion(input: {
+  contextId: string;
+  operation: string;
+}): { ok: true; admission: SemanticCompletionAdmission } | { ok: false; reason: 'busy' } {
+  if (heldBy !== null || retiring || semanticAdmission !== null) {
+    return { ok: false, reason: 'busy' };
+  }
+  semanticTokenSeq += 1;
+  const admission: SemanticCompletionAdmission = {
+    token: semanticTokenSeq,
+    contextId: input.contextId,
+    operation: input.operation,
+    generation: semanticTokenSeq,
+  };
+  semanticAdmission = admission;
+  heldBy = 'semantic';
+  return { ok: true, admission };
+}
+
+export function getSemanticCompletionAdmission(): SemanticCompletionAdmission | null {
+  return semanticAdmission;
+}
+
+/** Release only the admission identified by token. A stale token is a no-op. */
+export function releaseSemanticCompletion(token: number): boolean {
+  if (!semanticAdmission || semanticAdmission.token !== token) return false;
+  semanticAdmission = null;
+  if (heldBy === 'semantic') heldBy = null;
+  wakeWaiters();
+  return true;
+}
+
+export function resetSemanticCompletionAdmissionForTests(): void {
+  semanticAdmission = null;
+  if (heldBy === 'semantic') heldBy = null;
   wakeWaiters();
 }
 
