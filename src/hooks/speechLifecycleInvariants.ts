@@ -169,6 +169,62 @@ export function noteOpenSpeechTurnDeviceEvidence(
   };
 }
 
+export type SpeechTimerClearReason =
+  | 'reducer_clear'
+  | 'suspend_preclear'
+  | 'deliver_cleanup'
+  | 'unmount_cleanup'
+  | 'rearm_replace';
+
+export function logGapTimerClear(fields: {
+  reason: SpeechTimerClearReason;
+  hadHandle: boolean;
+  generation: number;
+  heraldTurnId: number;
+  nativeSessionId: number;
+}): void {
+  if (!fields.hadHandle) return;
+  speechLifecycleLog('OPEN_SPEECH_GAP_TIMER_CLEAR', fields);
+}
+
+export function logMaxTurnTimerClear(fields: {
+  reason: SpeechTimerClearReason;
+  hadHandle: boolean;
+  heraldTurnId: number;
+}): void {
+  if (!fields.hadHandle) return;
+  speechLifecycleLog('OPEN_SPEECH_MAX_TURN_TIMER_CLEAR', fields);
+}
+
+export const GAP_TIMER_PROBE_OFFSETS_MS = [500, 1500] as const;
+
+/** Proof-only probes. They use their own schedule and do not touch the continuation timer. */
+export function scheduleOpenSpeechGapTimerProbes(input: {
+  proofActive: boolean;
+  generation: number;
+  heraldTurnId: number;
+  nativeSessionId: number;
+  readHadHandle: () => boolean;
+  schedule?: (fn: () => void, ms: number) => void;
+}): void {
+  if (!input.proofActive) return;
+  const schedule = input.schedule ?? ((fn: () => void, ms: number) => {
+    setTimeout(fn, ms);
+  });
+  for (const offsetMs of GAP_TIMER_PROBE_OFFSETS_MS) {
+    schedule(() => {
+      speechLifecycleLog('OPEN_SPEECH_GAP_TIMER_PROBE', {
+        offsetMs,
+        hadHandle: input.readHadHandle(),
+        generation: input.generation,
+        proofActive: true,
+        heraldTurnId: input.heraldTurnId,
+        nativeSessionId: input.nativeSessionId,
+      });
+    }, offsetMs);
+  }
+}
+
 export function speechLifecycleLog(event: string, extra: Record<string, unknown> = {}): void {
   const ts = Date.now();
   speechLifecycleRing.push({ ts, event, extra: { ...extra } });

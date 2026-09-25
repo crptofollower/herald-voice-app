@@ -11,6 +11,13 @@ import {
 } from '../../src/hooks/openSpeechTurnBoundary.ts';
 import { proposeSpeechCompletion } from '../../src/routing/semanticProvider.ts';
 import {
+  logGapTimerClear,
+  logMaxTurnTimerClear,
+  resetSpeechLifecycleRing,
+  scheduleOpenSpeechGapTimerProbes,
+  snapshotSpeechLifecycleRing,
+} from '../../src/hooks/speechLifecycleInvariants.ts';
+import {
   FORMER_SPEECH_PRODUCTION_PROBE_TIMEOUT_MS,
   SPEECH_PRODUCTION_PROBE_TIMEOUT_MS,
   classifySpeechProductionPreconditions,
@@ -545,6 +552,87 @@ export async function runSpeechProductionPathJourneyTests(): Promise<{
       && !boundarySrc.slice(boundarySrc.indexOf('export function reduceOpenSpeechTurn')).includes('speechLifecycleLog'),
     'reducer untouched',
     'logged inside reducer',
+  );
+
+  resetSpeechLifecycleRing();
+  const timerFields = { generation: 2, heraldTurnId: 1, nativeSessionId: 2 };
+  for (const reason of ['reducer_clear', 'suspend_preclear', 'deliver_cleanup', 'unmount_cleanup', 'rearm_replace'] as const) {
+    logGapTimerClear({ reason, hadHandle: true, ...timerFields });
+  }
+  logGapTimerClear({ reason: 'reducer_clear', hadHandle: false, ...timerFields });
+  const gapClears = snapshotSpeechLifecycleRing().filter((row) => row.event === 'OPEN_SPEECH_GAP_TIMER_CLEAR');
+  assert(
+    'each continuation clear reason is logged only when a handle existed',
+    gapClears.map((row) => row.extra.reason).join(',') === 'reducer_clear,suspend_preclear,deliver_cleanup,unmount_cleanup,rearm_replace',
+    'five reasons',
+    gapClears.map((row) => String(row.extra.reason)).join(','),
+  );
+  resetSpeechLifecycleRing();
+  logMaxTurnTimerClear({ reason: 'reducer_clear', hadHandle: true, heraldTurnId: 1 });
+  logMaxTurnTimerClear({ reason: 'reducer_clear', hadHandle: false, heraldTurnId: 1 });
+  assert(
+    'max-turn clear is logged only when a handle existed',
+    snapshotSpeechLifecycleRing().filter((row) => row.event === 'OPEN_SPEECH_MAX_TURN_TIMER_CLEAR').length === 1,
+    'one clear',
+    String(snapshotSpeechLifecycleRing().length),
+  );
+  resetSpeechLifecycleRing();
+  let handlePresent = true;
+  const scheduled: Array<{ ms: number; fn: () => void }> = [];
+  scheduleOpenSpeechGapTimerProbes({
+    proofActive: false,
+    generation: 2,
+    heraldTurnId: 1,
+    nativeSessionId: 2,
+    readHadHandle: () => handlePresent,
+    schedule: (fn, ms) => { scheduled.push({ ms, fn }); },
+  });
+  scheduleOpenSpeechGapTimerProbes({
+    proofActive: true,
+    generation: 2,
+    heraldTurnId: 1,
+    nativeSessionId: 2,
+    readHadHandle: () => handlePresent,
+    schedule: (fn, ms) => { scheduled.push({ ms, fn }); },
+  });
+  assert('proof-inactive arm schedules no handle probes', scheduled.length === 2 && scheduled[0].ms === 500 && scheduled[1].ms === 1500, '500,1500', scheduled.map((row) => row.ms).join(','));
+  scheduled[0].fn();
+  handlePresent = false;
+  scheduled[1].fn();
+  const probes = snapshotSpeechLifecycleRing().filter((row) => row.event === 'OPEN_SPEECH_GAP_TIMER_PROBE');
+  assert(
+    'T+500 probe reports the handle present and T+1500 reports it absent',
+    probes[0]?.extra.offsetMs === 500 && probes[0]?.extra.hadHandle === true
+      && probes[1]?.extra.offsetMs === 1500 && probes[1]?.extra.hadHandle === false,
+    '500 present, 1500 absent',
+    probes.map((row) => `${row.extra.offsetMs}:${row.extra.hadHandle}`).join(','),
+  );
+  const continuationCallback = useMic.slice(useMic.indexOf('continuationTimerRef.current = setTimeout'), useMic.indexOf('OPEN_SPEECH_GAP_ARMED'));
+  const beforeElapsed = continuationCallback.slice(0, continuationCallback.indexOf('OPEN_SPEECH_GAP_ELAPSED'));
+  assert(
+    'continuation callback still begins its speech log with GAP_ELAPSED and keeps 1200 ms',
+    continuationCallback.indexOf('OPEN_SPEECH_GAP_ELAPSED') < continuationCallback.indexOf('continuation_gap_elapsed')
+      && continuationCallback.includes('OPEN_SPEECH_CONTINUATION_GAP_MS')
+      && beforeElapsed.trimEnd().endsWith("speechLifecycleLog('"),
+    'elapsed first',
+    'moved',
+  );
+  const maxTurnStart = useMic.indexOf('heraldMaxTurnTimerRef.current = setTimeout');
+  const maxTurnCallback = useMic.slice(maxTurnStart, useMic.indexOf('OPEN_SPEECH_MAX_TURN_MS', maxTurnStart) + 'OPEN_SPEECH_MAX_TURN_MS'.length);
+  assert(
+    'max-turn callback logs entry before finalize and keeps the 20s delay',
+    maxTurnCallback.includes('OPEN_SPEECH_MAX_TURN_ELAPSED')
+      && maxTurnCallback.includes('OPEN_SPEECH_MAX_TURN_MS')
+      && maxTurnCallback.indexOf('OPEN_SPEECH_MAX_TURN_ELAPSED') < maxTurnCallback.indexOf('heraldMaxTurnTimerRef.current = null'),
+    'entry first',
+    'missing',
+  );
+  assert(
+    'every continuation clear path names a fixed reason',
+    ["'suspend_preclear'", "'reducer_clear'", "'rearm_replace'", "'deliver_cleanup'", "'unmount_cleanup'"]
+      .every((reason) => useMic.includes(`clearContinuationTimer(${reason})`)),
+    'all reasons',
+    'missing path',
   );
 
   console.log(`SpeechProductionPathJourney: ${passed} passed, ${failures.length} failed`);

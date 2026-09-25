@@ -26,8 +26,12 @@ import { beginTurn, getActiveTurnId, log as latLog, mono as latMono } from '../u
 import {
   LISTENING_READY_TIMEOUT_MS,
   applyListeningReadyTimeout,
+  logGapTimerClear,
+  logMaxTurnTimerClear,
+  scheduleOpenSpeechGapTimerProbes,
   speechLifecycleLog,
   noteOpenSpeechTurnDeviceEvidence,
+  type SpeechTimerClearReason,
 } from './speechLifecycleInvariants';
 
 export { evaluateEmptySessionRecovery } from './emptySessionRecoveryDecision';
@@ -163,8 +167,8 @@ export function useMic(
     if (bufferTimerRef.current) { clearTimeout(bufferTimerRef.current); bufferTimerRef.current = null; }
     bufferRef.current = '';
     if (maxTimer.current) { clearTimeout(maxTimer.current); maxTimer.current = null; }
-    clearContinuationTimer();
-    clearHeraldMaxTurnTimer();
+    clearContinuationTimer('suspend_preclear');
+    clearHeraldMaxTurnTimer('suspend_preclear');
     executeBoundaryEffects(applyBoundary({ type: 'tts_preempt' }));
     clearReadyTimeout();
     listeningReadyRef.current = false;
@@ -201,17 +205,31 @@ export function useMic(
   // One-shot (continuous:false): native 'end' is the provider session
   // boundary. Open mode may reopen inside a Herald turn; control_confirmation
   // still flushes the Herald turn on native end.
-  const clearContinuationTimer = () => {
+  const clearContinuationTimer = (reason: SpeechTimerClearReason) => {
+    const hadHandle = continuationTimerRef.current != null;
     if (continuationTimerRef.current) {
       clearTimeout(continuationTimerRef.current);
       continuationTimerRef.current = null;
     }
+    logGapTimerClear({
+      reason,
+      hadHandle,
+      generation: boundaryRef.current.continuationGeneration,
+      heraldTurnId: boundaryRef.current.heraldTurnId,
+      nativeSessionId: boundaryRef.current.nativeSessionId,
+    });
   };
-  const clearHeraldMaxTurnTimer = () => {
+  const clearHeraldMaxTurnTimer = (reason: SpeechTimerClearReason) => {
+    const hadHandle = heraldMaxTurnTimerRef.current != null;
     if (heraldMaxTurnTimerRef.current) {
       clearTimeout(heraldMaxTurnTimerRef.current);
       heraldMaxTurnTimerRef.current = null;
     }
+    logMaxTurnTimerClear({
+      reason,
+      hadHandle,
+      heraldTurnId: boundaryRef.current.heraldTurnId,
+    });
   };
 
   const applyBoundary = (event: OpenSpeechEvent): OpenSpeechEffect[] => {
@@ -401,15 +419,15 @@ export function useMic(
   const executeBoundaryEffects = (effects: OpenSpeechEffect[]) => {
     for (const fx of effects) {
       if (fx.type === 'clear_continuation_gap') {
-        clearContinuationTimer();
+        clearContinuationTimer('reducer_clear');
         speechLifecycleLog('OPEN_SPEECH_GAP_CLEARED', {
           heraldTurnId: boundaryRef.current.heraldTurnId,
           reason: 'reducer_clear',
         });
       }
-      if (fx.type === 'clear_max_turn') clearHeraldMaxTurnTimer();
+      if (fx.type === 'clear_max_turn') clearHeraldMaxTurnTimer('reducer_clear');
       if (fx.type === 'arm_continuation_gap') {
-        clearContinuationTimer();
+        clearContinuationTimer('rearm_replace');
         const generation = fx.generation;
         continuationTimerRef.current = setTimeout(() => {
           continuationTimerRef.current = null;
@@ -424,10 +442,20 @@ export function useMic(
           heraldTurnId: boundaryRef.current.heraldTurnId,
           generation,
         });
+        scheduleOpenSpeechGapTimerProbes({
+          proofActive: journeyProofActiveRef.current,
+          generation,
+          heraldTurnId: boundaryRef.current.heraldTurnId,
+          nativeSessionId: boundaryRef.current.nativeSessionId,
+          readHadHandle: () => continuationTimerRef.current != null,
+        });
       }
       if (fx.type === 'arm_max_turn') {
-        clearHeraldMaxTurnTimer();
+        clearHeraldMaxTurnTimer('rearm_replace');
         heraldMaxTurnTimerRef.current = setTimeout(() => {
+          speechLifecycleLog('OPEN_SPEECH_MAX_TURN_ELAPSED', {
+            heraldTurnId: boundaryRef.current.heraldTurnId,
+          });
           heraldMaxTurnTimerRef.current = null;
           executeBoundaryEffects(applyBoundary({ type: 'max_turn_elapsed' }));
         }, OPEN_SPEECH_MAX_TURN_MS);
@@ -491,8 +519,8 @@ export function useMic(
     turnActiveRef.current = false;
     speechStartedRef.current = false;
     if (maxTimer.current) { clearTimeout(maxTimer.current); maxTimer.current = null; }
-    clearContinuationTimer();
-    clearHeraldMaxTurnTimer();
+    clearContinuationTimer('deliver_cleanup');
+    clearHeraldMaxTurnTimer('deliver_cleanup');
     setIsRecording(false);
     if (final) {
       log('TRANSCRIPT_SELECTED', {
@@ -791,8 +819,8 @@ export function useMic(
       suspendCoordinatorRef.current.cancel();
       clearEmptySessionRecovery();
       clearReadyTimeout();
-      clearContinuationTimer();
-      clearHeraldMaxTurnTimer();
+      clearContinuationTimer('unmount_cleanup');
+      clearHeraldMaxTurnTimer('unmount_cleanup');
     };
   }, []);
 
