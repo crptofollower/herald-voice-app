@@ -54,7 +54,9 @@ export async function runUxPass1Tests() {
     micSrc,
     (src) => typeof src === 'string'
       && /const \[partialText, setPartialText\]/.test(src)
-      && /return \{ isRecording, startRecording, stopRecording, suspendForSpeech, partialText \}/.test(src),
+      && /partialText,/.test(src)
+      && /injectCommittedOpenSpeechSegment,/.test(src)
+      && !/setPartialText,/.test(src),
     'partialText state mirrored and returned',
   );
 

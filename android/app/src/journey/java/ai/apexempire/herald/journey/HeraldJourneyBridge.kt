@@ -224,6 +224,38 @@ object HeraldJourneyBridge {
     } else json
   }
 
+  fun probeSpeechProductionPath(timeoutMs: Long = 180_000L): String {
+    if (!inFlight.compareAndSet(false, true)) {
+      return JSONObject().put("schema", "herald.journey.speech_production_path.v1").put("status", "FAIL").put("failReason", "duplicate_or_in_flight").toString()
+    }
+    lastJson.set(null)
+    expectedTurnId.set(null)
+    val latch = CountDownLatch(1)
+    waiter.set(latch)
+    val ctx = reactContext
+    if (ctx == null) {
+      inFlight.set(false)
+      waiter.set(null)
+      return JSONObject().put("schema", "herald.journey.speech_production_path.v1").put("status", "FAIL").put("failReason", "react_context_missing").toString()
+    }
+    try {
+      ctx
+        .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+        .emit("DebugJourneySpeechProductionPath", Arguments.createMap())
+    } catch (e: Exception) {
+      inFlight.set(false)
+      waiter.set(null)
+      return JSONObject().put("schema", "herald.journey.speech_production_path.v1").put("status", "FAIL").put("failReason", "emit_failed").toString()
+    }
+    val completed = latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+    val json = lastJson.get()
+    waiter.set(null)
+    inFlight.set(false)
+    return if (!completed || json == null) {
+      JSONObject().put("schema", "herald.journey.speech_production_path.v1").put("status", "FAIL").put("failReason", "timeout").toString()
+    } else json
+  }
+
   fun probeSemanticEngine(timeoutMs: Long = 5_000L): String {
     if (!inFlight.compareAndSet(false, true)) {
       return JSONObject().put("schema", "herald.journey.semantic_engine.v1").put("gate", "PENDING").put("failReason", "duplicate_or_in_flight").toString()

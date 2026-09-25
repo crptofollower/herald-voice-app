@@ -84,6 +84,14 @@ import { useMedicationSemanticInterpreterEngine } from '../hooks/useMedicationSe
 import { isRecollectionSemanticDeviceEvidenceTrigger } from '../dev/recollectionSemanticDeviceEvidenceTrigger';
 import { runRecollectionSemanticDeviceEvidence } from '../dev/recollectionSemanticDeviceEvidenceRun';
 import { proposeLocalClassification, proposeSpeechCompletion } from '../routing/semanticProvider';
+import {
+  noteClassifierContext,
+  noteSpeechAdmissionRequested,
+  noteSpeechSemanticInvoked,
+  noteSpeechSemanticSettled,
+  noteSpeechSendStarted,
+  noteSpeechTranscriptDelivered,
+} from '../dev/speechProductionPathProof';
 import { applyWorldContext } from '../routing/worldContextNeed';
 import {
   selectConversationalWorker,
@@ -1416,6 +1424,7 @@ export default function ChatScreen() {
     // nothing downstream has to care which device produced the text.
     text = normalizeInput(text);
     if (!text) return;
+    if (inputSource === 'speech') noteSpeechSendStarted();
 
     if (isRecollectionSemanticDeviceEvidenceTrigger(text)) {
       lastSentRef.current = now;
@@ -1868,7 +1877,11 @@ export default function ChatScreen() {
     noteProofState('before');
     const outcome = await processUtterance(text, sessionRef.current, {
       classifyQuery,
-      classifyLLM: async (t: string) => proposeLocalClassification(t, getCtx(), { modelIdentity: getModelIdentity() }),
+      classifyLLM: async (t: string) => {
+        const ctx = getCtx();
+        noteClassifierContext(typeof ctx?.id === 'number' ? ctx.id : null);
+        return proposeLocalClassification(t, ctx, { modelIdentity: getModelIdentity() });
+      },
       llmReady: llmStatus === 'ready',
       llmStatus,
       captureContext: {
@@ -2958,6 +2971,7 @@ export default function ChatScreen() {
     const trimmed = transcript.trim().slice(0, 2000);
     if (trimmed) talkSessionRef.current.noteContentfulUtterance();
     if (!trimmed) return;
+    noteSpeechTranscriptDelivered();
     latLog('handleTranscript entry', { turnId: getActiveTurnId(), charLen: trimmed.length });
     // Brief display in input bar so user sees what was heard, then send
     setInputText(trimmed);
@@ -3010,11 +3024,26 @@ export default function ChatScreen() {
     }
   }, [classifyQuery, getCtx, getKnownContactNames, getKnownListNames, llmStatus, getModelIdentity, getMedicationSemanticInterpreterCtx, addMessage, speak]);
 
-  const { isRecording, startRecording, stopRecording, suspendForSpeech, partialText } = useMic(
+  const { isRecording, startRecording, stopRecording, suspendForSpeech, partialText, injectCommittedOpenSpeechSegment } = useMic(
     handleTranscript,
     isSpeakingRef,
     handleNoRecognizableSpeech,
-    (text) => proposeSpeechCompletion(text, getCtx()),
+    (text) => {
+      const ctx = getCtx();
+      const contextId = typeof ctx?.id === 'number' ? ctx.id : null;
+      noteSpeechAdmissionRequested();
+      noteSpeechSemanticInvoked(contextId);
+      return proposeSpeechCompletion(text, ctx).then(
+        (proposal) => {
+          noteSpeechSemanticSettled();
+          return proposal;
+        },
+        (error) => {
+          noteSpeechSemanticSettled();
+          throw error;
+        },
+      );
+    },
     () => {
       const cue = projectRealization(
         { kind: 'CLARIFY_INTENT', text: "I didn't catch the rest of that." },
@@ -3115,6 +3144,9 @@ export default function ChatScreen() {
         injectHeardTranscript: (text: string) => {
           handleTranscript(text);
         },
+        injectCommittedSpeechSegment: (text: string) => {
+          injectCommittedOpenSpeechSegment(text);
+        },
         peekTalkSession: () => ({
           phase: talkSessionRef.current.phase,
           generation: talkSessionRef.current.generation,
@@ -3136,7 +3168,7 @@ export default function ChatScreen() {
     } catch {
       /* journey host only */
     }
-  }, [sendMessage, startRecording, handleTranscript]);
+  }, [sendMessage, startRecording, handleTranscript, injectCommittedOpenSpeechSegment]);
 
   useRaiseToWake({
     aiName: aiName || 'Herald',
