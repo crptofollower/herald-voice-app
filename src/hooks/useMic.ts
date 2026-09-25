@@ -19,6 +19,7 @@ import {
   type OpenSpeechTurnState,
 } from './openSpeechTurnBoundary';
 import { admittedTurnText } from './speechTurnEnvelope';
+import { journeyCommittedSegmentEvents, noteSpeechBoundaryEntered } from '../dev/speechProductionPathProof';
 import type { SpeechCompletionProposal } from './speechAdmission';
 import { beginTurn, getActiveTurnId, log as latLog, mono as latMono } from '../utils/latencyInstrument';
 import {
@@ -74,6 +75,7 @@ export function useMic(
   const continuationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const heraldMaxTurnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const resolveSpeechAdmissionRef = useRef(resolveSpeechAdmission);
+  const journeyProofActiveRef = useRef(false);
   const onBoundedSpeechRecoveryRef = useRef(onBoundedSpeechRecovery);
   resolveSpeechAdmissionRef.current = resolveSpeechAdmission;
   onBoundedSpeechRecoveryRef.current = onBoundedSpeechRecovery;
@@ -339,6 +341,14 @@ export function useMic(
       nativeSessionId: session,
       continuationStartRequestedAtMs: requestedAt,
     });
+    if (journeyProofActiveRef.current) {
+      executeBoundaryEffects(applyBoundary({
+        type: 'native_listening_ready',
+        nativeSessionId: session,
+        nowMs: Date.now(),
+      }));
+      return;
+    }
     try {
       speechLifecycleLog('RECOGNITION_REQUESTED', {
         session,
@@ -383,12 +393,14 @@ export function useMic(
         startContinuationNative();
       }
       if (fx.type === 'abort_native') {
+        journeyProofActiveRef.current = false;
         engineActiveRef.current = false;
         try { ExpoSpeechRecognitionModule.abort(); } catch { /* already idle */ }
       }
       if (fx.type === 'deliver') {
         const admitted = admittedTurnText(boundaryRef.current, fx.utterance, fx.source);
         if (admitted) deliverBufferWithoutNativeStop(fx.source, admitted);
+        journeyProofActiveRef.current = false;
       }
       if (fx.type === 'evaluate_admission') {
         const trigger = fx.trigger;
@@ -814,5 +826,25 @@ export function useMic(
     }
   }, [stopRecording]);
 
-  return { isRecording, startRecording, stopRecording, suspendForSpeech, partialText };
+  const injectCommittedOpenSpeechSegment = useCallback((text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || journeyProofActiveRef.current) return;
+    journeyProofActiveRef.current = true;
+    noteSpeechBoundaryEntered();
+    micSessionRef.current += 1;
+    const session = micSessionRef.current;
+    const nowMs = Date.now();
+    for (const event of journeyCommittedSegmentEvents(session, trimmed, nowMs)) {
+      executeBoundaryEffects(applyBoundary(event));
+    }
+  }, []);
+
+  return {
+    isRecording,
+    startRecording,
+    stopRecording,
+    suspendForSpeech,
+    partialText,
+    injectCommittedOpenSpeechSegment,
+  };
 }

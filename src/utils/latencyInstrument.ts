@@ -18,6 +18,11 @@ let ctxCompletionSeq = 0;
 let lastCompletionSeq: number | null = null;
 let lastConsumer: CtxCompletionConsumer | null = null;
 let lastCompletionEndMonoMs: number | null = null;
+let lastObservedCtxCompletion: {
+  completionSeq: number;
+  consumer: CtxCompletionConsumer;
+  outcome: 'ok' | 'error';
+} | null = null;
 
 function monoNow(): number {
   if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
@@ -140,12 +145,22 @@ export function extractCompletionTimingFields(result: unknown): Record<string, u
   return out;
 }
 
+/** Latest completion end, including speech. Does not affect the session cursor. */
+export function getLastCtxCompletionObservation(): {
+  completionSeq: number;
+  consumer: CtxCompletionConsumer;
+  outcome: 'ok' | 'error';
+} | null {
+  return lastObservedCtxCompletion ? { ...lastObservedCtxCompletion } : null;
+}
+
 /** Log END + update in-memory last-completion cursor. Never throws to callers. */
 export function endCtxCompletion(
   completionSeq: number,
   consumer: CtxCompletionConsumer,
   durationMs: number,
   result?: unknown,
+  outcome: 'ok' | 'error' = 'ok',
 ): void {
   try {
     const timingFields = extractCompletionTimingFields(result);
@@ -158,6 +173,7 @@ export function endCtxCompletion(
     lastCompletionSeq = completionSeq;
     lastConsumer = consumer;
     lastCompletionEndMonoMs = monoNow();
+    lastObservedCtxCompletion = { completionSeq, consumer, outcome };
   } catch {
     // instrumentation must never alter completion behavior
   }
@@ -183,6 +199,7 @@ export function observeCtxCompletionEnd(
       durationMs: Math.round(durationMs * 100) / 100,
       ...extractCompletionTimingFields(result),
     });
+    lastObservedCtxCompletion = { completionSeq, consumer, outcome };
   } catch {
     // instrumentation must never alter completion behavior
   }

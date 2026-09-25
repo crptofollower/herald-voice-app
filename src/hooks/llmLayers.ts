@@ -658,7 +658,7 @@ User: "${trimmed.replace(/"/g, '\\"')}"`;
       };
     } catch (e) {
       if (completionSeq != null && !completionEnded) {
-        endCtxCompletion(completionSeq, consumer, Date.now() - __t0, undefined);
+        endCtxCompletion(completionSeq, consumer, Date.now() - __t0, undefined, 'error');
       }
       classifyOutcome = 'failed';
       console.log('[classifyWithLLM] failed', JSON.stringify({ ms: Date.now() - __t0, error: String(e) }));

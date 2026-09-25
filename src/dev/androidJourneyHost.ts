@@ -4,7 +4,7 @@
  */
 import { DeviceEventEmitter, NativeModules, Platform } from 'react-native';
 import { beginSemanticProof, finishSemanticProof } from './semanticJourneyEvidence';
-import { classifySemanticEngineReadiness, emptySemanticEngineDiagnostic } from './semanticEngineReadiness';
+import { classifySemanticEngineReadiness, emptySemanticEngineDiagnostic, SEMANTIC_ENGINE_READINESS_TIMEOUT_MS } from './semanticEngineReadiness';
 import {
   JOURNEY_TURN_READINESS_POLL_MS,
   JOURNEY_TURN_READINESS_TIMEOUT_MS,
@@ -24,6 +24,13 @@ import {
   snapshotSpeechLifecycleRing,
   peekOpenSpeechTurnDeviceEvidence,
 } from '../hooks/speechLifecycleInvariants';
+import {
+  SPEECH_PRODUCTION_PATH_FIXTURE,
+  armSpeechProductionPathProof,
+  resetSpeechProductionPathProof,
+  snapshotSpeechProductionPathProof,
+  speechProductionPathSatisfied,
+} from './speechProductionPathProof';
 
 type SendMessageFn = (text: string, inputSource?: 'typed' | 'speech') => Promise<void>;
 type StartRecordingFn = (
@@ -41,11 +48,13 @@ type JourneyRuntime = {
   resetConversation: () => void;
   startRecording?: StartRecordingFn;
   peekSpeaking?: () => boolean;
+  peekClassifierReady?: () => boolean;
   beginManualConversation?: () => void;
   injectHeardTranscript?: (text: string) => void;
   peekTalkSession?: () => TalkSessionPeek;
   peekSemanticEngine?: () => import('./semanticEngineReadiness').SemanticEngineDiagnostic;
   peekJourneyTurnReadiness?: () => JourneyTurnReadiness;
+  injectCommittedSpeechSegment?: (text: string) => void;
 };
 
 type NativeBridge = {
@@ -150,6 +159,7 @@ const TEARDOWN_EVENT = 'DebugJourneyTeardown';
 const SPEECH_PROBE_EVENT = 'DebugJourneySpeechProbe';
 const TALK_SESSION_HANDOFF_EVENT = 'DebugJourneyTalkSessionHandoff';
 const SEMANTIC_ENGINE_PROBE_EVENT = 'DebugJourneySemanticEngineProbe';
+const SPEECH_PRODUCTION_PATH_EVENT = 'DebugJourneySpeechProductionPath';
 const NATIVE_NAME = 'DebugJourneyBridge';
 
 let runtime: JourneyRuntime | null = null;
@@ -160,6 +170,7 @@ let teardownSubscription: { remove: () => void } | null = null;
 let speechProbeSubscription: { remove: () => void } | null = null;
 let talkSessionHandoffSubscription: { remove: () => void } | null = null;
 let semanticEngineProbeSubscription: { remove: () => void } | null = null;
+let speechProductionPathSubscription: { remove: () => void } | null = null;
 let inFlightTurnId: string | null = null;
 let lastReportedOutcome: unknown = undefined;
 let lastReportedPendingKey: string | null = null;
@@ -919,6 +930,78 @@ function runReset(scenarioId: string | null = null): void {
   }
 }
 
+function speechProofEnvelope(status: 'PASS' | 'FAIL', failReason: string | null) {
+  const snap = snapshotSpeechProductionPathProof();
+  return {
+    schema: 'herald.journey.speech_production_path.v1' as const,
+    status,
+    failReason,
+    speechBoundaryEntered: snap.speechBoundaryEntered,
+    speechAdmissionRequested: snap.speechAdmissionRequested,
+    speechSemanticInvoked: snap.speechSemanticInvoked,
+    speechSemanticSettled: snap.speechSemanticSettled,
+    speechTranscriptDelivered: snap.speechTranscriptDelivered,
+    speechSendStarted: snap.speechSendStarted,
+    classifierInvokedAfterSpeech: snap.classifierInvokedAfterSpeech,
+    sameClassifierContext: snap.sameClassifierContext,
+    sendProcessingReturned: snap.sendProcessingReturned,
+    speechCompletionCount: snap.speechCompletionCount,
+    speechClassifierContextId: snap.speechClassifierContextId,
+    classifyClassifierContextId: snap.classifyClassifierContextId,
+    speechNativeOutcome: snap.speechNativeOutcome,
+    speechCompletionSeq: snap.speechCompletionSeq,
+    classifierNativeOutcome: snap.classifierNativeOutcome,
+    classifierCompletionSeq: snap.classifierCompletionSeq,
+    speechSemanticInvokedSeq: snap.speechSemanticInvokedSeq,
+    speechSemanticSettledSeq: snap.speechSemanticSettledSeq,
+    speechTranscriptDeliveredSeq: snap.speechTranscriptDeliveredSeq,
+    speechSendStartedSeq: snap.speechSendStartedSeq,
+    classifierStartedSeq: snap.classifierStartedSeq,
+    classifierSettledSeq: snap.classifierSettledSeq,
+  };
+}
+
+async function runSpeechProductionPathProof(): Promise<void> {
+  const inject = runtime?.injectCommittedSpeechSegment;
+  const classifierReady = runtime?.peekClassifierReady;
+  const peekSpeaking = runtime?.peekSpeaking;
+  if (!inject) {
+    emitComplete(speechProofEnvelope('FAIL', 'speech_inject_unbound'));
+    return;
+  }
+  if (!classifierReady) {
+    emitComplete(speechProofEnvelope('FAIL', 'classifier_ready_unbound'));
+    return;
+  }
+  if (!peekSpeaking) {
+    emitComplete(speechProofEnvelope('FAIL', 'tts_state_unbound'));
+    return;
+  }
+  const readyDeadline = Date.now() + SEMANTIC_ENGINE_READINESS_TIMEOUT_MS;
+  while (!classifierReady()) {
+    if (Date.now() >= readyDeadline) {
+      emitComplete(speechProofEnvelope('FAIL', 'classifier_not_ready'));
+      return;
+    }
+    await sleep(50);
+  }
+  if (peekSpeaking()) {
+    emitComplete(speechProofEnvelope('FAIL', 'tts_not_idle'));
+    return;
+  }
+  resetSpeechProductionPathProof();
+  armSpeechProductionPathProof();
+  inject(SPEECH_PRODUCTION_PATH_FIXTURE);
+  const deadline = Date.now() + 170_000;
+  let snap = snapshotSpeechProductionPathProof();
+  while (Date.now() < deadline && !speechProductionPathSatisfied(snap)) {
+    await sleep(50);
+    snap = snapshotSpeechProductionPathProof();
+  }
+  const ok = speechProductionPathSatisfied(snap);
+  emitComplete(speechProofEnvelope(ok ? 'PASS' : 'FAIL', ok ? null : 'speech_production_path_incomplete'));
+}
+
 export function bindJourneySendMessage(fn: SendMessageFn): void {
   runtime = {
     sendMessage: fn,
@@ -926,11 +1009,13 @@ export function bindJourneySendMessage(fn: SendMessageFn): void {
     resetConversation: runtime?.resetConversation ?? (() => {}),
     startRecording: runtime?.startRecording,
     peekSpeaking: runtime?.peekSpeaking,
+    peekClassifierReady: runtime?.peekClassifierReady,
     beginManualConversation: runtime?.beginManualConversation,
     injectHeardTranscript: runtime?.injectHeardTranscript,
     peekTalkSession: runtime?.peekTalkSession,
     peekSemanticEngine: runtime?.peekSemanticEngine,
     peekJourneyTurnReadiness: runtime?.peekJourneyTurnReadiness,
+    injectCommittedSpeechSegment: runtime?.injectCommittedSpeechSegment,
   };
   if (native) {
     try { native.hostReady(); } catch { /* ignore */ }
@@ -979,6 +1064,9 @@ export function onboardAndroidJourneyHost(): void {
   talkSessionHandoffSubscription = DeviceEventEmitter.addListener(TALK_SESSION_HANDOFF_EVENT, () => {
     void runTalkSessionHandoffProbe();
   });
+  speechProductionPathSubscription = DeviceEventEmitter.addListener(SPEECH_PRODUCTION_PATH_EVENT, () => {
+    void runSpeechProductionPathProof();
+  });
   semanticEngineProbeSubscription = DeviceEventEmitter.addListener(SEMANTIC_ENGINE_PROBE_EVENT, () => {
     const diagnostic = runtime?.peekSemanticEngine?.() ?? emptySemanticEngineDiagnostic();
     emitComplete({
@@ -1001,6 +1089,9 @@ export function teardownAndroidJourneyHost(): void {
   talkSessionHandoffSubscription = null;
   semanticEngineProbeSubscription?.remove();
   semanticEngineProbeSubscription = null;
+  speechProductionPathSubscription?.remove();
+  speechProductionPathSubscription = null;
+  resetSpeechProductionPathProof();
   runtime = null;
   native = null;
   inFlightTurnId = null;
