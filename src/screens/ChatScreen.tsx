@@ -88,6 +88,11 @@ import {
   noteClassifierSettled,
   noteClassifierStarted,
   noteSendProcessingReturned,
+  noteDeterministicAdmissionRequested,
+  noteDeterministicResolverReturned,
+  noteDeterministicSendProcessingReturned,
+  noteDeterministicSpeechSendStarted,
+  noteDeterministicTranscriptDelivered,
   noteSpeechAdmissionRequested,
   noteSpeechSemanticInvoked,
   noteSpeechSemanticSettled,
@@ -1429,7 +1434,10 @@ export default function ChatScreen() {
     // nothing downstream has to care which device produced the text.
     text = normalizeInput(text);
     if (!text) return;
-    if (inputSource === 'speech') noteSpeechSendStarted();
+    if (inputSource === 'speech') {
+      noteSpeechSendStarted();
+      noteDeterministicSpeechSendStarted();
+    }
 
     if (isRecollectionSemanticDeviceEvidenceTrigger(text)) {
       lastSentRef.current = now;
@@ -1912,6 +1920,7 @@ export default function ChatScreen() {
     }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current, calendarPresentationRef.current, calendarContinuationRef.current, discourseRef.current, conversationLedgerRef.current, reminiscenceArcRef.current, recoveryObligationRef.current, todoPresentationRef.current);
     journeyOutcome = outcome;
     noteSendProcessingReturned();
+    noteDeterministicSendProcessingReturned();
     noteProofState('after');
     try {
       const proof = require('../dev/semanticJourneyEvidence');
@@ -2992,6 +3001,7 @@ export default function ChatScreen() {
     if (trimmed) talkSessionRef.current.noteContentfulUtterance();
     if (!trimmed) return;
     noteSpeechTranscriptDelivered();
+    noteDeterministicTranscriptDelivered();
     latLog('handleTranscript entry', { turnId: getActiveTurnId(), charLen: trimmed.length });
     // Brief display in input bar so user sees what was heard, then send
     setInputText(trimmed);
@@ -3054,6 +3064,7 @@ export default function ChatScreen() {
       const beforeSeq = getLastCtxCompletionObservation()?.completionSeq ?? null;
       noteSpeechAdmissionRequested();
       noteSpeechSemanticInvoked(contextId);
+      noteDeterministicAdmissionRequested();
       return proposeSpeechCompletion(text, ctx).then(
         (proposal) => {
           const observed = getLastCtxCompletionObservation();
@@ -3062,6 +3073,11 @@ export default function ChatScreen() {
             fresh && observed?.outcome === 'ok' ? 'ok' : 'error',
             fresh && observed?.outcome === 'ok' ? observed.completionSeq : null,
           );
+          noteDeterministicResolverReturned({
+            proposal: proposal === 'complete' || proposal === 'incomplete' || proposal === 'uncertain' ? proposal : 'other',
+            classifierContextNull: ctx == null,
+            speechNativeCompletionObserved: fresh,
+          });
           return proposal;
         },
         (error) => {

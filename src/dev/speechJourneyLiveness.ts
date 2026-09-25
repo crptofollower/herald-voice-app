@@ -24,9 +24,7 @@ export type SpeechLivenessStep =
 
 export type SpeechPreconditionFailure =
   | 'speech_inject_unbound'
-  | 'classifier_ready_unbound'
   | 'tts_state_unbound'
-  | 'classifier_not_ready'
   | 'tts_not_idle';
 
 export type SpeechLivenessBreadcrumb = {
@@ -55,26 +53,16 @@ export function noteSpeechJourneyLiveness(crumb: SpeechLivenessBreadcrumb): void
 
 export function classifySpeechProductionPreconditions(input: {
   injectBound: boolean;
-  classifierBound: boolean;
   ttsBound: boolean;
-  classifierReady: boolean;
   speaking: boolean;
 }): SpeechPreconditionFailure | null {
   noteSpeechJourneyLiveness({
     step: 'runtime_binding',
     speechInjectBinding: input.injectBound ? 'present' : 'missing',
-    classifierBinding: input.classifierBound ? 'present' : 'missing',
     ttsBinding: input.ttsBound ? 'present' : 'missing',
   });
   if (!input.injectBound) return 'speech_inject_unbound';
-  if (!input.classifierBound) return 'classifier_ready_unbound';
   if (!input.ttsBound) return 'tts_state_unbound';
-  noteSpeechJourneyLiveness({ step: 'classifier_ready_wait_entered' });
-  if (!input.classifierReady) {
-    noteSpeechJourneyLiveness({ step: 'classifier_ready_failed' });
-    return 'classifier_not_ready';
-  }
-  noteSpeechJourneyLiveness({ step: 'classifier_ready_achieved' });
   const ttsIdle = !input.speaking;
   noteSpeechJourneyLiveness({ step: 'tts_idle_checked', ttsIdle });
   if (!ttsIdle) return 'tts_not_idle';

@@ -264,16 +264,16 @@ object HeraldJourneyBridge {
       last = probeSpeechPreconditions()
       val obj = JSONObject(last)
       if (obj.optString("failReason") == "react_context_missing" || obj.optString("failReason") == "emit_failed") return last
-      if (obj.optString("classifierBinding") == "missing" || obj.optString("ttsBinding") == "missing") return last
-      if (obj.optBoolean("classifierReady", false)) return last
+      if (obj.optString("ttsBinding") == "missing") return last
+      if (obj.has("ttsIdle")) return last
       Thread.sleep(2_000L)
     }
-    return JSONObject(last).put("failReason", "classifier_not_ready").toString()
+    return JSONObject(last).put("failReason", "tts_state_unbound").toString()
   }
 
   fun probeSpeechProductionPath(timeoutMs: Long = 180_000L): String {
     if (!inFlight.compareAndSet(false, true)) {
-      return JSONObject().put("schema", "herald.journey.speech_production_path.v1").put("status", "FAIL").put("failReason", "duplicate_or_in_flight").toString()
+      return JSONObject().put("schema", "herald.journey.deterministic_speech_path.v1").put("status", "FAIL").put("failReason", "duplicate_or_in_flight").toString()
     }
     lastJson.set(null)
     expectedTurnId.set(null)
@@ -283,7 +283,7 @@ object HeraldJourneyBridge {
     if (ctx == null) {
       inFlight.set(false)
       waiter.set(null)
-      return JSONObject().put("schema", "herald.journey.speech_production_path.v1").put("status", "FAIL").put("failReason", "react_context_missing").toString()
+      return JSONObject().put("schema", "herald.journey.deterministic_speech_path.v1").put("status", "FAIL").put("failReason", "react_context_missing").toString()
     }
     try {
       Log.i(TAG, "speech_liveness native_emitted")
@@ -293,14 +293,14 @@ object HeraldJourneyBridge {
     } catch (e: Exception) {
       inFlight.set(false)
       waiter.set(null)
-      return JSONObject().put("schema", "herald.journey.speech_production_path.v1").put("status", "FAIL").put("failReason", "emit_failed").toString()
+      return JSONObject().put("schema", "herald.journey.deterministic_speech_path.v1").put("status", "FAIL").put("failReason", "emit_failed").toString()
     }
     val completed = latch.await(timeoutMs, TimeUnit.MILLISECONDS)
     val json = lastJson.get()
     waiter.set(null)
     inFlight.set(false)
     return if (!completed || json == null) {
-      JSONObject().put("schema", "herald.journey.speech_production_path.v1").put("status", "FAIL").put("failReason", "timeout").toString()
+      JSONObject().put("schema", "herald.journey.deterministic_speech_path.v1").put("status", "FAIL").put("failReason", "timeout").toString()
     } else json
   }
 

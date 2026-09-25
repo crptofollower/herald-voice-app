@@ -19,6 +19,17 @@ import {
   snapshotSpeechJourneyLiveness,
 } from '../../src/dev/speechJourneyLiveness.ts';
 import {
+  armDeterministicSpeechPathProof,
+  deterministicSpeechPathSatisfied,
+  noteDeterministicAdmissionRequested,
+  noteDeterministicContinuationGapElapsed,
+  noteDeterministicResolverReturned,
+  noteDeterministicSendProcessingReturned,
+  noteDeterministicSpeechBoundaryEntered,
+  noteDeterministicSpeechSendStarted,
+  noteDeterministicTranscriptDelivered,
+  resetDeterministicSpeechPathProof,
+  snapshotDeterministicSpeechPathProof,
   armSpeechProductionPathProof,
   journeyCommittedSegmentEvents,
   noteClassifierSettled,
@@ -240,9 +251,7 @@ export async function runSpeechProductionPathJourneyTests(): Promise<{
     'missing runtime becomes explicit FAIL',
     classifySpeechProductionPreconditions({
       injectBound: false,
-      classifierBound: true,
       ttsBound: true,
-      classifierReady: true,
       speaking: false,
     }) === 'speech_inject_unbound',
     'speech_inject_unbound',
@@ -250,15 +259,24 @@ export async function runSpeechProductionPathJourneyTests(): Promise<{
   );
   resetSpeechJourneyLivenessForTests();
   assert(
-    'classifier readiness failure becomes explicit FAIL',
+    'classifier readiness is not required',
     classifySpeechProductionPreconditions({
       injectBound: true,
-      classifierBound: true,
       ttsBound: true,
-      classifierReady: false,
       speaking: false,
-    }) === 'classifier_not_ready',
-    'classifier_not_ready',
+    }) === null,
+    'null',
+    'blocked',
+  );
+  resetSpeechJourneyLivenessForTests();
+  assert(
+    'TTS-active condition still fails',
+    classifySpeechProductionPreconditions({
+      injectBound: true,
+      ttsBound: true,
+      speaking: true,
+    }) === 'tts_not_idle',
+    'tts_not_idle',
     'other',
   );
   resetSpeechJourneyLivenessForTests();
@@ -280,7 +298,7 @@ export async function runSpeechProductionPathJourneyTests(): Promise<{
   );
   const speechTest = fs.readFileSync(path.join(root, 'android/app/src/androidTest/java/ai/apexempire/herald/journey/HeraldSpeechProductionPathV1Test.kt'), 'utf8');
   const bridge = fs.readFileSync(path.join(root, 'android/app/src/journey/java/ai/apexempire/herald/journey/HeraldJourneyBridge.kt'), 'utf8');
-  const readyAt = speechTest.indexOf('awaitSpeechPreconditions');
+  const ttsAt = speechTest.indexOf('probeSpeechPreconditions');
   const probeAt = speechTest.indexOf('probeSpeechProductionPath');
   assert(
     'outer probe timeout is narrower than the former blind wait',
@@ -292,10 +310,13 @@ export async function runSpeechProductionPathJourneyTests(): Promise<{
     String(SPEECH_PRODUCTION_PROBE_TIMEOUT_MS),
   );
   assert(
-    'prerequisite readiness is established before the speech probe',
-    readyAt > 0 && probeAt > readyAt && speechTest.includes('READINESS_TIMEOUT_MS = 25L * 60L * 1000L'),
-    'readiness then probe',
-    `ready=${readyAt} probe=${probeAt}`,
+    'TTS idle is checked before the speech probe without a classifier wait',
+    ttsAt > 0 && probeAt > ttsAt
+      && speechTest.includes('TTS_PROBE_TIMEOUT_MS = 5_000L')
+      && !speechTest.includes('classifier_not_ready')
+      && !speechTest.includes('25L * 60L * 1000L'),
+    'tts then probe',
+    `tts=${ttsAt} probe=${probeAt}`,
   );
   assert(
     'speech probe no longer waits out model readiness',
@@ -305,10 +326,13 @@ export async function runSpeechProductionPathJourneyTests(): Promise<{
   );
   const oracle = fs.readFileSync(path.join(root, 'src/dev/speechProductionPathProof.ts'), 'utf8');
   assert(
-    'accepted proof oracle is unchanged by liveness repair',
-    oracle.includes('function speechProductionPathSatisfied') && !oracle.includes('speechJourneyLiveness') && !oracle.includes('handler_exception'),
-    'oracle untouched',
-    'oracle drifted',
+    'legacy native oracle still requires speech and classifier completions',
+    oracle.includes("snap.speechNativeOutcome === 'ok'")
+      && oracle.includes("snap.classifierNativeOutcome === 'ok'")
+      && oracle.includes('function speechProductionPathSatisfied')
+      && oracle.includes('function deterministicSpeechPathSatisfied'),
+    'both oracles',
+    'missing',
   );
   const useMicProd = fs.readFileSync(path.join(root, 'src/hooks/useMic.ts'), 'utf8');
   const provider = fs.readFileSync(path.join(root, 'src/routing/semanticProvider.ts'), 'utf8');
@@ -318,6 +342,130 @@ export async function runSpeechProductionPathJourneyTests(): Promise<{
     'journey-only',
     'production import',
   );
+
+  const nullProposal = await proposeSpeechCompletion('turn the lamp on', null);
+  assert('production resolver returns uncertain for a null classifier context', nullProposal === 'uncertain', 'uncertain', String(nullProposal));
+  resetOpenSpeechTurnIdsForTests();
+  let detState = createIdleOpenSpeechTurnState();
+  for (const event of journeyCommittedSegmentEvents(3, SPEECH_PRODUCTION_PATH_FIXTURE, 5_000)) {
+    detState = reduceOpenSpeechTurn(detState, event).state;
+  }
+  detState = applyReopenedNativeSession(detState, 4);
+  detState = reduceOpenSpeechTurn(detState, { type: 'native_listening_ready', nativeSessionId: 4, nowMs: 5_100 }).state;
+  const detGap = reduceOpenSpeechTurn(detState, { type: 'continuation_gap_elapsed', generation: detState.continuationGeneration });
+  const detAdmission = detGap.effects.find((fx) => fx.type === 'evaluate_admission');
+  const detAdmitted = reduceOpenSpeechTurn(detGap.state, {
+    type: 'admission_evaluated',
+    trigger: 'continuation_gap',
+    proposal: nullProposal,
+    text: detAdmission && detAdmission.type === 'evaluate_admission' ? detAdmission.text : '',
+    epoch: detAdmission && detAdmission.type === 'evaluate_admission' ? detAdmission.epoch : 0,
+    heraldTurnId: detAdmission && detAdmission.type === 'evaluate_admission' ? detAdmission.heraldTurnId : 0,
+  });
+  assert(
+    'uncertain proposal admits once and does not extend',
+    detAdmitted.effects.filter((fx) => fx.type === 'deliver').length === 1
+      && !detAdmitted.effects.some((fx) => fx.type === 'reopen_native'),
+    'one deliver',
+    detAdmitted.effects.map((fx) => fx.type).join(','),
+  );
+
+  function passDeterministic(): void {
+    resetDeterministicSpeechPathProof();
+    armDeterministicSpeechPathProof();
+    noteDeterministicSpeechBoundaryEntered();
+    noteDeterministicContinuationGapElapsed();
+    noteDeterministicAdmissionRequested();
+    noteDeterministicResolverReturned({
+      proposal: 'uncertain',
+      classifierContextNull: true,
+      speechNativeCompletionObserved: false,
+    });
+    noteDeterministicTranscriptDelivered();
+    noteDeterministicSpeechSendStarted();
+    noteDeterministicSendProcessingReturned();
+  }
+  passDeterministic();
+  assert(
+    'deterministic production path satisfies the new oracle',
+    deterministicSpeechPathSatisfied(snapshotDeterministicSpeechPathProof()),
+    'satisfied',
+    JSON.stringify(snapshotDeterministicSpeechPathProof()),
+  );
+  assert(
+    'deterministic envelope has no fixture text',
+    !JSON.stringify(snapshotDeterministicSpeechPathProof()).includes(SPEECH_PRODUCTION_PATH_FIXTURE),
+    'absent',
+    'present',
+  );
+  resetDeterministicSpeechPathProof();
+  armDeterministicSpeechPathProof();
+  noteDeterministicSpeechBoundaryEntered();
+  noteDeterministicContinuationGapElapsed();
+  noteDeterministicAdmissionRequested();
+  noteDeterministicResolverReturned({
+    proposal: 'uncertain',
+    classifierContextNull: true,
+    speechNativeCompletionObserved: true,
+  });
+  noteDeterministicTranscriptDelivered();
+  noteDeterministicSpeechSendStarted();
+  noteDeterministicSendProcessingReturned();
+  assert('unexpected speech native completion fails', deterministicSpeechPathSatisfied(snapshotDeterministicSpeechPathProof()) === false, 'false', 'true');
+  resetDeterministicSpeechPathProof();
+  armDeterministicSpeechPathProof();
+  noteDeterministicSpeechBoundaryEntered();
+  noteDeterministicContinuationGapElapsed();
+  noteDeterministicAdmissionRequested();
+  noteDeterministicResolverReturned({ proposal: 'complete', classifierContextNull: true, speechNativeCompletionObserved: false });
+  noteDeterministicTranscriptDelivered();
+  noteDeterministicSpeechSendStarted();
+  noteDeterministicSendProcessingReturned();
+  assert('complete proposal fails the production contract', deterministicSpeechPathSatisfied(snapshotDeterministicSpeechPathProof()) === false, 'false', 'true');
+  resetDeterministicSpeechPathProof();
+  armDeterministicSpeechPathProof();
+  noteDeterministicSpeechBoundaryEntered();
+  noteDeterministicContinuationGapElapsed();
+  noteDeterministicAdmissionRequested();
+  noteDeterministicResolverReturned({ proposal: 'incomplete', classifierContextNull: true, speechNativeCompletionObserved: false });
+  noteDeterministicTranscriptDelivered();
+  noteDeterministicSpeechSendStarted();
+  noteDeterministicSendProcessingReturned();
+  assert('incomplete proposal fails the production contract', deterministicSpeechPathSatisfied(snapshotDeterministicSpeechPathProof()) === false, 'false', 'true');
+  resetDeterministicSpeechPathProof();
+  armDeterministicSpeechPathProof();
+  noteDeterministicSpeechBoundaryEntered();
+  noteDeterministicContinuationGapElapsed();
+  noteDeterministicAdmissionRequested();
+  noteDeterministicResolverReturned({ proposal: 'uncertain', classifierContextNull: true, speechNativeCompletionObserved: false });
+  noteDeterministicSpeechSendStarted();
+  noteDeterministicSendProcessingReturned();
+  assert('no delivery fails', deterministicSpeechPathSatisfied(snapshotDeterministicSpeechPathProof()) === false, 'false', 'true');
+  passDeterministic();
+  noteDeterministicTranscriptDelivered();
+  assert('duplicate delivery fails', deterministicSpeechPathSatisfied(snapshotDeterministicSpeechPathProof()) === false, 'false', 'true');
+  resetDeterministicSpeechPathProof();
+  armDeterministicSpeechPathProof();
+  noteDeterministicSpeechBoundaryEntered();
+  noteDeterministicContinuationGapElapsed();
+  noteDeterministicAdmissionRequested();
+  noteDeterministicResolverReturned({ proposal: 'uncertain', classifierContextNull: true, speechNativeCompletionObserved: false });
+  noteDeterministicTranscriptDelivered();
+  noteDeterministicSpeechSendStarted();
+  assert('missing sendProcessingReturned fails', deterministicSpeechPathSatisfied(snapshotDeterministicSpeechPathProof()) === false, 'false', 'true');
+  resetDeterministicSpeechPathProof();
+  armDeterministicSpeechPathProof();
+  noteDeterministicSpeechSendStarted();
+  noteDeterministicSpeechBoundaryEntered();
+  noteDeterministicContinuationGapElapsed();
+  noteDeterministicAdmissionRequested();
+  noteDeterministicResolverReturned({ proposal: 'uncertain', classifierContextNull: true, speechNativeCompletionObserved: false });
+  noteDeterministicTranscriptDelivered();
+  noteDeterministicSendProcessingReturned();
+  assert('out-of-order deterministic notes fail', deterministicSpeechPathSatisfied(snapshotDeterministicSpeechPathProof()) === false, 'false', 'true');
+  passDeterministic();
+  noteDeterministicAdmissionRequested();
+  assert('a second admission is an incomplete extension and fails', snapshotDeterministicSpeechPathProof().incompleteExtensionTaken === true && deterministicSpeechPathSatisfied(snapshotDeterministicSpeechPathProof()) === false, 'false', 'true');
 
   console.log(`SpeechProductionPathJourney: ${passed} passed, ${failures.length} failed`);
   return { passed, failed: failures.length, total: passed + failures.length, failures };

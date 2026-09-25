@@ -225,6 +225,176 @@ export function speechProductionPathSatisfied(snap: SpeechProductionPathProof): 
     && before(snap.classifierStartedSeq, snap.classifierSettledSeq);
 }
 
+export type DeterministicSpeechProposal = 'uncertain' | 'complete' | 'incomplete' | 'other';
+
+export type DeterministicSpeechPathProof = {
+  speechBoundaryEntered: boolean;
+  continuationGapElapsed: boolean;
+  speechAdmissionRequested: boolean;
+  speechResolverReturned: boolean;
+  speechProposal: DeterministicSpeechProposal | null;
+  classifierContextNull: boolean;
+  speechNativeCompletionObserved: boolean;
+  transcriptDeliveryCount: number;
+  speechSendStarted: boolean;
+  sendProcessingReturned: boolean;
+  incompleteExtensionTaken: boolean;
+  speechBoundaryEnteredSeq: number | null;
+  continuationGapElapsedSeq: number | null;
+  speechAdmissionRequestedSeq: number | null;
+  speechResolverReturnedSeq: number | null;
+  transcriptDeliveredSeq: number | null;
+  speechSendStartedSeq: number | null;
+  sendProcessingReturnedSeq: number | null;
+};
+
+let detArmed = false;
+let detTick = 0;
+let detBoundary = false;
+let detGap = false;
+let detAdmission = false;
+let detAdmissionCount = 0;
+let detResolver = false;
+let detProposal: DeterministicSpeechProposal | null = null;
+let detCtxNull = false;
+let detNativeObserved = false;
+let detDeliveryCount = 0;
+let detSend = false;
+let detProcessing = false;
+let detBoundarySeq: number | null = null;
+let detGapSeq: number | null = null;
+let detAdmissionSeq: number | null = null;
+let detResolverSeq: number | null = null;
+let detTranscriptSeq: number | null = null;
+let detSendSeq: number | null = null;
+let detProcessingSeq: number | null = null;
+
+function detStamp(): number {
+  detTick += 1;
+  return detTick;
+}
+
+export function resetDeterministicSpeechPathProof(): void {
+  detArmed = false;
+  detTick = 0;
+  detBoundary = false;
+  detGap = false;
+  detAdmission = false;
+  detAdmissionCount = 0;
+  detResolver = false;
+  detProposal = null;
+  detCtxNull = false;
+  detNativeObserved = false;
+  detDeliveryCount = 0;
+  detSend = false;
+  detProcessing = false;
+  detBoundarySeq = null;
+  detGapSeq = null;
+  detAdmissionSeq = null;
+  detResolverSeq = null;
+  detTranscriptSeq = null;
+  detSendSeq = null;
+  detProcessingSeq = null;
+}
+
+export function armDeterministicSpeechPathProof(): void {
+  resetDeterministicSpeechPathProof();
+  detArmed = true;
+}
+
+export function noteDeterministicSpeechBoundaryEntered(): void {
+  if (!detArmed || detBoundarySeq != null) return;
+  detBoundary = true;
+  detBoundarySeq = detStamp();
+}
+
+export function noteDeterministicContinuationGapElapsed(): void {
+  if (!detArmed || detGapSeq != null) return;
+  detGap = true;
+  detGapSeq = detStamp();
+}
+
+export function noteDeterministicAdmissionRequested(): void {
+  if (!detArmed) return;
+  detAdmissionCount += 1;
+  detAdmission = true;
+  if (detAdmissionSeq == null) detAdmissionSeq = detStamp();
+}
+
+export function noteDeterministicResolverReturned(input: {
+  proposal: DeterministicSpeechProposal;
+  classifierContextNull: boolean;
+  speechNativeCompletionObserved: boolean;
+}): void {
+  if (!detArmed || detResolverSeq != null) return;
+  detResolver = true;
+  detProposal = input.proposal;
+  detCtxNull = input.classifierContextNull;
+  detNativeObserved = input.speechNativeCompletionObserved;
+  detResolverSeq = detStamp();
+}
+
+export function noteDeterministicTranscriptDelivered(): void {
+  if (!detArmed) return;
+  detDeliveryCount += 1;
+  if (detTranscriptSeq == null) detTranscriptSeq = detStamp();
+}
+
+export function noteDeterministicSpeechSendStarted(): void {
+  if (!detArmed || detSendSeq != null) return;
+  detSend = true;
+  detSendSeq = detStamp();
+}
+
+export function noteDeterministicSendProcessingReturned(): void {
+  if (!detArmed || detProcessingSeq != null) return;
+  detProcessing = true;
+  detProcessingSeq = detStamp();
+}
+
+export function snapshotDeterministicSpeechPathProof(): DeterministicSpeechPathProof {
+  return {
+    speechBoundaryEntered: detBoundary,
+    continuationGapElapsed: detGap,
+    speechAdmissionRequested: detAdmission,
+    speechResolverReturned: detResolver,
+    speechProposal: detProposal,
+    classifierContextNull: detCtxNull,
+    speechNativeCompletionObserved: detNativeObserved,
+    transcriptDeliveryCount: detDeliveryCount,
+    speechSendStarted: detSend,
+    sendProcessingReturned: detProcessing,
+    incompleteExtensionTaken: detAdmissionCount > 1,
+    speechBoundaryEnteredSeq: detBoundarySeq,
+    continuationGapElapsedSeq: detGapSeq,
+    speechAdmissionRequestedSeq: detAdmissionSeq,
+    speechResolverReturnedSeq: detResolverSeq,
+    transcriptDeliveredSeq: detTranscriptSeq,
+    speechSendStartedSeq: detSendSeq,
+    sendProcessingReturnedSeq: detProcessingSeq,
+  };
+}
+
+export function deterministicSpeechPathSatisfied(snap: DeterministicSpeechPathProof): boolean {
+  return snap.speechBoundaryEntered
+    && snap.continuationGapElapsed
+    && snap.speechAdmissionRequested
+    && snap.speechResolverReturned
+    && snap.speechProposal === 'uncertain'
+    && snap.classifierContextNull
+    && snap.speechNativeCompletionObserved === false
+    && snap.transcriptDeliveryCount === 1
+    && snap.speechSendStarted
+    && snap.sendProcessingReturned
+    && snap.incompleteExtensionTaken === false
+    && before(snap.speechBoundaryEnteredSeq, snap.continuationGapElapsedSeq)
+    && before(snap.continuationGapElapsedSeq, snap.speechAdmissionRequestedSeq)
+    && before(snap.speechAdmissionRequestedSeq, snap.speechResolverReturnedSeq)
+    && before(snap.speechResolverReturnedSeq, snap.transcriptDeliveredSeq)
+    && before(snap.transcriptDeliveredSeq, snap.speechSendStartedSeq)
+    && before(snap.speechSendStartedSeq, snap.sendProcessingReturnedSeq);
+}
+
 /** Production open-speech events for one committed segment. The reducer decides admission. */
 export function journeyCommittedSegmentEvents(
   nativeSessionId: number,

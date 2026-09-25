@@ -33,10 +33,11 @@ import {
 } from '../hooks/speechLifecycleInvariants';
 import {
   SPEECH_PRODUCTION_PATH_FIXTURE,
-  armSpeechProductionPathProof,
+  armDeterministicSpeechPathProof,
+  deterministicSpeechPathSatisfied,
+  resetDeterministicSpeechPathProof,
   resetSpeechProductionPathProof,
-  snapshotSpeechProductionPathProof,
-  speechProductionPathSatisfied,
+  snapshotDeterministicSpeechPathProof,
 } from './speechProductionPathProof';
 
 type SendMessageFn = (text: string, inputSource?: 'typed' | 'speech') => Promise<void>;
@@ -455,7 +456,7 @@ function deriveCapability(
 }
 
 function emitComplete(result: object): void {
-  const speechProof = (result as { schema?: string }).schema === 'herald.journey.speech_production_path.v1';
+  const speechProof = (result as { schema?: string }).schema === 'herald.journey.deterministic_speech_path.v1';
   if (!native) {
     if (speechProof) noteSpeechEmitComplete(false, false);
     else console.log('[JOURNEY-BRIDGE] {"step":"emit_complete_failed","reason":"native_missing"}');
@@ -947,33 +948,29 @@ function runReset(scenarioId: string | null = null): void {
 }
 
 function speechProofEnvelope(status: 'PASS' | 'FAIL', failReason: string | null) {
-  const snap = snapshotSpeechProductionPathProof();
+  const snap = snapshotDeterministicSpeechPathProof();
   return {
-    schema: 'herald.journey.speech_production_path.v1' as const,
+    schema: 'herald.journey.deterministic_speech_path.v1' as const,
     status,
     failReason,
     speechBoundaryEntered: snap.speechBoundaryEntered,
+    continuationGapElapsed: snap.continuationGapElapsed,
     speechAdmissionRequested: snap.speechAdmissionRequested,
-    speechSemanticInvoked: snap.speechSemanticInvoked,
-    speechSemanticSettled: snap.speechSemanticSettled,
-    speechTranscriptDelivered: snap.speechTranscriptDelivered,
+    speechResolverReturned: snap.speechResolverReturned,
+    speechProposal: snap.speechProposal,
+    classifierContextNull: snap.classifierContextNull,
+    speechNativeCompletionObserved: snap.speechNativeCompletionObserved,
+    transcriptDeliveryCount: snap.transcriptDeliveryCount,
     speechSendStarted: snap.speechSendStarted,
-    classifierInvokedAfterSpeech: snap.classifierInvokedAfterSpeech,
-    sameClassifierContext: snap.sameClassifierContext,
     sendProcessingReturned: snap.sendProcessingReturned,
-    speechCompletionCount: snap.speechCompletionCount,
-    speechClassifierContextId: snap.speechClassifierContextId,
-    classifyClassifierContextId: snap.classifyClassifierContextId,
-    speechNativeOutcome: snap.speechNativeOutcome,
-    speechCompletionSeq: snap.speechCompletionSeq,
-    classifierNativeOutcome: snap.classifierNativeOutcome,
-    classifierCompletionSeq: snap.classifierCompletionSeq,
-    speechSemanticInvokedSeq: snap.speechSemanticInvokedSeq,
-    speechSemanticSettledSeq: snap.speechSemanticSettledSeq,
-    speechTranscriptDeliveredSeq: snap.speechTranscriptDeliveredSeq,
+    incompleteExtensionTaken: snap.incompleteExtensionTaken,
+    speechBoundaryEnteredSeq: snap.speechBoundaryEnteredSeq,
+    continuationGapElapsedSeq: snap.continuationGapElapsedSeq,
+    speechAdmissionRequestedSeq: snap.speechAdmissionRequestedSeq,
+    speechResolverReturnedSeq: snap.speechResolverReturnedSeq,
+    transcriptDeliveredSeq: snap.transcriptDeliveredSeq,
     speechSendStartedSeq: snap.speechSendStartedSeq,
-    classifierStartedSeq: snap.classifierStartedSeq,
-    classifierSettledSeq: snap.classifierSettledSeq,
+    sendProcessingReturnedSeq: snap.sendProcessingReturnedSeq,
   };
 }
 
@@ -991,29 +988,26 @@ function speechPreconditionsSnapshot() {
 
 async function runSpeechProductionPathProof(): Promise<void> {
   const inject = runtime?.injectCommittedSpeechSegment;
-  const classifierReady = runtime?.peekClassifierReady;
   const peekSpeaking = runtime?.peekSpeaking;
   const failure = classifySpeechProductionPreconditions({
     injectBound: typeof inject === 'function',
-    classifierBound: typeof classifierReady === 'function',
     ttsBound: typeof peekSpeaking === 'function',
-    classifierReady: classifierReady ? classifierReady() : false,
     speaking: peekSpeaking ? peekSpeaking() : false,
   });
   if (failure || !inject) {
     emitComplete(speechProofEnvelope('FAIL', failure ?? 'speech_inject_unbound'));
     return;
   }
-  resetSpeechProductionPathProof();
-  armSpeechProductionPathProof();
+  resetDeterministicSpeechPathProof();
+  armDeterministicSpeechPathProof();
   noteSpeechJourneyLiveness({ step: 'proof_armed' });
   noteSpeechJourneyLiveness({ step: 'proof_started' });
   inject(SPEECH_PRODUCTION_PATH_FIXTURE);
   const deadline = Date.now() + SPEECH_PRODUCTION_PROOF_WINDOW_MS;
-  let snap = snapshotSpeechProductionPathProof();
-  while (Date.now() < deadline && !speechProductionPathSatisfied(snap)) {
+  let snap = snapshotDeterministicSpeechPathProof();
+  while (Date.now() < deadline && !deterministicSpeechPathSatisfied(snap)) {
     await sleep(50);
-    snap = snapshotSpeechProductionPathProof();
+    snap = snapshotDeterministicSpeechPathProof();
   }
   noteSpeechJourneyLiveness({ step: 'proof_completed' });
   const ok = speechProductionPathSatisfied(snap);
@@ -1118,6 +1112,7 @@ export function teardownAndroidJourneyHost(): void {
   speechPreconditionsSubscription?.remove();
   speechPreconditionsSubscription = null;
   resetSpeechProductionPathProof();
+  resetDeterministicSpeechPathProof();
   runtime = null;
   native = null;
   inFlightTurnId = null;

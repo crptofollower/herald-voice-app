@@ -19,7 +19,7 @@ import {
   type OpenSpeechTurnState,
 } from './openSpeechTurnBoundary';
 import { admittedTurnText } from './speechTurnEnvelope';
-import { journeyCommittedSegmentEvents, noteSpeechBoundaryEntered } from '../dev/speechProductionPathProof';
+import { journeyCommittedSegmentEvents, noteDeterministicContinuationGapElapsed, noteDeterministicSpeechBoundaryEntered, noteSpeechBoundaryEntered } from '../dev/speechProductionPathProof';
 import type { SpeechCompletionProposal } from './speechAdmission';
 import { beginTurn, getActiveTurnId, log as latLog, mono as latMono } from '../utils/latencyInstrument';
 import {
@@ -379,6 +379,7 @@ export function useMic(
         const generation = fx.generation;
         continuationTimerRef.current = setTimeout(() => {
           continuationTimerRef.current = null;
+          noteDeterministicContinuationGapElapsed();
           executeBoundaryEffects(applyBoundary({ type: 'continuation_gap_elapsed', generation }));
         }, OPEN_SPEECH_CONTINUATION_GAP_MS);
       }
@@ -831,6 +832,7 @@ export function useMic(
     if (!trimmed || journeyProofActiveRef.current) return;
     journeyProofActiveRef.current = true;
     noteSpeechBoundaryEntered();
+    noteDeterministicSpeechBoundaryEntered();
     micSessionRef.current += 1;
     const session = micSessionRef.current;
     const nowMs = Date.now();
