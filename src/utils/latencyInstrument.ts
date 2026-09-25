@@ -4,7 +4,7 @@
 
 const PREFIX = '[LATENCY-INSTRUMENT]';
 
-export type CtxCompletionConsumer = 'warmup' | 'classifier' | 'ephemeral';
+export type CtxCompletionConsumer = 'warmup' | 'classifier' | 'ephemeral' | 'speech';
 
 let appBaselineMs: number | null = null;
 let chatScreenMountSeq = 0;
@@ -158,6 +158,31 @@ export function endCtxCompletion(
     lastCompletionSeq = completionSeq;
     lastConsumer = consumer;
     lastCompletionEndMonoMs = monoNow();
+  } catch {
+    // instrumentation must never alter completion behavior
+  }
+}
+
+/**
+ * Log a completion end without moving the last-consumer cursor.
+ * Speech uses this so it cannot change canonical-session restoration,
+ * which keys off prevConsumer === 'ephemeral'.
+ */
+export function observeCtxCompletionEnd(
+  completionSeq: number,
+  consumer: CtxCompletionConsumer,
+  durationMs: number,
+  outcome: 'ok' | 'error',
+  result?: unknown,
+): void {
+  try {
+    log('ctx.completion END', {
+      completionSeq,
+      consumer,
+      outcome,
+      durationMs: Math.round(durationMs * 100) / 100,
+      ...extractCompletionTimingFields(result),
+    });
   } catch {
     // instrumentation must never alter completion behavior
   }

@@ -2,6 +2,7 @@
 // The packet is closed. Personal values stay in the local handle map.
 
 import { classifyWithLLM, type ClassifyOutcome } from '../hooks/llmLayers';
+import { beginCtxCompletion, mono as latMono, observeCtxCompletionEnd } from '../utils/latencyInstrument';
 import { noteReferenceInvocation } from '../dev/semanticJourneyEvidence';
 import { runSharedSemanticCompletion, type SemanticCompletionRunOptions } from '../utils/semanticCompletionLifecycle';
 import type { LlamaContext } from 'llama.rn';
@@ -152,16 +153,20 @@ export async function proposeSpeechCompletion(
 ): Promise<'complete' | 'incomplete' | 'uncertain'> {
   const packet = buildSemanticPacket({ userText, riskTier: 'none' });
   if (!ctx || typeof ctx.completion !== 'function' || !packet.userText.trim()) return 'uncertain';
+  const completionSeq = beginCtxCompletion('speech');
+  const started = latMono();
   try {
     const value = await ctx.completion({
       prompt: `${SPEECH_COMPLETION_PROMPT}\n${packet.userText}`,
       n_predict: 8,
     });
+    observeCtxCompletionEnd(completionSeq, 'speech', latMono() - started, 'ok', value);
     const raw = typeof value === 'string' ? value : value?.text;
     const token = String(raw ?? '').trim().toLowerCase().split(/\s+/)[0] ?? '';
     if (token === 'complete' || token === 'incomplete' || token === 'uncertain') return token;
     return 'uncertain';
   } catch {
+    observeCtxCompletionEnd(completionSeq, 'speech', latMono() - started, 'error');
     return 'uncertain';
   }
 }
