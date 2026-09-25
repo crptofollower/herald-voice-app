@@ -10,6 +10,15 @@ import {
 } from '../../src/hooks/openSpeechTurnBoundary.ts';
 import { proposeSpeechCompletion } from '../../src/routing/semanticProvider.ts';
 import {
+  FORMER_SPEECH_PRODUCTION_PROBE_TIMEOUT_MS,
+  SPEECH_PRODUCTION_PROBE_TIMEOUT_MS,
+  classifySpeechProductionPreconditions,
+  noteSpeechEmitComplete,
+  receiveSpeechProductionCommand,
+  resetSpeechJourneyLivenessForTests,
+  snapshotSpeechJourneyLiveness,
+} from '../../src/dev/speechJourneyLiveness.ts';
+import {
   armSpeechProductionPathProof,
   journeyCommittedSegmentEvents,
   noteClassifierSettled,
@@ -200,6 +209,114 @@ export async function runSpeechProductionPathJourneyTests(): Promise<{
       /llmStatusRef\.current = llmStatus/.test(chat),
     'production chain',
     'missing',
+  );
+
+  resetSpeechJourneyLivenessForTests();
+  let handlerExceptionEmitted = false;
+  await receiveSpeechProductionCommand(async () => {}, () => { handlerExceptionEmitted = true; });
+  assert(
+    'listener-entry breadcrumb appears when the command is received',
+    snapshotSpeechJourneyLiveness().some((crumb) => crumb.step === 'listener_received'),
+    'listener_received',
+    snapshotSpeechJourneyLiveness().map((crumb) => crumb.step).join(','),
+  );
+  resetSpeechJourneyLivenessForTests();
+  handlerExceptionEmitted = false;
+  await receiveSpeechProductionCommand(async () => { throw new Error('hidden'); }, () => { handlerExceptionEmitted = true; });
+  assert(
+    'handler exception becomes an explicit Journey failure signal',
+    handlerExceptionEmitted && snapshotSpeechJourneyLiveness().some((crumb) => crumb.step === 'handler_entered'),
+    'handler_exception',
+    String(handlerExceptionEmitted),
+  );
+  assert(
+    'handler exception envelope reason is fixed',
+    host.includes("speechProofEnvelope('FAIL', 'handler_exception')"),
+    'handler_exception',
+    'missing',
+  );
+  resetSpeechJourneyLivenessForTests();
+  assert(
+    'missing runtime becomes explicit FAIL',
+    classifySpeechProductionPreconditions({
+      injectBound: false,
+      classifierBound: true,
+      ttsBound: true,
+      classifierReady: true,
+      speaking: false,
+    }) === 'speech_inject_unbound',
+    'speech_inject_unbound',
+    'other',
+  );
+  resetSpeechJourneyLivenessForTests();
+  assert(
+    'classifier readiness failure becomes explicit FAIL',
+    classifySpeechProductionPreconditions({
+      injectBound: true,
+      classifierBound: true,
+      ttsBound: true,
+      classifierReady: false,
+      speaking: false,
+    }) === 'classifier_not_ready',
+    'classifier_not_ready',
+    'other',
+  );
+  resetSpeechJourneyLivenessForTests();
+  noteSpeechEmitComplete(false, false);
+  assert(
+    'emitComplete native-missing failure is visible',
+    snapshotSpeechJourneyLiveness().some((crumb) => crumb.step === 'emit_complete_failed' && crumb.emitResult === 'native_missing'),
+    'native_missing',
+    snapshotSpeechJourneyLiveness().map((crumb) => crumb.emitResult).join(','),
+  );
+  resetSpeechJourneyLivenessForTests();
+  noteSpeechEmitComplete(true, true);
+  assert(
+    'emitComplete throw is visible and carries no exception text',
+    snapshotSpeechJourneyLiveness().some((crumb) => crumb.step === 'emit_complete_failed' && crumb.emitResult === 'threw')
+      && !JSON.stringify(snapshotSpeechJourneyLiveness()).includes('hidden'),
+    'threw',
+    JSON.stringify(snapshotSpeechJourneyLiveness()),
+  );
+  const speechTest = fs.readFileSync(path.join(root, 'android/app/src/androidTest/java/ai/apexempire/herald/journey/HeraldSpeechProductionPathV1Test.kt'), 'utf8');
+  const bridge = fs.readFileSync(path.join(root, 'android/app/src/journey/java/ai/apexempire/herald/journey/HeraldJourneyBridge.kt'), 'utf8');
+  const readyAt = speechTest.indexOf('awaitSpeechPreconditions');
+  const probeAt = speechTest.indexOf('probeSpeechProductionPath');
+  assert(
+    'outer probe timeout is narrower than the former blind wait',
+    SPEECH_PRODUCTION_PROBE_TIMEOUT_MS < FORMER_SPEECH_PRODUCTION_PROBE_TIMEOUT_MS
+      && bridge.includes('fun probeSpeechProductionPath(timeoutMs: Long = 180_000L)')
+      && !bridge.includes('1_680_000L')
+      && speechTest.includes('PROBE_TIMEOUT_MS = 180_000L'),
+    '180000',
+    String(SPEECH_PRODUCTION_PROBE_TIMEOUT_MS),
+  );
+  assert(
+    'prerequisite readiness is established before the speech probe',
+    readyAt > 0 && probeAt > readyAt && speechTest.includes('READINESS_TIMEOUT_MS = 25L * 60L * 1000L'),
+    'readiness then probe',
+    `ready=${readyAt} probe=${probeAt}`,
+  );
+  assert(
+    'speech probe no longer waits out model readiness',
+    !probe.includes('SEMANTIC_ENGINE_READINESS_TIMEOUT_MS') && probe.includes('classifySpeechProductionPreconditions'),
+    'immediate precondition',
+    'still waiting',
+  );
+  const oracle = fs.readFileSync(path.join(root, 'src/dev/speechProductionPathProof.ts'), 'utf8');
+  assert(
+    'accepted proof oracle is unchanged by liveness repair',
+    oracle.includes('function speechProductionPathSatisfied') && !oracle.includes('speechJourneyLiveness') && !oracle.includes('handler_exception'),
+    'oracle untouched',
+    'oracle drifted',
+  );
+  const useMicProd = fs.readFileSync(path.join(root, 'src/hooks/useMic.ts'), 'utf8');
+  const provider = fs.readFileSync(path.join(root, 'src/routing/semanticProvider.ts'), 'utf8');
+  assert(
+    'ordinary production behavior remains inert',
+    !useMicProd.includes('speechJourneyLiveness') && !provider.includes('speechJourneyLiveness') && !chat.includes('speechJourneyLiveness'),
+    'journey-only',
+    'production import',
   );
 
   console.log(`SpeechProductionPathJourney: ${passed} passed, ${failures.length} failed`);

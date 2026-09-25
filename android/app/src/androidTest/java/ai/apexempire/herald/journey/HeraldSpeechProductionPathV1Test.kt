@@ -21,7 +21,8 @@ class HeraldSpeechProductionPathV1Test {
   companion object {
     private const val TAG = "HeraldSpeechProductionPath"
     private const val HOST_TIMEOUT_MS = 90_000L
-    private const val PROBE_TIMEOUT_MS = 1_680_000L
+    private const val READINESS_TIMEOUT_MS = 25L * 60L * 1000L
+    private const val PROBE_TIMEOUT_MS = 180_000L
   }
 
   @get:Rule
@@ -37,6 +38,12 @@ class HeraldSpeechProductionPathV1Test {
     if (!HeraldJourneyBridge.awaitHostReady(HOST_TIMEOUT_MS)) {
       fail("RUNNER_FAIL JOURNEY_HOST_NOT_READY")
     }
+    val pre = JSONObject(HeraldJourneyBridge.awaitSpeechPreconditions(READINESS_TIMEOUT_MS))
+    emit(pre)
+    if (pre.optString("classifierBinding") == "missing") fail("PRECONDITION_FAIL classifier_ready_unbound")
+    if (pre.optString("ttsBinding") == "missing") fail("PRECONDITION_FAIL tts_state_unbound")
+    if (!pre.optBoolean("classifierReady", false)) fail("PRECONDITION_FAIL classifier_not_ready")
+    if (!pre.optBoolean("ttsIdle", false)) fail("PRECONDITION_FAIL tts_not_idle")
     val json = JSONObject(HeraldJourneyBridge.probeSpeechProductionPath(PROBE_TIMEOUT_MS))
     emit(json)
     if (json.optString("schema") != "herald.journey.speech_production_path.v1") {

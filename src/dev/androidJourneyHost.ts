@@ -4,7 +4,14 @@
  */
 import { DeviceEventEmitter, NativeModules, Platform } from 'react-native';
 import { beginSemanticProof, finishSemanticProof } from './semanticJourneyEvidence';
-import { classifySemanticEngineReadiness, emptySemanticEngineDiagnostic, SEMANTIC_ENGINE_READINESS_TIMEOUT_MS } from './semanticEngineReadiness';
+import { classifySemanticEngineReadiness, emptySemanticEngineDiagnostic } from './semanticEngineReadiness';
+import {
+  SPEECH_PRODUCTION_PROOF_WINDOW_MS,
+  classifySpeechProductionPreconditions,
+  noteSpeechEmitComplete,
+  noteSpeechJourneyLiveness,
+  receiveSpeechProductionCommand,
+} from './speechJourneyLiveness';
 import {
   JOURNEY_TURN_READINESS_POLL_MS,
   JOURNEY_TURN_READINESS_TIMEOUT_MS,
@@ -160,6 +167,7 @@ const SPEECH_PROBE_EVENT = 'DebugJourneySpeechProbe';
 const TALK_SESSION_HANDOFF_EVENT = 'DebugJourneyTalkSessionHandoff';
 const SEMANTIC_ENGINE_PROBE_EVENT = 'DebugJourneySemanticEngineProbe';
 const SPEECH_PRODUCTION_PATH_EVENT = 'DebugJourneySpeechProductionPath';
+const SPEECH_PRECONDITIONS_EVENT = 'DebugJourneySpeechPreconditions';
 const NATIVE_NAME = 'DebugJourneyBridge';
 
 let runtime: JourneyRuntime | null = null;
@@ -171,6 +179,7 @@ let speechProbeSubscription: { remove: () => void } | null = null;
 let talkSessionHandoffSubscription: { remove: () => void } | null = null;
 let semanticEngineProbeSubscription: { remove: () => void } | null = null;
 let speechProductionPathSubscription: { remove: () => void } | null = null;
+let speechPreconditionsSubscription: { remove: () => void } | null = null;
 let inFlightTurnId: string | null = null;
 let lastReportedOutcome: unknown = undefined;
 let lastReportedPendingKey: string | null = null;
@@ -446,11 +455,18 @@ function deriveCapability(
 }
 
 function emitComplete(result: object): void {
-  if (!native) return;
+  const speechProof = (result as { schema?: string }).schema === 'herald.journey.speech_production_path.v1';
+  if (!native) {
+    if (speechProof) noteSpeechEmitComplete(false, false);
+    else console.log('[JOURNEY-BRIDGE] {"step":"emit_complete_failed","reason":"native_missing"}');
+    return;
+  }
   try {
     native.completeTurn(JSON.stringify(result));
+    if (speechProof) noteSpeechEmitComplete(true, false);
   } catch {
-    /* native may have torn down */
+    if (speechProof) noteSpeechEmitComplete(true, true);
+    else console.log('[JOURNEY-BRIDGE] {"step":"emit_complete_failed","reason":"threw"}');
   }
 }
 
@@ -961,43 +977,45 @@ function speechProofEnvelope(status: 'PASS' | 'FAIL', failReason: string | null)
   };
 }
 
+function speechPreconditionsSnapshot() {
+  const classifierReady = runtime?.peekClassifierReady;
+  const peekSpeaking = runtime?.peekSpeaking;
+  return {
+    schema: 'herald.journey.speech_preconditions.v1' as const,
+    classifierBinding: classifierReady ? 'present' as const : 'missing' as const,
+    classifierReady: classifierReady ? classifierReady() : false,
+    ttsBinding: peekSpeaking ? 'present' as const : 'missing' as const,
+    ttsIdle: peekSpeaking ? !peekSpeaking() : false,
+  };
+}
+
 async function runSpeechProductionPathProof(): Promise<void> {
   const inject = runtime?.injectCommittedSpeechSegment;
   const classifierReady = runtime?.peekClassifierReady;
   const peekSpeaking = runtime?.peekSpeaking;
-  if (!inject) {
-    emitComplete(speechProofEnvelope('FAIL', 'speech_inject_unbound'));
-    return;
-  }
-  if (!classifierReady) {
-    emitComplete(speechProofEnvelope('FAIL', 'classifier_ready_unbound'));
-    return;
-  }
-  if (!peekSpeaking) {
-    emitComplete(speechProofEnvelope('FAIL', 'tts_state_unbound'));
-    return;
-  }
-  const readyDeadline = Date.now() + SEMANTIC_ENGINE_READINESS_TIMEOUT_MS;
-  while (!classifierReady()) {
-    if (Date.now() >= readyDeadline) {
-      emitComplete(speechProofEnvelope('FAIL', 'classifier_not_ready'));
-      return;
-    }
-    await sleep(50);
-  }
-  if (peekSpeaking()) {
-    emitComplete(speechProofEnvelope('FAIL', 'tts_not_idle'));
+  const failure = classifySpeechProductionPreconditions({
+    injectBound: typeof inject === 'function',
+    classifierBound: typeof classifierReady === 'function',
+    ttsBound: typeof peekSpeaking === 'function',
+    classifierReady: classifierReady ? classifierReady() : false,
+    speaking: peekSpeaking ? peekSpeaking() : false,
+  });
+  if (failure || !inject) {
+    emitComplete(speechProofEnvelope('FAIL', failure ?? 'speech_inject_unbound'));
     return;
   }
   resetSpeechProductionPathProof();
   armSpeechProductionPathProof();
+  noteSpeechJourneyLiveness({ step: 'proof_armed' });
+  noteSpeechJourneyLiveness({ step: 'proof_started' });
   inject(SPEECH_PRODUCTION_PATH_FIXTURE);
-  const deadline = Date.now() + 170_000;
+  const deadline = Date.now() + SPEECH_PRODUCTION_PROOF_WINDOW_MS;
   let snap = snapshotSpeechProductionPathProof();
   while (Date.now() < deadline && !speechProductionPathSatisfied(snap)) {
     await sleep(50);
     snap = snapshotSpeechProductionPathProof();
   }
+  noteSpeechJourneyLiveness({ step: 'proof_completed' });
   const ok = speechProductionPathSatisfied(snap);
   emitComplete(speechProofEnvelope(ok ? 'PASS' : 'FAIL', ok ? null : 'speech_production_path_incomplete'));
 }
@@ -1065,7 +1083,13 @@ export function onboardAndroidJourneyHost(): void {
     void runTalkSessionHandoffProbe();
   });
   speechProductionPathSubscription = DeviceEventEmitter.addListener(SPEECH_PRODUCTION_PATH_EVENT, () => {
-    void runSpeechProductionPathProof();
+    void receiveSpeechProductionCommand(
+      () => runSpeechProductionPathProof(),
+      () => emitComplete(speechProofEnvelope('FAIL', 'handler_exception')),
+    );
+  });
+  speechPreconditionsSubscription = DeviceEventEmitter.addListener(SPEECH_PRECONDITIONS_EVENT, () => {
+    emitComplete(speechPreconditionsSnapshot());
   });
   semanticEngineProbeSubscription = DeviceEventEmitter.addListener(SEMANTIC_ENGINE_PROBE_EVENT, () => {
     const diagnostic = runtime?.peekSemanticEngine?.() ?? emptySemanticEngineDiagnostic();
@@ -1091,6 +1115,8 @@ export function teardownAndroidJourneyHost(): void {
   semanticEngineProbeSubscription = null;
   speechProductionPathSubscription?.remove();
   speechProductionPathSubscription = null;
+  speechPreconditionsSubscription?.remove();
+  speechPreconditionsSubscription = null;
   resetSpeechProductionPathProof();
   runtime = null;
   native = null;
