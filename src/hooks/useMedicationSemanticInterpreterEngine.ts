@@ -42,6 +42,7 @@ import {
   emptySemanticEngineDiagnostic,
   type SemanticEngineDiagnostic,
 } from '../dev/semanticEngineReadiness';
+import { getSemanticContextState } from '../utils/semanticCompletionLifecycle';
 import { ensureSemanticLargeModel } from '../utils/semanticModelProvisioning';
 import { semanticConsumersRequireContext } from '../utils/semanticProvisioningPolicy';
 
@@ -65,7 +66,13 @@ function logInterpreterEngine(event: string, extra: Record<string, unknown> = {}
 let semanticEngineDiagnostic: SemanticEngineDiagnostic = emptySemanticEngineDiagnostic();
 
 export function peekSemanticEngineDiagnostic(): SemanticEngineDiagnostic {
-  return semanticEngineDiagnostic;
+  const semanticCompletionState = getSemanticContextState();
+  return {
+    ...semanticEngineDiagnostic,
+    semanticContextHeld: semanticEngineDiagnostic.contextHeld,
+    semanticCompletionState,
+    semanticUsable: semanticCompletionState === 'READY',
+  };
 }
 
 function publishSemanticEngineDiagnostic(patch: Partial<SemanticEngineDiagnostic>): void {

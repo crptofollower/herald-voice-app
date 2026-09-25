@@ -38,6 +38,9 @@ export async function runSemanticEngineReadinessV1Tests() {
       semanticEngineStatus: 'ready',
       initLlama: 'succeeded',
       contextHeld: true,
+      semanticContextHeld: true,
+      semanticCompletionState: 'READY',
+      semanticUsable: true,
       modelFilePresent: true,
       ensureStatus: 'ready',
     })) === 'READY',
@@ -98,6 +101,42 @@ export async function runSemanticEngineReadinessV1Tests() {
   assert(
     'the gate does not treat a filename as personal evidence',
     !JSON.stringify(snap({ modelFilePresent: true })).match(/patel|maya|metoprolol|512/),
+  );
+  assert(
+    'held context that is DRAINING is not proof-ready',
+    classifySemanticEngineReadiness(snap({
+      semanticEngineStatus: 'ready',
+      initLlama: 'succeeded',
+      contextHeld: true,
+      semanticContextHeld: true,
+      semanticCompletionState: 'DRAINING',
+      semanticUsable: false,
+      modelFilePresent: true,
+    })) === 'PENDING',
+  );
+  assert(
+    'held context that is UNHEALTHY is not proof-ready',
+    classifySemanticEngineReadiness(snap({
+      semanticEngineStatus: 'ready',
+      initLlama: 'succeeded',
+      contextHeld: true,
+      semanticContextHeld: true,
+      semanticCompletionState: 'UNHEALTHY',
+      semanticUsable: false,
+      modelFilePresent: true,
+    })) === 'PENDING',
+  );
+  assert(
+    'held context that is READY is proof-ready',
+    classifySemanticEngineReadiness(snap({
+      semanticEngineStatus: 'ready',
+      initLlama: 'succeeded',
+      contextHeld: true,
+      semanticContextHeld: true,
+      semanticCompletionState: 'READY',
+      semanticUsable: true,
+      modelFilePresent: true,
+    })) === 'READY',
   );
 
   console.log(`\n${BOLD}SemanticEngineReadinessV1: ${passed} passed, ${failures.length} failed${RESET}`);

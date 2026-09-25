@@ -1,8 +1,16 @@
-// Shared llama.rn 3B semantic completion ownership.
-// Caller deadlines may return unavailable; native ownership is held until
-// ctx.completion settles. No second completion while unsettled.
+// Shared llama.rn 3B semantic completion ownership for callers of
+// runSharedSemanticCompletion. This does not yet cover every Herald
+// ctx.completion site. A caller deadline abandons the user-turn wait only.
+// Native ownership stays until ctx.completion settles. Late results are discarded.
 
-import { isLlamaContextBusy } from './llamaContextExclusive';
+import { log as latencyLog } from './latencyInstrument';
+import {
+  getSemanticCompletionAdmission,
+  isLlamaContextBusy,
+  releaseSemanticCompletion,
+  tryAdmitSemanticCompletion,
+  resetSemanticCompletionAdmissionForTests,
+} from './llamaContextExclusive';
 
 export type SemanticCompletionUnavailableReason =
   | 'no_ctx'
@@ -24,16 +32,92 @@ export type SemanticCompletionRunOptions = {
   onAcquired?: () => void;
 };
 
-let nativeGeneration = 0;
-let nativeInFlight = false;
+export type SemanticContextState = 'READY' | 'OWNED' | 'DRAINING' | 'UNHEALTHY';
 
-export function isSemanticNativeCompletionInFlight(): boolean {
-  return nativeInFlight;
+export type SemanticCompletionBreadcrumb = {
+  event: string;
+  operation: string | null;
+  generation: number | null;
+  contextState: SemanticContextState;
+  firedLateMs?: number;
+};
+
+export const SEMANTIC_NATIVE_RECOVERY_HORIZON_MS = 30_000;
+const SHARED_CONTEXT_ID = 'shared-semantic';
+
+let contextState: SemanticContextState = 'READY';
+let activeToken: number | null = null;
+let activeOperation: string | null = null;
+let activeGeneration: number | null = null;
+let callerAbandoned = false;
+let nativeSettled = true;
+let recoveryTimer: ReturnType<typeof setTimeout> | null = null;
+let recoveryHorizonMs = SEMANTIC_NATIVE_RECOVERY_HORIZON_MS;
+const breadcrumbs: SemanticCompletionBreadcrumb[] = [];
+
+function note(event: string, extra?: { firedLateMs?: number }): void {
+  const crumb: SemanticCompletionBreadcrumb = {
+    event,
+    operation: activeOperation,
+    generation: activeGeneration,
+    contextState,
+    ...(extra?.firedLateMs != null ? { firedLateMs: extra.firedLateMs } : {}),
+  };
+  breadcrumbs.push(crumb);
+  latencyLog('SEMANTIC_COMPLETION_LIFECYCLE', {
+    lifecycleEvent: crumb.event,
+    operation: crumb.operation,
+    generation: crumb.generation,
+    contextState: crumb.contextState,
+    ...(crumb.firedLateMs != null ? { firedLateMs: crumb.firedLateMs } : {}),
+  });
 }
 
-export function resetSemanticCompletionLifecycleForTests(): void {
-  nativeGeneration += 1;
-  nativeInFlight = false;
+export function isSemanticNativeCompletionInFlight(): boolean {
+  return !nativeSettled && activeToken != null;
+}
+
+export function getSemanticContextState(): SemanticContextState {
+  return contextState;
+}
+
+export function peekSemanticCompletionBreadcrumbs(): readonly SemanticCompletionBreadcrumb[] {
+  return breadcrumbs;
+}
+
+export function resetSemanticCompletionLifecycleForTests(opts?: { recoveryHorizonMs?: number }): void {
+  if (recoveryTimer) clearTimeout(recoveryTimer);
+  recoveryTimer = null;
+  if (activeToken != null) releaseSemanticCompletion(activeToken);
+  contextState = 'READY';
+  activeToken = null;
+  activeOperation = null;
+  activeGeneration = null;
+  callerAbandoned = false;
+  nativeSettled = true;
+  recoveryHorizonMs = opts?.recoveryHorizonMs ?? SEMANTIC_NATIVE_RECOVERY_HORIZON_MS;
+  breadcrumbs.length = 0;
+  resetSemanticCompletionAdmissionForTests();
+}
+
+function releaseIfCurrent(token: number): void {
+  if (activeToken !== token) return;
+  const released = releaseSemanticCompletion(token);
+  if (!released) return;
+  activeToken = null;
+  nativeSettled = true;
+  callerAbandoned = false;
+  if (recoveryTimer) {
+    clearTimeout(recoveryTimer);
+    recoveryTimer = null;
+  }
+  if (contextState === 'UNHEALTHY') {
+    note('slot_released_unhealthy');
+    return;
+  }
+  contextState = 'READY';
+  note('context_ready');
+  note('slot_released');
 }
 
 export async function runSharedSemanticCompletion(
@@ -41,58 +125,119 @@ export async function runSharedSemanticCompletion(
   params: unknown,
   opts?: SemanticCompletionRunOptions,
 ): Promise<SemanticCompletionRun> {
-  if (typeof getCtx !== 'function') {
-    return { status: 'unavailable', reason: 'no_ctx' };
+  if (contextState === 'DRAINING' || contextState === 'UNHEALTHY' || contextState === 'OWNED') {
+    note(contextState === 'UNHEALTHY' ? 'rejected_unhealthy' : contextState === 'DRAINING' ? 'rejected_draining' : 'rejected_busy');
+    return { status: 'unavailable', reason: contextState === 'READY' ? 'busy' : 'in_flight' };
   }
+  note('semantic_requested');
+  if (typeof getCtx !== 'function') return { status: 'unavailable', reason: 'no_ctx' };
   const ctx = getCtx();
-  if (!ctx || typeof ctx.completion !== 'function') {
-    return { status: 'unavailable', reason: 'no_ctx' };
-  }
-  if (nativeInFlight) {
-    return { status: 'unavailable', reason: 'in_flight' };
-  }
-  if (isLlamaContextBusy()) {
+  if (!ctx || typeof ctx.completion !== 'function') return { status: 'unavailable', reason: 'no_ctx' };
+  if (isLlamaContextBusy() || getSemanticCompletionAdmission()) {
+    note('rejected_busy');
     return { status: 'unavailable', reason: 'busy' };
   }
 
-  nativeInFlight = true;
-  const generation = ++nativeGeneration;
-  const release = () => {
-    if (nativeGeneration === generation) nativeInFlight = false;
-  };
+  const operation = `op-${breadcrumbs.length + 1}`;
+  const admitted = tryAdmitSemanticCompletion({ contextId: SHARED_CONTEXT_ID, operation });
+  if (!admitted.ok) {
+    note('rejected_busy');
+    return { status: 'unavailable', reason: 'busy' };
+  }
 
-  opts?.onAcquired?.();
-
-  let nativePromise: Promise<unknown>;
+  activeToken = admitted.admission.token;
+  activeOperation = admitted.admission.operation;
+  activeGeneration = admitted.admission.generation;
+  contextState = 'OWNED';
+  callerAbandoned = false;
+  nativeSettled = false;
+  const token = admitted.admission.token;
+  note('slot_acquired');
   try {
-    nativePromise = Promise.resolve(ctx.completion(params)).finally(release);
+    opts?.onAcquired?.();
   } catch {
-    release();
+    note('lifecycle_error');
+    releaseIfCurrent(token);
     return { status: 'unavailable', reason: 'error' };
   }
-  void nativePromise.catch(() => {});
-
   const deadlineMs = opts?.callerDeadlineMs;
-  if (deadlineMs == null) {
-    try {
-      const value = await nativePromise;
-      return { status: 'ok', value };
-    } catch {
-      return { status: 'unavailable', reason: 'error' };
-    }
-  }
+  const deadlineArmedAt = Date.now();
+  if (deadlineMs != null) note('deadline_armed');
 
   let timer: ReturnType<typeof setTimeout> | null = null;
-  const timed = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error('timeout')), deadlineMs);
+  let callerSettled = false;
+  let resolveCaller: (run: SemanticCompletionRun) => void = () => {};
+  const caller = new Promise<SemanticCompletionRun>((resolve) => {
+    resolveCaller = (run) => {
+      if (callerSettled) return;
+      callerSettled = true;
+      resolve(run);
+    };
   });
-  try {
-    const value = await Promise.race([nativePromise, timed]);
-    if (timer) clearTimeout(timer);
-    return { status: 'ok', value };
-  } catch (e) {
-    if (timer) clearTimeout(timer);
-    const reason = String(e).includes('timeout') ? 'timeout' : 'error';
-    return { status: 'unavailable', reason };
+
+  if (deadlineMs != null) {
+    timer = setTimeout(() => {
+      const deadlineObservedAt = Date.now();
+      const firedLateMs = Math.max(0, deadlineObservedAt - (deadlineArmedAt + deadlineMs));
+      note('deadline_observed', { firedLateMs });
+      if (nativeSettled || activeToken !== token) return;
+      callerAbandoned = true;
+      contextState = 'DRAINING';
+      note('caller_abandoned');
+      note('native_still_in_flight');
+      resolveCaller({ status: 'unavailable', reason: 'timeout' });
+      if (recoveryTimer) clearTimeout(recoveryTimer);
+      recoveryTimer = setTimeout(() => {
+        if (activeToken === token && !nativeSettled) {
+          contextState = 'UNHEALTHY';
+          note('context_unhealthy');
+        }
+      }, recoveryHorizonMs);
+    }, deadlineMs);
   }
+
+  note('native_invoke_started');
+  let nativePromise: Promise<unknown>;
+  try {
+    nativePromise = Promise.resolve(ctx.completion(params));
+  } catch {
+    if (timer) clearTimeout(timer);
+    releaseIfCurrent(token);
+    return { status: 'unavailable', reason: 'error' };
+  }
+
+  nativePromise.then(
+    (value) => {
+      if (activeToken !== token) return;
+      nativeSettled = true;
+      if (timer) clearTimeout(timer);
+      if (callerAbandoned) {
+        note('late_native_settlement');
+        note('late_result_discarded');
+        releaseIfCurrent(token);
+        return;
+      }
+      note('native_settled');
+      resolveCaller({ status: 'ok', value });
+      releaseIfCurrent(token);
+    },
+    (e) => {
+      if (activeToken !== token) return;
+      nativeSettled = true;
+      if (timer) clearTimeout(timer);
+      if (callerAbandoned) {
+        note('late_native_settlement');
+        note('late_result_discarded');
+        releaseIfCurrent(token);
+        return;
+      }
+      resolveCaller({
+        status: 'unavailable',
+        reason: String(e).includes('timeout') ? 'timeout' : 'error',
+      });
+      releaseIfCurrent(token);
+    },
+  );
+
+  return caller;
 }
