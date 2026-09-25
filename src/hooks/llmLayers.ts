@@ -491,6 +491,8 @@ export async function classifyWithLLM(
     /** Fired after successful warmup completion, still under classifier hold,
      *  before nested canonical save. Ready must not wait on snapshot I/O. */
     onWarmupSucceeded?: () => void;
+    /** User turns stay `try`. Warmup is the only caller allowed to wait. */
+    exclusiveMode?: 'try' | 'wait';
   },
 ): Promise<ClassifyOutcome> {
   const turnId = getActiveTurnId();
@@ -501,7 +503,7 @@ export async function classifyWithLLM(
   const trimmed = userText.trim();
   if (!trimmed) return { status: 'ok', intents: [], readIntents: [], readLabeled: false };
 
-  const gate = await withLlamaContextExclusive('classifier', 'try', async () => {
+  const gate = await withLlamaContextExclusive('classifier', opts?.exclusiveMode ?? 'try', async () => {
     const classifyT0 = latMono();
     const isWarmup = trimmed === 'warmup ping';
     const consumer: CtxCompletionConsumer = isWarmup ? 'warmup' : 'classifier';
@@ -700,6 +702,7 @@ export async function warmupClassifier(
     timeoutMs: null,
     modelIdentity: identity ?? null,
     onWarmupSucceeded: hooks?.onWarmupSucceeded,
+    exclusiveMode: 'wait',
   });
   console.log('[warmupClassifier] done', JSON.stringify({ ms: Date.now() - __t0, status: out.status }));
   if (out.status === 'not_ready') {

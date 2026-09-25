@@ -9,6 +9,11 @@ export type SemanticEngineDiagnostic = {
   initLlama: 'not_started' | 'succeeded' | 'failed';
   modelFilePresent: boolean;
   contextHeld: boolean;
+  /** Init succeeded and a context object exists. Not inference liveness. */
+  semanticContextHeld: boolean;
+  semanticCompletionState: 'READY' | 'OWNED' | 'DRAINING' | 'UNHEALTHY';
+  /** Lifecycle can accept a semantic request. Distinct from contextHeld. */
+  semanticUsable: boolean;
 };
 
 export type SemanticReadinessGate =
@@ -31,6 +36,9 @@ export function emptySemanticEngineDiagnostic(): SemanticEngineDiagnostic {
     initLlama: 'not_started',
     modelFilePresent: false,
     contextHeld: false,
+    semanticContextHeld: false,
+    semanticCompletionState: 'READY',
+    semanticUsable: true,
   };
 }
 
@@ -39,6 +47,9 @@ export function classifySemanticEngineReadiness(diagnostic: SemanticEngineDiagno
     diagnostic.semanticEngineStatus === 'ready'
     && diagnostic.initLlama === 'succeeded'
     && diagnostic.contextHeld
+    && diagnostic.semanticContextHeld
+    && diagnostic.semanticCompletionState === 'READY'
+    && diagnostic.semanticUsable
   ) {
     return 'READY';
   }
