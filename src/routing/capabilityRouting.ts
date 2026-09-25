@@ -250,7 +250,9 @@ export function admitCapabilityProposal(
 // instance/lifecycle — the caller supplies the SAME independent medication 3B
 // context the write seam uses (Slice 1: reuse the live context, add none).
 
-export type CapabilityUnavailableReason = 'ctx_missing' | 'ctx_busy' | 'in_flight' | 'error';
+export type CapabilityUnavailableReason = 'ctx_missing' | 'ctx_busy' | 'in_flight' | 'timeout' | 'error';
+
+const CAPABILITY_SEMANTIC_TIMEOUT_MS = 8000;
 
 export type CapabilityGenerationResult =
   | { status: 'ok'; proposal: CapabilityProposal }
@@ -394,6 +396,7 @@ Return ONLY JSON. Do not add any other text.`;
 export async function generateCapabilityProposal(
   raw: string,
   getCtx: () => LlamaContext | null,
+  opts?: { timeoutMs?: number },
 ): Promise<CapabilityGenerationResult> {
   const t0 = latMono();
   const run = await runSpecialistInference('capability', getCtx, {
@@ -408,6 +411,7 @@ export async function generateCapabilityProposal(
     min_p: 0,
     response_format: CAPABILITY_PROPOSAL_RESPONSE_FORMAT,
   }, {
+    callerDeadlineMs: opts?.timeoutMs ?? CAPABILITY_SEMANTIC_TIMEOUT_MS,
     onAcquired: () => logSemanticDispatchInferenceStart(),
   });
   if (run.status === 'unavailable') {
@@ -416,13 +420,14 @@ export async function generateCapabilityProposal(
       unavailableReason: run.reason === 'no_ctx' ? 'ctx_missing' : run.reason,
       hasCurrentUtterance: raw.trim().length > 0,
     });
-    if (run.reason === 'error') {
-      logSemanticDispatchInferenceEnd(latMono() - t0, undefined, 'error');
+    if (run.reason === 'timeout' || run.reason === 'error') {
+      logSemanticDispatchInferenceEnd(latMono() - t0, undefined, run.reason);
     }
-    const reason =
+    const reason: CapabilityUnavailableReason =
       run.reason === 'no_ctx' ? 'ctx_missing' :
       run.reason === 'busy' ? 'ctx_busy' :
       run.reason === 'in_flight' ? 'in_flight' :
+      run.reason === 'timeout' ? 'timeout' :
       'error';
     return { status: 'unavailable', reason };
   }

@@ -355,9 +355,12 @@ Describe the sentence, not the world. Never resolve or normalize a name. confide
 // optimization. Never queues, never waits — both checks are now owned by
 // semanticCompletionLifecycle.ts. This module does not hold a private in-flight boolean.
 
+const MEDICATION_SEMANTIC_TIMEOUT_MS = 8000;
+
 export async function generateMedicationSemanticProposal(
   raw: string,
   getCtx: () => LlamaContext | null,
+  opts?: { timeoutMs?: number },
 ): Promise<ProposalGenerationResult> {
   const t0 = latMono();
   const run = await runSpecialistInference('medication', getCtx, {
@@ -371,11 +374,12 @@ export async function generateMedicationSemanticProposal(
     top_k: 20,
     min_p: 0,
   }, {
+    callerDeadlineMs: opts?.timeoutMs ?? MEDICATION_SEMANTIC_TIMEOUT_MS,
     onAcquired: () => logSemanticSpecialistInferenceStart('medication'),
   });
   if (run.status === 'unavailable') {
-    if (run.reason === 'error') {
-      logSemanticSpecialistInferenceEnd('medication', latMono() - t0, undefined, 'error');
+    if (run.reason === 'timeout' || run.reason === 'error') {
+      logSemanticSpecialistInferenceEnd('medication', latMono() - t0, undefined, run.reason);
     }
     return { status: 'unavailable' };
   }
