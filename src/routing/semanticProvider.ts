@@ -128,12 +128,17 @@ const REFERENCE_SEMANTIC_TIMEOUT_MS = 8000;
 
 /** Reference, recap, and continuation proposals. The shared lifecycle owns the native call. */
 export async function completeBoundedInterpretation(
-  kind: 'active_reference' | 'recap' | 'reference_continuation',
+  kind: 'active_reference' | 'recap' | 'reference_continuation' | 'discourse_mention',
   ctx: { completion: (params: any) => Promise<unknown> } | null,
   params: unknown,
   opts?: { timeoutMs?: number },
 ): Promise<{ status: 'ok'; value: unknown } | { status: 'unavailable' }> {
-  if (kind !== 'active_reference' && kind !== 'recap' && kind !== 'reference_continuation') {
+  if (
+    kind !== 'active_reference'
+    && kind !== 'recap'
+    && kind !== 'reference_continuation'
+    && kind !== 'discourse_mention'
+  ) {
     return { status: 'unavailable' };
   }
   if (!ctx || typeof ctx.completion !== 'function') return { status: 'unavailable' };
@@ -223,6 +228,61 @@ export async function proposeReferenceContinuation(
     return null;
   } catch {
     note('error', 'error');
+    return null;
+  }
+}
+
+export const DISCOURSE_MENTION_PROPOSAL_PROMPT =
+  'Reply with JSON only: an array of objects. Each object has span and kind. kind is place or event_or_topic. span is copied exactly from the utterance. Return [] when none apply.';
+
+export type DiscourseMentionProposalItem = {
+  span: string;
+  kind: string;
+};
+
+/** Current-turn span proposals. Null means admit nothing. Offsets in the payload are ignored. */
+export function parseDiscourseMentionPayload(raw: string): DiscourseMentionProposalItem[] | null {
+  const start = raw.indexOf('[');
+  const end = raw.lastIndexOf(']');
+  if (start < 0 || end <= start) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+  const items: DiscourseMentionProposalItem[] = [];
+  for (const item of parsed) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+    const row = item as Record<string, unknown>;
+    if (typeof row.span !== 'string' || typeof row.kind !== 'string') return null;
+    items.push({ span: row.span, kind: row.kind });
+  }
+  return items;
+}
+
+export async function proposeDiscourseMentions(
+  userText: string,
+  ctx: { completion: (params: any) => Promise<unknown> } | null,
+  opts?: { timeoutMs?: number },
+): Promise<DiscourseMentionProposalItem[] | null> {
+  const packet = buildSemanticPacket({ userText, riskTier: 'none' });
+  if (!packet.userText.trim() || !ctx || typeof ctx.completion !== 'function') return null;
+  try {
+    const value = await completeBoundedInterpretation('discourse_mention', ctx, {
+      prompt: `${DISCOURSE_MENTION_PROPOSAL_PROMPT}\n${packet.userText}`,
+      n_predict: 128,
+    }, opts);
+    if (value.status !== 'ok') return null;
+    const payload = value.value;
+    const raw = typeof payload === 'string'
+      ? payload
+      : String((payload as { text?: string; content?: string } | null)?.text
+        ?? (payload as { content?: string } | null)?.content
+        ?? '');
+    return parseDiscourseMentionPayload(raw);
+  } catch {
     return null;
   }
 }

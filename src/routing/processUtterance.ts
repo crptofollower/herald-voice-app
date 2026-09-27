@@ -54,6 +54,7 @@ import { isClosedActiveSubjectIdentityLookup, ACTIVE_SUBJECT_GROUNDING_ACK } fro
 import { admitGroundedContinuation, admitGroundedUnavailability } from './workingFocusReference';
 import { noteSemanticAdmission } from '../dev/semanticJourneyEvidence';
 import { proposeReferenceContinuation } from './semanticProvider';
+import { populateCurrentTurnDiscourseMentions } from './discourseMentionProposal';
 import {
   admitReminiscenceVerbatim,
   suppressCurrentReminiscenceArc,
@@ -2265,6 +2266,16 @@ export async function processUtterance(
       };
     }
     arc.close();
+  }
+  if (
+    discourse
+    && routeDecision.kind === 'needs_clarification'
+    && routeDecision.reason === 'default'
+  ) {
+    const mentionCtx = deps.getMedicationSemanticInterpreterCtx?.() ?? null;
+    if (mentionCtx) {
+      await populateCurrentTurnDiscourseMentions(text, mentionCtx, discourse);
+    }
   }
   const routeAct = actForRoute(routeDecision);
   if (routeDecision.kind === 'device_read' && routeDecision.reason === 'family:read') {
