@@ -51,7 +51,7 @@ import { EPISODE_RECALL_LIMIT } from '../db/episodeRead';
 import { listActiveEpisodes } from '../db/episodesWriter';
 import { realizeEpisodePerspective } from '../utils/episodeCapture';
 import { isClosedActiveSubjectIdentityLookup, ACTIVE_SUBJECT_GROUNDING_ACK } from './activeSubjectReference';
-import { admitWorkingFocusReference } from './workingFocusReference';
+import { admitGroundedContinuation } from './workingFocusReference';
 import { noteSemanticAdmission } from '../dev/semanticJourneyEvidence';
 import { proposeReferenceContinuation } from './semanticProvider';
 import {
@@ -940,7 +940,7 @@ export async function processUtterance(
     }
   }
   const presentedPeople = discourse?.peekReferentsInPlay() ?? null;
-  if (presentedPeople?.purpose.kind === 'presented_people' && !session.hasPending()) {
+  if (presentedPeople?.purpose.kind === 'presented_people' && !session.hasPending() && isReferentPhoneQuestion(text)) {
     const proposal = await proposeReferenceContinuation(
       text,
       deps.getMedicationSemanticInterpreterCtx?.() ?? null,
@@ -1119,34 +1119,188 @@ export async function processUtterance(
       calendar: calendarPresentation,
       todo: todoPresentation,
     });
-    if (liveSets.length > 0) {
+    const liveFocus = subject?.peek() ?? null;
+    const liveReferentSet = discourse?.peekReferentsInPlay() ?? null;
+    const hasGround = liveSets.length > 0 || !!liveFocus || (liveReferentSet?.candidateIds.length ?? 0) > 0;
+    const closedSubjectAct = !!liveFocus && (
+      isReferentPhoneQuestion(text)
+      || isReferentEpisodeTimeQuestion(text)
+      || isReferentVisitDateQuestion(text)
+      || isReferentVisitOutcomeQuestion(text)
+      || isReferentUpcomingVisitQuestion(text)
+      || isReferentYearBoundedVisitQuestion(text) != null
+      || (liveFocus.domain === 'medical_doctor' && isClosedActiveSubjectIdentityLookup(text))
+    );
+    if (hasGround && !closedSubjectAct) {
+      const semanticCtx = deps.getMedicationSemanticInterpreterCtx?.() ?? null;
       const proposal = await proposeReferenceContinuation(
         text,
-        deps.getMedicationSemanticInterpreterCtx?.() ?? null,
-        { groundedPresentedSets: true },
+        semanticCtx,
+        {
+          groundedPeople: !!liveFocus || (liveReferentSet?.candidateIds.length ?? 0) > 0,
+          groundedPresentedSets: liveSets.length > 0,
+        },
       );
-      noteSemanticAdmission({
-        mechanism: 'presented_set',
-        eligibleCount: liveSets.length === 1 ? liveSets[0]!.orderedMemberIds.length : liveSets.length,
-        resolution: proposal?.applicable ? 'ambiguous' : 'none',
-        candidateAdmitted: false,
-        admittedInGroundedSet: false,
-        clarificationRequired: proposal?.applicable === true,
-        capabilityDecision: null,
-        capabilityReason: null,
+      const decision = admitGroundedContinuation(proposal, {
+        interpretationFailed: semanticCtx != null && proposal == null,
+        focuses: liveFocus && liveFocus.domain !== 'episode'
+          ? [{ domain: liveFocus.domain, entityId: liveFocus.entityId, displayName: liveFocus.displayName }]
+          : [],
+        presentedSets: liveSets.map((set) => ({
+          domain: set.domain,
+          setId: set.setId,
+          memberIds: set.orderedMemberIds,
+        })),
+        referents: (liveReferentSet?.candidateIds ?? []).map((entityId) => ({ entityId })),
       });
-      if (proposal?.applicable) {
-        const medicationSet = liveSets.length === 1 && liveSets[0]?.domain === 'medication' ? liveSets[0] : null;
-        const responseText = medicationSet
-          ? (clarifyRetainedMedications(medicationSet.orderedMemberIds) ?? ORDERED_PRESENTATION_CONFUSION)
+      const mechanism = decision.kind === 'admit_focus' || (liveSets.length === 0 && !liveReferentSet)
+        ? 'working_focus' as const
+        : liveSets.length === 0 && liveReferentSet
+          ? 'referents_in_play' as const
+          : 'presented_set' as const;
+      if (decision.kind === 'admit_focus' && liveFocus?.domain === 'medical_doctor') {
+        const responseText = await answerReferentVisitDate(liveFocus);
+        noteSemanticAdmission({
+          mechanism: 'working_focus',
+          eligibleCount: 1,
+          resolution: responseText ? 'unique' : 'none',
+          candidateAdmitted: !!responseText,
+          admittedInGroundedSet: responseText ? true : null,
+          clarificationRequired: !responseText,
+          capabilityDecision: null,
+          capabilityReason: null,
+        });
+        if (responseText) {
+          subject?.establishMedical({ entityId: liveFocus.entityId, displayName: liveFocus.displayName });
+          return {
+            handled: true,
+            source: 'referent_resume',
+            responseText,
+            commits: [],
+            responseAct: { kind: 'ANSWER', text: responseText, epistemic: 'deterministic_read' },
+          };
+        }
+      } else if (decision.kind === 'admit_member') {
+        if (decision.domain === 'medication') {
+          const livePresentation = medicationPresentation?.peek();
+          const index = livePresentation?.medicationIds.indexOf(decision.memberId) ?? -1;
+          const answered = livePresentation && index >= 0
+            ? answerMedicationOrdinal(livePresentation, index)
+            : null;
+          if (answered?.kind === 'ok') {
+            noteSemanticAdmission({
+              mechanism: 'presented_set',
+              eligibleCount: 1,
+              resolution: 'unique',
+              candidateAdmitted: true,
+              admittedInGroundedSet: true,
+              clarificationRequired: false,
+              capabilityDecision: null,
+              capabilityReason: null,
+            });
+            medicationPresentation?.renew();
+            return {
+              handled: true,
+              source: 'referent_resume',
+              responseText: answered.responseText,
+              commits: [],
+              responseAct: { kind: 'ANSWER', text: answered.responseText, epistemic: 'deterministic_read' },
+            };
+          }
+        } else if (decision.domain === 'grocery') {
+          const row = getOpenListItemById(decision.memberId, 'grocery');
+          if (row) {
+            noteSemanticAdmission({
+              mechanism: 'presented_set',
+              eligibleCount: 1,
+              resolution: 'unique',
+              candidateAdmitted: true,
+              admittedInGroundedSet: true,
+              clarificationRequired: false,
+              capabilityDecision: null,
+              capabilityReason: null,
+            });
+            orderedPresentation?.renew();
+            return groceryHandled('referent_resume', formatGroceryItemReadback(row.body));
+          }
+        } else if (decision.domain === 'calendar') {
+          const livePresentation = calendarPresentation?.peek();
+          const answered = livePresentation ? answerCalendarTimeInquiry(livePresentation, 1) : null;
+          if (answered?.kind === 'ok') {
+            noteSemanticAdmission({
+              mechanism: 'presented_set',
+              eligibleCount: 1,
+              resolution: 'unique',
+              candidateAdmitted: true,
+              admittedInGroundedSet: true,
+              clarificationRequired: false,
+              capabilityDecision: null,
+              capabilityReason: null,
+            });
+            calendarPresentation?.clear();
+            return {
+              handled: true,
+              source: 'referent_resume',
+              responseText: answered.responseText,
+              commits: [],
+            };
+          }
+        }
+      }
+      if (decision.kind === 'clarify' || decision.kind === 'retain' || decision.kind === 'admit_focus' || decision.kind === 'admit_member') {
+        const onlyMedication = decision.kind === 'clarify'
+          && liveSets.length === 1
+          && liveSets[0]?.domain === 'medication'
+          && !liveFocus
+          && !liveReferentSet;
+        const responseText = onlyMedication
+          ? (clarifyRetainedMedications(liveSets[0]!.orderedMemberIds) ?? ORDERED_PRESENTATION_CONFUSION)
           : ORDERED_PRESENTATION_CONFUSION;
+        if (liveSets.length > 0) {
+          recoveryObligation?.establishJob('clarify_reference', {
+            kind: 'presented_sets',
+            setIds: liveSets.map((set) => set.setId),
+          });
+        } else if (liveReferentSet) {
+          recoveryObligation?.establishJob('clarify_reference', {
+            kind: 'referents_in_play',
+            setId: liveReferentSet.setId,
+          });
+        } else if (liveFocus?.domain === 'medical_doctor') {
+          recoveryObligation?.establishJob('clarify_reference', {
+            kind: 'working_focus',
+            focusKey: `${liveFocus.domain}:${liveFocus.entityId}`,
+          });
+        }
+        noteSemanticAdmission({
+          mechanism,
+          eligibleCount: decision.kind === 'clarify' ? decision.eligibleCount : liveSets.length || (liveFocus ? 1 : liveReferentSet?.candidateIds.length ?? 0),
+          resolution: decision.kind === 'clarify' ? 'ambiguous' : 'none',
+          candidateAdmitted: false,
+          admittedInGroundedSet: false,
+          clarificationRequired: true,
+          capabilityDecision: null,
+          capabilityReason: null,
+        });
         return {
           handled: true,
           source: 'referent_resume',
           responseText,
           commits: [],
-          responseAct: armSoft(clarifyReferenceAct(responseText)),
+          responseAct: clarifyReferenceAct(responseText),
         };
+      }
+      if (decision.kind === 'none') {
+        noteSemanticAdmission({
+          mechanism,
+          eligibleCount: 0,
+          resolution: 'none',
+          candidateAdmitted: false,
+          admittedInGroundedSet: null,
+          clarificationRequired: false,
+          capabilityDecision: null,
+          capabilityReason: null,
+        });
       }
     }
   }
@@ -1458,46 +1612,6 @@ export async function processUtterance(
         if (responseText && live.domain === 'medical_doctor') {
           subject.establishMedical({ entityId: live.entityId, displayName: live.displayName });
           return { handled: true, source: 'referent_resume', responseText, commits: [] };
-        }
-      }
-    }
-    if (live) {
-      const proposal = await proposeReferenceContinuation(
-        text,
-        deps.getMedicationSemanticInterpreterCtx?.() ?? null,
-      );
-      const compatible = live.domain === 'medical_doctor' ? [live] : [];
-      const decision = admitWorkingFocusReference(proposal, compatible);
-      noteSemanticAdmission({
-        mechanism: 'working_focus',
-        eligibleCount: compatible.length,
-        resolution: decision.kind === 'admit' ? 'unique' : decision.kind === 'clarify' ? 'ambiguous' : proposal?.applicable ? 'rejected' : 'none',
-        candidateAdmitted: decision.kind === 'admit',
-        admittedInGroundedSet: decision.kind === 'admit' ? true : null,
-        clarificationRequired: decision.kind === 'clarify',
-        capabilityDecision: null,
-        capabilityReason: null,
-      });
-      if (decision.kind === 'clarify') {
-        return {
-          handled: true,
-          source: 'referent_resume',
-          responseText: ORDERED_PRESENTATION_CONFUSION,
-          commits: [],
-          responseAct: clarifyReferenceAct(ORDERED_PRESENTATION_CONFUSION),
-        };
-      }
-      if (decision.kind === 'admit' && live.domain === 'medical_doctor') {
-        const responseText = await answerReferentVisitDate(live);
-        if (responseText) {
-          subject.establishMedical({ entityId: live.entityId, displayName: live.displayName });
-          return {
-            handled: true,
-            source: 'referent_resume',
-            responseText,
-            commits: [],
-            responseAct: { kind: 'ANSWER', text: responseText, epistemic: 'deterministic_read' },
-          };
         }
       }
     }
