@@ -1,20 +1,20 @@
 package ai.apexempire.herald.journey
 
 import android.util.Log
-import androidx.test.ext.junit.rules.ActivityScenarioRule
+import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import ai.apexempire.herald.MainActivity
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.fail
-import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
  * Drives the production open-speech admission chain under the retired classifier.
  * The envelope is booleans and enums only.
+ * Location preflight is androidTest-only and finishes before this proof starts.
  */
 @RunWith(AndroidJUnit4::class)
 class HeraldSpeechProductionPathV1Test {
@@ -25,16 +25,21 @@ class HeraldSpeechProductionPathV1Test {
     private const val PROBE_TIMEOUT_MS = 180_000L
   }
 
-  @get:Rule
-  val activityRule = ActivityScenarioRule(MainActivity::class.java)
+  private lateinit var scenario: ActivityScenario<MainActivity>
 
   @After
   fun tearDown() {
     HeraldJourneyBridge.requestHostTeardown()
+    if (::scenario.isInitialized) scenario.close()
   }
 
   @Test
   fun speechProductionPath_realAdmissionChain() {
+    val blocked = JourneyLocationPreflight.enableBeforeLaunch()
+    if (blocked != null) fail("PREFLIGHT_FAIL $blocked")
+    scenario = ActivityScenario.launch(MainActivity::class.java)
+    val preflight = JourneyLocationPreflight.finishAfterLaunch(scenario)
+    if (preflight != null) fail("PREFLIGHT_FAIL $preflight")
     if (!HeraldJourneyBridge.awaitHostReady(HOST_TIMEOUT_MS)) {
       fail("RUNNER_FAIL JOURNEY_HOST_NOT_READY")
     }

@@ -317,6 +317,36 @@ export async function runSpeechProductionPathJourneyTests(): Promise<{
     '180000',
     String(SPEECH_PRODUCTION_PROBE_TIMEOUT_MS),
   );
+  const enableAt = speechTest.indexOf('JourneyLocationPreflight.enableBeforeLaunch');
+  const launchAt = speechTest.indexOf('ActivityScenario.launch');
+  const finishAt = speechTest.indexOf('JourneyLocationPreflight.finishAfterLaunch');
+  assert(
+    'location preflight finishes before the speech proof starts',
+    enableAt >= 0 && launchAt > enableAt && finishAt > launchAt && probeAt > finishAt,
+    'preflight then proof',
+    `${enableAt},${launchAt},${finishAt},${probeAt}`,
+  );
+  const useLocation = fs.readFileSync(path.join(root, 'src/hooks/useLocation.ts'), 'utf8');
+  const useMicSource = fs.readFileSync(path.join(root, 'src/hooks/useMic.ts'), 'utf8');
+  const boundary = fs.readFileSync(path.join(root, 'src/hooks/openSpeechTurnBoundary.ts'), 'utf8');
+  assert(
+    'production location and speech files do not run the location shell',
+    !useLocation.includes('set-location-enabled')
+      && !useMicSource.includes('set-location-enabled')
+      && !boundary.includes('set-location-enabled')
+      && boundary.includes('OPEN_SPEECH_CONTINUATION_GAP_MS = 1200')
+      && boundary.includes('OPEN_SPEECH_MAX_TURN_MS = 20_000'),
+    'production untouched',
+    'shell or timer drift',
+  );
+  const policy = fs.readFileSync(path.join(root, 'android/app/src/journeyPreflight/java/ai/apexempire/herald/journey/JourneyLocationPreflightPolicy.kt'), 'utf8');
+  assert(
+    'preflight blocks proof on shell, resolution, and resume failures',
+    ['shell_enable_failed', 'resolution_failed', 'main_activity_not_resumed', 'location_overlay_present']
+      .every((reason) => policy.includes(reason)),
+    'fail closed',
+    'missing reason',
+  );
   assert(
     'TTS idle is checked before the speech probe without a classifier wait',
     ttsAt > 0 && probeAt > ttsAt
