@@ -35,6 +35,7 @@ import {
 import {
   SPEECH_PRODUCTION_PATH_FIXTURE,
   armDeterministicSpeechPathProof,
+  decideJourneySpeechProof,
   deterministicSpeechPathSatisfied,
   resetDeterministicSpeechPathProof,
   resetSpeechProductionPathProof,
@@ -1013,10 +1014,9 @@ async function runSpeechProductionPathProof(): Promise<void> {
   }
   setSpeechHandlerStage('after_proof_completed');
   noteSpeechJourneyLiveness({ step: 'proof_completed' });
-  setSpeechHandlerStage('legacy_satisfier');
-  const ok = speechProductionPathSatisfied(snap);
   setSpeechHandlerStage('result_envelope');
-  const envelope = speechProofEnvelope(ok ? 'PASS' : 'FAIL', ok ? null : 'speech_production_path_incomplete');
+  const decision = decideJourneySpeechProof(snap);
+  const envelope = speechProofEnvelope(decision.status, decision.failReason);
   setSpeechHandlerStage('before_emit');
   emitComplete(envelope);
 }

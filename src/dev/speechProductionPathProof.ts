@@ -395,6 +395,17 @@ export function deterministicSpeechPathSatisfied(snap: DeterministicSpeechPathPr
     && before(snap.speechSendStartedSeq, snap.sendProcessingReturnedSeq);
 }
 
+export function decideJourneySpeechProof(snap: DeterministicSpeechPathProof): {
+  status: 'PASS' | 'FAIL';
+  failReason: string | null;
+} {
+  const ok = deterministicSpeechPathSatisfied(snap);
+  return {
+    status: ok ? 'PASS' : 'FAIL',
+    failReason: ok ? null : 'speech_production_path_incomplete',
+  };
+}
+
 /** Production open-speech events for one committed segment. The reducer decides admission. */
 export function journeyCommittedSegmentEvents(
   nativeSessionId: number,

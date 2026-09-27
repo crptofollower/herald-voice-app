@@ -30,6 +30,7 @@ import {
 } from '../../src/dev/speechJourneyLiveness.ts';
 import {
   armDeterministicSpeechPathProof,
+  decideJourneySpeechProof,
   deterministicSpeechPathSatisfied,
   noteDeterministicAdmissionRequested,
   noteDeterministicContinuationGapElapsed,
@@ -331,20 +332,27 @@ export async function runSpeechProductionPathJourneyTests(): Promise<{
     'non_error_Object',
     JSON.stringify(opaque),
   );
+  const proofCompletedAt = probe.indexOf("step: 'proof_completed'");
+  const decisionAt = probe.indexOf('decideJourneySpeechProof(snap)');
   assert(
-    'speech proof marks the handler stage around completion',
-    probe.includes("setSpeechHandlerStage('before_proof_completed')")
+    'final Journey proof uses the deterministic satisfier after proof completion',
+    proofCompletedAt > 0
+      && decisionAt > proofCompletedAt
+      && probe.includes('deterministicSpeechPathSatisfied(snap)')
+      && !probe.includes('speechProductionPathSatisfied')
+      && probe.includes("setSpeechHandlerStage('before_proof_completed')")
       && probe.includes("setSpeechHandlerStage('after_proof_completed')")
-      && probe.includes("setSpeechHandlerStage('legacy_satisfier')")
       && probe.includes("setSpeechHandlerStage('result_envelope')")
       && probe.includes("setSpeechHandlerStage('before_emit')"),
-    'stages',
-    'missing',
+    'deterministic final decision',
+    `completed=${proofCompletedAt} decision=${decisionAt}`,
   );
   assert(
     'handler stage diagnostic stays off production speech files',
     !useMic.includes('setSpeechHandlerStage')
+      && !useMic.includes('decideJourneySpeechProof')
       && !chat.includes('setSpeechHandlerStage')
+      && !chat.includes('decideJourneySpeechProof')
       && !fs.readFileSync(path.join(root, 'src/hooks/useSpeech.ts'), 'utf8').includes('setSpeechHandlerStage')
       && !fs.readFileSync(path.join(root, 'src/hooks/openSpeechTurnBoundary.ts'), 'utf8').includes('setSpeechHandlerStage'),
     'absent',
@@ -552,11 +560,26 @@ export async function runSpeechProductionPathJourneyTests(): Promise<{
     noteDeterministicSendProcessingReturned();
   }
   passDeterministic();
+  const passDecision = decideJourneySpeechProof(snapshotDeterministicSpeechPathProof());
   assert(
     'deterministic production path satisfies the new oracle',
     deterministicSpeechPathSatisfied(snapshotDeterministicSpeechPathProof()),
     'satisfied',
     JSON.stringify(snapshotDeterministicSpeechPathProof()),
+  );
+  assert(
+    'a satisfied deterministic snapshot emits PASS',
+    passDecision.status === 'PASS' && passDecision.failReason === null,
+    'PASS',
+    `${passDecision.status}:${String(passDecision.failReason)}`,
+  );
+  resetDeterministicSpeechPathProof();
+  const incompleteDecision = decideJourneySpeechProof(snapshotDeterministicSpeechPathProof());
+  assert(
+    'an unsatisfied deterministic snapshot emits the incomplete failure',
+    incompleteDecision.status === 'FAIL' && incompleteDecision.failReason === 'speech_production_path_incomplete',
+    'FAIL speech_production_path_incomplete',
+    `${incompleteDecision.status}:${String(incompleteDecision.failReason)}`,
   );
   assert(
     'deterministic envelope has no fixture text',
