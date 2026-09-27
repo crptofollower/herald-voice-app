@@ -504,10 +504,10 @@ export async function runOrderedPresentationTests() {
     presentGrocery(ordered, subject, medication);
     const thisOne = await say('This one');
     assert('OP122 This one is not a position read', thisOne,
-      v => v.handled === true
-        && v.responseAct?.kind === 'CLARIFY_REFERENCE'
-        && !/milk|eggs|bananas/i.test(v.responseText ?? ''),
-      'clarify, no item');
+      v => v.handled === false
+        && v.responseAct?.kind !== 'CLARIFY_REFERENCE'
+        && !/milk|eggs|bananas|not sure which/i.test(JSON.stringify(v)),
+      'generic miss, no item');
     assert('OP123 This one keeps the presented set', ordered.hasLive(), v => v === true, 'live');
   }
 
@@ -519,11 +519,11 @@ export async function runOrderedPresentationTests() {
     presentGrocery(ordered, subject, medication);
     const it = await say('It');
     assert('OP124 It is not a position read', it,
-      v => v.handled === true
-        && v.responseAct?.kind === 'CLARIFY_REFERENCE'
+      v => v.handled === false
+        && v.responseAct?.kind !== 'CLARIFY_REFERENCE'
         && ordered.hasLive()
-        && !/milk|eggs|bananas/i.test(v.responseText ?? ''),
-      'clarify, set kept');
+        && !/milk|eggs|bananas|not sure which/i.test(JSON.stringify(v)),
+      'generic miss, set kept');
   }
 
   {

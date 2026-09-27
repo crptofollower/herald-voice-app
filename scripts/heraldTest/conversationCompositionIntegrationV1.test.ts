@@ -126,9 +126,9 @@ export async function runConversationCompositionIntegrationV1Tests() {
     namedFocusMatch: false,
     namedOtherIdentity: false,
   };
-  assert('a miss with ground and no semantic context clarifies',
-    admitGroundedUnavailability(ground) === 'clarify',
-    (v) => v === true, 'clarify');
+  assert('a miss with ground preserves context without claiming a reference',
+    admitGroundedUnavailability(ground) === 'preserve',
+    (v) => v === true, 'preserve');
   assert('an understood route is not intercepted',
     admitGroundedUnavailability({ ...ground, routeMiss: false }) === 'pass',
     (v) => v === true, 'pass');
@@ -455,17 +455,74 @@ export async function runConversationCompositionIntegrationV1Tests() {
     null,
     recoverObligation,
   );
-  assert('a route miss with one working focus clarifies and keeps that focus',
-    missed.handled === true
-      && missed.responseAct?.kind === 'CLARIFY_REFERENCE'
-      && !/last saw/i.test(missed.responseText ?? '')
+  const missedRoute = missed.handled ? null : missed.routeDecision;
+  assert('a route miss keeps one working focus and does not ask which one',
+    missed.handled === false
+      && missedRoute?.kind === 'needs_clarification'
+      && missedRoute.reason === 'default'
+      && missed.responseAct?.kind !== 'CLARIFY_REFERENCE'
+      && !/not sure which|last saw/i.test(JSON.stringify(missed))
       && recoverSubject.peek()?.entityId === 'Dr. Patel'
-      && recoverObligation.peek()?.scope.kind === 'working_focus'
-      && (missed.commits ?? []).length === 0,
-    (v) => v === true, 'grounded recovery');
+      && recoverObligation.peek()?.job !== 'clarify_reference',
+    (v) => v === true, 'preserved, not claimed');
   assert('semantic unavailability does not authorize a write',
     openItems().join(',') === beforeMiss.join(','),
     (v) => v === true, 'no write');
+
+  const pizzaSubject = new ConversationalSubjectHolder();
+  pizzaSubject.establishMedical({ entityId: 'Dr. Patel', displayName: 'Dr. Patel' });
+  const pizzaObligation = new RecoveryObligationHolder();
+  const pizza = await processUtterance(
+    'I like pizza tonight.',
+    new ConversationSession(),
+    silent,
+    pizzaSubject,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    pizzaObligation,
+  );
+  const pizzaRoute = pizza.handled ? null : pizza.routeDecision;
+  assert('an unrelated statement does not claim the live focus',
+    pizza.handled === false
+      && pizzaRoute?.kind === 'needs_clarification'
+      && pizzaRoute.reason === 'default'
+      && pizza.responseAct?.kind !== 'CLARIFY_REFERENCE'
+      && !/not sure which|last saw/i.test(JSON.stringify(pizza))
+      && pizzaSubject.peek()?.entityId === 'Dr. Patel'
+      && pizzaObligation.peek()?.job !== 'clarify_reference',
+    (v) => v === true, 'generic miss');
+
+  const idleMeds = new MedicationPresentationHolder();
+  const idleObligation = new RecoveryObligationHolder();
+  idleMeds.establish(['med_metoprolol', 'med_lisinopril']);
+  const idleSet = await processUtterance(
+    'I like pizza tonight.',
+    new ConversationSession(),
+    silent,
+    null,
+    idleMeds,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    idleObligation,
+  );
+  const idleRoute = idleSet.handled ? null : idleSet.routeDecision;
+  assert('an unrelated statement does not claim a live presented set',
+    idleSet.handled === false
+      && idleRoute?.reason === 'default'
+      && idleSet.responseAct?.kind !== 'CLARIFY_REFERENCE'
+      && !/not sure which|metoprolol|lisinopril/i.test(JSON.stringify(idleSet))
+      && idleMeds.peek()?.medicationIds.join(',') === 'med_metoprolol,med_lisinopril'
+      && idleObligation.peek()?.job !== 'clarify_reference',
+    (v) => v === true, 'set preserved, not claimed');
   const confirmed = await processUtterance(
     'Yes, Dr. Patel.',
     new ConversationSession(),
@@ -501,10 +558,13 @@ export async function runConversationCompositionIntegrationV1Tests() {
     null,
     silentPeople,
   );
-  assert('missing semantic context with several people clarifies and picks none',
-    silentMany.handled === true
-      && silentMany.responseAct?.kind === 'CLARIFY_REFERENCE'
-      && !/512|555|0111|0122|maya|priya/i.test(silentMany.responseText ?? '')
+  const silentManyRoute = silentMany.handled ? null : silentMany.routeDecision;
+  assert('several people survive a generic miss and none is chosen',
+    silentMany.handled === false
+      && silentManyRoute?.kind === 'needs_clarification'
+      && silentManyRoute.reason === 'default'
+      && silentMany.responseAct?.kind !== 'CLARIFY_REFERENCE'
+      && !/512|555|0111|0122|maya|priya|not sure which/i.test(JSON.stringify(silentMany))
       && silentPeople.peekReferentsInPlay()?.candidateIds.join(',') === 'd1,d2',
     (v) => v === true, 'no top-1');
 

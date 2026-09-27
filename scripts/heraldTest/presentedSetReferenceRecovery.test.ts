@@ -101,13 +101,15 @@ export async function runPresentedSetReferenceRecoveryTests() {
   const unusedRecovery = new RecoveryObligationHolder();
   unusedMeds.establish(['med_metoprolol', 'med_lisinopril']);
   const unused = await processUtterance('zz idle', new ConversationSession(), silent, null, unusedMeds, null, null, null, null, null, null, unusedRecovery);
-  assert('a route miss with a live medication set preserves it and clarifies',
-    unused.handled === true
-      && unused.responseAct?.kind === 'CLARIFY_REFERENCE'
+  const unusedRoute = unused.handled ? null : unused.routeDecision;
+  assert('a route miss keeps a live medication set without claiming it',
+    unused.handled === false
+      && unusedRoute?.reason === 'default'
+      && unused.responseAct?.kind !== 'CLARIFY_REFERENCE'
       && unusedMeds.peek()?.medicationIds.join(',') === 'med_metoprolol,med_lisinopril'
-      && !/metoprolol|lisinopril/i.test(unused.responseText ?? '')
-      && unusedRecovery.peek()?.job === 'clarify_reference',
-    (v) => v === true, 'grounded set recovery');
+      && !/metoprolol|lisinopril|not sure which/i.test(JSON.stringify(unused))
+      && unusedRecovery.peek()?.job !== 'clarify_reference',
+    (v) => v === true, 'set preserved, not claimed');
 
   const bothMeds = new MedicationPresentationHolder();
   const grocery = new OrderedPresentationHolder();

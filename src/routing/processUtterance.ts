@@ -679,6 +679,7 @@ export async function processUtterance(
   };
   const continuationRecoveryCandidates: ContinuationRecoveryCandidate[] = [];
   let semanticContextMissing = false;
+  let retainGroundWithoutReference = false;
   // 0) Law 0 — emergency preempts everything (Spine §3a). Checked before pending
   //    resolution, before routing, before any classifier. A held pending is
   //    RELEASED, never resumed — no re-ask, no ladder, no ack generated here
@@ -2092,7 +2093,7 @@ export async function processUtterance(
       namedFocusMatch,
       namedOtherIdentity: !!(uniqueMedical && named && !namedFocusMatch),
     });
-    if (recovery !== 'pass') {
+    if (recovery === 'resolve_named_focus' || recovery === 'preserve') {
       if (held && held.domain !== 'episode' && subject && !subject.hasLive()) {
         subject.restore(held);
       }
@@ -2110,24 +2111,7 @@ export async function processUtterance(
           };
         }
       }
-      const setIds = liveSetsNow.map((set) => set.setId);
-      if (setIds.length > 0) {
-        recoveryObligation?.establishJob('clarify_reference', { kind: 'presented_sets', setIds });
-      } else if (referentSet?.setId) {
-        recoveryObligation?.establishJob('clarify_reference', { kind: 'referents_in_play', setId: referentSet.setId });
-      } else if (held && held.domain !== 'episode') {
-        recoveryObligation?.establishJob('clarify_reference', {
-          kind: 'working_focus',
-          focusKey: `${held.domain}:${held.entityId}`,
-        });
-      }
-      return {
-        handled: true,
-        source: 'referent_resume',
-        responseText: ORDERED_PRESENTATION_CONFUSION,
-        commits: [],
-        responseAct: clarifyReferenceAct(ORDERED_PRESENTATION_CONFUSION),
-      };
+      retainGroundWithoutReference = true;
     }
   }
   const pinned = new Set(
@@ -2147,13 +2131,13 @@ export async function processUtterance(
   const calendarSetId = calendarPeek
     ? presentedSet('calendar', calendarPeek.eventIds).setId
     : null;
-  if (medicationAwaitingUnusedClear && !medicationRebound && !keepCoexistingSets && !(medicationSetId && pinned.has(medicationSetId))) {
+  if (medicationAwaitingUnusedClear && !medicationRebound && !keepCoexistingSets && !retainGroundWithoutReference && !(medicationSetId && pinned.has(medicationSetId))) {
     medicationPresentation?.clear();
   }
-  if (groceryAwaitingUnusedClear && !groceryRebound && !keepCoexistingSets && !(grocerySetId && pinned.has(grocerySetId))) {
+  if (groceryAwaitingUnusedClear && !groceryRebound && !keepCoexistingSets && !retainGroundWithoutReference && !(grocerySetId && pinned.has(grocerySetId))) {
     orderedPresentation?.clear();
   }
-  if (calendarAwaitingUnusedClear && !calendarRebound && !keepCoexistingSets && !(calendarSetId && pinned.has(calendarSetId))) {
+  if (calendarAwaitingUnusedClear && !calendarRebound && !keepCoexistingSets && !retainGroundWithoutReference && !(calendarSetId && pinned.has(calendarSetId))) {
     calendarPresentation?.clear();
   }
   syncSoft();

@@ -111,17 +111,19 @@ export async function runContinuationRecoveryEvidenceTests() {
   subject.beginUserTurn();
   subject.establishFamily({ entityId: secretId, displayName: 'Pat', relationship: 'wife' });
   const related = await say('how is he doing today');
-  assert('related miss preserves the person and clarifies', (
-    related.handled === true
-    && related.responseAct?.kind === 'CLARIFY_REFERENCE'
+  assert('related miss preserves the person without a reference claim', (
+    related.handled === false
+    && related.routeDecision.kind === 'needs_clarification'
+    && related.routeDecision.reason === 'default'
+    && related.responseAct?.kind !== 'CLARIFY_REFERENCE'
     && subject.hasLive()
     && subject.peek()?.displayName === 'Pat'
   ));
-  assert('related clarification does not disclose the phone', (
-    !/555|1112222/.test(related.responseText ?? '')
+  assert('related miss does not disclose the phone', (
+    !/555|1112222/.test(JSON.stringify(related))
   ));
-  assert('related clarification does not answer as if the person were selected for an action', (
-    related.commits.length === 0
+  assert('related miss does not answer as if the person were selected for an action', (
+    related.handled === false
     && !/555/.test(JSON.stringify(related))
   ));
   const syntheticPerson: ContinuationRecoveryCandidate[] = [];
@@ -154,12 +156,14 @@ export async function runContinuationRecoveryEvidenceTests() {
   subject2.beginUserTurn();
   subject2.establishFamily({ entityId: secretId2, displayName: 'Pat', relationship: 'wife' });
   const unrelated = await say2('I like pizza tonight');
-  assert('unrelated miss with a live person clarifies and keeps that person', (
-    unrelated.handled === true
-    && unrelated.responseAct?.kind === 'CLARIFY_REFERENCE'
+  assert('unrelated miss keeps the person and does not claim them', (
+    unrelated.handled === false
+    && unrelated.routeDecision.kind === 'needs_clarification'
+    && unrelated.routeDecision.reason === 'default'
+    && unrelated.responseAct?.kind !== 'CLARIFY_REFERENCE'
     && subject2.hasLive()
     && subject2.peek()?.displayName === 'Pat'
-    && !/555/.test(unrelated.responseText ?? '')
+    && !/555|not sure which/i.test(JSON.stringify(unrelated))
   ));
   const pizzaCandidates: ContinuationRecoveryCandidate[] = [];
   recordContinuationRecoveryCandidate(pizzaCandidates, 'person', 'Pat');
@@ -289,10 +293,11 @@ export async function runContinuationRecoveryEvidenceTests() {
   med2.establish([medRow.id]);
   const medExpire = await sayMed2('I like pizza tonight');
   assert('a medication set survives an unrelated miss and is not named', (
-    medExpire.handled === true
-    && medExpire.responseAct?.kind === 'CLARIFY_REFERENCE'
+    medExpire.handled === false
+    && medExpire.routeDecision.reason === 'default'
+    && medExpire.responseAct?.kind !== 'CLARIFY_REFERENCE'
     && med2.hasLive()
-    && !/eliquis/i.test(medExpire.responseText ?? '')
+    && !/eliquis|not sure which/i.test(JSON.stringify(medExpire))
     && !JSON.stringify(medExpire).includes(medRow.id)
   ));
 
@@ -302,8 +307,9 @@ export async function runContinuationRecoveryEvidenceTests() {
   ordExpire.establish('grocery', [grocPresentedId]);
   const grocExpire = await sayGrocExpire('the first one 5 mg');
   assert('a grocery set survives a bounded miss and does not expose its id', (
-    grocExpire.handled === true
-    && grocExpire.responseAct?.kind === 'CLARIFY_REFERENCE'
+    grocExpire.handled === false
+    && grocExpire.routeDecision.reason === 'default'
+    && grocExpire.responseAct?.kind !== 'CLARIFY_REFERENCE'
     && ordExpire.hasLive()
     && !JSON.stringify(grocExpire).includes(grocPresentedId)
   ));

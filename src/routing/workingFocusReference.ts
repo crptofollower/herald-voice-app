@@ -101,13 +101,15 @@ export function admitGroundedContinuation(
   return { kind: 'clarify', eligibleCount: eligible.length };
 }
 
-export type GroundedUnavailabilityDecision = 'pass' | 'clarify' | 'resolve_named_focus';
+export type GroundedUnavailabilityDecision = 'pass' | 'preserve' | 'resolve_named_focus';
 
 /**
- * Missing semantic context is not a referent. An understood route passes
- * through. A miss with eligible ground clarifies and keeps that ground.
- * A caller-supplied name match may resolve the one preserved focus.
- * A different explicit identity passes through so the old focus is not sticky.
+ * Preservation is not utilization. Missing semantic context is not evidence
+ * that the utterance refers to live ground. An understood route passes
+ * through. A miss with eligible ground preserves that ground and does not
+ * authorize a reference clarification. A caller-supplied name match may
+ * resolve the one preserved focus. A different explicit identity passes
+ * through so the old focus can move.
  */
 export function admitGroundedUnavailability(input: {
   semanticUnavailable: boolean;
@@ -119,5 +121,5 @@ export function admitGroundedUnavailability(input: {
   if (!input.semanticUnavailable || !input.hasEligibleGround || !input.routeMiss) return 'pass';
   if (input.namedOtherIdentity) return 'pass';
   if (input.namedFocusMatch) return 'resolve_named_focus';
-  return 'clarify';
+  return 'preserve';
 }
