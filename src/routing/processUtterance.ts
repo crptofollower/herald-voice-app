@@ -51,7 +51,7 @@ import { EPISODE_RECALL_LIMIT } from '../db/episodeRead';
 import { listActiveEpisodes } from '../db/episodesWriter';
 import { realizeEpisodePerspective } from '../utils/episodeCapture';
 import { isClosedActiveSubjectIdentityLookup, ACTIVE_SUBJECT_GROUNDING_ACK } from './activeSubjectReference';
-import { admitGroundedContinuation } from './workingFocusReference';
+import { admitGroundedContinuation, admitGroundedUnavailability } from './workingFocusReference';
 import { noteSemanticAdmission } from '../dev/semanticJourneyEvidence';
 import { proposeReferenceContinuation } from './semanticProvider';
 import {
@@ -82,7 +82,7 @@ import { answerLiveReminiscenceRecall } from '../db/recollectionRead';
 import { inspectHolds, formatHoldRecall } from './holdRecall';
 import { detectFamilyRead, resolveFamilyRead, listFamilyReadMatches } from '../utils/familyRead';
 import { resolveHouseholdProvider } from '../utils/householdRead';
-import { getLastVisit } from '../db/medicalDB';
+import { getLastVisit, normalizeDoctorNameForMatch } from '../db/medicalDB';
 import { extractDoctorName } from '../utils/detectMedicalEvent';
 import {
   getActiveTurnId,
@@ -678,6 +678,7 @@ export async function processUtterance(
     return act;
   };
   const continuationRecoveryCandidates: ContinuationRecoveryCandidate[] = [];
+  let semanticContextMissing = false;
   // 0) Law 0 — emergency preempts everything (Spine §3a). Checked before pending
   //    resolution, before routing, before any classifier. A held pending is
   //    RELEASED, never resumed — no re-ask, no ladder, no ack generated here
@@ -1133,6 +1134,7 @@ export async function processUtterance(
     );
     if (hasGround && !closedSubjectAct) {
       const semanticCtx = deps.getMedicationSemanticInterpreterCtx?.() ?? null;
+      if (!semanticCtx) semanticContextMissing = true;
       const proposal = await proposeReferenceContinuation(
         text,
         semanticCtx,
@@ -2063,6 +2065,71 @@ export async function processUtterance(
     subject.restore(focusHeldForSideActivity);
   }
   const keepCoexistingSets = sideActivity || medicationRebound || groceryRebound || calendarRebound;
+  if (semanticContextMissing && !personEstablished) {
+    const held = focusHeldForSideActivity;
+    const liveSetsNow = collectLivePresentedSets({
+      medication: medicationPresentation,
+      ordered: orderedPresentation,
+      calendar: calendarPresentation,
+      todo: todoPresentation,
+    });
+    const referentSet = discourse?.peekReferentsInPlay() ?? null;
+    const hasEligibleGround = (!!held && held.domain !== 'episode')
+      || liveSetsNow.length > 0
+      || (referentSet?.candidateIds.length ?? 0) > 0;
+    const named = extractDoctorName(text);
+    const uniqueMedical = held?.domain === 'medical_doctor'
+      && liveSetsNow.length === 0
+      && !referentSet;
+    const namedFocusMatch = !!(uniqueMedical && held && named && (
+      normalizeDoctorNameForMatch(named) === normalizeDoctorNameForMatch(held.displayName)
+      || normalizeDoctorNameForMatch(named) === normalizeDoctorNameForMatch(held.entityId)
+    ));
+    const recovery = admitGroundedUnavailability({
+      semanticUnavailable: true,
+      routeMiss: routeDecision.kind === 'needs_clarification' && routeDecision.reason === 'default',
+      hasEligibleGround,
+      namedFocusMatch,
+      namedOtherIdentity: !!(uniqueMedical && named && !namedFocusMatch),
+    });
+    if (recovery !== 'pass') {
+      if (held && held.domain !== 'episode' && subject && !subject.hasLive()) {
+        subject.restore(held);
+      }
+      if (recovery === 'resolve_named_focus' && held?.domain === 'medical_doctor') {
+        const responseText = await answerReferentVisitDate(held);
+        if (responseText) {
+          subject?.establishMedical({ entityId: held.entityId, displayName: held.displayName });
+          recoveryObligation?.clear();
+          return {
+            handled: true,
+            source: 'referent_resume',
+            responseText,
+            commits: [],
+            responseAct: { kind: 'ANSWER', text: responseText, epistemic: 'deterministic_read' },
+          };
+        }
+      }
+      const setIds = liveSetsNow.map((set) => set.setId);
+      if (setIds.length > 0) {
+        recoveryObligation?.establishJob('clarify_reference', { kind: 'presented_sets', setIds });
+      } else if (referentSet?.setId) {
+        recoveryObligation?.establishJob('clarify_reference', { kind: 'referents_in_play', setId: referentSet.setId });
+      } else if (held && held.domain !== 'episode') {
+        recoveryObligation?.establishJob('clarify_reference', {
+          kind: 'working_focus',
+          focusKey: `${held.domain}:${held.entityId}`,
+        });
+      }
+      return {
+        handled: true,
+        source: 'referent_resume',
+        responseText: ORDERED_PRESENTATION_CONFUSION,
+        commits: [],
+        responseAct: clarifyReferenceAct(ORDERED_PRESENTATION_CONFUSION),
+      };
+    }
+  }
   const pinned = new Set(
     recoveryObligation?.peek()?.scope.kind === 'presented_sets'
       && isSoftObligationEligible(recoveryObligation.peek()!, softView())

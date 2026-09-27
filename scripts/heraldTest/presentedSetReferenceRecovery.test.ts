@@ -100,10 +100,14 @@ export async function runPresentedSetReferenceRecoveryTests() {
   const unusedMeds = new MedicationPresentationHolder();
   const unusedRecovery = new RecoveryObligationHolder();
   unusedMeds.establish(['med_metoprolol', 'med_lisinopril']);
-  await processUtterance('zz idle', new ConversationSession(), silent, null, unusedMeds, null, null, null, null, null, null, unusedRecovery);
-  assert('a non-reference turn can still clear an unused medication set',
-    unusedMeds.peek() === null && unusedRecovery.peek() === null,
-    (v) => v === true, 'unused clear');
+  const unused = await processUtterance('zz idle', new ConversationSession(), silent, null, unusedMeds, null, null, null, null, null, null, unusedRecovery);
+  assert('a route miss with a live medication set preserves it and clarifies',
+    unused.handled === true
+      && unused.responseAct?.kind === 'CLARIFY_REFERENCE'
+      && unusedMeds.peek()?.medicationIds.join(',') === 'med_metoprolol,med_lisinopril'
+      && !/metoprolol|lisinopril/i.test(unused.responseText ?? '')
+      && unusedRecovery.peek()?.job === 'clarify_reference',
+    (v) => v === true, 'grounded set recovery');
 
   const bothMeds = new MedicationPresentationHolder();
   const grocery = new OrderedPresentationHolder();

@@ -503,8 +503,12 @@ export async function runOrderedPresentationTests() {
     insertItem(db, 'g3', 'bananas', '2026-01-03T00:00:00.000Z');
     presentGrocery(ordered, subject, medication);
     const thisOne = await say('This one');
-    assert('OP122 This one not a position', thisOne, v => v.handled === false, 'not referent');
-    assert('OP123 This one unused-clears', ordered.hasLive(), v => v === false, 'cleared');
+    assert('OP122 This one is not a position read', thisOne,
+      v => v.handled === true
+        && v.responseAct?.kind === 'CLARIFY_REFERENCE'
+        && !/milk|eggs|bananas/i.test(v.responseText ?? ''),
+      'clarify, no item');
+    assert('OP123 This one keeps the presented set', ordered.hasLive(), v => v === true, 'live');
   }
 
   {
@@ -514,7 +518,12 @@ export async function runOrderedPresentationTests() {
     insertItem(db, 'g3', 'bananas', '2026-01-03T00:00:00.000Z');
     presentGrocery(ordered, subject, medication);
     const it = await say('It');
-    assert('OP124 It not a position', it, v => v.handled === false, 'not referent');
+    assert('OP124 It is not a position read', it,
+      v => v.handled === true
+        && v.responseAct?.kind === 'CLARIFY_REFERENCE'
+        && ordered.hasLive()
+        && !/milk|eggs|bananas/i.test(v.responseText ?? ''),
+      'clarify, set kept');
   }
 
   {

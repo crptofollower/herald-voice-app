@@ -14,7 +14,7 @@ import { MedicationPresentationHolder } from '../../src/routing/medicationPresen
 import { OrderedPresentationHolder } from '../../src/routing/orderedPresentation.ts';
 import { DiscourseContinuityHolder } from '../../src/routing/discourseContinuity.ts';
 import { RecoveryObligationHolder } from '../../src/routing/recoveryObligation.ts';
-import { admitGroundedContinuation } from '../../src/routing/workingFocusReference.ts';
+import { admitGroundedContinuation, admitGroundedUnavailability } from '../../src/routing/workingFocusReference.ts';
 import {
   beginSemanticProof,
   finishSemanticProof,
@@ -119,6 +119,39 @@ export async function runConversationCompositionIntegrationV1Tests() {
       referents: [],
     }).kind === 'none',
     (v) => v === true, 'none');
+  const ground = {
+    semanticUnavailable: true,
+    routeMiss: true,
+    hasEligibleGround: true,
+    namedFocusMatch: false,
+    namedOtherIdentity: false,
+  };
+  assert('a miss with ground and no semantic context clarifies',
+    admitGroundedUnavailability(ground) === 'clarify',
+    (v) => v === true, 'clarify');
+  assert('an understood route is not intercepted',
+    admitGroundedUnavailability({ ...ground, routeMiss: false }) === 'pass',
+    (v) => v === true, 'pass');
+  assert('a miss with no ground stays generic',
+    admitGroundedUnavailability({ ...ground, hasEligibleGround: false }) === 'pass',
+    (v) => v === true, 'pass');
+  assert('a different explicit identity is not stuck to the old focus',
+    admitGroundedUnavailability({ ...ground, namedOtherIdentity: true }) === 'pass',
+    (v) => v === true, 'pass');
+  assert('an explicit name match resolves only the preserved focus',
+    admitGroundedUnavailability({ ...ground, namedFocusMatch: true }) === 'resolve_named_focus',
+    (v) => v === true, 'resolve');
+  assert('a present semantic context does not use the unavailability decision',
+    admitGroundedUnavailability({ ...ground, semanticUnavailable: false }) === 'pass',
+    (v) => v === true, 'pass');
+  const unavailabilitySrc = admissionSrc.slice(admissionSrc.indexOf('export function admitGroundedUnavailability'));
+  assert('unavailability recovery adds no pronoun or phrase grammar',
+    unavailabilitySrc.startsWith('export function admitGroundedUnavailability')
+      && !unavailabilitySrc.includes('RegExp')
+      && !unavailabilitySrc.includes('.test(')
+      && !/\b(him|her|what about|grocery|patel)\b/i.test(unavailabilitySrc),
+    (v) => v === true, 'no grammar');
+
   assert('one stored medication member is the admitted candidate',
     admitGroundedContinuation({ applicable: true }, {
       interpretationFailed: false,
@@ -387,6 +420,132 @@ export async function runConversationCompositionIntegrationV1Tests() {
       && openItems().length === beforeJuice.length + 1
       && missingSubject.peek()?.entityId === 'Dr. Patel',
     (v) => v === true, 'ctx missing falls through');
+
+  const eggsRecoverSubject = new ConversationalSubjectHolder();
+  eggsRecoverSubject.establishMedical({ entityId: 'Dr. Patel', displayName: 'Dr. Patel' });
+  const beforeEggsRecover = openItems();
+  const eggsRecover = await processUtterance(
+    'Add eggs to my grocery list.',
+    new ConversationSession(),
+    silent,
+    eggsRecoverSubject,
+  );
+  assert('missing semantic context still writes an explicit grocery add',
+    openItems().includes('eggs')
+      && openItems().length === beforeEggsRecover.length + 1
+      && eggsRecover.responseAct?.kind !== 'CLARIFY_REFERENCE'
+      && eggsRecoverSubject.peek()?.entityId === 'Dr. Patel',
+    (v) => v === true, 'grocery executes');
+
+  const recoverSubject = new ConversationalSubjectHolder();
+  recoverSubject.establishMedical({ entityId: 'Dr. Patel', displayName: 'Dr. Patel' });
+  const recoverObligation = new RecoveryObligationHolder();
+  const beforeMiss = openItems().slice();
+  const missed = await processUtterance(
+    'What about him?',
+    new ConversationSession(),
+    silent,
+    recoverSubject,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    recoverObligation,
+  );
+  assert('a route miss with one working focus clarifies and keeps that focus',
+    missed.handled === true
+      && missed.responseAct?.kind === 'CLARIFY_REFERENCE'
+      && !/last saw/i.test(missed.responseText ?? '')
+      && recoverSubject.peek()?.entityId === 'Dr. Patel'
+      && recoverObligation.peek()?.scope.kind === 'working_focus'
+      && (missed.commits ?? []).length === 0,
+    (v) => v === true, 'grounded recovery');
+  assert('semantic unavailability does not authorize a write',
+    openItems().join(',') === beforeMiss.join(','),
+    (v) => v === true, 'no write');
+  const confirmed = await processUtterance(
+    'Yes, Dr. Patel.',
+    new ConversationSession(),
+    silent,
+    recoverSubject,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    recoverObligation,
+  );
+  assert('an explicit name then uses the visit reader',
+    confirmed.handled === true
+      && confirmed.responseAct?.kind === 'ANSWER'
+      && /last saw/i.test(confirmed.responseText ?? '')
+      && /patel/i.test(confirmed.responseText ?? '')
+      && recoverSubject.peek()?.entityId === 'Dr. Patel',
+    (v) => v === true, 'reader after clarification');
+
+  const silentPeople = new DiscourseContinuityHolder();
+  silentPeople.establishReferentsInPlay(['d1', 'd2'], 'presented_people');
+  const silentMany = await processUtterance(
+    'zz reference',
+    new ConversationSession(),
+    silent,
+    null,
+    null,
+    null,
+    null,
+    null,
+    silentPeople,
+  );
+  assert('missing semantic context with several people clarifies and picks none',
+    silentMany.handled === true
+      && silentMany.responseAct?.kind === 'CLARIFY_REFERENCE'
+      && !/512|555|0111|0122|maya|priya/i.test(silentMany.responseText ?? '')
+      && silentPeople.peekReferentsInPlay()?.candidateIds.join(',') === 'd1,d2',
+    (v) => v === true, 'no top-1');
+
+  const bareRecovery = new RecoveryObligationHolder();
+  const bare = await processUtterance(
+    'zz ungrounded',
+    new ConversationSession(),
+    silent,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    bareRecovery,
+  );
+  const bareRoute = bare.handled ? null : bare.routeDecision;
+  assert('a route miss with no ground stays the generic miss',
+    bare.handled === false
+      && bareRoute?.kind === 'needs_clarification'
+      && bareRoute.reason === 'default'
+      && bareRecovery.peek() === null,
+    (v) => v === true, 'generic miss');
+
+  const shiftAway = new ConversationalSubjectHolder();
+  shiftAway.establishMedical({ entityId: 'Dr. Patel', displayName: 'Dr. Patel' });
+  const shiftedAway = await processUtterance(
+    'When did I last see Dr. Shah?',
+    new ConversationSession(),
+    silent,
+    shiftAway,
+  );
+  assert('an explicit other doctor is not trapped by the old focus',
+    shiftedAway.handled === false
+      && shiftedAway.routeDecision.kind === 'device_read'
+      && shiftedAway.routeDecision.reason === 'medical:visit_history_read'
+      && shiftedAway.routeDecision.response.includes('Shah')
+      && shiftAway.peek()?.entityId === 'Dr. Shah',
+    (v) => v === true, 'topic shift');
 
   const chat = fs.readFileSync(path.join(ROOT, 'src/screens/ChatScreen.tsx'), 'utf8');
   const host = fs.readFileSync(path.join(ROOT, 'src/dev/androidJourneyHost.ts'), 'utf8');

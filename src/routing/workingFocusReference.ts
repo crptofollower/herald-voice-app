@@ -100,3 +100,24 @@ export function admitGroundedContinuation(
   }
   return { kind: 'clarify', eligibleCount: eligible.length };
 }
+
+export type GroundedUnavailabilityDecision = 'pass' | 'clarify' | 'resolve_named_focus';
+
+/**
+ * Missing semantic context is not a referent. An understood route passes
+ * through. A miss with eligible ground clarifies and keeps that ground.
+ * A caller-supplied name match may resolve the one preserved focus.
+ * A different explicit identity passes through so the old focus is not sticky.
+ */
+export function admitGroundedUnavailability(input: {
+  semanticUnavailable: boolean;
+  routeMiss: boolean;
+  hasEligibleGround: boolean;
+  namedFocusMatch: boolean;
+  namedOtherIdentity: boolean;
+}): GroundedUnavailabilityDecision {
+  if (!input.semanticUnavailable || !input.hasEligibleGround || !input.routeMiss) return 'pass';
+  if (input.namedOtherIdentity) return 'pass';
+  if (input.namedFocusMatch) return 'resolve_named_focus';
+  return 'clarify';
+}

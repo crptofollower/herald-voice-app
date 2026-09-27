@@ -111,19 +111,22 @@ export async function runContinuationRecoveryEvidenceTests() {
   subject.beginUserTurn();
   subject.establishFamily({ entityId: secretId, displayName: 'Pat', relationship: 'wife' });
   const related = await say('how is he doing today');
-  assert('related fallthrough is unhandled needs_clarification/default', (
-    !related.handled
-    && related.routeDecision.kind === 'needs_clarification'
-    && related.routeDecision.reason === 'default'
+  assert('related miss preserves the person and clarifies', (
+    related.handled === true
+    && related.responseAct?.kind === 'CLARIFY_REFERENCE'
+    && subject.hasLive()
+    && subject.peek()?.displayName === 'Pat'
   ));
-  assert('authoritative person holder cleared after unused-clear', !subject.hasLive());
-  assert('person recovery candidate survives unused-clear', (
-    !related.handled
-    && related.continuationRecoveryCandidates.some((c) => c.domain === 'person' && c.spokenReferent === 'Pat')
+  assert('related clarification does not disclose the phone', (
+    !/555|1112222/.test(related.responseText ?? '')
   ));
-  const adoptedRelated = related.handled
-    ? []
-    : adoptContinuationRecoveryCandidates('how is he doing today', related.continuationRecoveryCandidates);
+  assert('related clarification does not answer as if the person were selected for an action', (
+    related.commits.length === 0
+    && !/555/.test(JSON.stringify(related))
+  ));
+  const syntheticPerson: ContinuationRecoveryCandidate[] = [];
+  recordContinuationRecoveryCandidate(syntheticPerson, 'person', 'Pat');
+  const adoptedRelated = adoptContinuationRecoveryCandidates('how is he doing today', syntheticPerson);
   const relatedPacket = buildVerifiedConversationalPacket({
     verifiedPersonalFacts: '',
     sessionEvidenceLines: ['how is he doing today'],
@@ -151,24 +154,23 @@ export async function runContinuationRecoveryEvidenceTests() {
   subject2.beginUserTurn();
   subject2.establishFamily({ entityId: secretId2, displayName: 'Pat', relationship: 'wife' });
   const unrelated = await say2('I like pizza tonight');
-  assert('unrelated utterance still needs_clarification/default', (
-    !unrelated.handled
-    && unrelated.routeDecision.kind === 'needs_clarification'
-    && unrelated.routeDecision.reason === 'default'
+  assert('unrelated miss with a live person clarifies and keeps that person', (
+    unrelated.handled === true
+    && unrelated.responseAct?.kind === 'CLARIFY_REFERENCE'
+    && subject2.hasLive()
+    && subject2.peek()?.displayName === 'Pat'
+    && !/555/.test(unrelated.responseText ?? '')
   ));
-  assert('unrelated topic captures expiry but does not adopt for the worker', (
-    !unrelated.handled
-    && unrelated.continuationRecoveryCandidates.some((c) => c.domain === 'person')
-    && adoptContinuationRecoveryCandidates('I like pizza tonight', unrelated.continuationRecoveryCandidates).length === 0
+  const pizzaCandidates: ContinuationRecoveryCandidate[] = [];
+  recordContinuationRecoveryCandidate(pizzaCandidates, 'person', 'Pat');
+  assert('unrelated topic does not adopt the person for the worker', (
+    adoptContinuationRecoveryCandidates('I like pizza tonight', pizzaCandidates).length === 0
   ));
   const unrelatedFmt = formatVerifiedConversationalPacket(buildVerifiedConversationalPacket({
     verifiedPersonalFacts: '',
     sessionEvidenceLines: ['I like pizza tonight'],
     pendingLabel: null,
-    continuationRecoveryCandidates: adoptContinuationRecoveryCandidates(
-      'I like pizza tonight',
-      unrelated.handled ? [] : unrelated.continuationRecoveryCandidates,
-    ),
+    continuationRecoveryCandidates: [],
   }));
   assert('unrelated worker packet has no prior subject recovery', (
     /CONTINUATION RECOVERY[\s\S]*\(none\)/.test(unrelatedFmt)
@@ -286,12 +288,12 @@ export async function runContinuationRecoveryEvidenceTests() {
   med2.beginUserTurn();
   med2.establish([medRow.id]);
   const medExpire = await sayMed2('I like pizza tonight');
-  assert('medication unused-clear captures generic label only', (
-    !medExpire.handled
-    && !med2.hasLive()
-    && medExpire.continuationRecoveryCandidates.some((c) => c.domain === 'medication' && c.spokenReferent === CONTINUATION_RECOVERY_SAFE_LABEL.medication)
-    && !JSON.stringify(medExpire.continuationRecoveryCandidates).includes(medRow.id)
-    && adoptContinuationRecoveryCandidates('I like pizza tonight', medExpire.continuationRecoveryCandidates).length === 0
+  assert('a medication set survives an unrelated miss and is not named', (
+    medExpire.handled === true
+    && medExpire.responseAct?.kind === 'CLARIFY_REFERENCE'
+    && med2.hasLive()
+    && !/eliquis/i.test(medExpire.responseText ?? '')
+    && !JSON.stringify(medExpire).includes(medRow.id)
   ));
 
   const grocPresentedId = 'groc-secret-id';
@@ -299,16 +301,15 @@ export async function runContinuationRecoveryEvidenceTests() {
   ordExpire.beginUserTurn();
   ordExpire.establish('grocery', [grocPresentedId]);
   const grocExpire = await sayGrocExpire('the first one 5 mg');
-  assert('grocery unused-clear with bounded position evidence reaches default clarification', (
-    !grocExpire.handled
-    && grocExpire.routeDecision.kind === 'needs_clarification'
-    && grocExpire.routeDecision.reason === 'default'
-    && grocExpire.continuationRecoveryCandidates.some((c) => c.domain === 'grocery')
+  assert('a grocery set survives a bounded miss and does not expose its id', (
+    grocExpire.handled === true
+    && grocExpire.responseAct?.kind === 'CLARIFY_REFERENCE'
+    && ordExpire.hasLive()
+    && !JSON.stringify(grocExpire).includes(grocPresentedId)
   ));
-  const grocAdopted = adoptContinuationRecoveryCandidates(
-    'the first one 5 mg',
-    grocExpire.handled ? [] : grocExpire.continuationRecoveryCandidates,
-  );
+  const syntheticGrocery: ContinuationRecoveryCandidate[] = [];
+  recordContinuationRecoveryCandidate(syntheticGrocery, 'grocery', CONTINUATION_RECOVERY_SAFE_LABEL.grocery);
+  const grocAdopted = adoptContinuationRecoveryCandidates('the first one 5 mg', syntheticGrocery);
   const grocFmt = formatVerifiedConversationalPacket(buildVerifiedConversationalPacket({
     verifiedPersonalFacts: '',
     sessionEvidenceLines: ['the first one 5 mg'],
