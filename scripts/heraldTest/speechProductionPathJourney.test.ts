@@ -340,12 +340,25 @@ export async function runSpeechProductionPathJourneyTests(): Promise<{
     'shell or timer drift',
   );
   const policy = fs.readFileSync(path.join(root, 'android/app/src/journeyPreflight/java/ai/apexempire/herald/journey/JourneyLocationPreflightPolicy.kt'), 'utf8');
+  const preflight = fs.readFileSync(path.join(root, 'android/app/src/androidTest/java/ai/apexempire/herald/journey/JourneyLocationPreflight.kt'), 'utf8');
   assert(
     'preflight blocks proof on shell, resolution, and resume failures',
     ['shell_enable_failed', 'resolution_failed', 'main_activity_not_resumed', 'location_overlay_present']
       .every((reason) => policy.includes(reason)),
     'fail closed',
     'missing reason',
+  );
+  assert(
+    'settings failures are classified from the unwrapped exception before the proof',
+    preflight.includes('settingsExceptionMarker')
+      && preflight.includes('classifySettingsException')
+      && preflight.includes('findApiException')
+      && policy.includes('fun classifySettingsException')
+      && policy.includes('settings_check_exception')
+      && !useLocation.includes('settings_check_exception')
+      && !useLocation.includes('classifySettingsException'),
+    'classified',
+    'missing',
   );
   assert(
     'TTS idle is checked before the speech probe without a classifier wait',

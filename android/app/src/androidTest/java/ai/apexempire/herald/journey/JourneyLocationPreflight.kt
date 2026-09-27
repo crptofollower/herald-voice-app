@@ -11,6 +11,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiSelector
 import ai.apexempire.herald.MainActivity
+import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.common.api.ResolvableApiException
 import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationServices
@@ -62,7 +63,10 @@ object JourneyLocationPreflight {
     var settingsAfter: SettingsRead? = null
     when (settingsFirst) {
       SettingsRead.SATISFIED -> mark("settings_check_success")
-      SettingsRead.HARD_FAILURE -> return fail("settings_hard_failure")
+      SettingsRead.HARD_FAILURE -> {
+        mark("settings_hard_failure")
+        return fail("settings_hard_failure")
+      }
       SettingsRead.RESOLUTION_REQUIRED -> {
         mark("resolution_required")
         resolutionRan = true
@@ -120,11 +124,51 @@ object JourneyLocationPreflight {
         TimeUnit.SECONDS,
       )
       SettingsRead.SATISFIED
-    } catch (_: ResolvableApiException) {
-      SettingsRead.RESOLUTION_REQUIRED
-    } catch (_: Exception) {
-      SettingsRead.HARD_FAILURE
+    } catch (thrown: Exception) {
+      // Tasks.await wraps the task failure in ExecutionException. The Play Services
+      // status is on that cause, or on a direct ApiException if the client threw one.
+      if (thrown is InterruptedException) Thread.currentThread().interrupt()
+      val observed = observeSettingsFailure(thrown)
+      mark(JourneyLocationPreflightPolicy.settingsExceptionMarker(observed))
+      JourneyLocationPreflightPolicy.classifySettingsException(observed)
     }
+  }
+
+  private fun observeSettingsFailure(thrown: Throwable): SettingsExceptionObservation {
+    val api = findApiException(thrown)
+    val status = api?.status
+    val resolvable = api is ResolvableApiException
+      || status?.hasResolution() == true
+      || api?.statusCode == JourneyLocationPreflightPolicy.SETTINGS_RESOLUTION_REQUIRED_STATUS
+    return SettingsExceptionObservation(
+      thrownClass = thrown.javaClass.simpleName,
+      causeClass = thrown.cause?.javaClass?.simpleName,
+      statusCode = api?.statusCode,
+      statusMessage = status?.statusMessage,
+      resolvable = resolvable,
+    )
+  }
+
+  private fun findApiException(thrown: Throwable): ApiException? {
+    var current: Throwable? = thrown
+    val seen = HashSet<Throwable>()
+    while (current != null && seen.add(current)) {
+      if (current is ApiException) return current
+      current = current.cause
+    }
+    return null
+  }
+
+  private fun findResolvable(thrown: Throwable): ResolvableApiException? {
+    var current: Throwable? = thrown
+    val seen = HashSet<Throwable>()
+    while (current != null && seen.add(current)) {
+      if (current is ResolvableApiException) return current
+      val api = current as? ApiException
+      if (api?.status?.hasResolution() == true) return ResolvableApiException(api.status)
+      current = current.cause
+    }
+    return null
   }
 
   private fun resolveSettingsUi(scenario: ActivityScenario<MainActivity>) {
@@ -136,9 +180,10 @@ object JourneyLocationPreflight {
           val settings = LocationSettingsRequest.Builder().addLocationRequest(request).setAlwaysShow(true).build()
           LocationServices.getSettingsClient(host).checkLocationSettings(settings)
             .addOnFailureListener { error ->
-              if (error is ResolvableApiException) {
+              val resolvable = findResolvable(error)
+              if (resolvable != null) {
                 try {
-                  error.startResolutionForResult(host, RESOLUTION_REQUEST)
+                  resolvable.startResolutionForResult(host, RESOLUTION_REQUEST)
                 } catch (_: Exception) {
                   // The settings recheck decides failure.
                 }

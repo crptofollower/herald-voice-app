@@ -6,6 +6,18 @@ enum class SettingsRead { SATISFIED, RESOLUTION_REQUIRED, HARD_FAILURE }
 
 enum class ActivityRead { RESUMED_CLEAR, NOT_RESUMED, OVERLAY_PRESENT }
 
+/**
+ * Facts read from a SettingsClient failure after walking its cause chain.
+ * [resolvable] is the live type/status fact. Routing applies the timeout override.
+ */
+data class SettingsExceptionObservation(
+  val thrownClass: String,
+  val causeClass: String?,
+  val statusCode: Int?,
+  val statusMessage: String?,
+  val resolvable: Boolean,
+)
+
 data class LocationPreflightObservation(
   val locationBeforeEnable: LocationRead,
   val shellRan: Boolean,
@@ -18,6 +30,40 @@ data class LocationPreflightObservation(
 )
 
 object JourneyLocationPreflightPolicy {
+  /** CommonStatusCodes.RESOLUTION_REQUIRED. Literal so this policy does not link Play Services. */
+  const val SETTINGS_RESOLUTION_REQUIRED_STATUS = 6
+
+  /**
+   * Timeout and interruption are hard failures.
+   * A live resolvable type, a status that has a resolution, or status 6 enters the existing fallback.
+   * Every other shape fails closed.
+   */
+  fun classifySettingsException(observation: SettingsExceptionObservation): SettingsRead {
+    if (isAwaitControlFailure(observation.thrownClass) || isAwaitControlFailure(observation.causeClass)) {
+      return SettingsRead.HARD_FAILURE
+    }
+    if (observation.resolvable || observation.statusCode == SETTINGS_RESOLUTION_REQUIRED_STATUS) {
+      return SettingsRead.RESOLUTION_REQUIRED
+    }
+    return SettingsRead.HARD_FAILURE
+  }
+
+  fun safeStatusMessage(raw: String?): String? {
+    if (raw.isNullOrBlank()) return null
+    val oneLine = raw.replace(Regex("[\\r\\n\\t]+"), " ").trim()
+    if (oneLine.length > 80) return null
+    if (!oneLine.matches(Regex("[A-Za-z0-9 _.:/-]+"))) return null
+    return oneLine
+  }
+
+  fun settingsExceptionMarker(observation: SettingsExceptionObservation): String {
+    val resolvable = classifySettingsException(observation) == SettingsRead.RESOLUTION_REQUIRED
+    val message = safeStatusMessage(observation.statusMessage)?.let { " message=$it" }.orEmpty()
+    val cause = observation.causeClass ?: "none"
+    val status = observation.statusCode?.toString() ?: "none"
+    return "settings_check_exception class=${observation.thrownClass} cause=$cause status=$status$message resolvable=$resolvable"
+  }
+
   fun failReason(observation: LocationPreflightObservation): String? {
     if (observation.shellRan && !observation.shellAccepted) return "shell_enable_failed"
     val location = if (observation.shellRan) {
@@ -42,5 +88,11 @@ object JourneyLocationPreflightPolicy {
       ActivityRead.NOT_RESUMED -> "main_activity_not_resumed"
       ActivityRead.OVERLAY_PRESENT -> "location_overlay_present"
     }
+  }
+
+  private fun isAwaitControlFailure(className: String?): Boolean {
+    if (className == null) return false
+    val simple = className.substringAfterLast('.')
+    return simple == "TimeoutException" || simple == "InterruptedException"
   }
 }
