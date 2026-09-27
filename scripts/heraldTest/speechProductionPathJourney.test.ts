@@ -320,11 +320,30 @@ export async function runSpeechProductionPathJourneyTests(): Promise<{
   const enableAt = speechTest.indexOf('JourneyLocationPreflight.enableBeforeLaunch');
   const launchAt = speechTest.indexOf('ActivityScenario.launch');
   const finishAt = speechTest.indexOf('JourneyLocationPreflight.finishAfterLaunch');
+  const idleAt = speechTest.indexOf('JourneyTtsIdleGate.awaitIdle');
   assert(
     'location preflight finishes before the speech proof starts',
     enableAt >= 0 && launchAt > enableAt && finishAt > launchAt && probeAt > finishAt,
     'preflight then proof',
     `${enableAt},${launchAt},${finishAt},${probeAt}`,
+  );
+  const idlePolicy = fs.readFileSync(path.join(root, 'android/app/src/journeyPreflight/java/ai/apexempire/herald/journey/JourneyTtsIdlePolicy.kt'), 'utf8');
+  const idleGate = fs.readFileSync(path.join(root, 'android/app/src/androidTest/java/ai/apexempire/herald/journey/JourneyTtsIdleGate.kt'), 'utf8');
+  const useSpeech = fs.readFileSync(path.join(root, 'src/hooks/useSpeech.ts'), 'utf8');
+  assert(
+    'speech proof waits for the existing speaking signal before it starts',
+    finishAt < idleAt && idleAt < ttsAt && ttsAt < probeAt
+      && idlePolicy.includes('TIMEOUT_MS = 15_000L')
+      && idlePolicy.includes('BINDING_MISSING')
+      && idleGate.includes('tts_idle_wait_start')
+      && idleGate.includes('tts_idle_observed')
+      && idleGate.includes('tts_idle_timeout')
+      && !idleGate.includes('setSpeaking')
+      && !idleGate.includes('ExpoSpeech')
+      && !useSpeech.includes('tts_idle_wait_start')
+      && !useSpeech.includes('JourneyTtsIdle'),
+    'idle then proof',
+    `${finishAt},${idleAt},${ttsAt},${probeAt}`,
   );
   const useLocation = fs.readFileSync(path.join(root, 'src/hooks/useLocation.ts'), 'utf8');
   const useMicSource = fs.readFileSync(path.join(root, 'src/hooks/useMic.ts'), 'utf8');

@@ -43,6 +43,10 @@ class HeraldSpeechProductionPathV1Test {
     if (!HeraldJourneyBridge.awaitHostReady(HOST_TIMEOUT_MS)) {
       fail("RUNNER_FAIL JOURNEY_HOST_NOT_READY")
     }
+    val idle = JourneyTtsIdleGate.awaitIdle {
+      HeraldJourneyBridge.probeSpeechPreconditions(TTS_PROBE_TIMEOUT_MS)
+    }
+    if (idle != null) fail("PRECONDITION_FAIL $idle")
     val pre = JSONObject(HeraldJourneyBridge.probeSpeechPreconditions(TTS_PROBE_TIMEOUT_MS))
     emit(pre)
     if (pre.optString("ttsBinding") == "missing") fail("PRECONDITION_FAIL tts_state_unbound")
