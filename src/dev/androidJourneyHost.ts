@@ -11,6 +11,7 @@ import {
   noteSpeechEmitComplete,
   noteSpeechJourneyLiveness,
   receiveSpeechProductionCommand,
+  setSpeechHandlerStage,
 } from './speechJourneyLiveness';
 import {
   JOURNEY_TURN_READINESS_POLL_MS,
@@ -987,6 +988,7 @@ function speechPreconditionsSnapshot() {
 }
 
 async function runSpeechProductionPathProof(): Promise<void> {
+  setSpeechHandlerStage('before_proof_completed');
   const inject = runtime?.injectCommittedSpeechSegment;
   const peekSpeaking = runtime?.peekSpeaking;
   const failure = classifySpeechProductionPreconditions({
@@ -1009,9 +1011,14 @@ async function runSpeechProductionPathProof(): Promise<void> {
     await sleep(50);
     snap = snapshotDeterministicSpeechPathProof();
   }
+  setSpeechHandlerStage('after_proof_completed');
   noteSpeechJourneyLiveness({ step: 'proof_completed' });
+  setSpeechHandlerStage('legacy_satisfier');
   const ok = speechProductionPathSatisfied(snap);
-  emitComplete(speechProofEnvelope(ok ? 'PASS' : 'FAIL', ok ? null : 'speech_production_path_incomplete'));
+  setSpeechHandlerStage('result_envelope');
+  const envelope = speechProofEnvelope(ok ? 'PASS' : 'FAIL', ok ? null : 'speech_production_path_incomplete');
+  setSpeechHandlerStage('before_emit');
+  emitComplete(envelope);
 }
 
 export function bindJourneySendMessage(fn: SendMessageFn): void {

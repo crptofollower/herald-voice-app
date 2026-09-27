@@ -24,6 +24,8 @@ import {
   noteSpeechEmitComplete,
   receiveSpeechProductionCommand,
   resetSpeechJourneyLivenessForTests,
+  setSpeechHandlerStage,
+  snapshotSpeechHandlerException,
   snapshotSpeechJourneyLiveness,
 } from '../../src/dev/speechJourneyLiveness.ts';
 import {
@@ -54,6 +56,10 @@ import {
   speechProductionPathSatisfied,
   SPEECH_PRODUCTION_PATH_FIXTURE,
 } from '../../src/dev/speechProductionPathProof.ts';
+
+function throwMarkedHandlerError(): void {
+  throw new Error('marked-handler');
+}
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const failures: { label: string; expected: string; got: string }[] = [];
@@ -253,6 +259,96 @@ export async function runSpeechProductionPathJourneyTests(): Promise<{
     host.includes("speechProofEnvelope('FAIL', 'handler_exception')"),
     'handler_exception',
     'missing',
+  );
+  resetSpeechJourneyLivenessForTests();
+  handlerExceptionEmitted = false;
+  await receiveSpeechProductionCommand(async () => {}, () => { handlerExceptionEmitted = true; });
+  assert(
+    'successful handler records no exception diagnostic',
+    handlerExceptionEmitted === false && snapshotSpeechHandlerException() === null,
+    'none',
+    snapshotSpeechHandlerException() ? 'present' : 'none',
+  );
+  resetSpeechJourneyLivenessForTests();
+  handlerExceptionEmitted = false;
+  await receiveSpeechProductionCommand(async () => { throwMarkedHandlerError(); }, () => { handlerExceptionEmitted = true; });
+  const marked = snapshotSpeechHandlerException();
+  assert(
+    'Error throw captures class and message',
+    marked?.isError === true && marked.errorClass === 'Error' && marked.message === 'marked-handler',
+    'Error marked-handler',
+    `${marked?.errorClass ?? 'missing'} ${marked?.message ?? 'missing'}`,
+  );
+  assert(
+    'Error throw captures a bounded top frame',
+    typeof marked?.topFrame === 'string'
+      && marked.topFrame.startsWith('at ')
+      && marked.topFrame.includes('throwMarkedHandlerError')
+      && marked.topFrame.length <= 180
+      && !marked.topFrame.includes('Users'),
+    'bounded frame',
+    marked?.topFrame ?? 'missing',
+  );
+  assert(
+    'exception diagnostic still emits the handler_exception signal',
+    handlerExceptionEmitted === true && marked?.message === 'marked-handler',
+    'emitted',
+    String(handlerExceptionEmitted),
+  );
+  resetSpeechJourneyLivenessForTests();
+  handlerExceptionEmitted = false;
+  await receiveSpeechProductionCommand(async () => {
+    setSpeechHandlerStage('legacy_satisfier');
+    throw 'plain-failure';
+  }, () => { handlerExceptionEmitted = true; });
+  const plain = snapshotSpeechHandlerException();
+  assert(
+    'non-Error throw captures a bounded fallback',
+    plain?.isError === false && plain?.errorClass === 'string' && plain?.message === 'plain-failure' && plain?.topFrame === null,
+    'string plain-failure',
+    `${plain?.errorClass ?? 'missing'} ${plain?.message ?? 'missing'}`,
+  );
+  assert(
+    'handler stage is preserved on the exception diagnostic',
+    plain?.stage === 'legacy_satisfier',
+    'legacy_satisfier',
+    plain?.stage ?? 'missing',
+  );
+  resetSpeechJourneyLivenessForTests();
+  handlerExceptionEmitted = false;
+  await receiveSpeechProductionCommand(async () => {
+    setSpeechHandlerStage('result_envelope');
+    throw { utterance: 'should-not-appear' };
+  }, () => { handlerExceptionEmitted = true; });
+  const opaque = snapshotSpeechHandlerException();
+  assert(
+    'non-Error object stays a class fallback and still fails the handler',
+    handlerExceptionEmitted === true
+      && opaque?.isError === false
+      && opaque?.message === 'non_error_Object'
+      && opaque?.stage === 'result_envelope'
+      && !JSON.stringify(opaque).includes('should-not-appear'),
+    'non_error_Object',
+    JSON.stringify(opaque),
+  );
+  assert(
+    'speech proof marks the handler stage around completion',
+    probe.includes("setSpeechHandlerStage('before_proof_completed')")
+      && probe.includes("setSpeechHandlerStage('after_proof_completed')")
+      && probe.includes("setSpeechHandlerStage('legacy_satisfier')")
+      && probe.includes("setSpeechHandlerStage('result_envelope')")
+      && probe.includes("setSpeechHandlerStage('before_emit')"),
+    'stages',
+    'missing',
+  );
+  assert(
+    'handler stage diagnostic stays off production speech files',
+    !useMic.includes('setSpeechHandlerStage')
+      && !chat.includes('setSpeechHandlerStage')
+      && !fs.readFileSync(path.join(root, 'src/hooks/useSpeech.ts'), 'utf8').includes('setSpeechHandlerStage')
+      && !fs.readFileSync(path.join(root, 'src/hooks/openSpeechTurnBoundary.ts'), 'utf8').includes('setSpeechHandlerStage'),
+    'absent',
+    'present',
   );
   resetSpeechJourneyLivenessForTests();
   assert(
