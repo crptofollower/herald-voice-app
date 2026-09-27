@@ -105,6 +105,7 @@ import {
   parseMedicationOrdinalIndex,
   MEDICATION_ORDINAL_CONFUSION,
   clarifyRetainedMedications,
+  readPresentedMedicationSet,
 } from './medicationPresentation';
 import {
   OrderedPresentationHolder,
@@ -680,6 +681,8 @@ export async function processUtterance(
   const continuationRecoveryCandidates: ContinuationRecoveryCandidate[] = [];
   let semanticContextMissing = false;
   let retainGroundWithoutReference = false;
+  let deferredMedicationMemberId: string | null = null;
+  let deferredMedicationClarify = false;
   // 0) Law 0 — emergency preempts everything (Spine §3a). Checked before pending
   //    resolution, before routing, before any classifier. A held pending is
   //    RELEASED, never resumed — no re-ask, no ladder, no ack generated here
@@ -853,11 +856,16 @@ export async function processUtterance(
   if (recoveryObligation?.canContinue()) {
     if (isRecoveryRepairSignal(text)) {
       const realized = realizeRecoveryObligationConsume(text);
+      const presentedIds = realized.family === 'medications'
+        ? medicationPresentation?.peek()?.medicationIds ?? []
+        : [];
+      const reread = presentedIds.length > 0 ? readPresentedMedicationSet(presentedIds) : null;
       recoveryObligation.clear();
+      if (reread) medicationPresentation?.renew();
       return {
         handled: true,
         source: 'recovery_obligation',
-        responseText: realized.responseText,
+        responseText: reread ?? realized.responseText,
         commits: [],
       };
     }
@@ -1161,6 +1169,16 @@ export async function processUtterance(
         : liveSets.length === 0 && liveReferentSet
           ? 'referents_in_play' as const
           : 'presented_set' as const;
+      const deferMedicationReference = !liveFocus
+        && !liveReferentSet
+        && liveSets.length === 1
+        && liveSets[0]?.domain === 'medication'
+        && (decision.kind === 'clarify' || (decision.kind === 'admit_member' && decision.domain === 'medication'));
+      if (deferMedicationReference && decision.kind === 'admit_member') {
+        deferredMedicationMemberId = decision.memberId;
+      } else if (deferMedicationReference && decision.kind === 'clarify') {
+        deferredMedicationClarify = true;
+      }
       if (decision.kind === 'admit_focus' && liveFocus?.domain === 'medical_doctor') {
         const responseText = await answerReferentVisitDate(liveFocus);
         noteSemanticAdmission({
@@ -1183,7 +1201,7 @@ export async function processUtterance(
             responseAct: { kind: 'ANSWER', text: responseText, epistemic: 'deterministic_read' },
           };
         }
-      } else if (decision.kind === 'admit_member') {
+      } else if (decision.kind === 'admit_member' && !deferMedicationReference) {
         if (decision.domain === 'medication') {
           const livePresentation = medicationPresentation?.peek();
           const index = livePresentation?.medicationIds.indexOf(decision.memberId) ?? -1;
@@ -1250,7 +1268,7 @@ export async function processUtterance(
           }
         }
       }
-      if (decision.kind === 'clarify' || decision.kind === 'retain' || decision.kind === 'admit_focus' || decision.kind === 'admit_member') {
+      if (!deferMedicationReference && (decision.kind === 'clarify' || decision.kind === 'retain' || decision.kind === 'admit_focus' || decision.kind === 'admit_member')) {
         const onlyMedication = decision.kind === 'clarify'
           && liveSets.length === 1
           && liveSets[0]?.domain === 'medication'
@@ -2066,6 +2084,39 @@ export async function processUtterance(
     subject.restore(focusHeldForSideActivity);
   }
   const keepCoexistingSets = sideActivity || medicationRebound || groceryRebound || calendarRebound;
+  const medicationRouteMiss = routeDecision.kind === 'needs_clarification' && routeDecision.reason === 'default';
+  if (medicationRouteMiss && !personEstablished && deferredMedicationMemberId && medicationPresentation?.hasLive()) {
+    const livePresentation = medicationPresentation.peek();
+    const index = livePresentation?.medicationIds.indexOf(deferredMedicationMemberId) ?? -1;
+    const answered = livePresentation && index >= 0
+      ? answerMedicationOrdinal(livePresentation, index)
+      : null;
+    if (answered?.kind === 'ok') {
+      medicationPresentation.renew();
+      return {
+        handled: true,
+        source: 'referent_resume',
+        responseText: answered.responseText,
+        commits: [],
+        responseAct: { kind: 'ANSWER', text: answered.responseText, epistemic: 'deterministic_read' },
+      };
+    }
+  }
+  if (medicationRouteMiss && !personEstablished && deferredMedicationClarify && medicationPresentation?.hasLive()) {
+    const ids = medicationPresentation.peek()?.medicationIds ?? [];
+    const responseText = clarifyRetainedMedications(ids) ?? ORDERED_PRESENTATION_CONFUSION;
+    const setId = ids.length > 0 ? presentedSet('medication', ids).setId : null;
+    if (setId) {
+      recoveryObligation?.establishJob('clarify_reference', { kind: 'presented_sets', setIds: [setId] });
+    }
+    return {
+      handled: true,
+      source: 'referent_resume',
+      responseText,
+      commits: [],
+      responseAct: clarifyReferenceAct(responseText),
+    };
+  }
   if (semanticContextMissing && !personEstablished) {
     const held = focusHeldForSideActivity;
     const liveSetsNow = collectLivePresentedSets({

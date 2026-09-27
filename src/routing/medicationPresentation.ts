@@ -8,6 +8,7 @@
 
 import {
   formatCurrentMedicationReadback,
+  formatMedicationSpokenPhrase,
   getActiveMedicationById,
 } from '../db/medicalDB';
 
@@ -109,6 +110,17 @@ export class MedicationPresentationHolder {
       repairAvailable: false,
     };
   }
+}
+
+/** Stored rows for the presented ids only. No member is selected. */
+export function readPresentedMedicationSet(ids: readonly string[]): string | null {
+  const rows = ids
+    .map((id) => getActiveMedicationById(id))
+    .filter((row): row is NonNullable<typeof row> => !!row);
+  if (rows.length === 0) return null;
+  const spoken = rows.map((row) => formatMedicationSpokenPhrase(row)).join('; ');
+  if (rows.length === 1) return `You're currently on ${spoken}.`;
+  return `You're currently on ${rows.length} medications: ${spoken}.`;
 }
 
 /** Names come from the stored rows. The presentation still holds ids only. */

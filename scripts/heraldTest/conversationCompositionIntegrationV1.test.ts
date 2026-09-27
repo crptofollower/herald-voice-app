@@ -617,6 +617,140 @@ export async function runConversationCompositionIntegrationV1Tests() {
       && host.includes('semantic,'),
     (v) => v === true, 'proof wired');
 
+  const readerSrc = fs.readFileSync(path.join(ROOT, 'src/routing/medicationPresentation.ts'), 'utf8');
+  const readerFn = readerSrc.slice(readerSrc.indexOf('export function readPresentedMedicationSet'));
+  assert('presented-set reread adds no color, shape, or alias grammar',
+    readerFn.startsWith('export function readPresentedMedicationSet')
+      && !/\b(blue|color|oval|round|pill|alias)\b/i.test(readerFn.split('export function clarifyRetainedMedications')[0] ?? readerFn),
+    (v) => v === true, 'no descriptor grammar');
+
+  const setSubject = new MedicationPresentationHolder();
+  const setRecovery = new RecoveryObligationHolder();
+  const summary = await processUtterance(
+    'What medications am I taking?',
+    new ConversationSession(),
+    silent,
+    null,
+    setSubject,
+  );
+  const summaryRoute = summary.handled ? null : summary.routeDecision;
+  const blueMiss = await processUtterance(
+    'the blue one',
+    new ConversationSession(),
+    silent,
+    null,
+    setSubject,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    setRecovery,
+  );
+  const blueRoute = blueMiss.handled ? null : blueMiss.routeDecision;
+  assert('a descriptor with no stored attribute does not select a medication',
+    summaryRoute?.reason === 'medical:summary'
+      && setSubject.peek()?.medicationIds.length === 2
+      && blueMiss.handled === false
+      && blueRoute?.reason === 'default'
+      && blueMiss.responseAct?.kind !== 'CLARIFY_REFERENCE'
+      && !/metoprolol|lisinopril/i.test(JSON.stringify(blueMiss))
+      && setSubject.peek()?.medicationIds.length === 2,
+    (v) => v === true, 'no fabricated mapping');
+  setRecovery.establish();
+  const beforeRepair = openItems().slice();
+  const repaired = await processUtterance(
+    "That's not what I meant. I mean my medications.",
+    new ConversationSession(),
+    silent,
+    null,
+    setSubject,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    setRecovery,
+  );
+  assert('a medication correction rereads the presented set',
+    repaired.handled === true
+      && repaired.source === 'recovery_obligation'
+      && /metoprolol/i.test(repaired.responseText ?? '')
+      && /lisinopril/i.test(repaired.responseText ?? '')
+      && setSubject.peek()?.medicationIds.length === 2
+      && openItems().join(',') === beforeRepair.join(','),
+    (v) => v === true, 'set reread');
+
+  const described = new MedicationPresentationHolder();
+  described.establish(['med_metoprolol', 'med_lisinopril']);
+  const describedTurn = await processUtterance(
+    'the blue one',
+    new ConversationSession(),
+    applicable,
+    null,
+    described,
+  );
+  assert('applicable reference to several medications clarifies without choosing',
+    describedTurn.handled === true
+      && describedTurn.responseAct?.kind === 'CLARIFY_REFERENCE'
+      && /metoprolol/i.test(describedTurn.responseText ?? '')
+      && /lisinopril/i.test(describedTurn.responseText ?? '')
+      && !/\bblue\b/i.test(describedTurn.responseText ?? '')
+      && described.peek()?.medicationIds.length === 2
+      && (describedTurn.commits ?? []).length === 0,
+    (v) => v === true, 'clarify, no mapping');
+
+  const rebuilt = new MedicationPresentationHolder();
+  rebuilt.establish(['med_metoprolol', 'med_lisinopril']);
+  const summaryAgain = await processUtterance(
+    'What medications am I taking?',
+    new ConversationSession(),
+    applicable,
+    null,
+    rebuilt,
+  );
+  const summaryAgainRoute = summaryAgain.handled ? null : summaryAgain.routeDecision;
+  assert('an explicit medication summary still rebuilds the presented set',
+    summaryAgain.handled === false
+      && summaryAgainRoute?.reason === 'medical:summary'
+      && rebuilt.peek()?.medicationIds.length === 2,
+    (v) => v === true, 'summary remains');
+
+  const named = new MedicationPresentationHolder();
+  named.establish(['med_metoprolol', 'med_lisinopril']);
+  const namedTurn = await processUtterance(
+    'How often do I take metoprolol?',
+    new ConversationSession(),
+    applicable,
+    null,
+    named,
+  );
+  const namedRoute = namedTurn.handled ? null : namedTurn.routeDecision;
+  assert('an explicit medication name keeps the named reader',
+    namedTurn.handled === false
+      && namedRoute?.reason === 'medical:named_inquiry'
+      && /metoprolol/i.test(namedRoute?.response ?? '')
+      && namedTurn.responseAct?.kind !== 'CLARIFY_REFERENCE',
+    (v) => v === true, 'named inquiry');
+
+  const sideMeds = new MedicationPresentationHolder();
+  sideMeds.establish(['med_metoprolol', 'med_lisinopril']);
+  const beforeSide = openItems().length;
+  const sideGrocery = await processUtterance(
+    'Add rye to my grocery list.',
+    new ConversationSession(),
+    applicable,
+    null,
+    sideMeds,
+  );
+  assert('a grocery command is not intercepted as a medication correction',
+    openItems().includes('rye')
+      && openItems().length === beforeSide + 1
+      && sideGrocery.responseAct?.kind !== 'CLARIFY_REFERENCE',
+    (v) => v === true, 'grocery executes');
+
   resetSemanticCompletionLifecycleForTests();
   const timeoutSubject = new ConversationalSubjectHolder();
   timeoutSubject.establishMedical({ entityId: 'Dr. Patel', displayName: 'Dr. Patel' });
