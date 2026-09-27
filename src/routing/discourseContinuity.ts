@@ -16,6 +16,9 @@ export const DISCOURSE_TURN_TTL = 4;
 export const DISCOURSE_WALL_MS = 10 * 60 * 1000;
 export const TOPIC_EVIDENCE_MAX_LINES = 3;
 export const TOPIC_EVIDENCE_MAX_CHARS = 160;
+export const DISCOURSE_MENTION_ACTIVE_MAX = 8;
+export const DISCOURSE_MENTION_PER_TURN_MAX = 4;
+export const DISCOURSE_EPISODE_MAX = 4;
 
 export type TopicEvidenceLine = {
   text: string;
@@ -50,6 +53,61 @@ export type InterpretationHoldSlot = {
   candidates: AdmittedMultiFactCandidate[];
   sourceTurn: number;
   refreshedAtTurn: number;
+};
+
+export type DiscourseMentionKind = 'person' | 'place' | 'event_or_topic';
+export type DiscourseMentionStatus = 'active' | 'corrected_away' | 'superseded';
+
+/** Current-conversation mention. Source span and provenance stay immutable. */
+export type DiscourseMention = {
+  mentionId: string;
+  kind: DiscourseMentionKind;
+  surfaceSpan: string;
+  start: number;
+  end: number;
+  sourceTurnId: number;
+  sourceUtteranceRef: string;
+  epistemic: 'current_conversation';
+  durable: false;
+  status: DiscourseMentionStatus;
+};
+
+/** Co-membership only. No relation, predicate, or role. */
+export type DiscourseEpisode = {
+  episodeId: string;
+  memberMentionIds: string[];
+  sourceTurnIds: number[];
+};
+
+export type DiscourseMentionProposal = {
+  kind: string;
+  surfaceSpan: string;
+  start: number;
+  end: number;
+};
+
+export type DiscourseAdmitReason =
+  | 'span_mismatch'
+  | 'invalid_kind'
+  | 'person_unsupported'
+  | 'mention_capacity'
+  | 'turn_capacity'
+  | 'episode_capacity'
+  | 'overlap_conflict'
+  | 'contained_span'
+  | 'episode_unresolved';
+
+export type DiscourseAdmitRejection = {
+  kind: string;
+  surfaceSpan: string;
+  reason: DiscourseAdmitReason;
+};
+
+export type DiscourseAdmitBatch = {
+  admitted: DiscourseMention[];
+  reused: DiscourseMention[];
+  superseded: DiscourseMention[];
+  rejected: DiscourseAdmitRejection[];
 };
 
 export type WcsSnapshot = {
@@ -145,6 +203,26 @@ function hasLiveTopicContinuation(text: string, displayName: string): boolean {
     || isTopicLookup(text);
 }
 
+function isDiscourseMentionKind(kind: string): kind is DiscourseMentionKind {
+  return kind === 'person' || kind === 'place' || kind === 'event_or_topic';
+}
+
+function spanIsExact(utterance: string, start: number, end: number, surfaceSpan: string): boolean {
+  if (!Number.isInteger(start) || !Number.isInteger(end)) return false;
+  if (start < 0 || end > utterance.length || start >= end) return false;
+  return utterance.slice(start, end) === surfaceSpan;
+}
+
+function rangesOverlap(a0: number, a1: number, b0: number, b1: number): boolean {
+  return a0 < b1 && b0 < a1;
+}
+
+function rangeContains(outerStart: number, outerEnd: number, innerStart: number, innerEnd: number): boolean {
+  return outerStart <= innerStart
+    && innerEnd <= outerEnd
+    && (outerEnd - outerStart) > (innerEnd - innerStart);
+}
+
 function sameItemLists(a: readonly string[], b: readonly string[]): boolean {
   if (a.length !== b.length) return false;
   return a.every((x, i) => x.toLowerCase() === (b[i] ?? '').toLowerCase());
@@ -156,12 +234,18 @@ export class WorkingConversationState {
   private candidateSet: (CandidateSetSlot & { refreshedAtMs: number }) | null = null;
   private interpretationHold: (InterpretationHoldSlot & { refreshedAtMs: number }) | null = null;
   private referentsInPlay: import('./canonicalConversationState').ReferentsInPlay | null = null;
+  private mentions: DiscourseMention[] = [];
+  private episodes: DiscourseEpisode[] = [];
+  private mentionSeq = 0;
+  private episodeSeq = 0;
+  private admittedThisTurn = 0;
   private turn = 0;
 
   constructor(private readonly now: () => number = () => Date.now()) {}
 
   beginUserTurn(): void {
     this.turn += 1;
+    this.admittedThisTurn = 0;
     this.expireStale();
   }
 
@@ -175,6 +259,11 @@ export class WorkingConversationState {
     this.candidateSet = null;
     this.interpretationHold = null;
     this.referentsInPlay = null;
+    this.mentions = [];
+    this.episodes = [];
+    this.mentionSeq = 0;
+    this.episodeSeq = 0;
+    this.admittedThisTurn = 0;
   }
 
   peekReferentsInPlay(): import('./canonicalConversationState').ReferentsInPlay | null {
@@ -384,21 +473,147 @@ export class WorkingConversationState {
     return { turnIndex: this.turn, focus, candidateSet };
   }
 
+  peekDiscourseMentions(): DiscourseMention[] {
+    return this.mentions.map((mention) => ({ ...mention }));
+  }
+
+  peekDiscourseEpisodes(): DiscourseEpisode[] {
+    return this.episodes.map((episode) => ({
+      episodeId: episode.episodeId,
+      memberMentionIds: [...episode.memberMentionIds],
+      sourceTurnIds: [...episode.sourceTurnIds],
+    }));
+  }
+
+  /**
+   * Structural admission for place and event_or_topic proposals, and for a
+   * person proposal only when qualifyingNarrativePersonNames already accepts
+   * that exact surface. Does not choose cross-turn applicability.
+   */
+  admitDiscourseProposals(
+    utterance: string,
+    proposals: readonly DiscourseMentionProposal[],
+    association: 'new_episode' | 'continue' = 'new_episode',
+  ): DiscourseAdmitBatch {
+    const admitted: DiscourseMention[] = [];
+    const reused: DiscourseMention[] = [];
+    const superseded: DiscourseMention[] = [];
+    const rejected: DiscourseAdmitRejection[] = [];
+    const supportedPersons = new Set(
+      qualifyingNarrativePersonNames(utterance).map((name) => name.toLowerCase()),
+    );
+    const utteranceRef = `turn:${this.turn}`;
+    let episode = association === 'continue' ? this.episodeContinuedByLiveTopic() : null;
+    if (association === 'continue' && !episode) {
+      for (const proposal of proposals) {
+        rejected.push({ kind: proposal.kind, surfaceSpan: proposal.surfaceSpan, reason: 'episode_unresolved' });
+      }
+      return { admitted, reused, superseded, rejected };
+    }
+    let createdEpisode = false;
+    for (const proposal of proposals) {
+      if (!isDiscourseMentionKind(proposal.kind)) {
+        rejected.push({ kind: proposal.kind, surfaceSpan: proposal.surfaceSpan, reason: 'invalid_kind' });
+        continue;
+      }
+      if (!spanIsExact(utterance, proposal.start, proposal.end, proposal.surfaceSpan)) {
+        rejected.push({ kind: proposal.kind, surfaceSpan: proposal.surfaceSpan, reason: 'span_mismatch' });
+        continue;
+      }
+      if (proposal.kind === 'person' && !supportedPersons.has(proposal.surfaceSpan.toLowerCase())) {
+        rejected.push({ kind: proposal.kind, surfaceSpan: proposal.surfaceSpan, reason: 'person_unsupported' });
+        continue;
+      }
+      if (!episode && !createdEpisode) {
+        if (this.episodes.length >= DISCOURSE_EPISODE_MAX) {
+          rejected.push({ kind: proposal.kind, surfaceSpan: proposal.surfaceSpan, reason: 'episode_capacity' });
+          continue;
+        }
+        episode = {
+          episodeId: `de${++this.episodeSeq}`,
+          memberMentionIds: [],
+          sourceTurnIds: [],
+        };
+        this.episodes.push(episode);
+        createdEpisode = true;
+      }
+      if (!episode) {
+        rejected.push({ kind: proposal.kind, surfaceSpan: proposal.surfaceSpan, reason: 'episode_capacity' });
+        continue;
+      }
+      const duplicate = this.activeMembers(episode).find((mention) => (
+        mention.kind === proposal.kind
+        && mention.surfaceSpan.toLowerCase() === proposal.surfaceSpan.toLowerCase()
+      ));
+      if (duplicate) {
+        reused.push({ ...duplicate });
+        this.noteEpisodeTurn(episode);
+        continue;
+      }
+      const overlap = this.overlapAgainst(episode, utteranceRef, proposal);
+      if (overlap.kind === 'conflict' || overlap.kind === 'contained') {
+        rejected.push({
+          kind: proposal.kind,
+          surfaceSpan: proposal.surfaceSpan,
+          reason: overlap.kind === 'contained' ? 'contained_span' : 'overlap_conflict',
+        });
+        continue;
+      }
+      if (this.admittedThisTurn >= DISCOURSE_MENTION_PER_TURN_MAX) {
+        rejected.push({ kind: proposal.kind, surfaceSpan: proposal.surfaceSpan, reason: 'turn_capacity' });
+        continue;
+      }
+      const activeAfterSupersede = this.mentions.filter((mention) => mention.status === 'active').length
+        - (overlap.kind === 'longer' ? 1 : 0);
+      if (activeAfterSupersede >= DISCOURSE_MENTION_ACTIVE_MAX) {
+        rejected.push({ kind: proposal.kind, surfaceSpan: proposal.surfaceSpan, reason: 'mention_capacity' });
+        continue;
+      }
+      if (overlap.kind === 'longer') {
+        overlap.shorter.status = 'superseded';
+        superseded.push({ ...overlap.shorter });
+      }
+      const mention: DiscourseMention = {
+        mentionId: `dm${++this.mentionSeq}`,
+        kind: proposal.kind,
+        surfaceSpan: proposal.surfaceSpan,
+        start: proposal.start,
+        end: proposal.end,
+        sourceTurnId: this.turn,
+        sourceUtteranceRef: utteranceRef,
+        epistemic: 'current_conversation',
+        durable: false,
+        status: 'active',
+      };
+      this.mentions.push(mention);
+      this.admittedThisTurn += 1;
+      if (!episode.memberMentionIds.includes(mention.mentionId)) {
+        episode.memberMentionIds.push(mention.mentionId);
+      }
+      this.noteEpisodeTurn(episode);
+      admitted.push({ ...mention });
+    }
+    if (createdEpisode && episode && episode.memberMentionIds.length === 0) {
+      this.episodes = this.episodes.filter((item) => item.episodeId !== episode!.episodeId);
+    }
+    return { admitted, reused, superseded, rejected };
+  }
+
   /**
    * `exactlyOneNarrativePerson` is set only when this turn's local
-   * qualifying name list has length 1 at the extraction site — never
-   * inferred from peekTopic() (last-of-many also stores a single topic).
-   * Orchestration may publish that name as conversational ledger focus.
-   * This holder does not write the ledger.
+   * qualifying name list has length 1 and that mention is admitted.
+   * Several qualifying names stay as separate mentions. This holder does
+   * not write the ledger.
    */
-  noteNarrativeUtterance(text: string): { exactlyOneNarrativePerson: string | null } {
+  noteNarrativeUtterance(
+    text: string,
+    proposals: readonly DiscourseMentionProposal[] = [],
+  ): { exactlyOneNarrativePerson: string | null } {
     const live = this.peekTopic();
     if (live && hasLiveTopicContinuation(text, live.displayName)) {
-      if (isReferenceQuestion(text)) {
-        this.refreshTopic();
-        return { exactlyOneNarrativePerson: null };
-      }
-      this.appendTopicEvidence(text);
+      if (isReferenceQuestion(text)) this.refreshTopic();
+      else this.appendTopicEvidence(text);
+      this.admitDiscourseProposals(text, proposals, 'continue');
       return { exactlyOneNarrativePerson: null };
     }
     const items = extractNarrativeOperationalCandidates(text);
@@ -408,14 +623,75 @@ export class WorkingConversationState {
       else this.establishCandidateSet(null, items);
     }
     const names = qualifyingNarrativePersonNames(text);
-    if (names.length === 1) {
+    const personProposals: DiscourseMentionProposal[] = [];
+    for (const name of names) {
+      const start = text.indexOf(name);
+      if (start < 0) continue;
+      personProposals.push({
+        kind: 'person',
+        surfaceSpan: text.slice(start, start + name.length),
+        start,
+        end: start + name.length,
+      });
+    }
+    const batch = this.admitDiscourseProposals(text, [...personProposals, ...proposals], 'new_episode');
+    const kept = new Set(
+      [...batch.admitted, ...batch.reused]
+        .filter((mention) => mention.kind === 'person')
+        .map((mention) => mention.surfaceSpan),
+    );
+    if (names.length === 1 && kept.has(names[0])) {
       this.establishTopic(names[0], text);
       return { exactlyOneNarrativePerson: names[0] };
     }
-    if (names.length > 0) {
-      this.establishTopic(names[names.length - 1], text);
-    }
     return { exactlyOneNarrativePerson: null };
+  }
+
+  private activeMembers(episode: DiscourseEpisode): DiscourseMention[] {
+    const ids = new Set(episode.memberMentionIds);
+    return this.mentions.filter((mention) => mention.status === 'active' && ids.has(mention.mentionId));
+  }
+
+  private noteEpisodeTurn(episode: DiscourseEpisode): void {
+    if (!episode.sourceTurnIds.includes(this.turn)) episode.sourceTurnIds.push(this.turn);
+  }
+
+  private episodeContinuedByLiveTopic(): DiscourseEpisode | null {
+    const topic = this.topic;
+    if (!topic) return null;
+    const name = topic.displayName.toLowerCase();
+    const hits = this.episodes.filter((episode) => this.activeMembers(episode).some((mention) => (
+      mention.kind === 'person' && mention.surfaceSpan.toLowerCase() === name
+    )));
+    return hits.length === 1 ? hits[0] : null;
+  }
+
+  private overlapAgainst(
+    episode: DiscourseEpisode,
+    utteranceRef: string,
+    proposal: DiscourseMentionProposal & { kind: DiscourseMentionKind },
+  ): { kind: 'none' } | { kind: 'conflict' } | { kind: 'contained' } | { kind: 'longer'; shorter: DiscourseMention } {
+    const sameUtterance = this.activeMembers(episode).filter((mention) => mention.sourceUtteranceRef === utteranceRef);
+    let containedByLonger = false;
+    let shorter: DiscourseMention | null = null;
+    for (const mention of sameUtterance) {
+      if (!rangesOverlap(mention.start, mention.end, proposal.start, proposal.end)) continue;
+      const sameKind = mention.kind === proposal.kind;
+      if (sameKind && rangeContains(proposal.start, proposal.end, mention.start, mention.end)) {
+        if (shorter) return { kind: 'conflict' };
+        shorter = mention;
+        continue;
+      }
+      if (sameKind && rangeContains(mention.start, mention.end, proposal.start, proposal.end)) {
+        containedByLonger = true;
+        continue;
+      }
+      return { kind: 'conflict' };
+    }
+    if (shorter && containedByLonger) return { kind: 'conflict' };
+    if (shorter) return { kind: 'longer', shorter };
+    if (containedByLonger) return { kind: 'contained' };
+    return { kind: 'none' };
   }
 
   private expireStale(): void {
