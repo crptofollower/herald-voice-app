@@ -2061,6 +2061,7 @@ export default function ChatScreen() {
         ? ({ handled: false } as const)
         : await answerActiveSubjectReference(text, {
             ledgerEntries: conversationLedgerRef.current.peek(Date.now()),
+            discourseMentions: discourseRef.current.peekDiscourseMentions(),
             getInterpreterCtx: getMedicationSemanticInterpreterCtx,
           });
       const groundedFocus =

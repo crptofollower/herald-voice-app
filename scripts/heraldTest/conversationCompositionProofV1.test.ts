@@ -1,5 +1,6 @@
 // Conversation composition proof. Production seams, legal semantic stubs.
 // The stub marks compatibility sets. It does not select a winner or mint ids.
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
@@ -8,6 +9,8 @@ import { classifyQuery } from '../../src/routing/tierRouter.ts';
 import { processUtterance } from '../../src/routing/processUtterance.ts';
 import { ConversationSession } from '../../src/routing/conversationSession.ts';
 import { DiscourseContinuityHolder } from '../../src/routing/discourseContinuity.ts';
+import { answerActiveSubjectReference } from '../../src/routing/activeSubjectReference.ts';
+import type { ConversationTurnRecord } from '../../src/routing/conversationTurnLedger.ts';
 import {
   DISCOURSE_APPLICABILITY_PROMPT,
   DISCOURSE_CORRECTION_PROMPT,
@@ -842,6 +845,169 @@ async function conversation4() {
   check('c4 Elena mention is not a contact id', discourse.peekDiscourseMentions().every((mention) => !mention.mentionId.startsWith('contact')), 'id collision');
 }
 
+const RETAINED_LEDGER_PERSON: ConversationTurnRecord = {
+  turnIndex: 1,
+  establishedAt: 1,
+  utterance: 'I was with Marcus.',
+  intentType: null,
+  operation: 'conversational',
+  outcome: 'presented',
+  authorityTier: 'conversational',
+  assistantReplySummary: null,
+  focus: [{ kind: 'person', displayValue: 'Marcus', referable: true, tier: 'conversational' }],
+};
+
+async function askDiscourseIdentity(text: string, discourse: DiscourseContinuityHolder) {
+  let generatorCalls = 0;
+  const outcome = await answerActiveSubjectReference(text, {
+    ledgerEntries: [RETAINED_LEDGER_PERSON],
+    discourseMentions: discourse.peekDiscourseMentions(),
+    getInterpreterCtx: () => ({
+      completion: async () => {
+        generatorCalls += 1;
+        return { text: '{"applicable":true,"selectedIndex":1,"ambiguous":false,"confidence":0.99}' };
+      },
+    }) as never,
+  });
+  return { outcome, generatorCalls };
+}
+
+async function identityQuestionReadsDiscourse() {
+  console.log(`\n${BOLD}identity question reads active discourse people${RESET}`);
+  const db = await openDb();
+  const discourse = new DiscourseContinuityHolder();
+  const session = new ConversationSession();
+  const deps = {
+    classifyQuery,
+    classifyLLM: null,
+    llmReady: false as const,
+    llmStatus: 'unavailable' as const,
+  };
+  const introduced = await processUtterance('I caught up with Elena yesterday.', session, {
+    ...deps,
+    getMedicationSemanticInterpreterCtx: () => ({
+      completion: completionFor({
+        text: 'I caught up with Elena yesterday.',
+        mentions: [{ span: 'Elena', kind: 'person' }],
+        marks: 'suppress',
+      }),
+    }),
+  }, null, null, null, null, null, discourse);
+  check(
+    'identity setup keeps the grounded acknowledgement',
+    introduced.handled === false && actOf(introduced) === 'ACKNOWLEDGE' && speechOf(introduced) === 'Got it — Elena.',
+    speechOf(introduced),
+  );
+  const one = await askDiscourseIdentity('Who was I talking about?', discourse);
+  const oneReply = one.outcome.handled ? one.outcome.reply : '';
+  check(
+    'one eligible grounded person answers the identity question',
+    one.outcome.handled === true
+      && one.outcome.kind === 'identity'
+      && oneReply === 'You were talking about Elena.'
+      && one.generatorCalls === 0
+      && !oneReply.includes('Marcus'),
+    `${oneReply} calls=${one.generatorCalls}`,
+  );
+  const unrelated = await processUtterance('The sky looks grey today.', session, {
+    ...deps,
+    getMedicationSemanticInterpreterCtx: () => ({
+      completion: completionFor({ text: 'The sky looks grey today.', mentions: [], marks: 'suppress' }),
+    }),
+  }, null, null, null, null, null, discourse);
+  const afterFresh = await askDiscourseIdentity('Who was I talking about?', discourse);
+  const freshReply = afterFresh.outcome.handled ? afterFresh.outcome.reply : '';
+  check(
+    'fresh unrelated turn does not resurrect a retained ledger person',
+    unrelated.handled === false
+      && speechOf(unrelated) === ''
+      && freshReply === 'You were talking about Elena.'
+      && !freshReply.includes('Marcus'),
+    freshReply,
+  );
+  const pair = new DiscourseContinuityHolder();
+  const pairSession = new ConversationSession();
+  await processUtterance('I had lunch with Nora.', pairSession, {
+    ...deps,
+    getMedicationSemanticInterpreterCtx: () => ({
+      completion: completionFor({ text: 'I had lunch with Nora.', mentions: [{ span: 'Nora', kind: 'person' }], marks: 'suppress' }),
+    }),
+  }, null, null, null, null, null, pair);
+  await processUtterance('Jonas stopped by with her.', pairSession, {
+    ...deps,
+    getMedicationSemanticInterpreterCtx: () => ({
+      completion: completionFor({ text: 'Jonas stopped by with her.', mentions: [{ span: 'Jonas', kind: 'person' }], marks: 'suppress' }),
+    }),
+  }, null, null, null, null, null, pair);
+  const many = await askDiscourseIdentity('Who was I talking about?', pair);
+  const manyReply = many.outcome.handled ? many.outcome.reply : '';
+  check(
+    'two eligible grounded people clarify',
+    many.outcome.handled === true
+      && many.outcome.kind === 'ambiguous'
+      && manyReply.includes('Nora')
+      && manyReply.includes('Jonas')
+      && !manyReply.startsWith('You were talking about')
+      && many.generatorCalls === 0,
+    manyReply,
+  );
+  const empty = new DiscourseContinuityHolder();
+  const none = await askDiscourseIdentity('Who was I talking about?', empty);
+  check(
+    'zero eligible people fabricate no identity',
+    none.outcome.handled === false && none.generatorCalls === 0,
+    none.outcome.handled ? none.outcome.reply : 'unhandled',
+  );
+  const corrected = new DiscourseContinuityHolder();
+  const correctedSession = new ConversationSession();
+  await processUtterance('I caught up with Elena yesterday.', correctedSession, {
+    ...deps,
+    getMedicationSemanticInterpreterCtx: () => ({
+      completion: completionFor({
+        text: 'I caught up with Elena yesterday.',
+        mentions: [{ span: 'Elena', kind: 'person' }],
+        marks: 'suppress',
+      }),
+    }),
+  }, null, null, null, null, null, corrected);
+  await processUtterance('No, I meant Sarah.', correctedSession, {
+    ...deps,
+    getMedicationSemanticInterpreterCtx: () => ({
+      completion: completionFor({
+        text: 'No, I meant Sarah.',
+        correction: { target: { surface: 'Elena', kind: 'person' }, newSpans: [{ span: 'Sarah', kind: 'person' }] },
+      }),
+    }),
+  }, null, null, null, null, null, corrected);
+  const replaced = await askDiscourseIdentity('Who was I talking about?', corrected);
+  const replacedReply = replaced.outcome.handled ? replaced.outcome.reply : '';
+  const elena = corrected.peekDiscourseMentions().find((mention) => mention.surfaceSpan === 'Elena');
+  check(
+    'corrected-away person is not the current identity',
+    elena?.status === 'corrected_away'
+      && replacedReply === 'You were talking about Sarah.'
+      && !replacedReply.includes('Elena'),
+    `${elena?.status ?? 'missing'} ${replacedReply}`,
+  );
+  const contacts = Number((db.prepare('SELECT COUNT(*) AS n FROM contacts').get() as { n: number }).n);
+  const medications = Number((db.prepare('SELECT COUNT(*) AS n FROM medications').get() as { n: number }).n);
+  check(
+    'identity read writes no contact medication or relation',
+    contacts === 0
+      && medications === 0
+      && !JSON.stringify(discourse.peekDiscourseEpisodes()).includes('friend_of')
+      && !JSON.stringify(pair.peekDiscourseEpisodes()).includes('friend_of')
+      && !JSON.stringify(corrected.peekDiscourseEpisodes()).includes('friend_of'),
+    `contacts ${contacts} medications ${medications}`,
+  );
+  const chat = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src/screens/ChatScreen.tsx'), 'utf8');
+  check(
+    'ChatScreen supplies discourse mentions to the identity reader',
+    chat.includes('discourseMentions: discourseRef.current.peekDiscourseMentions()'),
+    'call site missing',
+  );
+}
+
 export async function runConversationCompositionProofV1Tests() {
   console.log(`\n${BOLD}── Conversation Composition Proof V1 ──${RESET}\n`);
   passed = 0;
@@ -850,6 +1016,7 @@ export async function runConversationCompositionProofV1Tests() {
   CLUNKY.length = 0;
   await conversation1();
   await admissionAckListsEverySurface();
+  await identityQuestionReadsDiscourse();
   await conversation2();
   await conversation3();
   await conversation4();

@@ -65,6 +65,7 @@ import type { LlamaContext } from 'llama.rn';
 import { completeBoundedInterpretation } from './semanticProvider';
 import type { ConversationTurnFocusEntry, ConversationTurnRecord } from './conversationTurnLedger';
 import { buildRecapCandidates, type RecapCandidate } from './immediateSemanticRecap';
+import type { DiscourseMention } from './discourseContinuity';
 import {
   logActiveSubjectInferenceEnd,
   logActiveSubjectInferenceStart,
@@ -494,8 +495,43 @@ export type ActiveSubjectOutcome =
 
 export type ActiveSubjectReferenceDeps = {
   ledgerEntries: ConversationTurnRecord[];
+  /** When present on a closed identity question, active discourse people are
+   *  the eligible set. The ledger is not consulted for that question. */
+  discourseMentions?: readonly DiscourseMention[];
   getInterpreterCtx?: () => LlamaContext | null;
 };
+
+/** Active current-conversation people, in mention order. Corrected-away and
+ *  non-person mentions are not candidates. No resolver key is attached. */
+export function discoursePersonRecapCandidates(mentions: readonly DiscourseMention[]): RecapCandidate[] {
+  return mentions
+    .filter((mention) => mention.kind === 'person' && mention.status === 'active' && mention.durable === false)
+    .map((mention, index) => {
+      const focus = buildFocusEntry(
+        { kind: 'person', displayValue: mention.surfaceSpan, referable: true },
+        { status: 'presented', source: 'deterministic', referenceOnly: true },
+      )[0]!;
+      const record: ConversationTurnRecord = {
+        turnIndex: mention.sourceTurnId,
+        establishedAt: 0,
+        utterance: mention.sourceWording ?? mention.surfaceSpan,
+        intentType: null,
+        operation: 'conversational',
+        outcome: 'presented',
+        authorityTier: 'conversational',
+        assistantReplySummary: null,
+        focus: [focus],
+      };
+      return {
+        index,
+        kind: 'person',
+        displayValue: mention.surfaceSpan,
+        record,
+        focus,
+        intentType: null,
+      };
+    });
+}
 
 /**
  * Single entry point. Returns handled:false when this mechanism has no
@@ -567,7 +603,9 @@ export async function answerActiveSubjectReference(
         ? 'content_lookup'
         : 'identity_lookup';
 
-  const allCandidates = buildRecapCandidates(deps.ledgerEntries);
+  const allCandidates = isClosedIdentity && deps.discourseMentions != null
+    ? discoursePersonRecapCandidates(deps.discourseMentions)
+    : buildRecapCandidates(deps.ledgerEntries);
   const diagSink: ActiveSubjectResolutionDiagSink = {};
   const resolution = await resolveActiveSubjectCandidate(
     t,
