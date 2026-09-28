@@ -29,6 +29,48 @@ import type { ImmediateRecapOutcome } from '../routing/immediateSemanticRecap';
 export const EPHEMERAL_CLARIFY_REPLY =
   "I'm not sure I'm following you — can you help me understand?";
 
+/** Closed subjects. A verb inventory would be a phrase list, so it is not used. */
+const ASSISTANT_FIRST_PERSON_RE = /\b(?:I|we|my|our)\b/i;
+/** Present-tense limits. These may stay even when they mention a person. */
+const ASSISTANT_SYSTEM_STATE_OPENING_RE = /^(?:I(?:'m| am) not|I (?:do not|don't|cannot|can't)|I can help)\b/i;
+/** Suggestions about the user's next step are not a claim that Herald lived it. */
+const ASSISTANT_MODAL_SUGGESTION_RE = /^(?:I|we)\s+(?:could|can|should|might|would|will|'ll)\b/i;
+const ASSISTANT_LIVED_TIME_RE = /\b(?:yesterday|ago|younger|used to|last (?:night|week|year|month))\b/i;
+const ASSISTANT_SHARED_ECHO_RE = /\b(?:too|as well|the same)\b/i;
+const ASSISTANT_WHEN_LIVED_RE = /\bwhen (?:I was|we were)\b/i;
+const ASSISTANT_KINSHIP_RE = /\b(?:my|our)\s+(?:wife|husband|spouse|partner|son|daughter|child|children|kids?|mom|mother|dad|father|brother|sister|family|parents)\b/i;
+
+function sentenceClaimsLivedHistory(sentence: string): boolean {
+  const spoken = sentence.replace(/^["“]+/, '');
+  if (!ASSISTANT_FIRST_PERSON_RE.test(spoken)) return false;
+  const opening = spoken.match(ASSISTANT_SYSTEM_STATE_OPENING_RE);
+  if (opening && !ASSISTANT_FIRST_PERSON_RE.test(spoken.slice(opening[0].length))) return false;
+  if (
+    ASSISTANT_MODAL_SUGGESTION_RE.test(spoken)
+    && !ASSISTANT_WHEN_LIVED_RE.test(spoken)
+    && !ASSISTANT_KINSHIP_RE.test(spoken)
+  ) {
+    return false;
+  }
+  return ASSISTANT_LIVED_TIME_RE.test(spoken)
+    || ASSISTANT_SHARED_ECHO_RE.test(spoken)
+    || ASSISTANT_WHEN_LIVED_RE.test(spoken)
+    || ASSISTANT_KINSHIP_RE.test(spoken);
+}
+
+/**
+ * Generative text may describe the user's words and may suggest a next step.
+ * It may not narrate a life, family, or shared past. If nothing remains, the
+ * caller uses the canned clarification.
+ */
+export function withholdAssistantBiography(text: string): string {
+  const sentences = text
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => sentence.length > 0);
+  return sentences.filter((sentence) => !sentenceClaimsLivedHistory(sentence)).join(' ').trim();
+}
+
 export function buildUnverifiedBiographyInquiryMiss(name: string): string {
   const n = name.trim();
   if (!n) return "I don't have anything stored about that person.";
@@ -227,11 +269,7 @@ export async function resolveEphemeralSeam(input: {
       'i',
     ).test(evidence);
     if (!known) {
-      return {
-        kind: 'generative',
-        reply: buildUnverifiedBiographyInquiryMiss(inquiryName),
-        grantContinuation: true,
-      };
+      return publishGenerativeReply(buildUnverifiedBiographyInquiryMiss(inquiryName));
     }
   }
 
@@ -269,7 +307,17 @@ export async function resolveEphemeralSeam(input: {
 
   const ephemeral = await input.generate();
   if (ephemeral.status === 'ok') {
-    return { kind: 'generative', reply: ephemeral.text, grantContinuation: true };
+    return publishGenerativeReply(ephemeral.text);
   }
   return { kind: 'clarify', reply: EPHEMERAL_CLARIFY_REPLY, grantContinuation: true };
+}
+
+function publishGenerativeReply(text: string):
+  | { kind: 'generative'; reply: string; grantContinuation: true }
+  | { kind: 'clarify'; reply: string; grantContinuation: true } {
+  const reply = withholdAssistantBiography(text);
+  if (!reply) {
+    return { kind: 'clarify', reply: EPHEMERAL_CLARIFY_REPLY, grantContinuation: true };
+  }
+  return { kind: 'generative', reply, grantContinuation: true };
 }
