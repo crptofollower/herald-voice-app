@@ -2283,22 +2283,20 @@ export async function processUtterance(
     }
     if (correction.kind !== 'blocked') {
     const applied = await applyCurrentTurnDiscourseApplicability(text, discourse, mentionCtx);
-    if (applied?.outcome === 'one') {
+    if (applied?.outcome === 'one' || applied?.outcome === 'many') {
+      // The reference result is frozen. Same-turn mentions are admitted
+      // afterward and are not candidates for this result.
+      if (mentionCtx) {
+        await populateCurrentTurnDiscourseMentions(text, mentionCtx, discourse);
+      }
       return {
         handled: true,
         source: 'discourse_reflection',
         responseText: applied.speech,
         commits: [],
-        responseAct: reflectCurrentTurnAct(applied.speech),
-      };
-    }
-    if (applied?.outcome === 'many') {
-      return {
-        handled: true,
-        source: 'discourse_reflection',
-        responseText: applied.speech,
-        commits: [],
-        responseAct: clarifyReferenceAct(applied.speech),
+        responseAct: applied.outcome === 'one'
+          ? reflectCurrentTurnAct(applied.speech)
+          : clarifyReferenceAct(applied.speech),
       };
     }
     if (applied?.outcome === 'unresolved') {
