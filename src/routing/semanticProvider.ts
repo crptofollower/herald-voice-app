@@ -128,7 +128,7 @@ const REFERENCE_SEMANTIC_TIMEOUT_MS = 8000;
 
 /** Reference, recap, and continuation proposals. The shared lifecycle owns the native call. */
 export async function completeBoundedInterpretation(
-  kind: 'active_reference' | 'recap' | 'reference_continuation' | 'discourse_mention' | 'discourse_applicability',
+  kind: 'active_reference' | 'recap' | 'reference_continuation' | 'discourse_mention' | 'discourse_applicability' | 'discourse_correction',
   ctx: { completion: (params: any) => Promise<unknown> } | null,
   params: unknown,
   opts?: { timeoutMs?: number },
@@ -139,6 +139,7 @@ export async function completeBoundedInterpretation(
     && kind !== 'reference_continuation'
     && kind !== 'discourse_mention'
     && kind !== 'discourse_applicability'
+    && kind !== 'discourse_correction'
   ) {
     return { status: 'unavailable' };
   }
@@ -365,6 +366,117 @@ export async function proposeDiscourseApplicability(
         ?? (payload as { content?: string } | null)?.content
         ?? '');
     return parseDiscourseApplicabilityPayload(raw);
+  } catch {
+    return null;
+  }
+}
+
+const CORRECTION_FORBIDDEN_KEYS = [
+  'replace',
+  'from',
+  'to',
+  'replacementId',
+  'selectedIndex',
+  'selectedHandle',
+  'chosenHandle',
+  'winner',
+  'best',
+  'rank',
+  'score',
+  'confidence',
+];
+
+export const DISCOURSE_CORRECTION_PROMPT =
+  'Reply with JSON only. Keys are correction_turn, target_marks, replacement_marks, and optional new_spans. Each mark has handle and mark. mark is compatible, incompatible, or uncertain. A new_spans item has span and kind. kind is place or event_or_topic. Do not choose one candidate.';
+
+export type DiscourseCorrectionPayload = {
+  correctionTurn: boolean;
+  targetMarks: Array<{ handle: string; mark: string }>;
+  replacementMarks: Array<{ handle: string; mark: string }>;
+  newSpans: Array<{ span: string; kind: string }>;
+};
+
+function correctionValueHasForbiddenKey(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  if (Array.isArray(value)) return value.some((item) => correctionValueHasForbiddenKey(item));
+  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    if (CORRECTION_FORBIDDEN_KEYS.includes(key)) return true;
+    if (correctionValueHasForbiddenKey(nested)) return true;
+  }
+  return false;
+}
+
+function correctionMarks(value: unknown): Array<{ handle: string; mark: string }> | null {
+  if (!Array.isArray(value)) return null;
+  const marks: Array<{ handle: string; mark: string }> = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+    if (correctionValueHasForbiddenKey(item)) return null;
+    const row = item as Record<string, unknown>;
+    if (typeof row.handle !== 'string' || typeof row.mark !== 'string') return null;
+    if (row.mark !== 'compatible' && row.mark !== 'incompatible' && row.mark !== 'uncertain') return null;
+    marks.push({ handle: row.handle, mark: row.mark });
+  }
+  return marks;
+}
+
+/** Compatibility sets only. Null rejects the whole payload, including any replacement operation. */
+export function parseDiscourseCorrectionPayload(raw: string): DiscourseCorrectionPayload | null {
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  if (correctionValueHasForbiddenKey(parsed)) return null;
+  const row = parsed as Record<string, unknown>;
+  if (typeof row.correction_turn !== 'boolean') return null;
+  const targetMarks = correctionMarks(row.target_marks);
+  const replacementMarks = correctionMarks(row.replacement_marks);
+  if (!targetMarks || !replacementMarks) return null;
+  const newSpans: Array<{ span: string; kind: string }> = [];
+  if (row.new_spans !== undefined) {
+    if (!Array.isArray(row.new_spans)) return null;
+    for (const item of row.new_spans) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+      if (correctionValueHasForbiddenKey(item)) return null;
+      const spanRow = item as Record<string, unknown>;
+      if (typeof spanRow.span !== 'string' || typeof spanRow.kind !== 'string') return null;
+      if (spanRow.kind !== 'place' && spanRow.kind !== 'event_or_topic') return null;
+      newSpans.push({ span: spanRow.span, kind: spanRow.kind });
+    }
+  }
+  return {
+    correctionTurn: row.correction_turn,
+    targetMarks,
+    replacementMarks,
+    newSpans,
+  };
+}
+
+export async function proposeDiscourseCorrection(
+  prompt: string,
+  ctx: { completion: (params: any) => Promise<unknown> } | null,
+  opts?: { timeoutMs?: number },
+): Promise<DiscourseCorrectionPayload | null> {
+  if (!prompt.trim() || !ctx || typeof ctx.completion !== 'function') return null;
+  try {
+    const value = await completeBoundedInterpretation('discourse_correction', ctx, {
+      prompt,
+      n_predict: 256,
+    }, opts);
+    if (value.status !== 'ok') return null;
+    const payload = value.value;
+    const raw = typeof payload === 'string'
+      ? payload
+      : String((payload as { text?: string; content?: string } | null)?.text
+        ?? (payload as { content?: string } | null)?.content
+        ?? '');
+    return parseDiscourseCorrectionPayload(raw);
   } catch {
     return null;
   }

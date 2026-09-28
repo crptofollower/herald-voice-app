@@ -112,6 +112,15 @@ export type DiscourseAdmitBatch = {
   rejected: DiscourseAdmitRejection[];
 };
 
+/** Planned correction. The holder applies it only after every check passes. */
+export type DiscourseCorrectionApplyRequest = {
+  targetMentionId: string;
+  replacement:
+    | { source: 'existing'; mentionId: string }
+    | { source: 'new'; proposal: DiscourseMentionProposal };
+  utterance: string;
+};
+
 export type WcsSnapshot = {
   turnIndex: number;
   focus: {
@@ -601,6 +610,64 @@ export class WorkingConversationState {
       this.episodes = this.episodes.filter((item) => item.episodeId !== episode!.episodeId);
     }
     return { admitted, reused, superseded, rejected };
+  }
+
+  /**
+   * One in-memory correction. Checks finish before any mention or episode
+   * write. Source span, offsets, and source turn stay as admitted.
+   */
+  applyDiscourseCorrection(request: DiscourseCorrectionApplyRequest): { applied: true; replacementId: string } | { applied: false } {
+    const target = this.mentions.find((mention) => mention.mentionId === request.targetMentionId);
+    if (!target || target.status !== 'active') return { applied: false };
+    const episode = this.episodes.find((item) => item.memberMentionIds.includes(target.mentionId));
+    if (!episode) return { applied: false };
+    const utterance = request.utterance;
+    let replacementId = '';
+    let pending: DiscourseMention | null = null;
+    if (request.replacement.source === 'existing') {
+      const existing = this.mentions.find((mention) => mention.mentionId === request.replacement.mentionId);
+      if (!existing || existing.status !== 'active' || existing.mentionId === target.mentionId) return { applied: false };
+      replacementId = existing.mentionId;
+    } else {
+      const proposal = request.replacement.proposal;
+      if (!isDiscourseMentionKind(proposal.kind)) return { applied: false };
+      if (!spanIsExact(utterance, proposal.start, proposal.end, proposal.surfaceSpan)) return { applied: false };
+      if (proposal.kind === 'person') {
+        const supported = new Set(qualifyingNarrativePersonNames(utterance).map((name) => name.toLowerCase()));
+        if (!supported.has(proposal.surfaceSpan.toLowerCase())) return { applied: false };
+      }
+      if (this.admittedThisTurn >= DISCOURSE_MENTION_PER_TURN_MAX) return { applied: false };
+      const activeCount = this.mentions.filter((mention) => mention.status === 'active').length;
+      if (activeCount > DISCOURSE_MENTION_ACTIVE_MAX) return { applied: false };
+      const overlap = this.overlapAgainst(episode, `turn:${this.turn}`, proposal);
+      if (overlap.kind !== 'none') return { applied: false };
+      const wording = isUnsafeEvidenceLine(utterance) ? '' : boundEvidenceText(utterance);
+      replacementId = `dm${this.mentionSeq + 1}`;
+      pending = {
+        mentionId: replacementId,
+        kind: proposal.kind,
+        surfaceSpan: proposal.surfaceSpan,
+        start: proposal.start,
+        end: proposal.end,
+        sourceTurnId: this.turn,
+        sourceUtteranceRef: `turn:${this.turn}`,
+        epistemic: 'current_conversation',
+        durable: false,
+        status: 'active',
+        ...(wording ? { sourceWording: wording } : {}),
+      };
+    }
+    if (pending) {
+      this.mentionSeq += 1;
+      this.mentions.push(pending);
+      this.admittedThisTurn += 1;
+    }
+    target.status = 'corrected_away';
+    if (!episode.memberMentionIds.includes(replacementId)) {
+      episode.memberMentionIds.push(replacementId);
+    }
+    this.noteEpisodeTurn(episode);
+    return { applied: true, replacementId };
   }
 
   /**
