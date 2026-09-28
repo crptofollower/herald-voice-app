@@ -1045,9 +1045,8 @@ export async function processUtterance(
       commits: [],
     };
   }
-  const exactlyOneNarrativePerson = discourse
-    ? discourse.noteNarrativeUtterance(text).exactlyOneNarrativePerson
-    : null;
+  let exactlyOneNarrativePerson: string | null = null;
+  if (discourse) discourse.noteNarrativeUtterance(text);
   if (discourse) {
     console.log('[WCS]', JSON.stringify(discourse.snapshot()));
   }
@@ -1859,6 +1858,11 @@ export async function processUtterance(
   }
   if (routeDecision.kind === 'interpretation_hold') {
     discourse?.establishInterpretationHold(routeDecision.episodeId, routeDecision.candidates);
+    const holdMentionCtx = deps.getMedicationSemanticInterpreterCtx?.() ?? null;
+    if (discourse && holdMentionCtx) {
+      await populateCurrentTurnDiscourseMentions(text, holdMentionCtx, discourse);
+      discourse.establishTopicFromCommittedPersons(text);
+    }
     // ACTIVE_SUBJECT_GROUNDING_ACK ("Okay.") is the existing handled-turn
     // acknowledgment used when Herald followed a turn without committing
     // domain facts (activeSubjectReference / medicalVisitOutcomeAsk). Required
@@ -2214,19 +2218,6 @@ export async function processUtterance(
       continuityReferenceOnly = false;
     }
   }
-  if (
-    !continuityFocus
-    && !personEstablished
-    && exactlyOneNarrativePerson
-    && admitsNarrativeContinuityPublication(routeDecision)
-  ) {
-    continuityFocus = {
-      kind: 'person',
-      displayValue: exactlyOneNarrativePerson,
-      referable: true,
-    };
-    continuityReferenceOnly = true;
-  }
   logTodoCompletePendingProbe(text, session);
   if (isRecollectionNominationFallthrough(routeDecision)) {
     const disposition = nominateReminiscence(text, { arcOpen: arc.isOpen() });
@@ -2278,6 +2269,7 @@ export async function processUtterance(
     const mentionCtx = deps.getMedicationSemanticInterpreterCtx?.() ?? null;
     const correction = await considerCurrentTurnDiscourseCorrection(text, discourse, mentionCtx);
     if (correction.kind === 'reply') {
+      discourse.establishTopicFromCommittedPersons(text);
       return {
         handled: true,
         source: 'discourse_correction',
@@ -2311,7 +2303,21 @@ export async function processUtterance(
     if (mentionCtx) {
       await populateCurrentTurnDiscourseMentions(text, mentionCtx, discourse);
     }
+    exactlyOneNarrativePerson = discourse.establishTopicFromCommittedPersons(text);
     }
+  }
+  if (
+    !continuityFocus
+    && !personEstablished
+    && exactlyOneNarrativePerson
+    && admitsNarrativeContinuityPublication(routeDecision)
+  ) {
+    continuityFocus = {
+      kind: 'person',
+      displayValue: exactlyOneNarrativePerson,
+      referable: true,
+    };
+    continuityReferenceOnly = true;
   }
   const routeAct = actForRoute(routeDecision);
   if (routeDecision.kind === 'device_read' && routeDecision.reason === 'family:read') {

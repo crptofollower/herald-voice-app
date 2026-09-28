@@ -10,7 +10,6 @@ import type {
 import {
   DISCOURSE_MENTION_PER_TURN_MAX,
   TOPIC_EVIDENCE_MAX_CHARS,
-  qualifyingNarrativePersonNames,
 } from './discourseContinuity';
 import {
   DISCOURSE_APPLICABILITY_CARD_MAX,
@@ -19,7 +18,7 @@ import {
   priorActiveDiscourseCandidates,
   type DiscourseApplicabilityCandidate,
 } from './discourseApplicability';
-import { groundExactDiscourseSpans, locateExactUniqueSpan } from './discourseMentionProposal';
+import { acceptDiscourseSpanProposals, dropCrossKindSpanGroups } from './discourseMentionProposal';
 import {
   DISCOURSE_CORRECTION_PROMPT,
   proposeDiscourseCorrection,
@@ -67,32 +66,16 @@ export function correctionSpeech(kind: DiscourseMentionKind, surface: string): s
   return `Got it — you meant ${surface}.`;
 }
 
-export function correctionPersonProposals(utterance: string): DiscourseMentionProposal[] {
-  const proposals: DiscourseMentionProposal[] = [];
-  for (const name of qualifyingNarrativePersonNames(utterance)) {
-    const located = locateExactUniqueSpan(utterance, name);
-    if (!located) continue;
-    if (utterance.slice(located.start, located.end) !== name) continue;
-    proposals.push({
-      kind: 'person',
-      surfaceSpan: name,
-      start: located.start,
-      end: located.end,
-    });
-  }
-  return proposals;
-}
-
 /**
  * Pure correction plan. Zero or many on either side does not describe a mutation.
  * A new span that failed grounding is not a candidate.
+ * Person replacements arrive only as grounded spans. The name heuristic does not mint them.
  */
 export function admitDiscourseCorrection(input: {
   candidates: readonly DiscourseApplicabilityCandidate[];
   targetMarks: DiscourseCorrectionPayload['targetMarks'];
   replacementMarks: DiscourseCorrectionPayload['replacementMarks'];
   groundedNew: readonly DiscourseMentionProposal[];
-  personProposals: readonly DiscourseMentionProposal[];
   groundingFailed: boolean;
   admittedThisTurn: number;
   structuralAllowedHandles?: readonly string[] | null;
@@ -116,6 +99,7 @@ export function admitDiscourseCorrection(input: {
     };
   }
   const target = targets[0];
+  const groundedNew = dropCrossKindSpanGroups(input.groundedNew);
   const replacements: ReplacementChoice[] = [];
   for (const candidate of input.candidates) {
     if (candidate.handle === target.handle) continue;
@@ -127,22 +111,12 @@ export function admitDiscourseCorrection(input: {
       existingId: candidate.handle,
     });
   }
-  const groundedSurfaces = new Set(input.groundedNew.map((item) => item.surfaceSpan));
-  for (const proposal of input.groundedNew) {
+  for (const proposal of groundedNew) {
     if (proposal.surfaceSpan.toLowerCase() === target.surfaceSpan.toLowerCase() && proposal.kind === target.kind) {
       continue;
     }
     replacements.push({
       key: `new:${proposal.kind}:${proposal.surfaceSpan}`,
-      surface: proposal.surfaceSpan,
-      proposal,
-    });
-  }
-  for (const proposal of input.personProposals) {
-    if (groundedSurfaces.has(proposal.surfaceSpan)) continue;
-    if (proposal.surfaceSpan.toLowerCase() === target.surfaceSpan.toLowerCase()) continue;
-    replacements.push({
-      key: `person:${proposal.surfaceSpan}`,
       surface: proposal.surfaceSpan,
       proposal,
     });
@@ -213,14 +187,19 @@ export async function considerCurrentTurnDiscourseCorrection(
     return { kind: 'continue' };
   }
   if (!parsed || !parsed.correctionTurn) return { kind: 'continue' };
-  const grounded = groundExactDiscourseSpans(utterance, parsed.newSpans);
+  const accepted = acceptDiscourseSpanProposals(utterance, parsed.newSpans);
+  const groundingFailed = accepted.rejected.some((item) => (
+    item.reason === 'absent'
+    || item.reason === 'ambiguous'
+    || item.reason === 'empty_span'
+    || item.reason === 'invalid_kind'
+  ));
   const decision = admitDiscourseCorrection({
     candidates,
     targetMarks: parsed.targetMarks,
     replacementMarks: parsed.replacementMarks,
-    groundedNew: grounded.ready,
-    personProposals: correctionPersonProposals(utterance),
-    groundingFailed: grounded.rejected.length > 0,
+    groundedNew: accepted.ready,
+    groundingFailed,
     admittedThisTurn: discourse.peekDiscourseMentions().filter((mention) => mention.sourceTurnId === currentTurn).length,
     structuralAllowedHandles: null,
   });

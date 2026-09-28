@@ -146,9 +146,10 @@ export async function runDiscourseMentionProposalTests() {
   {
     const text = 'about his trip to Ireland';
     const grounded = groundExactDiscourseSpans(text, [{ span: 'Ireland', kind: 'person' }]);
-    assert('a person kind is rejected',
-      grounded.ready.length === 0
-      && grounded.rejected[0]?.reason === 'invalid_kind');
+    assert('a person span is grounded before the syntax fence',
+      grounded.ready.length === 1
+      && grounded.ready[0]?.kind === 'person'
+      && grounded.ready[0]?.surfaceSpan === 'Ireland');
   }
 
   {
@@ -172,7 +173,13 @@ export async function runDiscourseMentionProposalTests() {
   {
     const discourse = new DiscourseContinuityHolder();
     discourse.beginUserTurn();
-    discourse.noteNarrativeUtterance('Martin called.');
+    const martin = 'Martin called.';
+    discourse.admitDiscourseProposals(martin, [{
+      kind: 'person',
+      surfaceSpan: 'Martin',
+      start: 0,
+      end: 'Martin'.length,
+    }]);
     const before = discourse.peekDiscourseMentions().map((item) => item.mentionId).join(',');
     await populateCurrentTurnDiscourseMentions(
       'about his trip to Ireland',

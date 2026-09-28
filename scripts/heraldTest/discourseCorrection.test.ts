@@ -20,7 +20,6 @@ import {
 import {
   admitDiscourseCorrection,
   considerCurrentTurnDiscourseCorrection,
-  correctionPersonProposals,
 } from '../../src/routing/discourseCorrection.ts';
 import { resetSemanticCompletionLifecycleForTests } from '../../src/utils/semanticCompletionLifecycle.ts';
 
@@ -54,7 +53,9 @@ function snapshot(mention: DiscourseMention | undefined) {
 
 function seedEpisode(discourse: DiscourseContinuityHolder) {
   discourse.beginUserTurn();
-  discourse.noteNarrativeUtterance('Martin called.');
+  const martin = 'Martin called.';
+  discourse.admitDiscourseProposals(martin, [at(martin, 'Martin', 'person')]);
+  discourse.establishTopic('Martin', martin);
   const line = 'about his trip to Ireland';
   discourse.beginUserTurn();
   discourse.noteNarrativeUtterance(line, [
@@ -87,7 +88,6 @@ export async function runDiscourseCorrectionTests() {
       targetMarks: [{ handle: ireland.mentionId, mark: 'compatible' }],
       replacementMarks: [{ handle: italy.mentionId, mark: 'compatible' }],
       groundedNew: [],
-      personProposals: [],
       groundingFailed: false,
       admittedThisTurn: 0,
       structuralAllowedHandles: null,
@@ -133,7 +133,6 @@ export async function runDiscourseCorrectionTests() {
       ],
       replacementMarks: [],
       groundedNew: [at(utterance, 'Italy', 'place')],
-      personProposals: correctionPersonProposals(utterance),
       groundingFailed: false,
       admittedThisTurn: 0,
       structuralAllowedHandles: null,
@@ -173,8 +172,7 @@ export async function runDiscourseCorrectionTests() {
       candidates: priorActiveDiscourseCandidates(mentions, discourse.peekDiscourseEpisodes(), discourse.snapshot().turnIndex),
       targetMarks: [{ handle: martin.mentionId, mark: 'compatible' }],
       replacementMarks: [],
-      groundedNew: [],
-      personProposals: correctionPersonProposals(utterance),
+      groundedNew: [at(utterance, 'Sarah', 'person')],
       groundingFailed: false,
       admittedThisTurn: 0,
       structuralAllowedHandles: null,
@@ -208,7 +206,6 @@ export async function runDiscourseCorrectionTests() {
       targetMarks: mentions.map((item) => ({ handle: item.mentionId, mark: 'incompatible' as const })),
       replacementMarks: [],
       groundedNew: [],
-      personProposals: [],
       groundingFailed: false,
       admittedThisTurn: 0,
       structuralAllowedHandles: null,
@@ -218,7 +215,6 @@ export async function runDiscourseCorrectionTests() {
       targetMarks: mentions.filter((item) => item.surfaceSpan !== 'trip').map((item) => ({ handle: item.mentionId, mark: 'compatible' as const })),
       replacementMarks: [],
       groundedNew: [],
-      personProposals: [],
       groundingFailed: false,
       admittedThisTurn: 0,
       structuralAllowedHandles: null,
@@ -228,7 +224,6 @@ export async function runDiscourseCorrectionTests() {
       targetMarks: [{ handle: mentions.find((item) => item.surfaceSpan === 'Ireland')!.mentionId, mark: 'compatible' }],
       replacementMarks: [],
       groundedNew: [],
-      personProposals: [],
       groundingFailed: false,
       admittedThisTurn: 0,
       structuralAllowedHandles: null,
@@ -241,7 +236,6 @@ export async function runDiscourseCorrectionTests() {
         { kind: 'place', surfaceSpan: 'Italy', start: 0, end: 5 },
         { kind: 'place', surfaceSpan: 'Spain', start: 8, end: 13 },
       ],
-      personProposals: [],
       groundingFailed: false,
       admittedThisTurn: 0,
       structuralAllowedHandles: null,
@@ -283,8 +277,8 @@ export async function runDiscourseCorrectionTests() {
       replacement_marks: [],
       new_spans: [{ span: 'Sarah', kind: 'person' }],
     }));
-    assert('winner, replace, and person-kind fields reject the payload',
-      winner === null && directed === null && personKind === null);
+    assert('winner and replace fields reject the payload, and a person span is legal',
+      winner === null && directed === null && personKind?.newSpans[0]?.kind === 'person');
     assert('a malformed correction payload is not a plan',
       parseDiscourseCorrectionPayload('not json') === null
       && parseDiscourseCorrectionPayload('{"correction_turn":true}') === null);
@@ -387,7 +381,6 @@ export async function runDiscourseCorrectionTests() {
       targetMarks: [{ handle: ireland.mentionId, mark: 'compatible' }],
       replacementMarks: [],
       groundedNew: [at(utterance, 'Italy', 'place')],
-      personProposals: [],
       groundingFailed: false,
       admittedThisTurn: 0,
       structuralAllowedHandles: null,
@@ -477,12 +470,10 @@ export async function runDiscourseCorrectionTests() {
   {
     const discourse = new DiscourseContinuityHolder();
     const session = new ConversationSession();
-    await processUtterance(
-      'I was talking to my friend Martin yesterday and he was telling me about his new place',
-      session,
-      depsBase,
-      null, null, null, null, null, discourse,
-    );
+    const martinLine = 'I was talking to my friend Martin yesterday and he was telling me about his new place';
+    discourse.beginUserTurn();
+    discourse.admitDiscourseProposals(martinLine, [at(martinLine, 'Martin', 'person')]);
+    discourse.establishTopic('Martin', martinLine);
     const line = 'about his trip to Ireland';
     discourse.admitDiscourseProposals(line, [
       at(line, 'trip', 'event_or_topic'),
@@ -535,6 +526,8 @@ export async function runDiscourseCorrectionTests() {
       && act?.kind === 'ACKNOWLEDGE'
       && speech === 'Got it — you meant Italy.'
       && placeItaly?.status === 'active'
+      && !after.some((item) => item.kind === 'person' && item.surfaceSpan === 'Italy')
+      && discourse.peekTopic()?.displayName === 'Martin'
       && after.find((item) => item.mentionId === ireland.mentionId)?.status === 'corrected_away'
       && episode?.memberMentionIds.includes(ireland.mentionId)
       && episode?.memberMentionIds.includes(placeItaly?.mentionId ?? '')
@@ -571,7 +564,6 @@ export async function runDiscourseCorrectionTests() {
       ],
       replacementMarks: [],
       groundedNew: [],
-      personProposals: [],
       groundingFailed: false,
       admittedThisTurn: 0,
       structuralAllowedHandles: null,
@@ -581,7 +573,6 @@ export async function runDiscourseCorrectionTests() {
       targetMarks: [{ handle: martin.mentionId, mark: 'compatible' }],
       replacementMarks: [],
       groundedNew: [{ kind: 'place', surfaceSpan: 'Italy', start: 0, end: 5 }],
-      personProposals: [],
       groundingFailed: false,
       admittedThisTurn: 0,
       structuralAllowedHandles: null,

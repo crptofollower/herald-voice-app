@@ -39,6 +39,17 @@ function shim(db: Database.Database) {
   };
 }
 
+function commitPerson(discourse: DiscourseContinuityHolder, text: string, surface: string) {
+  const start = text.indexOf(surface);
+  discourse.admitDiscourseProposals(text, [{
+    kind: 'person',
+    surfaceSpan: surface,
+    start,
+    end: start + surface.length,
+  }]);
+  discourse.establishTopic(surface, text);
+}
+
 function at(text: string, surface: string, kind: DiscourseMentionProposal['kind']): DiscourseMentionProposal {
   const start = text.indexOf(surface);
   return { kind, surfaceSpan: surface, start, end: start + surface.length };
@@ -347,7 +358,7 @@ export async function runDiscourseApplicabilityTests() {
     const prompts: string[] = [];
     const discourse = new DiscourseContinuityHolder();
     discourse.beginUserTurn();
-    discourse.noteNarrativeUtterance('Martin called.');
+    commitPerson(discourse, 'Martin called.', 'Martin');
     const before = discourse.peekDiscourseMentions().map((item) => item.mentionId).join(',');
     const added = await processUtterance(
       'Add rye to my grocery list.',
@@ -377,7 +388,7 @@ export async function runDiscourseApplicabilityTests() {
   {
     const discourse = new DiscourseContinuityHolder();
     discourse.beginUserTurn();
-    discourse.noteNarrativeUtterance('Martin called.');
+    commitPerson(discourse, 'Martin called.', 'Martin');
     discourse.beginUserTurn();
     const before = discourse.peekDiscourseMentions().map((item) => item.mentionId).join(',');
     let outcome: Awaited<ReturnType<typeof applyCurrentTurnDiscourseApplicability>> = null;
@@ -399,7 +410,7 @@ export async function runDiscourseApplicabilityTests() {
   {
     const discourse = new DiscourseContinuityHolder();
     discourse.beginUserTurn();
-    discourse.noteNarrativeUtterance('Martin called.');
+    commitPerson(discourse, 'Martin called.', 'Martin');
     for (let i = 0; i < 6; i += 1) discourse.beginUserTurn();
     const still = discourse.peekDiscourseMentions().filter((item) => item.status === 'active');
     const unused = await applyCurrentTurnDiscourseApplicability(
@@ -427,7 +438,8 @@ export async function runDiscourseApplicabilityTests() {
     const session = new ConversationSession();
     const turn1 = 'I was talking to my friend Martin yesterday and he was telling me about his new place';
     const turn2 = 'about his trip to Ireland';
-    await processUtterance(turn1, session, depsBase, null, null, null, null, null, discourse);
+    discourse.beginUserTurn();
+    commitPerson(discourse, turn1, 'Martin');
     discourse.admitDiscourseProposals(turn2, [
       at(turn2, 'trip', 'event_or_topic'),
       at(turn2, 'Ireland', 'place'),
@@ -497,7 +509,7 @@ export async function runDiscourseApplicabilityTests() {
   {
     const discourse = new DiscourseContinuityHolder();
     discourse.beginUserTurn();
-    discourse.noteNarrativeUtterance('Martin called.');
+    commitPerson(discourse, 'Martin called.', 'Martin');
     const line = 'alpha beta gamma';
     discourse.admitDiscourseProposals(line, [
       at(line, 'alpha', 'place'),

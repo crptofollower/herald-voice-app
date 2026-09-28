@@ -147,6 +147,10 @@ export function stripGrammaticalContractionSuffix(token: string): string {
   return token.replace(CONTRACTION_SUFFIX_RE, '');
 }
 
+/**
+ * Syntax fence only. A surviving token is compatible with the current
+ * name heuristic. This function does not admit a mention or move the topic.
+ */
 export function qualifyingNarrativePersonNames(text: string): string[] {
   const t = text.trim();
   if (!t) return [];
@@ -497,9 +501,9 @@ export class WorkingConversationState {
   }
 
   /**
-   * Structural admission for place and event_or_topic proposals, and for a
-   * person proposal only when qualifyingNarrativePersonNames already accepts
-   * that exact surface. Does not choose cross-turn applicability.
+   * Structural admission for spans the caller already typed and grounded.
+   * A person span is admitted only when the name syntax fence also accepts
+   * that exact surface. This method does not mint a person from title case.
    */
   admitDiscourseProposals(
     utterance: string,
@@ -671,10 +675,9 @@ export class WorkingConversationState {
   }
 
   /**
-   * `exactlyOneNarrativePerson` is set only when this turn's local
-   * qualifying name list has length 1 and that mention is admitted.
-   * Several qualifying names stay as separate mentions. This holder does
-   * not write the ledger.
+   * Refreshes an already established topic and admits caller-supplied
+   * spans. Person mentions are not minted from title-case syntax.
+   * `exactlyOneNarrativePerson` stays null; topic follows a committed person.
    */
   noteNarrativeUtterance(
     text: string,
@@ -693,29 +696,25 @@ export class WorkingConversationState {
       if (liveSet && sameItemLists(liveSet.items, items)) this.refreshCandidateSet();
       else this.establishCandidateSet(null, items);
     }
-    const names = qualifyingNarrativePersonNames(text);
-    const personProposals: DiscourseMentionProposal[] = [];
-    for (const name of names) {
-      const start = text.indexOf(name);
-      if (start < 0) continue;
-      personProposals.push({
-        kind: 'person',
-        surfaceSpan: text.slice(start, start + name.length),
-        start,
-        end: start + name.length,
-      });
-    }
-    const batch = this.admitDiscourseProposals(text, [...personProposals, ...proposals], 'new_episode');
-    const kept = new Set(
-      [...batch.admitted, ...batch.reused]
-        .filter((mention) => mention.kind === 'person')
-        .map((mention) => mention.surfaceSpan),
-    );
-    if (names.length === 1 && kept.has(names[0])) {
-      this.establishTopic(names[0], text);
-      return { exactlyOneNarrativePerson: names[0] };
-    }
+    this.admitDiscourseProposals(text, proposals, 'new_episode');
     return { exactlyOneNarrativePerson: null };
+  }
+
+  /**
+   * Legacy topic follows exactly one person mention committed on this turn.
+   * A place or event commit does not move the topic.
+   */
+  establishTopicFromCommittedPersons(evidenceText: string): string | null {
+    const surfaces = new Set<string>();
+    for (const mention of this.mentions) {
+      if (mention.sourceTurnId !== this.turn) continue;
+      if (mention.status !== 'active' || mention.kind !== 'person') continue;
+      surfaces.add(mention.surfaceSpan);
+    }
+    if (surfaces.size !== 1) return null;
+    const name = [...surfaces][0];
+    this.establishTopic(name, evidenceText);
+    return name;
   }
 
   private activeMembers(episode: DiscourseEpisode): DiscourseMention[] {

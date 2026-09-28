@@ -23,7 +23,9 @@ import {
   DISCOURSE_WALL_MS,
   DiscourseContinuityHolder,
   WorkingConversationState,
+  qualifyingNarrativePersonNames,
 } from '../../src/routing/discourseContinuity.ts';
+import { DISCOURSE_MENTION_PROPOSAL_PROMPT } from '../../src/routing/semanticProvider.ts';
 import {
   formatOperationalListClarification,
   isAmbiguousOperationalListAcquisition,
@@ -105,6 +107,17 @@ function fresh(opts?: {
     },
     llmReady: opts?.llmReady ?? !!opts?.classifyLLM,
     captureContext: { contacts: [] as string[], lists: ['grocery'] as string[] },
+    getMedicationSemanticInterpreterCtx: () => ({
+      completion: async (params: { prompt?: string }) => {
+        const prompt = params.prompt ?? '';
+        if (prompt.startsWith(DISCOURSE_MENTION_PROPOSAL_PROMPT)) {
+          const utterance = prompt.slice(DISCOURSE_MENTION_PROPOSAL_PROMPT.length).trim();
+          const names = qualifyingNarrativePersonNames(utterance);
+          return { text: JSON.stringify(names.map((span) => ({ span, kind: 'person' }))) };
+        }
+        return { text: '[]' };
+      },
+    }),
   };
   const say = (text: string) =>
     processUtterance(text, session, deps, subject, medication, ordered, calendarPresentation, calendar, discourse);

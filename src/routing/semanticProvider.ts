@@ -235,7 +235,7 @@ export async function proposeReferenceContinuation(
 }
 
 export const DISCOURSE_MENTION_PROPOSAL_PROMPT =
-  'Reply with JSON only: an array of objects. Each object has span and kind. kind is place or event_or_topic. span is copied exactly from the utterance. Return [] when none apply.';
+  'Reply with JSON only: an array of objects. Each object has span and kind. kind is person, place, or event_or_topic. span is copied exactly from the utterance. Return [] when none apply.';
 
 export type DiscourseMentionProposalItem = {
   span: string;
@@ -387,7 +387,7 @@ const CORRECTION_FORBIDDEN_KEYS = [
 ];
 
 export const DISCOURSE_CORRECTION_PROMPT =
-  'Reply with JSON only. Keys are correction_turn, target_marks, replacement_marks, and optional new_spans. Each mark has handle and mark. mark is compatible, incompatible, or uncertain. A new_spans item has span and kind. kind is place or event_or_topic. Do not choose one candidate.';
+  'Reply with JSON only. Keys are correction_turn, target_marks, replacement_marks, and optional new_spans. Each mark has handle and mark. mark is compatible, incompatible, or uncertain. A new_spans item has span and kind. kind is person, place, or event_or_topic. Do not choose one candidate.';
 
 export type DiscourseCorrectionPayload = {
   correctionTurn: boolean;
@@ -446,7 +446,7 @@ export function parseDiscourseCorrectionPayload(raw: string): DiscourseCorrectio
       if (correctionValueHasForbiddenKey(item)) return null;
       const spanRow = item as Record<string, unknown>;
       if (typeof spanRow.span !== 'string' || typeof spanRow.kind !== 'string') return null;
-      if (spanRow.kind !== 'place' && spanRow.kind !== 'event_or_topic') return null;
+      if (spanRow.kind !== 'person' && spanRow.kind !== 'place' && spanRow.kind !== 'event_or_topic') return null;
       newSpans.push({ span: spanRow.span, kind: spanRow.kind });
     }
   }

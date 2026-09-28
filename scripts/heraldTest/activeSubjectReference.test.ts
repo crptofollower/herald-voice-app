@@ -28,7 +28,8 @@ import {
 import { DOMAIN_WRITERS } from '../../src/routing/routeIntent.ts';
 import { continuityLedgerFocus } from '../../src/routing/conversationTurnLedgerWrite.ts';
 import { ConversationalSubjectHolder } from '../../src/routing/conversationalSubject.ts';
-import { DiscourseContinuityHolder } from '../../src/routing/discourseContinuity.ts';
+import { DiscourseContinuityHolder, qualifyingNarrativePersonNames } from '../../src/routing/discourseContinuity.ts';
+import { DISCOURSE_MENTION_PROPOSAL_PROMPT } from '../../src/routing/semanticProvider.ts';
 import { writeMedicalRecord } from '../../src/db/medicalDB.ts';
 import { classifyImmediateRecapDeterministic, answerImmediateSemanticRecap } from '../../src/routing/immediateSemanticRecap.ts';
 import { classifyRecentCommittedAddRecall } from '../../src/routing/recentActionRecall.ts';
@@ -77,6 +78,23 @@ function makeShim(db: Database.Database) {
     getFirstSync: (s: string, p: unknown[] = []) => { try { return db.prepare(s).get(...p) ?? null; } catch { return null; } },
     runSync: (s: string, p: unknown[] = []) => db.prepare(s).run(...p),
     execSync: (s: string) => db.exec(s),
+  };
+}
+
+function withPersonTyping<T extends Record<string, unknown>>(deps: T) {
+  return {
+    ...deps,
+    getMedicationSemanticInterpreterCtx: () => ({
+      completion: async (params: { prompt?: string }) => {
+        const prompt = params.prompt ?? '';
+        if (prompt.startsWith(DISCOURSE_MENTION_PROPOSAL_PROMPT)) {
+          const utterance = prompt.slice(DISCOURSE_MENTION_PROPOSAL_PROMPT.length).trim();
+          const names = qualifyingNarrativePersonNames(utterance);
+          return { text: JSON.stringify(names.map((span) => ({ span, kind: 'person' }))) };
+        }
+        return { text: '[]' };
+      },
+    }),
   };
 }
 
@@ -617,7 +635,7 @@ export async function runActiveSubjectReferenceTests() {
     const discourse = new DiscourseContinuityHolder();
     const subject = new ConversationalSubjectHolder();
     const text = 'Paul called me yesterday.';
-    const outcome = await processUtterance(text, session, deps, subject, null, null, null, null, discourse, ledger);
+    const outcome = await processUtterance(text, session, withPersonTyping(deps), subject, null, null, null, null, discourse, ledger);
     assertTrue('narrative: unhandled (not a domain write)', outcome.handled === false);
     assert('narrative: WCS stores Paul', discourse.peekTopic()?.displayName, 'Paul');
     assertTrue('narrative: Flow C not armed', !subject.hasLive());
@@ -1014,7 +1032,7 @@ export async function runActiveSubjectReferenceTests() {
     const { session, deps } = freshDb();
     const ledger = createConversationTurnLedger();
     const discourse = new DiscourseContinuityHolder();
-    const establish = await processUtterance('Paul called me yesterday.', session, deps, null, null, null, null, null, discourse, ledger);
+    const establish = await processUtterance('Paul called me yesterday.', session, withPersonTyping(deps), null, null, null, null, null, discourse, ledger);
     publishContinuity(ledger, 'Paul called me yesterday.', establish);
     const focus = ledger.peek(Date.now()).flatMap((e) => e.focus)[0];
     assert('authority: narrative focus is conversational', focus?.tier, 'conversational');

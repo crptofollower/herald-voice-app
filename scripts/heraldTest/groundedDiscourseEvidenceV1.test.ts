@@ -47,16 +47,11 @@ export async function runGroundedDiscourseEvidenceV1Tests() {
     const noted = discourse.noteNarrativeUtterance(text);
     const mention = discourse.peekDiscourseMentions().find((item) => item.surfaceSpan === 'Martin');
     const start = text.indexOf('Martin');
-    assert('one person mention keeps exact provenance',
-      noted.exactlyOneNarrativePerson === 'Martin'
-      && mention?.kind === 'person'
-      && mention.start === start
-      && mention.end === start + 'Martin'.length
-      && mention.sourceTurnId === 1
-      && mention.sourceUtteranceRef === 'turn:1'
-      && mention.epistemic === 'current_conversation'
-      && mention.durable === false
-      && mention.status === 'active');
+    assert('title-case syntax does not commit a person mention',
+      noted.exactlyOneNarrativePerson === null
+      && mention === undefined
+      && discourse.peekTopic() === null
+      && start === text.indexOf('Martin'));
   }
 
   {
@@ -65,10 +60,9 @@ export async function runGroundedDiscourseEvidenceV1Tests() {
     discourse.beginUserTurn();
     const noted = discourse.noteNarrativeUtterance(text);
     const names = discourse.peekDiscourseMentions().filter((item) => item.status === 'active').map((item) => item.surfaceSpan);
-    assert('several people in one utterance all stay',
+    assert('several title-case tokens do not commit person mentions',
       noted.exactlyOneNarrativePerson === null
-      && names.includes('Martin')
-      && names.includes('Sarah')
+      && names.length === 0
       && discourse.peekTopic() === null);
   }
 
@@ -76,7 +70,11 @@ export async function runGroundedDiscourseEvidenceV1Tests() {
     const discourse = new DiscourseContinuityHolder();
     const text = 'about his trip to Ireland';
     discourse.beginUserTurn();
-    discourse.noteNarrativeUtterance('Martin called.');
+    const martin = 'Martin called.';
+    discourse.admitDiscourseProposals(martin, [{
+      kind: 'person', surfaceSpan: 'Martin', start: 0, end: 'Martin'.length,
+    }]);
+    discourse.establishTopic('Martin', martin);
     discourse.beginUserTurn();
     const ireland = at(text, 'Ireland');
     ireland.kind = 'place';
@@ -94,7 +92,11 @@ export async function runGroundedDiscourseEvidenceV1Tests() {
     const discourse = new DiscourseContinuityHolder();
     const text = 'about his trip to Ireland';
     discourse.beginUserTurn();
-    discourse.noteNarrativeUtterance('Martin called.');
+    const martin = 'Martin called.';
+    discourse.admitDiscourseProposals(martin, [{
+      kind: 'person', surfaceSpan: 'Martin', start: 0, end: 'Martin'.length,
+    }]);
+    discourse.establishTopic('Martin', martin);
     discourse.beginUserTurn();
     const trip = at(text, 'trip');
     trip.kind = 'event_or_topic';
@@ -208,7 +210,10 @@ export async function runGroundedDiscourseEvidenceV1Tests() {
     const discourse = new DiscourseContinuityHolder();
     const text = 'Martin and Sarah stopped by.';
     discourse.beginUserTurn();
-    discourse.noteNarrativeUtterance(text);
+    discourse.admitDiscourseProposals(text, ['Martin', 'Sarah'].map((name) => {
+      const start = text.indexOf(name);
+      return { kind: 'person' as const, surfaceSpan: name, start, end: start + name.length };
+    }));
     const episodes = discourse.peekDiscourseEpisodes();
     const members = episodes[0]?.memberMentionIds ?? [];
     assert('mentions from one turn share one episode',
@@ -270,7 +275,11 @@ export async function runGroundedDiscourseEvidenceV1Tests() {
     const names = ['Martin', 'Sarah', 'Helen', 'Chris'];
     for (const name of names) {
       discourse.beginUserTurn();
-      discourse.noteNarrativeUtterance(`${name} called.`);
+      const called = `${name} called.`;
+      const start = called.indexOf(name);
+      discourse.admitDiscourseProposals(called, [{
+        kind: 'person', surfaceSpan: name, start, end: start + name.length,
+      }]);
     }
     const kept = discourse.peekDiscourseEpisodes().map((item) => item.episodeId);
     discourse.beginUserTurn();
@@ -287,7 +296,10 @@ export async function runGroundedDiscourseEvidenceV1Tests() {
   {
     const discourse = new DiscourseContinuityHolder();
     discourse.beginUserTurn();
-    discourse.noteNarrativeUtterance('Martin called.');
+    const martin = 'Martin called.';
+    discourse.admitDiscourseProposals(martin, [{
+      kind: 'person', surfaceSpan: 'Martin', start: 0, end: 'Martin'.length,
+    }]);
     discourse.clear();
     assert('session clear drops mentions and episodes',
       discourse.peekDiscourseMentions().length === 0
@@ -318,7 +330,10 @@ export async function runGroundedDiscourseEvidenceV1Tests() {
     await runMigrations();
     const discourse = new DiscourseContinuityHolder();
     discourse.beginUserTurn();
-    discourse.noteNarrativeUtterance('Martin called.');
+    const martin = 'Martin called.';
+    discourse.admitDiscourseProposals(martin, [{
+      kind: 'person', surfaceSpan: 'Martin', start: 0, end: 'Martin'.length,
+    }]);
     const beforeIds = discourse.peekDiscourseMentions().map((item) => item.mentionId).join(',');
     const beforeItems = getDB().getAllSync<{ body: string }>('SELECT body FROM list_items WHERE removed_at IS NULL');
     await processUtterance(
@@ -352,7 +367,11 @@ export async function runGroundedDiscourseEvidenceV1Tests() {
     const second = await processUtterance(turn2, session, deps, null, null, null, null, null, discourse);
     const structural = new DiscourseContinuityHolder();
     structural.beginUserTurn();
-    structural.noteNarrativeUtterance(turn1);
+    const martinStart = turn1.indexOf('Martin');
+    structural.admitDiscourseProposals(turn1, [{
+      kind: 'person', surfaceSpan: 'Martin', start: martinStart, end: martinStart + 'Martin'.length,
+    }]);
+    structural.establishTopic('Martin', turn1);
     structural.beginUserTurn();
     const trip = at(turn2, 'trip');
     trip.kind = 'event_or_topic';
