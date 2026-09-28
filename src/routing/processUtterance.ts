@@ -17,6 +17,7 @@ import {
   actForPendingResolution,
   actForRoute,
   clarifyReferenceAct,
+  reflectCurrentTurnAct,
   requestConfirmationAct,
   type ResponseAct,
 } from './responseAct';
@@ -54,6 +55,7 @@ import { isClosedActiveSubjectIdentityLookup, ACTIVE_SUBJECT_GROUNDING_ACK } fro
 import { admitGroundedContinuation, admitGroundedUnavailability } from './workingFocusReference';
 import { noteSemanticAdmission } from '../dev/semanticJourneyEvidence';
 import { proposeReferenceContinuation } from './semanticProvider';
+import { applyCurrentTurnDiscourseApplicability } from './discourseApplicability';
 import { populateCurrentTurnDiscourseMentions } from './discourseMentionProposal';
 import {
   admitReminiscenceVerbatim,
@@ -188,7 +190,7 @@ export type RouteDeps = Parameters<typeof routeIntent>[1];
 export type UtteranceOutcome =
   | {
       handled: true;
-      source: 'pending_resume' | 'capture' | 'referent_resume' | 'interpretation' | 'hold_recall' | 'hold_continuity' | 'recent_add_recall' | 'recollection' | 'recovery_obligation';
+      source: 'pending_resume' | 'capture' | 'referent_resume' | 'interpretation' | 'hold_recall' | 'hold_continuity' | 'recent_add_recall' | 'recollection' | 'recovery_obligation' | 'discourse_reflection';
       responseText: string;
       commits: CommitResult[];
       /** Presentation hint only. Never speech-parsed. Never a conversational machine. */
@@ -2273,6 +2275,25 @@ export async function processUtterance(
     && routeDecision.reason === 'default'
   ) {
     const mentionCtx = deps.getMedicationSemanticInterpreterCtx?.() ?? null;
+    const applied = await applyCurrentTurnDiscourseApplicability(text, discourse, mentionCtx);
+    if (applied?.outcome === 'one') {
+      return {
+        handled: true,
+        source: 'discourse_reflection',
+        responseText: applied.speech,
+        commits: [],
+        responseAct: reflectCurrentTurnAct(applied.speech),
+      };
+    }
+    if (applied?.outcome === 'many') {
+      return {
+        handled: true,
+        source: 'discourse_reflection',
+        responseText: applied.speech,
+        commits: [],
+        responseAct: clarifyReferenceAct(applied.speech),
+      };
+    }
     if (mentionCtx) {
       await populateCurrentTurnDiscourseMentions(text, mentionCtx, discourse);
     }

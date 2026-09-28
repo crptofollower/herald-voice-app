@@ -70,6 +70,8 @@ export type DiscourseMention = {
   epistemic: 'current_conversation';
   durable: false;
   status: DiscourseMentionStatus;
+  /** Capped admitting utterance. Absent when the line is empty or unsafe. */
+  sourceWording?: string;
 };
 
 /** Co-membership only. No relation, predicate, or role. */
@@ -573,6 +575,7 @@ export class WorkingConversationState {
         overlap.shorter.status = 'superseded';
         superseded.push({ ...overlap.shorter });
       }
+      const wording = isUnsafeEvidenceLine(utterance) ? '' : boundEvidenceText(utterance);
       const mention: DiscourseMention = {
         mentionId: `dm${++this.mentionSeq}`,
         kind: proposal.kind,
@@ -584,6 +587,7 @@ export class WorkingConversationState {
         epistemic: 'current_conversation',
         durable: false,
         status: 'active',
+        ...(wording ? { sourceWording: wording } : {}),
       };
       this.mentions.push(mention);
       this.admittedThisTurn += 1;

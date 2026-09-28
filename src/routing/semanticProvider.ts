@@ -128,7 +128,7 @@ const REFERENCE_SEMANTIC_TIMEOUT_MS = 8000;
 
 /** Reference, recap, and continuation proposals. The shared lifecycle owns the native call. */
 export async function completeBoundedInterpretation(
-  kind: 'active_reference' | 'recap' | 'reference_continuation' | 'discourse_mention',
+  kind: 'active_reference' | 'recap' | 'reference_continuation' | 'discourse_mention' | 'discourse_applicability',
   ctx: { completion: (params: any) => Promise<unknown> } | null,
   params: unknown,
   opts?: { timeoutMs?: number },
@@ -138,6 +138,7 @@ export async function completeBoundedInterpretation(
     && kind !== 'recap'
     && kind !== 'reference_continuation'
     && kind !== 'discourse_mention'
+    && kind !== 'discourse_applicability'
   ) {
     return { status: 'unavailable' };
   }
@@ -282,6 +283,88 @@ export async function proposeDiscourseMentions(
         ?? (payload as { content?: string } | null)?.content
         ?? '');
     return parseDiscourseMentionPayload(raw);
+  } catch {
+    return null;
+  }
+}
+
+const APPLICABILITY_FORBIDDEN_KEYS = [
+  'selectedIndex',
+  'winner',
+  'best',
+  'rank',
+  'score',
+  'confidence',
+  'chosenHandle',
+  'selectedHandle',
+];
+
+export const DISCOURSE_APPLICABILITY_PROMPT =
+  'Reply with JSON only. Keys are utterance_applicable and marks. Each mark has handle and mark. mark is compatible, incompatible, or uncertain. Do not choose a winner.';
+
+export type DiscourseApplicabilityPayload = {
+  utteranceApplicable: boolean;
+  marks: Array<{ handle: string; mark: string }>;
+};
+
+function applicabilityValueHasForbiddenKey(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  if (Array.isArray(value)) return value.some((item) => applicabilityValueHasForbiddenKey(item));
+  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    if (APPLICABILITY_FORBIDDEN_KEYS.includes(key)) return true;
+    if (applicabilityValueHasForbiddenKey(nested)) return true;
+  }
+  return false;
+}
+
+/** Compatibility marks only. Null is fail-closed. Winner fields reject the payload. */
+export function parseDiscourseApplicabilityPayload(raw: string): DiscourseApplicabilityPayload | null {
+  const start = raw.indexOf('{');
+  const end = raw.lastIndexOf('}');
+  if (start < 0 || end <= start) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  if (applicabilityValueHasForbiddenKey(parsed)) return null;
+  const row = parsed as Record<string, unknown>;
+  if (typeof row.utterance_applicable !== 'boolean' || !Array.isArray(row.marks)) return null;
+  const marks: Array<{ handle: string; mark: string }> = [];
+  for (const item of row.marks) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+    if (applicabilityValueHasForbiddenKey(item)) return null;
+    const markRow = item as Record<string, unknown>;
+    if (typeof markRow.handle !== 'string' || typeof markRow.mark !== 'string') return null;
+    if (markRow.mark !== 'compatible' && markRow.mark !== 'incompatible' && markRow.mark !== 'uncertain') {
+      return null;
+    }
+    marks.push({ handle: markRow.handle, mark: markRow.mark });
+  }
+  return { utteranceApplicable: row.utterance_applicable, marks };
+}
+
+export async function proposeDiscourseApplicability(
+  prompt: string,
+  ctx: { completion: (params: any) => Promise<unknown> } | null,
+  opts?: { timeoutMs?: number },
+): Promise<DiscourseApplicabilityPayload | null> {
+  if (!prompt.trim() || !ctx || typeof ctx.completion !== 'function') return null;
+  try {
+    const value = await completeBoundedInterpretation('discourse_applicability', ctx, {
+      prompt,
+      n_predict: 256,
+    }, opts);
+    if (value.status !== 'ok') return null;
+    const payload = value.value;
+    const raw = typeof payload === 'string'
+      ? payload
+      : String((payload as { text?: string; content?: string } | null)?.text
+        ?? (payload as { content?: string } | null)?.content
+        ?? '');
+    return parseDiscourseApplicabilityPayload(raw);
   } catch {
     return null;
   }
