@@ -57,7 +57,7 @@ import { noteSemanticAdmission } from '../dev/semanticJourneyEvidence';
 import { proposeReferenceContinuation } from './semanticProvider';
 import { applyCurrentTurnDiscourseApplicability } from './discourseApplicability';
 import { considerCurrentTurnDiscourseCorrection } from './discourseCorrection';
-import { populateCurrentTurnDiscourseMentions } from './discourseMentionProposal';
+import { discourseAdmissionAckSpeech, populateCurrentTurnDiscourseMentions } from './discourseMentionProposal';
 import {
   admitReminiscenceVerbatim,
   suppressCurrentReminiscenceArc,
@@ -2261,6 +2261,7 @@ export async function processUtterance(
     }
     arc.close();
   }
+  let admissionAck: ResponseAct | undefined;
   if (
     discourse
     && routeDecision.kind === 'needs_clarification'
@@ -2304,6 +2305,11 @@ export async function processUtterance(
       await populateCurrentTurnDiscourseMentions(text, mentionCtx, discourse);
     }
     exactlyOneNarrativePerson = discourse.establishTopicFromCommittedPersons(text);
+    const committedSurfaces = discourse.peekDiscourseMentions()
+      .filter((mention) => mention.status === 'active' && mention.sourceTurnId === discourse.currentTurn())
+      .map((mention) => mention.surfaceSpan);
+    const admissionSpeech = discourseAdmissionAckSpeech(committedSurfaces);
+    if (admissionSpeech) admissionAck = acknowledgeAct(admissionSpeech);
     }
   }
   if (
@@ -2319,7 +2325,7 @@ export async function processUtterance(
     };
     continuityReferenceOnly = true;
   }
-  const routeAct = actForRoute(routeDecision);
+  const routeAct = admissionAck ?? actForRoute(routeDecision);
   if (routeDecision.kind === 'device_read' && routeDecision.reason === 'family:read') {
     const intent = detectFamilyRead(text);
     const matches = intent ? listFamilyReadMatches(intent) : [];

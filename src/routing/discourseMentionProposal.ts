@@ -131,6 +131,16 @@ export function acceptDiscourseSpanProposals(
   return { ready, rejected };
 }
 
+/**
+ * Acknowledgement of surfaces already committed this turn.
+ * Lists every surface in admission order. Does not rank, admit, or claim a write.
+ */
+export function discourseAdmissionAckSpeech(surfaces: readonly string[]): string | null {
+  const names = surfaces.map((surface) => surface.trim()).filter((surface) => surface.length > 0);
+  if (names.length === 0) return null;
+  return `Got it — ${names.join(', ')}.`;
+}
+
 /** Populate representation only. Does not choose a response. */
 export async function populateCurrentTurnDiscourseMentions(
   utterance: string,

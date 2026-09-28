@@ -159,7 +159,7 @@ import {
   establishHardPending,
   releaseContactCollect,
 } from '../routing/hardPendingBoundary';
-import { projectRealization } from '../routing/responseAct';
+import { deterministicAcknowledgementSpeech, projectRealization } from '../routing/responseAct';
 import { classifyEmergencyCallReply } from '../utils/emergencyCallConfirm';
 import { ConversationalSubjectHolder } from '../routing/conversationalSubject';
 import { MedicationPresentationHolder } from '../routing/medicationPresentation';
@@ -2107,6 +2107,13 @@ export default function ChatScreen() {
       } else if (outcome.routeDecision.reason === 'ambiguous_operational_list') {
         reply = formatOperationalListClarification(outcome.routeDecision.guess ?? '');
       } else if (outcome.routeDecision.reason === 'default') {
+        const admittedSpeech = deterministicAcknowledgementSpeech(outcome.responseAct);
+        if (admittedSpeech) {
+          reply = admittedSpeech;
+          ledgerOperation = 'conversational';
+          ledgerOutcome = 'presented';
+          ledgerAuthorityTier = 'conversational';
+        } else {
         const adoptedRecovery = adoptContinuationRecoveryCandidates(
           text,
           outcome.continuationRecoveryCandidates,
@@ -2183,6 +2190,7 @@ export default function ChatScreen() {
           hasPending: sessionRef.current.hasPending(),
         })) {
           recoveryObligationRef.current.establish();
+        }
         }
       }
       const realizedClarification = projectRealization(outcome.responseAct, reply);

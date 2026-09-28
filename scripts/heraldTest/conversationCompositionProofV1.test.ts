@@ -136,6 +136,8 @@ function ownerOf(outcome: Awaited<ReturnType<typeof processUtterance>>): string 
 
 function speechOf(outcome: Awaited<ReturnType<typeof processUtterance>>): string {
   if (outcome.handled && outcome.source !== 'emergency') return outcome.responseText;
+  const act = outcome.responseAct;
+  if (act && 'text' in act && act.text.trim()) return act.text;
   return '';
 }
 
@@ -265,9 +267,11 @@ async function conversation1() {
         label: 'c1t1 introduce Elena',
         owner: 'needs_clarification:default',
         applicability: 'zero',
+        act: 'ACKNOWLEDGE',
         active: [{ surface: 'Elena', kind: 'person' }],
         topic: 'Elena',
         durableCommit: false,
+        speechIncludes: ['Got it — Elena.'],
         speechExcludes: FORBIDDEN_SPEECH,
       },
     },
@@ -277,9 +281,12 @@ async function conversation1() {
         label: 'c1t2 add reunion',
         owner: 'needs_clarification:default',
         applicability: 'zero',
+        act: 'ACKNOWLEDGE',
         active: [{ surface: 'Elena', kind: 'person' }, { surface: 'reunion', kind: 'event_or_topic' }],
         topic: 'Elena',
         durableCommit: false,
+        speechIncludes: ['Got it — reunion.'],
+        speechExcludes: ['I saved'],
       },
     },
     {
@@ -288,6 +295,8 @@ async function conversation1() {
         label: 'c1t3 add Ireland',
         owner: 'needs_clarification:default',
         applicability: 'zero',
+        act: 'ACKNOWLEDGE',
+        speechIncludes: ['Got it — Ireland.'],
         active: [
           { surface: 'Elena', kind: 'person' },
           { surface: 'Ireland', kind: 'place' },
@@ -482,15 +491,15 @@ async function conversation2() {
   const turns: Array<{ script: TurnScript; expect: TurnExpect }> = [
     {
       script: { text: 'I had lunch with Nora.', mentions: [{ span: 'Nora', kind: 'person' }], marks: 'suppress' },
-      expect: { label: 'c2t1 introduce Nora', owner: 'needs_clarification:default', applicability: 'zero', active: [{ surface: 'Nora', kind: 'person' }], topic: 'Nora', durableCommit: false },
+      expect: { label: 'c2t1 introduce Nora', owner: 'needs_clarification:default', applicability: 'zero', act: 'ACKNOWLEDGE', active: [{ surface: 'Nora', kind: 'person' }], topic: 'Nora', durableCommit: false, speechIncludes: ['Got it — Nora.'] },
     },
     {
       script: { text: 'Jonas stopped by with her.', mentions: [{ span: 'Jonas', kind: 'person' }], marks: 'suppress' },
-      expect: { label: 'c2t2 introduce Jonas', owner: 'needs_clarification:default', applicability: 'zero', active: [{ surface: 'Jonas', kind: 'person' }, { surface: 'Nora', kind: 'person' }], topic: 'Jonas', durableCommit: false },
+      expect: { label: 'c2t2 introduce Jonas', owner: 'needs_clarification:default', applicability: 'zero', act: 'ACKNOWLEDGE', active: [{ surface: 'Jonas', kind: 'person' }, { surface: 'Nora', kind: 'person' }], topic: 'Jonas', durableCommit: false, speechIncludes: ['Got it — Jonas.'] },
     },
     {
       script: { text: 'He mentioned the wedding.', mentions: [{ span: 'wedding', kind: 'event_or_topic' }], marks: 'suppress' },
-      expect: { label: 'c2t3 shared wedding', owner: 'needs_clarification:default', applicability: 'zero', active: people, topic: 'Jonas', durableCommit: false },
+      expect: { label: 'c2t3 shared wedding', owner: 'needs_clarification:default', applicability: 'zero', act: 'ACKNOWLEDGE', active: people, topic: 'Jonas', durableCommit: false, speechIncludes: ['Got it — wedding.'] },
     },
     {
       script: {
@@ -577,7 +586,7 @@ async function conversation3() {
   const turns: Array<{ script: TurnScript; expect: TurnExpect }> = [
     {
       script: { text: 'We passed through Ireland.', mentions: [{ span: 'Ireland', kind: 'place' }], marks: 'suppress' },
-      expect: { label: 'c3t1 introduce Ireland', owner: 'needs_clarification:default', applicability: 'zero', active: [{ surface: 'Ireland', kind: 'place' }], topic: null, durableCommit: false },
+      expect: { label: 'c3t1 introduce Ireland', owner: 'needs_clarification:default', applicability: 'zero', act: 'ACKNOWLEDGE', active: [{ surface: 'Ireland', kind: 'place' }], topic: null, durableCommit: false, speechIncludes: ['Got it — Ireland.'] },
     },
     {
       script: { text: 'A reunion came up in that same chat.', mentions: [{ span: 'reunion', kind: 'event_or_topic' }], marks: 'suppress' },
@@ -585,6 +594,8 @@ async function conversation3() {
         label: 'c3t2 reunion by co-membership',
         owner: 'needs_clarification:default',
         applicability: 'zero',
+        act: 'ACKNOWLEDGE',
+        speechIncludes: ['Got it — reunion.'],
         active: [{ surface: 'Ireland', kind: 'place' }, { surface: 'reunion', kind: 'event_or_topic' }],
         topic: null,
         durableCommit: false,
@@ -621,6 +632,8 @@ async function conversation3() {
         label: 'c3t5 second place Spain',
         owner: 'needs_clarification:default',
         applicability: 'zero',
+        act: 'ACKNOWLEDGE',
+        speechIncludes: ['Got it — Spain.'],
         active: [{ surface: 'Ireland', kind: 'place' }, { surface: 'Spain', kind: 'place' }, { surface: 'reunion', kind: 'event_or_topic' }],
         topic: null,
         durableCommit: false,
@@ -734,6 +747,50 @@ async function conversation3() {
   check('c3 paraphrase stored no alias', !alias, 'alias mention present');
 }
 
+async function admissionAckListsEverySurface() {
+  await openDb();
+  const discourse = new DiscourseContinuityHolder();
+  const session = new ConversationSession();
+  const deps = {
+    classifyQuery,
+    classifyLLM: null,
+    llmReady: false,
+    llmStatus: 'unavailable' as const,
+  };
+  const both = await processUtterance('I caught up with Elena in Ireland.', session, {
+    ...deps,
+    getMedicationSemanticInterpreterCtx: () => ({
+      completion: completionFor({
+        text: 'I caught up with Elena in Ireland.',
+        mentions: [{ span: 'Elena', kind: 'person' }, { span: 'Ireland', kind: 'place' }],
+        marks: 'suppress',
+      }),
+    }),
+  }, null, null, null, null, null, discourse);
+  const speech = speechOf(both);
+  check(
+    'admission ack names every committed surface',
+    both.handled === false
+      && actOf(both) === 'ACKNOWLEDGE'
+      && speech === 'Got it — Elena, Ireland.'
+      && both.continuityFocus?.displayValue === 'Elena'
+      && discourse.peekTopic()?.displayName === 'Elena'
+      && !/saved|updated/i.test(speech),
+    `${actOf(both)} ${speech} focus=${both.handled ? '' : both.continuityFocus?.displayValue ?? ''}`,
+  );
+  const quiet = await processUtterance('The sky looks grey today.', session, {
+    ...deps,
+    getMedicationSemanticInterpreterCtx: () => ({
+      completion: completionFor({ text: 'The sky looks grey today.', mentions: [], marks: 'suppress' }),
+    }),
+  }, null, null, null, null, null, discourse);
+  check(
+    'ungrounded default does not invent an acknowledgement',
+    speechOf(quiet) === '' && actOf(quiet) !== 'ACKNOWLEDGE',
+    `${actOf(quiet)} ${speechOf(quiet)}`,
+  );
+}
+
 async function conversation4() {
   console.log(`\n${BOLD}conversation 4 — discourse is not contact or medical authority${RESET}`);
   const db = await openDb();
@@ -743,9 +800,11 @@ async function conversation4() {
     label: 'c4t1 conversational Elena',
     owner: 'needs_clarification:default',
     applicability: 'zero',
+    act: 'ACKNOWLEDGE',
     active: [{ surface: 'Elena', kind: 'person' }],
     topic: 'Elena',
     durableCommit: false,
+    speechIncludes: ['Got it — Elena.'],
   });
   await runTurn(discourse, session, { text: 'What about Elena?', marks: 'suppress' }, {
     label: 'c4t2 Elena stays conversational',
@@ -790,6 +849,7 @@ export async function runConversationCompositionProofV1Tests() {
   failures.length = 0;
   CLUNKY.length = 0;
   await conversation1();
+  await admissionAckListsEverySurface();
   await conversation2();
   await conversation3();
   await conversation4();

@@ -96,6 +96,17 @@ export function actForRoute(decision: { kind: string; reason?: string; response?
   return undefined;
 }
 
+/**
+ * A selected acknowledgement already owns the spoken turn.
+ * Empty text, or an act that claims memory or a write, does not.
+ */
+export function deterministicAcknowledgementSpeech(act: ResponseAct | undefined): string | null {
+  if (!act || act.kind !== 'ACKNOWLEDGE') return null;
+  if (act.impliesMemory || act.impliesWrite || act.impliesContinuation) return null;
+  if (!act.text.trim()) return null;
+  return act.text;
+}
+
 /** Project an already-selected act. Empty payload keeps the caller's wording. The kind is not recomputed. */
 export function projectRealization(act: ResponseAct | undefined, realizedSpeech: string): { act?: ResponseAct; speech: string } {
   if (!act || act.text.length === 0) return { act, speech: realizedSpeech };
