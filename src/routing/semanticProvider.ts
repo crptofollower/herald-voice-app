@@ -301,10 +301,12 @@ const APPLICABILITY_FORBIDDEN_KEYS = [
 ];
 
 export const DISCOURSE_APPLICABILITY_PROMPT =
-  'Reply with JSON only. Keys are utterance_applicable and marks. Each mark has handle and mark. mark is compatible, incompatible, or uncertain. Do not choose a winner.';
+  'Reply with JSON only. Keys are utterance_applicable, marks, and reference_attempt. reference_attempt is a boolean: true only when this utterance is trying to refer back to the conversation, otherwise false. It must not name a candidate. Each mark has handle and mark. mark is compatible, incompatible, or uncertain. Do not choose a winner.';
 
 export type DiscourseApplicabilityPayload = {
   utteranceApplicable: boolean;
+  /** Admitted only when the provider boolean is true. Never a name or a handle. */
+  referenceAttempt: boolean;
   marks: Array<{ handle: string; mark: string }>;
 };
 
@@ -333,6 +335,7 @@ export function parseDiscourseApplicabilityPayload(raw: string): DiscourseApplic
   if (applicabilityValueHasForbiddenKey(parsed)) return null;
   const row = parsed as Record<string, unknown>;
   if (typeof row.utterance_applicable !== 'boolean' || !Array.isArray(row.marks)) return null;
+  if ('reference_attempt' in row && typeof row.reference_attempt !== 'boolean') return null;
   const marks: Array<{ handle: string; mark: string }> = [];
   for (const item of row.marks) {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
@@ -344,7 +347,11 @@ export function parseDiscourseApplicabilityPayload(raw: string): DiscourseApplic
     }
     marks.push({ handle: markRow.handle, mark: markRow.mark });
   }
-  return { utteranceApplicable: row.utterance_applicable, marks };
+  return {
+    utteranceApplicable: row.utterance_applicable,
+    referenceAttempt: row.reference_attempt === true,
+    marks,
+  };
 }
 
 export async function proposeDiscourseApplicability(

@@ -91,7 +91,7 @@ function completionFor(turn: TurnScript) {
     }
     if (prompt.startsWith(DISCOURSE_APPLICABILITY_PROMPT)) {
       if (!turn.marks || turn.marks === 'suppress') {
-        return { text: JSON.stringify({ utterance_applicable: false, marks: [] }) };
+        return { text: JSON.stringify({ utterance_applicable: false, reference_attempt: false, marks: [] }) };
       }
       const cards = packet(prompt).candidates ?? [];
       const marks = cards.map((card) => ({
@@ -100,7 +100,7 @@ function completionFor(turn: TurnScript) {
           ? 'compatible'
           : 'incompatible',
       }));
-      return { text: JSON.stringify({ utterance_applicable: true, marks }) };
+      return { text: JSON.stringify({ utterance_applicable: true, reference_attempt: true, marks }) };
     }
     if (prompt.startsWith(DISCOURSE_MENTION_PROPOSAL_PROMPT)) {
       return { text: JSON.stringify(turn.mentions ?? []) };

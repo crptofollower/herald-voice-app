@@ -33,6 +33,7 @@ export type DiscourseApplicabilityCandidate = DiscourseApplicabilityCard & {
 
 export type DiscourseApplicabilityAdmission =
   | { outcome: 'zero' }
+  | { outcome: 'unresolved' }
   | {
       outcome: 'one';
       handle: string;
@@ -183,6 +184,11 @@ function clarifySpeech(surfaces: readonly string[]): string {
   return `Which of these should I continue: ${surfaces.join(', ')}?`;
 }
 
+/** Existing referent clarification. Names no candidate and claims no referent. */
+export function unresolvedReferenceSpeech(): string {
+  return "I'm not sure which one you mean.";
+}
+
 function oneResult(candidate: DiscourseApplicabilityCandidate): DiscourseApplicabilityAdmission {
   return {
     outcome: 'one',
@@ -277,6 +283,7 @@ export async function applyCurrentTurnDiscourseApplicability(
     return null;
   }
   if (!parsed) return null;
+  if (!parsed.referenceAttempt) return null;
   const marked = admitDiscourseApplicability({
     candidates,
     disclosedHandles,
@@ -285,5 +292,6 @@ export async function applyCurrentTurnDiscourseApplicability(
     structuralAllowedHandles: null,
     exactHandles: null,
   });
-  return marked.outcome === 'zero' ? null : marked;
+  if (marked.outcome === 'zero') return { outcome: 'unresolved' };
+  return marked;
 }

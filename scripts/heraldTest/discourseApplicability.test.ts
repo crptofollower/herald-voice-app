@@ -12,8 +12,11 @@ import {
   TOPIC_EVIDENCE_MAX_CHARS,
   type DiscourseMentionProposal,
 } from '../../src/routing/discourseContinuity.ts';
+import { answerActiveSubjectReference } from '../../src/routing/activeSubjectReference.ts';
 import {
   DISCOURSE_APPLICABILITY_PROMPT,
+  DISCOURSE_CORRECTION_PROMPT,
+  DISCOURSE_MENTION_PROPOSAL_PROMPT,
   parseDiscourseApplicabilityPayload,
 } from '../../src/routing/semanticProvider.ts';
 import {
@@ -23,8 +26,11 @@ import {
   discourseApplicabilityCards,
   exactActiveSurfaceHandles,
   priorActiveDiscourseCandidates,
+  unresolvedReferenceSpeech,
   type DiscourseApplicabilityCandidate,
 } from '../../src/routing/discourseApplicability.ts';
+import { isEligibleForEphemeralConversation } from '../../src/utils/ephemeralConversation.ts';
+import { mayRunGenerativeEphemeralPersonalProse } from '../../src/utils/ephemeralSeam.ts';
 import { resetSemanticCompletionLifecycleForTests } from '../../src/utils/semanticCompletionLifecycle.ts';
 
 const GREEN = '\x1b[32m', RED = '\x1b[31m', BOLD = '\x1b[1m', RESET = '\x1b[0m';
@@ -457,6 +463,7 @@ export async function runDiscourseApplicabilityTests() {
             return {
               text: JSON.stringify({
                 utterance_applicable: true,
+                reference_attempt: true,
                 marks: [
                   { handle: ids.get('trip'), mark: 'compatible' },
                   { handle: ids.get('Martin'), mark: 'incompatible' },
@@ -531,6 +538,306 @@ export async function runDiscourseApplicabilityTests() {
     const epsilon = prior.find((item) => item.surfaceSpan === 'epsilon');
     assert('co-member disclosure stops at three surfaces',
       epsilon?.coMembers.length === 3);
+  }
+
+  {
+    const absent = parseDiscourseApplicabilityPayload(JSON.stringify({
+      utterance_applicable: true,
+      marks: [{ handle: 'dmIreland', mark: 'compatible' }],
+    }));
+    const admittedFlag = parseDiscourseApplicabilityPayload(JSON.stringify({
+      utterance_applicable: true,
+      reference_attempt: true,
+      marks: [{ handle: 'dmIreland', mark: 'uncertain' }],
+    }));
+    const named = parseDiscourseApplicabilityPayload(JSON.stringify({
+      utterance_applicable: true,
+      reference_attempt: 'Elena',
+      marks: [{ handle: 'dmIreland', mark: 'compatible' }],
+    }));
+    const winner = parseDiscourseApplicabilityPayload(JSON.stringify({
+      utterance_applicable: true,
+      reference_attempt: true,
+      winner: 'dmIreland',
+      marks: [{ handle: 'dmIreland', mark: 'compatible' }],
+    }));
+    assert('a missing reference attempt is not admitted', absent?.referenceAttempt === false);
+    assert('a boolean reference attempt is admitted without naming a candidate',
+      admittedFlag?.referenceAttempt === true && admittedFlag.marks[0]?.mark === 'uncertain');
+    assert('a named reference attempt is rejected', named === null);
+    assert('a winner field still rejects the payload', winner === null);
+    assert('the applicability prompt asks for a boolean reference attempt and still forbids a winner',
+      DISCOURSE_APPLICABILITY_PROMPT.includes('reference_attempt is a boolean')
+      && DISCOURSE_APPLICABILITY_PROMPT.includes('must not name a candidate')
+      && DISCOURSE_APPLICABILITY_PROMPT.includes('Do not choose a winner'));
+  }
+
+  const deps = { classifyQuery, classifyLLM: null, llmReady: false, llmStatus: 'unavailable' as const };
+  const counts = () => ({
+    contacts: getDB().getAllSync('SELECT id FROM contacts').length,
+    medications: getDB().getAllSync('SELECT id FROM medications').length,
+    lists: getDB().getAllSync('SELECT body FROM list_items').length,
+  });
+
+  function promptPacket(prompt: string) {
+    return JSON.parse(prompt.slice(prompt.indexOf('\n') + 1)) as {
+      candidates?: Array<{ handle: string; kind: string; surfaceSpan: string }>;
+    };
+  }
+
+  async function speak(
+    discourse: DiscourseContinuityHolder,
+    text: string,
+    completion: (params: { prompt?: string }) => Promise<{ text: string }>,
+  ) {
+    return processUtterance(text, new ConversationSession(), {
+      ...deps,
+      getMedicationSemanticInterpreterCtx: () => ({ completion }),
+    }, null, null, null, null, null, discourse);
+  }
+
+  function applicabilityReply(
+    referenceAttempt: boolean,
+    marks: Array<{ handle: string; mark: string }>,
+  ) {
+    return async (params: { prompt?: string }) => {
+      const prompt = params.prompt ?? '';
+      if (prompt.startsWith(DISCOURSE_CORRECTION_PROMPT)) {
+        return { text: JSON.stringify({ correction_turn: false, target_marks: [], replacement_marks: [] }) };
+      }
+      if (prompt.startsWith(DISCOURSE_MENTION_PROPOSAL_PROMPT)) return { text: '[]' };
+      if (prompt.startsWith(DISCOURSE_APPLICABILITY_PROMPT)) {
+        return { text: JSON.stringify({ utterance_applicable: true, reference_attempt: referenceAttempt, marks }) };
+      }
+      return { text: '[]' };
+    };
+  }
+
+  {
+    const discourse = new DiscourseContinuityHolder();
+    discourse.beginUserTurn();
+    commitPerson(discourse, 'I caught up with Elena yesterday.', 'Elena');
+    discourse.beginUserTurn();
+    const id = discourse.peekDiscourseMentions().find((item) => item.surfaceSpan === 'Elena')?.mentionId ?? '';
+    const one = await speak(discourse, 'How is that going?', applicabilityReply(true, [
+      { handle: id, mark: 'compatible' },
+    ]));
+    const speech = one.handled && one.source !== 'emergency' ? one.responseText : '';
+    assert('an admitted reference with one compatible candidate keeps deterministic reflection',
+      one.handled === true
+      && one.source === 'discourse_reflection'
+      && one.responseAct?.kind === 'REFLECT_CURRENT_TURN'
+      && speech.includes('Elena')
+      && one.commits.length === 0);
+  }
+
+  {
+    const discourse = new DiscourseContinuityHolder();
+    discourse.beginUserTurn();
+    commitPerson(discourse, 'I had lunch with Nora.', 'Nora');
+    discourse.beginUserTurn();
+    commitPerson(discourse, 'Jonas stopped by.', 'Jonas');
+    discourse.beginUserTurn();
+    const handles = new Map(discourse.peekDiscourseMentions().map((item) => [item.surfaceSpan, item.mentionId]));
+    const many = await speak(discourse, 'How are they feeling about it?', applicabilityReply(true, [
+      { handle: handles.get('Nora') ?? '', mark: 'compatible' },
+      { handle: handles.get('Jonas') ?? '', mark: 'compatible' },
+    ]));
+    const speech = many.handled && many.source !== 'emergency' ? many.responseText : '';
+    assert('an admitted reference with two compatible candidates clarifies and picks neither',
+      many.handled === true
+      && many.responseAct?.kind === 'CLARIFY_REFERENCE'
+      && speech.includes('Nora')
+      && speech.includes('Jonas')
+      && !speech.startsWith('We were talking about'));
+  }
+
+  {
+    const discourse = new DiscourseContinuityHolder();
+    discourse.beginUserTurn();
+    commitPerson(discourse, 'I caught up with Elena yesterday.', 'Elena');
+    discourse.beginUserTurn();
+    const id = discourse.peekDiscourseMentions().find((item) => item.surfaceSpan === 'Elena')?.mentionId ?? '';
+    const before = counts();
+    const zero = await speak(discourse, 'How is that going?', applicabilityReply(true, [
+      { handle: id, mark: 'uncertain' },
+    ]));
+    const speech = zero.handled && zero.source !== 'emergency' ? zero.responseText : '';
+    const after = counts();
+    const proc = fs.readFileSync(path.join(ROOT, 'src/routing/processUtterance.ts'), 'utf8');
+    const at = proc.indexOf("applied?.outcome === 'unresolved'");
+    const branch = proc.slice(at, at + 480);
+    const chat = fs.readFileSync(path.join(ROOT, 'src/screens/ChatScreen.tsx'), 'utf8');
+    assert('an admitted reference with zero compatible candidates is an unresolved clarification',
+      zero.handled === true
+      && zero.source === 'discourse_unresolved_reference'
+      && zero.responseAct?.kind === 'CLARIFY_REFERENCE'
+      && speech === unresolvedReferenceSpeech()
+      && !speech.includes('Elena')
+      && zero.commits.length === 0);
+    assert('uncertain compatibility does not become the winner',
+      speech !== 'We were talking about Elena.'
+      && !speech.includes('Elena'));
+    assert('unresolved reference writes no contact, medication, or list row',
+      after.contacts === before.contacts
+      && after.medications === before.medications
+      && after.lists === before.lists);
+    assert('the unresolved act does not hand the live topic to generation',
+      !branch.includes('peekTopic')
+      && !branch.includes('discourseFieldsForGenerateSite')
+      && !branch.includes('buildVerifiedConversationalPacket')
+      && chat.indexOf('if (outcome.handled) {') < chat.indexOf("resolveEphemeralSeamGateADiag('needs_clarification'"));
+  }
+
+  {
+    const freshText = 'The sky looks grey today.';
+    const discourse = new DiscourseContinuityHolder();
+    discourse.beginUserTurn();
+    commitPerson(discourse, 'I caught up with Elena yesterday.', 'Elena');
+    discourse.beginUserTurn();
+    const id = discourse.peekDiscourseMentions().find((item) => item.surfaceSpan === 'Elena')?.mentionId ?? '';
+    const fresh = await speak(discourse, freshText, applicabilityReply(false, [
+      { handle: id, mark: 'compatible' },
+    ]));
+    const eligible = isEligibleForEphemeralConversation(freshText, false);
+    const mayGenerate = mayRunGenerativeEphemeralPersonalProse({
+      reason: 'default',
+      text: freshText,
+      hasAuthorizedContinuation: false,
+      hasPendingSession: false,
+      hasContactCollectPending: false,
+      isEligible: eligible,
+      threadEvidence: '',
+    });
+    assert('a fresh turn stays eligible for ephemeral conversation while a person remains active',
+      fresh.handled === false
+      && fresh.routeDecision.kind === 'needs_clarification'
+      && fresh.routeDecision.reason === 'default'
+      && eligible
+      && mayGenerate
+      && discourse.peekDiscourseMentions().some((item) => item.status === 'active' && item.surfaceSpan === 'Elena'));
+    assert('a compatible mark does not select a referent when the reference attempt is not admitted',
+      fresh.handled === false
+      && fresh.responseAct?.kind === 'UNKNOWN');
+  }
+
+  {
+    const discourse = new DiscourseContinuityHolder();
+    discourse.beginUserTurn();
+    commitPerson(discourse, 'I caught up with Elena yesterday.', 'Elena');
+    discourse.beginUserTurn();
+    const id = discourse.peekDiscourseMentions().find((item) => item.surfaceSpan === 'Elena')?.mentionId ?? '';
+    const sky = await speak(discourse, 'The sky looks grey today.', applicabilityReply(true, [
+      { handle: id, mark: 'uncertain' },
+    ]));
+    const speech = sky.handled && sky.source !== 'emergency' ? sky.responseText : '';
+    assert('an admitted reference attempt is unresolved even when the wording looks like a new topic',
+      sky.handled === true
+      && sky.source === 'discourse_unresolved_reference'
+      && speech === unresolvedReferenceSpeech()
+      && !speech.includes('Elena'));
+  }
+
+  {
+    const discourse = new DiscourseContinuityHolder();
+    discourse.beginUserTurn();
+    const introduced = await speak(
+      discourse,
+      'I caught up with Elena yesterday.',
+      async (params) => {
+        const prompt = params.prompt ?? '';
+        if (prompt.startsWith(DISCOURSE_MENTION_PROPOSAL_PROMPT)) {
+          return { text: JSON.stringify([{ span: 'Elena', kind: 'person' }]) };
+        }
+        return { text: '[]' };
+      },
+    );
+    const ack = introduced.handled ? '' : (introduced.responseAct?.kind === 'ACKNOWLEDGE' ? introduced.responseAct.text : '');
+    discourse.beginUserTurn();
+    const corrected = await speak(discourse, 'No, I meant Sarah.', async (params) => {
+      const prompt = params.prompt ?? '';
+      if (prompt.startsWith(DISCOURSE_CORRECTION_PROMPT)) {
+        const cards = promptPacket(prompt).candidates ?? [];
+        return { text: JSON.stringify({
+          correction_turn: true,
+          target_marks: cards.map((card) => ({
+            handle: card.handle,
+            mark: card.surfaceSpan === 'Elena' && card.kind === 'person' ? 'compatible' : 'incompatible',
+          })),
+          replacement_marks: cards.map((card) => ({ handle: card.handle, mark: 'incompatible' })),
+          new_spans: [{ span: 'Sarah', kind: 'person' }],
+        }) };
+      }
+      return { text: '[]' };
+    });
+    discourse.beginUserTurn();
+    const sarahId = discourse.peekDiscourseMentions().find((item) => item.surfaceSpan === 'Sarah')?.mentionId ?? '';
+    const before = counts();
+    const unresolved = await speak(discourse, 'What about Elena?', applicabilityReply(true, [
+      { handle: sarahId, mark: 'uncertain' },
+    ]));
+    const speech = unresolved.handled && unresolved.source !== 'emergency' ? unresolved.responseText : '';
+    const after = counts();
+    const elena = discourse.peekDiscourseMentions().find((item) => item.surfaceSpan === 'Elena');
+    const sarah = discourse.peekDiscourseMentions().find((item) => item.surfaceSpan === 'Sarah');
+    assert('grounded mention acknowledgement still owns the introduction',
+      introduced.handled === false && ack === 'Got it — Elena.');
+    assert('a corrected-away person is not resurrected or replaced on an unresolved reference',
+      corrected.handled === true
+      && corrected.source === 'discourse_correction'
+      && elena?.status === 'corrected_away'
+      && sarah?.status === 'active'
+      && unresolved.handled === true
+      && unresolved.source === 'discourse_unresolved_reference'
+      && speech === unresolvedReferenceSpeech()
+      && !speech.includes('Elena')
+      && !speech.includes('Sarah')
+      && unresolved.commits.length === 0
+      && after.contacts === before.contacts
+      && after.medications === before.medications
+      && after.lists === before.lists);
+  }
+
+  {
+    const discourse = new DiscourseContinuityHolder();
+    discourse.beginUserTurn();
+    await speak(discourse, 'I caught up with Elena yesterday.', async (params) => {
+      const prompt = params.prompt ?? '';
+      if (prompt.startsWith(DISCOURSE_MENTION_PROPOSAL_PROMPT)) {
+        return { text: JSON.stringify([{ span: 'Elena', kind: 'person' }]) };
+      }
+      return { text: '[]' };
+    });
+    discourse.beginUserTurn();
+    const grocery = await speak(discourse, 'Add oats to my grocery list.', async () => ({ text: '[]' }));
+    discourse.beginUserTurn();
+    const todo = await speak(discourse, 'add buy stamps to my todo list', async () => ({ text: '[]' }));
+    discourse.beginUserTurn();
+    const back = await speak(discourse, 'What about Elena?', async () => ({ text: '[]' }));
+    const identityRoute = await speak(discourse, 'Who was I talking about?', async () => ({ text: '[]' }));
+    const identity = await answerActiveSubjectReference('Who was I talking about?', {
+      ledgerEntries: [],
+      discourseMentions: discourse.peekDiscourseMentions(),
+    });
+    const backSpeech = back.handled && back.source !== 'emergency' ? back.responseText : '';
+    assert('grocery and todo turns leave the active person in place',
+      grocery.handled === true
+      && grocery.source === 'capture'
+      && todo.handled === true
+      && todo.source === 'capture'
+      && discourse.peekDiscourseMentions().some((item) => item.status === 'active' && item.surfaceSpan === 'Elena')
+      && getDB().getAllSync<{ body: string }>('SELECT body FROM list_items').some((item) => item.body === 'oats')
+      && getDB().getAllSync<{ body: string }>('SELECT body FROM list_items').some((item) => item.body === 'buy stamps'));
+    assert('an exact return after a capability turn stays a deterministic reflection',
+      back.handled === true
+      && back.source === 'discourse_reflection'
+      && backSpeech.includes('Elena'));
+    assert('a closed identity question stays a deterministic discourse read',
+      identityRoute.handled === false
+      && identityRoute.routeDecision.reason === 'active_subject_identity'
+      && identity.handled === true
+      && identity.kind === 'identity'
+      && identity.reply === 'You were talking about Elena.');
   }
 
   const total = passed + failures.length;

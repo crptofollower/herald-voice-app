@@ -55,7 +55,7 @@ import { isClosedActiveSubjectIdentityLookup, ACTIVE_SUBJECT_GROUNDING_ACK } fro
 import { admitGroundedContinuation, admitGroundedUnavailability } from './workingFocusReference';
 import { noteSemanticAdmission } from '../dev/semanticJourneyEvidence';
 import { proposeReferenceContinuation } from './semanticProvider';
-import { applyCurrentTurnDiscourseApplicability } from './discourseApplicability';
+import { applyCurrentTurnDiscourseApplicability, unresolvedReferenceSpeech } from './discourseApplicability';
 import { considerCurrentTurnDiscourseCorrection } from './discourseCorrection';
 import { discourseAdmissionAckSpeech, populateCurrentTurnDiscourseMentions } from './discourseMentionProposal';
 import {
@@ -191,7 +191,7 @@ export type RouteDeps = Parameters<typeof routeIntent>[1];
 export type UtteranceOutcome =
   | {
       handled: true;
-      source: 'pending_resume' | 'capture' | 'referent_resume' | 'interpretation' | 'hold_recall' | 'hold_continuity' | 'recent_add_recall' | 'recollection' | 'recovery_obligation' | 'discourse_reflection' | 'discourse_correction';
+      source: 'pending_resume' | 'capture' | 'referent_resume' | 'interpretation' | 'hold_recall' | 'hold_continuity' | 'recent_add_recall' | 'recollection' | 'recovery_obligation' | 'discourse_reflection' | 'discourse_correction' | 'discourse_unresolved_reference';
       responseText: string;
       commits: CommitResult[];
       /** Presentation hint only. Never speech-parsed. Never a conversational machine. */
@@ -2299,6 +2299,16 @@ export async function processUtterance(
         responseText: applied.speech,
         commits: [],
         responseAct: clarifyReferenceAct(applied.speech),
+      };
+    }
+    if (applied?.outcome === 'unresolved') {
+      const responseText = unresolvedReferenceSpeech();
+      return {
+        handled: true,
+        source: 'discourse_unresolved_reference',
+        responseText,
+        commits: [],
+        responseAct: clarifyReferenceAct(responseText),
       };
     }
     if (mentionCtx) {
