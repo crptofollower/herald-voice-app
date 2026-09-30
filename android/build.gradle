@@ -22,3 +22,19 @@ allprojects {
 
 apply plugin: "expo-root-project"
 apply plugin: "com.facebook.react.rootproject"
+
+// Worklets builds libworklets.so. Reanimated only links that binary, but its
+// CMake output also receives a copy and the library package would ship it.
+// Keep the producer copy; do not exclude it from the application.
+subprojects { subproject ->
+    subproject.plugins.withId("com.android.library") {
+        if (subproject.name != "react-native-reanimated") {
+            return
+        }
+        subproject.androidComponents {
+            onVariants(selector().all()) { variant ->
+                variant.packaging.jniLibs.excludes.add("**/libworklets.so")
+            }
+        }
+    }
+}
