@@ -11,7 +11,8 @@
 //     structurally obvious immediate-recap shapes ("what did I just tell
 //     you", "what did I just say", "remind me what I said"). Fast path
 //     only — it is NOT the complete mechanism.
-//   Stage B — when Stage A is not confident, a bounded local semantic
+//   Stage B — when Stage A is not confident and the utterance is
+//     structurally question-shaped, a bounded local semantic
 //     interpreter (same discipline as medicationSemanticInterpretation.ts:
 //     strict parse/validate, no coercion, confidence never grants trust by
 //     itself) may PROPOSE that the turn is an immediate-recap request and
@@ -155,6 +156,17 @@ export function classifyImmediateRecapDeterministic(text: string): boolean {
   if (ASSISTANT_RECAP_RE.test(t)) return false;
   if (recapYieldsToActiveSubject(t)) return false;
   return IMMEDIATE_RECAP_RE.test(t) || REMIND_ME_RE.test(t);
+}
+
+/** Reachability only. The same structural question class already used to
+ *  separate a narrative continuation from a question: a trailing question
+ *  mark, or a sentence-initial WH-word or auxiliary. Not a recap phrase
+ *  list, and not a decision that the turn is a recap. */
+function isStructurallyQuestionShaped(text: string): boolean {
+  const t = normalizeContractions(text.trim());
+  if (!t) return false;
+  if (/\?\s*$/.test(t)) return true;
+  return /^(?:who|what|when|where|why|how|which|did|was|were|is|are|do|does)\b/i.test(t);
 }
 
 // ─── Candidate focus construction (bounded, real ledger evidence only) ────
@@ -495,14 +507,23 @@ export async function answerImmediateSemanticRecap(
     };
   }
 
-  // Stage A did not confidently classify — fall back to bounded semantic
-  // interpretation only if there is anything to interpret against and an
-  // interpreter context is actually available.
+  // Stage A did not confidently classify. No candidates, or no interpreter
+  // function, keeps the existing fail-closed result.
   if (candidates.length === 0 || !deps.getInterpreterCtx) {
     emitDiag({
       stageB: candidates.length === 0 ? { status: 'not_invoked' } : { status: 'no_interpreter_context' },
       selectedCandidateIndex: null, selectedCandidateTier: null, adapterFound: null, rereadOutcome: 'not_applicable',
       finalResult: candidates.length === 0 ? 'no_candidate' : 'not_recap',
+    });
+    return { handled: false };
+  }
+  // Candidate presence is not evidence that this turn is asking for a recap.
+  // Ordinary declaratives do not consult Stage B.
+  if (!isStructurallyQuestionShaped(text)) {
+    emitDiag({
+      stageB: { status: 'not_invoked' },
+      selectedCandidateIndex: null, selectedCandidateTier: null, adapterFound: null, rereadOutcome: 'not_applicable',
+      finalResult: 'not_recap',
     });
     return { handled: false };
   }

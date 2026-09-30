@@ -18,6 +18,8 @@ import {
   answerImmediateSemanticRecap,
   RECAP_REREAD_ADAPTERS,
 } from '../../src/routing/immediateSemanticRecap.ts';
+import { answerActiveSubjectReference } from '../../src/routing/activeSubjectReference.ts';
+import { isEligibleForEphemeralConversation } from '../../src/utils/ephemeralConversation.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
 
@@ -312,6 +314,136 @@ export async function runImmediateSemanticRecapTests() {
     const commit = rec({ turnIndex: 1, focus: [{ kind: 'thing', displayValue: 'Eliquis', resolverKey: 'med_1', referable: true, tier: 'authoritative' }] });
     const outcome = await answerImmediateSemanticRecap('What was that medication I mentioned?', { ledgerEntries: [commit] });
     assertTrue('STAGE-B unavailable (no interpreter ctx) → not handled, falls through honestly', outcome.handled === false);
+  }
+
+  console.log(`\n${BOLD}-- Stage B only when the utterance is structurally a question --${RESET}`);
+  function hostileRecapCtx(reads: { n: number }, completions: { n: number }) {
+    return () => {
+      reads.n += 1;
+      return {
+        completion: async () => {
+          completions.n += 1;
+          return { text: '{"isImmediateRecap":true,"selectedIndex":0,"confidence":0.99}' };
+        },
+      } as any;
+    };
+  }
+  {
+    const commit = rec({ focus: [{ kind: 'person', displayValue: 'Alina', resolverKey: 'p_1', referable: true, tier: 'authoritative' }] });
+    const reads = { n: 0 };
+    const completions = { n: 0 };
+    const outcome = await answerImmediateSemanticRecap('The sky looks grey today.', {
+      ledgerEntries: [commit],
+      getInterpreterCtx: hostileRecapCtx(reads, completions),
+    });
+    const subject = await answerActiveSubjectReference('The sky looks grey today.', { ledgerEntries: [commit] });
+    assertTrue('fresh declarative with a candidate does not invoke Stage B',
+      outcome.handled === false && reads.n === 0 && completions.n === 0);
+    assertTrue('fresh declarative still reaches ephemeral conversation after recap and active subject decline',
+      subject.handled === false && isEligibleForEphemeralConversation('The sky looks grey today.') === true);
+  }
+  {
+    const commit = rec({ focus: [{ kind: 'person', displayValue: 'Alina', resolverKey: 'p_1', referable: true, tier: 'authoritative' }] });
+    const reads = { n: 0 };
+    const completions = { n: 0 };
+    const utterance = 'She told me about the lake.';
+    const outcome = await answerImmediateSemanticRecap(utterance, {
+      ledgerEntries: [commit],
+      getInterpreterCtx: hostileRecapCtx(reads, completions),
+    });
+    const subject = await answerActiveSubjectReference(utterance, { ledgerEntries: [commit] });
+    const focus = subject.handled && subject.kind === 'grounding' ? subject.focus : [];
+    assertTrue('declarative continuation with a candidate does not invoke Stage B',
+      !classifyImmediateRecapDeterministic(utterance)
+      && outcome.handled === false
+      && reads.n === 0
+      && completions.n === 0);
+    assertTrue('skipped Stage B still reaches the grounding continuation',
+      subject.handled === true
+      && subject.kind === 'grounding'
+      && subject.reply === 'Okay.'
+      && focus[0]?.displayValue === 'Alina');
+  }
+  {
+    const commit = rec({ focus: [{ kind: 'thing', displayValue: 'Eliquis', referable: true, tier: 'llm_proposal' }] });
+    const reads = { n: 0 };
+    const utterance = 'What was that thing I said?';
+    const outcome = await answerImmediateSemanticRecap(utterance, {
+      ledgerEntries: [commit],
+      getInterpreterCtx: hostileRecapCtx(reads, { n: 0 }),
+    });
+    assertTrue('a legitimate self-recap question still reaches Stage B',
+      !classifyImmediateRecapDeterministic(utterance)
+      && reads.n === 1
+      && outcome.handled === true
+      && outcome.kind === 'proposal_recap');
+  }
+  {
+    const commit = rec({ focus: [{ kind: 'thing', displayValue: 'Eliquis', resolverKey: 'med_1', referable: true, tier: 'authoritative' }] });
+    const reads = { n: 0 };
+    const outcome = await answerImmediateSemanticRecap('What was that medication I mentioned?', {
+      ledgerEntries: [commit],
+      getInterpreterCtx: hostileRecapCtx(reads, { n: 0 }),
+    });
+    assertTrue('What was that medication I mentioned? still reaches Stage B',
+      reads.n === 1 && outcome.handled === true && outcome.kind === 'capability_gap');
+  }
+  {
+    const commit = rec({
+      focus: [{ kind: 'thing', displayValue: 'Eliquis', resolverKey: 'med_1', referable: true, tier: 'authoritative' }],
+      intentType: 'medical_capture',
+    });
+    const reads = { n: 0 };
+    const utterance = 'Which medicine was I talking about?';
+    const outcome = await answerImmediateSemanticRecap(utterance, {
+      ledgerEntries: [commit],
+      getInterpreterCtx: hostileRecapCtx(reads, { n: 0 }),
+    });
+    const subject = await answerActiveSubjectReference(utterance, { ledgerEntries: [commit] });
+    assertTrue('Which medicine was I talking about? stays with active subject and does not enter Stage B',
+      outcome.handled === false
+      && reads.n === 0
+      && subject.handled === true
+      && subject.kind === 'identity'
+      && subject.reply === 'You were talking about Eliquis.');
+  }
+  {
+    const reads = { n: 0 };
+    const outcome = await answerImmediateSemanticRecap('What was that medication I mentioned?', {
+      ledgerEntries: [],
+      getInterpreterCtx: hostileRecapCtx(reads, { n: 0 }),
+    });
+    assertTrue('a question with no candidates keeps the existing miss and does not invoke Stage B',
+      outcome.handled === false && reads.n === 0);
+  }
+  {
+    const commit = rec({ focus: [{ kind: 'person', displayValue: 'Alina', referable: true, tier: 'llm_proposal' }] });
+    const reads = { n: 0 };
+    const outcome = await answerImmediateSemanticRecap('What did I just tell you?', {
+      ledgerEntries: [commit],
+      getInterpreterCtx: hostileRecapCtx(reads, { n: 0 }),
+    });
+    assertTrue('Stage A still owns a closed recap and does not invoke Stage B',
+      outcome.handled === true && outcome.kind === 'proposal_recap' && reads.n === 0);
+  }
+  {
+    const commit = rec({ focus: [{ kind: 'thing', displayValue: 'Eliquis', referable: true, tier: 'llm_proposal' }] });
+    const reads = { n: 0 };
+    const malformed = await answerImmediateSemanticRecap('What was that thing I said?', {
+      ledgerEntries: [commit],
+      getInterpreterCtx: () => {
+        reads.n += 1;
+        return { completion: async () => ({ text: 'not json' }) } as any;
+      },
+    });
+    const unavailable = await answerImmediateSemanticRecap('What was that thing I said?', {
+      ledgerEntries: [commit],
+      getInterpreterCtx: () => null,
+    });
+    assertTrue('malformed Stage B stays fail-closed after the question is reached',
+      reads.n === 1 && malformed.handled === false);
+    assertTrue('unavailable Stage B stays fail-closed',
+      unavailable.handled === false);
   }
 
   console.log(`\n${BOLD}-- Pending authority: consumer never sees a pending-armed turn --${RESET}`);
