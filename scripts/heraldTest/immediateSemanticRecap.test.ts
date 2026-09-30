@@ -446,6 +446,107 @@ export async function runImmediateSemanticRecapTests() {
       unavailable.handled === false);
   }
 
+  console.log(`\n${BOLD}-- Stage B admission veto for existing contradictory evidence --${RESET}`);
+  {
+    const commit = rec({ focus: [{ kind: 'thing', displayValue: 'Eliquis', referable: true, tier: 'llm_proposal' }] });
+    const completions = { n: 0 };
+    const outcome = await answerImmediateSemanticRecap('What did you just tell me?', {
+      ledgerEntries: [commit],
+      getInterpreterCtx: hostileRecapCtx({ n: 0 }, completions),
+    });
+    assertTrue('What did you just tell me? reaches Stage B and is not admitted',
+      !classifyImmediateRecapDeterministic('What did you just tell me?')
+      && completions.n === 1
+      && outcome.handled === false);
+  }
+  {
+    const commit = rec({ focus: [{ kind: 'thing', displayValue: 'Eliquis', resolverKey: 'med_1', referable: true, tier: 'authoritative' }] });
+    const completions = { n: 0 };
+    const outcome = await answerImmediateSemanticRecap('What medications am I taking?', {
+      ledgerEntries: [commit],
+      getInterpreterCtx: hostileRecapCtx({ n: 0 }, completions),
+    });
+    assertTrue('What medications am I taking? reaches Stage B and is not admitted',
+      completions.n === 1 && outcome.handled === false);
+  }
+  {
+    const commit = rec({ focus: [{ kind: 'thing', displayValue: 'Eliquis', referable: true, tier: 'llm_proposal' }] });
+    const eligible = [
+      'What was the medicine I just mentioned again?',
+      'What was I talking about?',
+      'Who was I talking about?',
+    ];
+    for (const utterance of eligible) {
+      const completions = { n: 0 };
+      const outcome = await answerImmediateSemanticRecap(utterance, {
+        ledgerEntries: [commit],
+        getInterpreterCtx: hostileRecapCtx({ n: 0 }, completions),
+      });
+      assertTrue(`${utterance} remains Stage-B eligible`,
+        !classifyImmediateRecapDeterministic(utterance)
+        && completions.n === 1
+        && outcome.handled === true
+        && outcome.kind === 'proposal_recap');
+    }
+  }
+  {
+    const commit = rec({ focus: [{ kind: 'thing', displayValue: 'Eliquis', referable: true, tier: 'llm_proposal' }] });
+    const completions = { n: 0 };
+    const utterance = 'uh what medicine did I just say I take';
+    const outcome = await answerImmediateSemanticRecap(utterance, {
+      ledgerEntries: [commit],
+      getInterpreterCtx: hostileRecapCtx({ n: 0 }, completions),
+    });
+    assertTrue('uh what medicine did I just say I take stays on Stage A',
+      classifyImmediateRecapDeterministic(utterance)
+      && completions.n === 0
+      && outcome.handled === true
+      && outcome.kind === 'proposal_recap');
+  }
+  {
+    const commit = rec({ focus: [{ kind: 'thing', displayValue: 'Eliquis', referable: true, tier: 'llm_proposal' }] });
+    const completions = { n: 0 };
+    const outcome = await answerImmediateSemanticRecap('What did Dr. Smith tell me?', {
+      ledgerEntries: [commit],
+      getInterpreterCtx: hostileRecapCtx({ n: 0 }, completions),
+    });
+    assertTrue('What did Dr. Smith tell me? is not resolved by this veto',
+      completions.n === 1
+      && outcome.handled === true
+      && outcome.kind === 'proposal_recap');
+  }
+  {
+    const { session, deps } = freshDb();
+    const commit = rec({ focus: [{ kind: 'thing', displayValue: 'Eliquis', resolverKey: 'med_1', referable: true, tier: 'authoritative' }] });
+    const completions = { n: 0 };
+    const recap = await answerImmediateSemanticRecap('What medications am I taking?', {
+      ledgerEntries: [commit],
+      getInterpreterCtx: hostileRecapCtx({ n: 0 }, completions),
+    });
+    const routed = await processUtterance('What medications am I taking?', session, {
+      ...deps,
+      getMedicationSemanticInterpreterCtx: hostileRecapCtx({ n: 0 }, { n: 0 }),
+    });
+    assertTrue('refusing the catalog read leaves the medical summary owner in place',
+      recap.handled === false
+      && routed.handled === false
+      && routed.routeDecision.kind === 'device_read'
+      && routed.routeDecision.reason === 'medical:summary');
+  }
+  {
+    const { session, deps } = freshDb();
+    const commit = rec({ focus: [{ kind: 'thing', displayValue: 'Eliquis', referable: true, tier: 'llm_proposal' }] });
+    const recap = await answerImmediateSemanticRecap('What did you just tell me?', {
+      ledgerEntries: [commit],
+      getInterpreterCtx: hostileRecapCtx({ n: 0 }, { n: 0 }),
+    });
+    const routed = await processUtterance('What did you just tell me?', session, deps);
+    assertTrue('refusing assistant recap does not invent a self-recap answer',
+      recap.handled === false
+      && routed.handled === false
+      && routed.routeDecision.kind === 'needs_clarification');
+  }
+
   console.log(`\n${BOLD}-- Pending authority: consumer never sees a pending-armed turn --${RESET}`);
   {
     // Structural proof, not a runtime one: this module has no import of

@@ -16,7 +16,10 @@
 //     interpreter (same discipline as medicationSemanticInterpretation.ts:
 //     strict parse/validate, no coercion, confidence never grants trust by
 //     itself) may PROPOSE that the turn is an immediate-recap request and
-//     which of the CALLER-SUPPLIED candidate foci it refers to. It selects
+//     which of the CALLER-SUPPLIED candidate foci it refers to. A proposal
+//     is not admitted when existing assistant-directed-recap evidence or
+//     existing catalog-medication-read evidence already contradicts it.
+//     It selects
 //     by INDEX into a list this module already built from real ledger
 //     evidence — it cannot fabricate a focus that was not already present,
 //     because there is no channel through which it could name one.
@@ -31,6 +34,7 @@
 // adding one more registry entry, not changing any function above it.
 
 import type { LlamaContext } from 'llama.rn';
+import { isCatalogMedicationReadUtterance } from '../utils/detectMedicalEvent';
 import { completeBoundedInterpretation } from './semanticProvider';
 import type { ConversationTurnFocusEntry, ConversationTurnRecord } from './conversationTurnLedger';
 import {
@@ -167,6 +171,15 @@ function isStructurallyQuestionShaped(text: string): boolean {
   if (!t) return false;
   if (/\?\s*$/.test(t)) return true;
   return /^(?:who|what|when|where|why|how|which|did|was|were|is|are|do|does)\b/i.test(t);
+}
+
+/** Facts this consumer already uses. They contradict a self-recap proposal.
+ *  Question shape still decides whether Stage B is consulted. These facts
+ *  decide whether that proposal may be admitted. */
+function stageBContradictedByExistingEvidence(text: string): boolean {
+  const t = normalizeContractions(text.trim());
+  if (ASSISTANT_RECAP_RE.test(t)) return true;
+  return isCatalogMedicationReadUtterance(text);
 }
 
 // ─── Candidate focus construction (bounded, real ledger evidence only) ────
@@ -535,6 +548,10 @@ export async function answerImmediateSemanticRecap(
   const { proposal } = generation;
   const stageBDiag: ImmediateRecapDiagStageB = { status: 'ok', isImmediateRecap: proposal.isImmediateRecap, selectedIndex: proposal.selectedIndex, confidence: proposal.confidence };
   if (!proposal.isImmediateRecap || proposal.confidence < RECAP_INTERPRETATION_CONFIDENCE_THRESHOLD) {
+    emitDiag({ stageB: stageBDiag, selectedCandidateIndex: null, selectedCandidateTier: null, adapterFound: null, rereadOutcome: 'not_applicable', finalResult: 'not_recap' });
+    return { handled: false };
+  }
+  if (stageBContradictedByExistingEvidence(text)) {
     emitDiag({ stageB: stageBDiag, selectedCandidateIndex: null, selectedCandidateTier: null, adapterFound: null, rereadOutcome: 'not_applicable', finalResult: 'not_recap' });
     return { handled: false };
   }
