@@ -14,6 +14,7 @@ import {
 } from '../../src/routing/discourseContinuity.ts';
 import { admitDiscourseApplicability, priorActiveDiscourseCandidates } from '../../src/routing/discourseApplicability.ts';
 import {
+  DISCOURSE_APPLICABILITY_PROMPT,
   DISCOURSE_CORRECTION_PROMPT,
   parseDiscourseCorrectionPayload,
 } from '../../src/routing/semanticProvider.ts';
@@ -589,6 +590,279 @@ export async function runDiscourseCorrectionTests() {
       && plan.outcome === 'plan'
       && refused.applied === false
       && JSON.stringify(discourse.peekDiscourseMentions()) === before);
+  }
+
+  function correctionCompletion(
+    prompts: string[],
+    reply: (prompt: string) => string,
+  ) {
+    return {
+      completion: async (params: { prompt?: string }) => {
+        const prompt = typeof params?.prompt === 'string' ? params.prompt : '';
+        prompts.push(prompt);
+        return { text: reply(prompt) };
+      },
+    };
+  }
+
+  function incompatibleMarks(discourse: DiscourseContinuityHolder) {
+    return discourse.peekDiscourseMentions().map((item) => ({
+      handle: item.mentionId,
+      mark: 'incompatible' as const,
+    }));
+  }
+
+  {
+    const discourse = new DiscourseContinuityHolder();
+    seedEpisode(discourse);
+    const before = JSON.stringify(discourse.peekDiscourseMentions());
+    const prompts: string[] = [];
+    const turn = await considerCurrentTurnDiscourseCorrection(
+      'She mentioned the harbor.',
+      discourse,
+      correctionCompletion(prompts, () => JSON.stringify({
+        correction_turn: true,
+        target_marks: incompatibleMarks(discourse),
+        replacement_marks: [],
+        new_spans: [{ span: 'Martin', kind: 'person' }],
+      })),
+    );
+    resetSemanticCompletionLifecycleForTests();
+    assert('failed grounding continues and writes nothing',
+      turn.kind === 'continue'
+      && prompts.some((prompt) => prompt.startsWith(DISCOURSE_CORRECTION_PROMPT))
+      && JSON.stringify(discourse.peekDiscourseMentions()) === before);
+  }
+
+  {
+    const discourse = new DiscourseContinuityHolder();
+    seedEpisode(discourse);
+    const before = JSON.stringify(discourse.peekDiscourseMentions());
+    const turn = await considerCurrentTurnDiscourseCorrection(
+      'She mentioned the harbor.',
+      discourse,
+      correctionCompletion([], () => JSON.stringify({
+        correction_turn: true,
+        target_marks: incompatibleMarks(discourse),
+        replacement_marks: [],
+        new_spans: [],
+      })),
+    );
+    resetSemanticCompletionLifecycleForTests();
+    assert('zero compatible targets continue and write nothing',
+      turn.kind === 'continue'
+      && JSON.stringify(discourse.peekDiscourseMentions()) === before);
+  }
+
+  {
+    const discourse = new DiscourseContinuityHolder();
+    seedEpisode(discourse);
+    const ireland = discourse.peekDiscourseMentions().find((item) => item.surfaceSpan === 'Ireland')!;
+    const before = JSON.stringify(discourse.peekDiscourseMentions());
+    const turn = await considerCurrentTurnDiscourseCorrection(
+      'She mentioned the harbor.',
+      discourse,
+      correctionCompletion([], () => JSON.stringify({
+        correction_turn: true,
+        target_marks: discourse.peekDiscourseMentions().map((item) => ({
+          handle: item.mentionId,
+          mark: item.mentionId === ireland.mentionId ? 'compatible' as const : 'incompatible' as const,
+        })),
+        replacement_marks: [],
+        new_spans: [],
+      })),
+    );
+    resetSemanticCompletionLifecycleForTests();
+    assert('zero admissible replacements continue and write nothing',
+      turn.kind === 'continue'
+      && JSON.stringify(discourse.peekDiscourseMentions()) === before);
+  }
+
+  {
+    const discourse = new DiscourseContinuityHolder();
+    seedEpisode(discourse);
+    const before = JSON.stringify(discourse.peekDiscourseMentions());
+    const prompts: string[] = [];
+    const martin = discourse.peekDiscourseMentions().find((item) => item.surfaceSpan === 'Martin')!;
+    const ireland = discourse.peekDiscourseMentions().find((item) => item.surfaceSpan === 'Ireland')!;
+    const clarified = await processUtterance(
+      'She mentioned the harbor.',
+      new ConversationSession(),
+      {
+        ...depsBase,
+        getMedicationSemanticInterpreterCtx: () => correctionCompletion(prompts, () => JSON.stringify({
+          correction_turn: true,
+          target_marks: discourse.peekDiscourseMentions().map((item) => ({
+            handle: item.mentionId,
+            mark: item.mentionId === martin.mentionId || item.mentionId === ireland.mentionId
+              ? 'compatible' as const
+              : 'incompatible' as const,
+          })),
+          replacement_marks: [],
+          new_spans: [],
+        })),
+      },
+      null, null, null, null, null, discourse,
+    );
+    resetSemanticCompletionLifecycleForTests();
+    const speech = clarified.handled && clarified.source !== 'emergency' ? clarified.responseText : '';
+    const act = clarified.handled && clarified.source !== 'emergency' ? clarified.responseAct : undefined;
+    assert('clarification still owns the turn',
+      clarified.handled === true
+      && clarified.source === 'discourse_correction'
+      && act?.kind === 'CLARIFY_REFERENCE'
+      && speech.startsWith('Which one should I correct:')
+      && !prompts.some((prompt) => prompt.startsWith(DISCOURSE_APPLICABILITY_PROMPT))
+      && JSON.stringify(discourse.peekDiscourseMentions()) === before
+      && (clarified.handled && clarified.source !== 'emergency' ? clarified.commits.length : 1) === 0);
+  }
+
+  {
+    const discourse = new DiscourseContinuityHolder();
+    seedEpisode(discourse);
+    const ireland = discourse.peekDiscourseMentions().find((item) => item.surfaceSpan === 'Ireland')!;
+    const utterance = 'No, I meant Italy.';
+    const turn = await considerCurrentTurnDiscourseCorrection(
+      utterance,
+      discourse,
+      correctionCompletion([], () => JSON.stringify({
+        correction_turn: true,
+        target_marks: discourse.peekDiscourseMentions().map((item) => ({
+          handle: item.mentionId,
+          mark: item.mentionId === ireland.mentionId ? 'compatible' as const : 'incompatible' as const,
+        })),
+        replacement_marks: [],
+        new_spans: [{ span: 'Italy', kind: 'place' }],
+      })),
+    );
+    resetSemanticCompletionLifecycleForTests();
+    const italy = discourse.peekDiscourseMentions().find((item) => item.surfaceSpan === 'Italy' && item.kind === 'place');
+    assert('an admitted correction still applies and owns the turn',
+      turn.kind === 'reply'
+      && turn.act === 'acknowledge'
+      && turn.speech === 'Got it — you meant Italy.'
+      && discourse.peekDiscourseMentions().find((item) => item.mentionId === ireland.mentionId)?.status === 'corrected_away'
+      && italy?.status === 'active');
+  }
+
+  {
+    const discourse = new DiscourseContinuityHolder();
+    seedEpisode(discourse);
+    const host = 'xxItaly';
+    discourse.admitDiscourseProposals(host, [at(host, 'xxItaly', 'event_or_topic')], 'continue');
+    const ireland = discourse.peekDiscourseMentions().find((item) => item.surfaceSpan === 'Ireland')!;
+    const before = JSON.stringify(discourse.peekDiscourseMentions());
+    const prompts: string[] = [];
+    const turn = await considerCurrentTurnDiscourseCorrection(
+      host,
+      discourse,
+      correctionCompletion(prompts, (prompt) => {
+        if (prompt.startsWith(DISCOURSE_APPLICABILITY_PROMPT)) return '{"utterance_applicable":true,"reference_attempt":true,"marks":[]}';
+        return JSON.stringify({
+          correction_turn: true,
+          target_marks: discourse.peekDiscourseMentions().map((item) => ({
+            handle: item.mentionId,
+            mark: item.mentionId === ireland.mentionId ? 'compatible' as const : 'incompatible' as const,
+          })),
+          replacement_marks: [],
+          new_spans: [{ span: 'Italy', kind: 'place' }],
+        });
+      }),
+    );
+    resetSemanticCompletionLifecycleForTests();
+    assert('holder refusal after an admitted plan stays blocked',
+      turn.kind === 'blocked'
+      && !prompts.some((prompt) => prompt.startsWith(DISCOURSE_APPLICABILITY_PROMPT))
+      && JSON.stringify(discourse.peekDiscourseMentions()) === before
+      && !discourse.peekDiscourseMentions().some((item) => item.surfaceSpan === 'Italy'));
+  }
+
+  {
+    const discourse = new DiscourseContinuityHolder();
+    seedEpisode(discourse);
+    const before = JSON.stringify(discourse.peekDiscourseMentions());
+    const malformed = await considerCurrentTurnDiscourseCorrection(
+      'She mentioned the harbor.',
+      discourse,
+      { completion: async () => ({ text: 'not json' }) },
+    );
+    resetSemanticCompletionLifecycleForTests();
+    const declined = await considerCurrentTurnDiscourseCorrection(
+      'She mentioned the harbor.',
+      discourse,
+      { completion: async () => ({ text: JSON.stringify({
+        correction_turn: false,
+        target_marks: [],
+        replacement_marks: [],
+      }) }) },
+    );
+    resetSemanticCompletionLifecycleForTests();
+    const unavailable = await considerCurrentTurnDiscourseCorrection(
+      'She mentioned the harbor.',
+      discourse,
+      null,
+    );
+    assert('malformed and unavailable proposals continue and write nothing',
+      malformed.kind === 'continue'
+      && declined.kind === 'continue'
+      && unavailable.kind === 'continue'
+      && JSON.stringify(discourse.peekDiscourseMentions()) === before);
+  }
+
+  {
+    const discourse = new DiscourseContinuityHolder();
+    seedEpisode(discourse);
+    const session = new ConversationSession();
+    const ireland = discourse.peekDiscourseMentions().find((item) => item.surfaceSpan === 'Ireland')!;
+    const before = JSON.stringify(discourse.peekDiscourseMentions());
+    const prompts: string[] = [];
+    const continued = await processUtterance(
+      'She mentioned the harbor.',
+      session,
+      {
+        ...depsBase,
+        getMedicationSemanticInterpreterCtx: () => correctionCompletion(prompts, (prompt) => {
+          if (prompt.startsWith(DISCOURSE_CORRECTION_PROMPT)) {
+            return JSON.stringify({
+              correction_turn: true,
+              target_marks: incompatibleMarks(discourse),
+              replacement_marks: [],
+              new_spans: [],
+            });
+          }
+          if (prompt.startsWith(DISCOURSE_APPLICABILITY_PROMPT)) {
+            return JSON.stringify({
+              utterance_applicable: true,
+              reference_attempt: true,
+              marks: discourse.peekDiscourseMentions().map((item) => ({
+                handle: item.mentionId,
+                mark: item.mentionId === ireland.mentionId ? 'compatible' : 'incompatible',
+              })),
+            });
+          }
+          return '[]';
+        }),
+      },
+      null, null, null, null, null, discourse,
+    );
+    resetSemanticCompletionLifecycleForTests();
+    const speech = continued.handled && continued.source !== 'emergency' ? continued.responseText : '';
+    const act = continued.handled && continued.source !== 'emergency' ? continued.responseAct : undefined;
+    const correctionAt = prompts.findIndex((prompt) => prompt.startsWith(DISCOURSE_CORRECTION_PROMPT));
+    const applicabilityAt = prompts.findIndex((prompt) => prompt.startsWith(DISCOURSE_APPLICABILITY_PROMPT));
+    assert('a rejected correction reaches the applicability continuation',
+      correctionAt >= 0
+      && applicabilityAt > correctionAt
+      && continued.handled === true
+      && continued.source === 'discourse_reflection'
+      && act?.kind === 'REFLECT_CURRENT_TURN'
+      && speech.startsWith('We were talking about Ireland.')
+      && !speech.startsWith('Got it')
+      && session.peekPendingKey() === null
+      && (continued.handled && continued.source !== 'emergency' ? continued.commits.length : 1) === 0
+      && discourse.peekDiscourseMentions().find((item) => item.mentionId === ireland.mentionId)?.status === 'active'
+      && !discourse.peekDiscourseMentions().some((item) => item.status === 'corrected_away')
+      && JSON.stringify(discourse.peekDiscourseMentions().filter((item) => item.surfaceSpan !== 'harbor')) === before);
   }
 
   const total = passed + failures.length;

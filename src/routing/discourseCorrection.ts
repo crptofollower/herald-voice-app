@@ -206,7 +206,10 @@ export async function considerCurrentTurnDiscourseCorrection(
   if (decision.outcome === 'clarify_target' || decision.outcome === 'clarify_replacement') {
     return { kind: 'reply', speech: decision.speech, act: 'clarify' };
   }
-  if (decision.outcome !== 'plan') return { kind: 'blocked' };
+  // Admission refused the hypothesis. It writes nothing and does not own the turn.
+  if (decision.outcome === 'no_correction') {
+    return { kind: 'continue' };
+  }
   const applied = discourse.applyDiscourseCorrection({
     targetMentionId: decision.targetMentionId,
     replacement: decision.replacement,
