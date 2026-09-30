@@ -478,8 +478,19 @@ export default function ChatScreen() {
   const { getCtx: getListRemoveShadowCtx } = useListRemoveInterpretationShadowEngine();
   const {
     status: medicationSemanticInterpreterStatus,
-    getCtx: getMedicationSemanticInterpreterCtx,
+    getCtx: getMedicationSemanticInterpreterCtxRaw,
   } = useMedicationSemanticInterpreterEngine();
+  const getMedicationSemanticInterpreterCtx = useCallback(() => {
+    const real = getMedicationSemanticInterpreterCtxRaw();
+    try {
+      const { loadJourneyHost } = require('../dev/maybeJourneyHost');
+      const host = loadJourneyHost();
+      if (host && typeof host.journeySemanticCtx === 'function') {
+        return host.journeySemanticCtx(real);
+      }
+    } catch { /* ordinary execution has no journey bridge */ }
+    return real;
+  }, [getMedicationSemanticInterpreterCtxRaw]);
   void activeModel;
 
   type ResolveContactFn = (nameOrRelation: string) => Promise<{ phone: string; name: string; contactId?: string; source: 'herald' | 'device' } | { phone: null; name: string; source: 'device'; candidateNames: string[]; deviceCandidates: { name: string; phone: string }[] } | null>;
@@ -3216,6 +3227,12 @@ export default function ChatScreen() {
             sendInFlight: sendingRef.current,
           });
         },
+        peekDiscourseMentions: () => discourseRef.current.peekDiscourseMentions().map((mention) => ({
+          surfaceSpan: mention.surfaceSpan,
+          kind: mention.kind,
+          status: mention.status,
+          durable: mention.durable,
+        })),
       });
     } catch {
       /* journey host only */

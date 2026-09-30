@@ -4,6 +4,18 @@
  */
 import { DeviceEventEmitter, NativeModules, Platform } from 'react-native';
 import { beginSemanticProof, finishSemanticProof } from './semanticJourneyEvidence';
+import {
+  buildFiveSliceTurnEvidence,
+  parseImmediateRecapDiagLine,
+  parseSemanticAdmissionLine,
+  type FiveSliceTurnEvidence,
+} from './journeyFiveSliceEvidence';
+import {
+  armJourneyScriptedCompletion,
+  clearJourneyScriptedCompletion,
+  peekJourneyScriptedCompletions,
+  wrapJourneySemanticCtx,
+} from './journeyScriptedCompletion';
 import { classifySemanticEngineReadiness, emptySemanticEngineDiagnostic } from './semanticEngineReadiness';
 import {
   SPEECH_PRODUCTION_PROOF_WINDOW_MS,
@@ -65,6 +77,7 @@ type JourneyRuntime = {
   peekSemanticEngine?: () => import('./semanticEngineReadiness').SemanticEngineDiagnostic;
   peekJourneyTurnReadiness?: () => JourneyTurnReadiness;
   injectCommittedSpeechSegment?: (text: string) => void;
+  peekDiscourseMentions?: () => DiscourseMentionPeek[];
 };
 
 type NativeBridge = {
@@ -81,7 +94,13 @@ type ListItemRow = {
   checked: number;
   removed_at: string | null;
 };
-type MedRow = { id: string; name: string; is_active: number };
+type MedRow = { id: string; name: string; dosage: string | null; is_active: number };
+type DiscourseMentionPeek = {
+  surfaceSpan: string;
+  kind: string;
+  status: string;
+  durable: boolean;
+};
 type RecordRow = {
   id: string;
   notes: string | null;
@@ -218,7 +237,7 @@ function snapshotAuthoritative(): AuthoritativeSnapshot {
     let medical_records: RecordRow[] = [];
     let evidence: EvidenceSnapRow[] = [];
     try {
-      medications = db.getAllSync<MedRow>(`SELECT id, name, is_active FROM medications;`);
+      medications = db.getAllSync<MedRow>(`SELECT id, name, dosage, is_active FROM medications;`);
     } catch { /* table may be absent on a partial open */ }
     try {
       medical_records = db.getAllSync<RecordRow>(
@@ -641,6 +660,7 @@ async function runTurn(payload: {
   inFlightTurnId = turnId;
   lastReportedOutcome = undefined;
   lastReportedPendingKey = null;
+  armJourneyScriptedCompletion(scenarioId);
   try {
     if (!isDBReady()) await initDB();
     prepareInstrumentationSession();
@@ -648,17 +668,27 @@ async function runTurn(payload: {
     const before = snapshotAuthoritative();
     beginSemanticProof(turnId);
     let semantic: ReturnType<typeof finishSemanticProof> = null;
-    try {
-      await runtime.sendMessage(text, 'typed');
-    } finally {
-      semantic = finishSemanticProof();
-    }
+    const observed = await observeFiveSliceTurnConsole(async () => {
+      try {
+        await runtime.sendMessage(text, 'typed');
+      } finally {
+        semantic = finishSemanticProof();
+      }
+    });
     const after = snapshotAuthoritative();
     const delta = diffSnapshots(before, after);
     const pendingAfter = lastReportedPendingKey ?? runtime.peekPendingKey();
     const routingPlus = describeRouting(lastReportedOutcome, pendingBefore, pendingAfter, delta, after);
     const { response, ...routing } = routingPlus;
     const missingRouter = lastReportedOutcome === undefined;
+    const fiveSlice: FiveSliceTurnEvidence | undefined = scenarioId?.startsWith('five_slice_')
+      ? buildFiveSliceTurnEvidence({
+          hits: peekJourneyScriptedCompletions(),
+          immediateRecap: observed.immediateRecap,
+          discourseMentions: runtime.peekDiscourseMentions?.() ?? [],
+          semanticAdmission: observed.semanticAdmission,
+        })
+      : undefined;
     emitComplete({
       schema: 'herald.journey.turn.v1',
       turnId,
@@ -682,6 +712,7 @@ async function runTurn(payload: {
         delta,
       },
       semantic,
+      ...(fiveSlice ? { fiveSlice } : {}),
     });
   } catch (e) {
     emitComplete(
@@ -691,7 +722,40 @@ async function runTurn(payload: {
       }),
     );
   } finally {
+    clearJourneyScriptedCompletion();
     inFlightTurnId = null;
+  }
+}
+
+async function observeFiveSliceTurnConsole<T>(run: () => Promise<T>): Promise<{
+  value: T;
+  immediateRecap: Record<string, unknown> | null;
+  semanticAdmission: ReturnType<typeof parseSemanticAdmissionLine>;
+}> {
+  const recaps: Record<string, unknown>[] = [];
+  const admissions: NonNullable<ReturnType<typeof parseSemanticAdmissionLine>>[] = [];
+  const warn = console.warn;
+  const log = console.log;
+  console.warn = ((...args: unknown[]) => {
+    const diag = parseImmediateRecapDiagLine(args.map((arg) => String(arg)).join(' '));
+    if (diag) recaps.push(diag);
+    warn.apply(console, args as []);
+  }) as typeof console.warn;
+  console.log = ((...args: unknown[]) => {
+    const admission = parseSemanticAdmissionLine(args.map((arg) => String(arg)).join(' '));
+    if (admission) admissions.push(admission);
+    log.apply(console, args as []);
+  }) as typeof console.log;
+  try {
+    const value = await run();
+    return {
+      value,
+      immediateRecap: recaps.length > 0 ? recaps[recaps.length - 1] : null,
+      semanticAdmission: admissions.length > 0 ? admissions[admissions.length - 1] : null,
+    };
+  } finally {
+    console.warn = warn;
+    console.log = log;
   }
 }
 
@@ -932,6 +996,7 @@ function runReset(scenarioId: string | null = null): void {
     applySemanticProofFixture(scenarioId);
     seenTurnIds.clear();
     inFlightTurnId = null;
+    clearJourneyScriptedCompletion();
     lastReportedOutcome = undefined;
     lastReportedPendingKey = null;
     emitComplete({
@@ -1039,6 +1104,11 @@ export function bindJourneySendMessage(fn: SendMessageFn): void {
   if (native) {
     try { native.hostReady(); } catch { /* ignore */ }
   }
+}
+
+/** Journey host entry. Unarmed calls return the production context unchanged. */
+export function journeySemanticCtx<T>(real: T): T {
+  return wrapJourneySemanticCtx(real);
 }
 
 export function bindJourneyRuntime(next: JourneyRuntime): void {

@@ -212,6 +212,7 @@ tasks.register("syncJourneyScenarioContract", Copy) {
         include "android.journey.v1.scenarios.json"
         include "android.medicalTemporal.v1.scenarios.json"
         include "android.semantic.proof.v1.scenarios.json"
+        include "android.five-slice.v1.scenarios.json"
     }
     into("${layout.buildDirectory.get()}/generated/journeyAssets/herald")
 }

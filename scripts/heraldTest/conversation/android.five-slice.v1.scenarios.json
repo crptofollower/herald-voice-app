@@ -1,0 +1,246 @@
+{
+  "schema": "herald.android.five-slice.v1",
+  "scenarioCount": 9,
+  "scenarios": [
+    {
+      "id": "five_slice_continuity",
+      "title": "Ordinary grocery capture and read still commit",
+      "turns": [
+        {
+          "input": "I need eggs and milk.",
+          "evidenceClass": "deterministic",
+          "scriptedCompletionIds": [],
+          "pending_key_after": null,
+          "route_source": "capture",
+          "commit_statuses": ["committed"],
+          "capability": "list_add",
+          "zero_delta": false,
+          "lists_added": ["grocery"],
+          "open_grocery_count": 2
+        },
+        {
+          "input": "What's on my grocery list?",
+          "evidenceClass": "deterministic",
+          "scriptedCompletionIds": [],
+          "pending_key_after": null,
+          "route_source": "device_read",
+          "route_kind": "device_read",
+          "commit_statuses": [],
+          "zero_delta": true,
+          "open_grocery_count": 2,
+          "response_includes": ["eggs", "milk"]
+        }
+      ]
+    },
+    {
+      "id": "five_slice_medication_floor",
+      "title": "Deterministic medication floor keeps drug identity and dosage",
+      "turns": [
+        {
+          "input": "I take Metformin 500 mg twice a day.",
+          "evidenceClass": "deterministic",
+          "scriptedCompletionIds": [],
+          "pending_key_after": "medical_capture",
+          "route_source": "capture",
+          "commit_statuses": ["pending"],
+          "commit_pending_keys": ["medical_capture"],
+          "capability": "medical_capture",
+          "zero_delta": true
+        },
+        {
+          "input": "Yes.",
+          "evidenceClass": "deterministic",
+          "scriptedCompletionIds": [],
+          "pending_key_before": "medical_capture",
+          "pending_key_after": null,
+          "route_source": "pending_resume",
+          "commit_statuses": ["committed"],
+          "capability": "medical_capture",
+          "zero_delta": false,
+          "medications_added": 1,
+          "medications_named": ["Metformin"],
+          "medications_dosage": [{ "name": "Metformin", "dosage": "500 mg" }]
+        }
+      ]
+    },
+    {
+      "id": "five_slice_recap_reachability",
+      "title": "A declarative with a recap candidate does not consult Stage B",
+      "turns": [
+        {
+          "input": "I take Metformin 500 mg twice a day.",
+          "evidenceClass": "deterministic",
+          "scriptedCompletionIds": [],
+          "pending_key_after": "medical_capture",
+          "route_source": "capture",
+          "commit_statuses": ["pending"],
+          "capability": "medical_capture",
+          "zero_delta": true
+        },
+        {
+          "input": "Yes.",
+          "evidenceClass": "deterministic",
+          "scriptedCompletionIds": [],
+          "pending_key_after": null,
+          "route_source": "pending_resume",
+          "commit_statuses": ["committed"],
+          "medications_named": ["Metformin"],
+          "zero_delta": false
+        },
+        {
+          "input": "The sky looks grey today.",
+          "evidenceClass": "deterministic",
+          "scriptedCompletionIds": [],
+          "route_kind": "needs_clarification",
+          "zero_delta": true,
+          "medications_named": ["Metformin"],
+          "response_excludes": ["You mentioned"],
+          "immediateRecap": {
+            "stageAMatched": false,
+            "stageBStatus": "not_invoked",
+            "finalResult": "not_recap"
+          }
+        }
+      ]
+    },
+    {
+      "id": "five_slice_catalog_owner",
+      "title": "Catalog medication read stays on the deterministic summary owner",
+      "turns": [
+        {
+          "input": "What medications am I taking?",
+          "evidenceClass": "deterministic",
+          "scriptedCompletionIds": [],
+          "pending_key_after": null,
+          "route_source": "device_read",
+          "route_kind": "device_read",
+          "route_reason": "medical:summary",
+          "commit_statuses": [],
+          "zero_delta": true,
+          "immediateRecapAbsent": true
+        }
+      ]
+    },
+    {
+      "id": "five_slice_recap_veto",
+      "title": "A Stage B self-recap proposal is vetoed by assistant-recap evidence",
+      "turns": [
+        {
+          "input": "I take Metformin 500 mg twice a day.",
+          "evidenceClass": "deterministic",
+          "scriptedCompletionIds": [],
+          "pending_key_after": "medical_capture",
+          "route_source": "capture",
+          "capability": "medical_capture",
+          "zero_delta": true
+        },
+        {
+          "input": "Yes.",
+          "evidenceClass": "deterministic",
+          "scriptedCompletionIds": [],
+          "pending_key_after": null,
+          "route_source": "pending_resume",
+          "medications_named": ["Metformin"],
+          "zero_delta": false
+        },
+        {
+          "input": "What did you just tell me?",
+          "evidenceClass": "injected",
+          "scriptedCompletionIds": ["fs-capability-abstain", "fs-recap-veto"],
+          "route_kind": "needs_clarification",
+          "zero_delta": true,
+          "medications_named": ["Metformin"],
+          "response_excludes": ["You mentioned", "Metformin"],
+          "immediateRecap": {
+            "stageAMatched": false,
+            "stageBStatus": "ok",
+            "isImmediateRecap": true,
+            "confidenceAtLeast": 0.6,
+            "selectedIndex": 0,
+            "selectedCandidateIndex": null,
+            "finalResult": "not_recap"
+          }
+        }
+      ]
+    },
+    {
+      "id": "five_slice_correction_fallthrough",
+      "title": "Rejected correction falls through to Ireland applicability",
+      "turns": [
+        {
+          "input": "about his trip to Ireland",
+          "evidenceClass": "injected",
+          "scriptedCompletionIds": ["fs-recollection-shadow-abstain", "fs-mention-closed"],
+          "route_kind": "needs_clarification",
+          "zero_delta": true,
+          "response_includes": ["Got it — Ireland."],
+          "discourseMentions": [
+            { "surfaceSpan": "Ireland", "kind": "place", "status": "active", "durable": false }
+          ]
+        },
+        {
+          "input": "She mentioned the harbor.",
+          "evidenceClass": "injected",
+          "scriptedCompletionIds": ["fs-recollection-shadow-abstain", "fs-correction-rejected", "fs-applicability-ireland", "fs-mention-empty"],
+          "route_source": "discourse_reflection",
+          "route_kind": "discourse_reflection",
+          "zero_delta": true,
+          "response_includes": ["We were talking about Ireland."],
+          "response_excludes": ["Got it"],
+          "discourseMentions": [
+            { "surfaceSpan": "Ireland", "kind": "place", "status": "active", "durable": false }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "five_slice_bounded_reject",
+      "title": "Prose-wrapped mention JSON admits nothing",
+      "turns": [
+        {
+          "input": "about his trip to Ireland",
+          "evidenceClass": "injected",
+          "scriptedCompletionIds": ["fs-recollection-shadow-abstain", "fs-mention-prose"],
+          "route_kind": "needs_clarification",
+          "zero_delta": true,
+          "discourseMentionCount": 0,
+          "response_excludes": ["Got it — Ireland."]
+        }
+      ]
+    },
+    {
+      "id": "five_slice_bounded_admit",
+      "title": "One closed mention proposal reaches deterministic admission",
+      "turns": [
+        {
+          "input": "about his trip to Ireland",
+          "evidenceClass": "injected",
+          "scriptedCompletionIds": ["fs-recollection-shadow-abstain", "fs-mention-closed"],
+          "route_kind": "needs_clarification",
+          "zero_delta": true,
+          "response_includes": ["Got it — Ireland."],
+          "discourseMentions": [
+            { "surfaceSpan": "Ireland", "kind": "place", "status": "active", "durable": false }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "five_slice_focus_purity",
+      "title": "A dosage-bearing focus is supplied and refused as drug identity",
+      "turns": [
+        {
+          "input": "The pharmacy filled my Lisinopril 10mg refill today.",
+          "evidenceClass": "injected",
+          "scriptedCompletionIds": ["fs-focus-purity", "fs-recollection-shadow-abstain", "fs-mention-empty"],
+          "suppliedFocus": "my Lisinopril 10mg refill",
+          "route_kind": "needs_clarification",
+          "zero_delta": true,
+          "medications_added": 0,
+          "response_excludes": ["Want me to remember"],
+          "semanticAdmission": { "decision": "REJECT", "reason": "focus_contains_dosage" }
+        }
+      ]
+    }
+  ]
+}
