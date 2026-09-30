@@ -301,6 +301,14 @@ export function admitMedicationSemanticProposal(
     return finishMedicationAdmission({ decision: 'CLARIFY', reason: 'insufficient_domain_evidence' });
   }
 
+  // A focus that already contains dosage is not a drug identity. Do not
+  // strip the dosage or recover a bare name from it. This is the last gate
+  // before ADMIT, so an earlier owner (pending, the deterministic floor,
+  // provenance, confidence, domain evidence) is unchanged.
+  if (extractDosage(focus)) {
+    return finishMedicationAdmission({ decision: 'REJECT', reason: 'focus_contains_dosage' });
+  }
+
   // Invariant 4 — dosage/frequency are NEVER taken from the model's proposal
   // (the ratified SemanticProposal V1 shape has no dosage/frequency field at
   // all). They are independently re-derived from raw via the existing,

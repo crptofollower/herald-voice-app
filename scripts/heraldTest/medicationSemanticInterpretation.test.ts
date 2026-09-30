@@ -13,8 +13,10 @@
 // Runner: wired from run.mjs (EXPECTED_TOTAL bump).
 
 import Database from 'better-sqlite3';
-import { setDB } from '../../src/db/schema.ts';
+import { setDB, runMigrations, getDB } from '../../src/db/schema.ts';
 import { routeIntent, llmMedicationCaptureLacksEvidence } from '../../src/routing/routeIntent.ts';
+import { processUtterance } from '../../src/routing/processUtterance.ts';
+import { ConversationSession } from '../../src/routing/conversationSession.ts';
 import { classifyQuery } from '../../src/routing/tierRouter.ts';
 import { detectMedicalEvent, hasMedicationDomainEvidence, isFirstPersonAuxiliaryQuestionShape, isMedicationQuestionShape, isMedicationInquirySpeechAct } from '../../src/utils/detectMedicalEvent.ts';
 import {
@@ -25,6 +27,7 @@ import {
   type SemanticProposal,
 } from '../../src/routing/medicationSemanticInterpretation.ts';
 import type { ClassifyOutcome, IntentRecord } from '../../src/hooks/llmLayers.ts';
+import { resetSemanticCompletionLifecycleForTests } from '../../src/utils/semanticCompletionLifecycle.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
 
@@ -548,6 +551,143 @@ export async function runMedicationSemanticInterpretationTests() {
   //    this is no longer "unchanged" — kept here, updated, so this file's
   //    own spot-check doesn't silently drift from what the floor actually
   //    does). ─────────────────────────────────────────────────────────────
+  // Focus purity: a dosage-bearing focus is not a drug identity. Clean
+  // focuses stay admissible. The deterministic floor still owns its turn.
+  const pureFocuses: [string, string][] = [
+    ['Eliquis', 'My cardiologist put me on Eliquis.'],
+    ['Synthroid', "I'm switching to a new dose of Synthroid, 75 micrograms."],
+    ['Amoxicillin', 'I picked up my Amoxicillin prescription this afternoon.'],
+    ['Lipitor', 'The doctor has me on 40 milligrams of Lipitor.'],
+  ];
+  for (const [focus, text] of pureFocuses) {
+    const decision = admitMedicationSemanticProposal(text, proposal({ focus, mentions: [focus] }), { hasPending: false });
+    assert(`${focus} remains an admissible drug identity`,
+      decision.decision === 'ADMIT' && decision.drug === focus,
+      (v) => v === true, `ADMIT ${focus}`);
+  }
+  const impureFocuses: [string, string, string][] = [
+    ['CD2', 'The pharmacy filled my Lisinopril 10mg refill today.', 'my Lisinopril 10mg refill'],
+    ['CD3', "I've been on 20 milligrams of Prozac for a month.", '20 milligrams of Prozac'],
+    ['CD5', 'Metformin 500 mg, twice daily — that is my prescription.', 'Metformin 500 mg'],
+  ];
+  for (const [id, text, focus] of impureFocuses) {
+    const decision = admitMedicationSemanticProposal(text, proposal({ focus, mentions: [focus] }), { hasPending: false });
+    assert(`${id} impure focus "${focus}" is not admitted as a drug`,
+      decision.decision === 'REJECT' && decision.reason === 'focus_contains_dosage',
+      (v) => v === true, 'REJECT focus_contains_dosage');
+  }
+  {
+    const text = 'I take Metformin 500 mg twice a day.';
+    const decision = admitMedicationSemanticProposal(
+      text,
+      proposal({ focus: 'Metformin 500 mg', mentions: ['Metformin 500 mg'] }),
+      { hasPending: false },
+    );
+    assert('a floor-claimed dosage utterance still defers before focus purity',
+      decision.decision === 'DEFER' && decision.reason === 'deterministic_floor_already_claims',
+      (v) => v === true, 'DEFER deterministic_floor_already_claims');
+  }
+  {
+    freshDB();
+    const text = 'My cardiologist put me on Eliquis.';
+    const decision = await routeIntent(text, {
+      classifyQuery,
+      classifyLLM: null,
+      llmReady: false,
+      getMedicationSemanticInterpreterCtx: () => ({
+        completion: async () => ({
+          content: JSON.stringify({
+            capability: 'medication.capture',
+            confidence: 'high',
+            mentions: ['Eliquis'],
+            predicate: 'put',
+            focus: 'Eliquis',
+            score: 0.9,
+          }),
+        }),
+      }),
+    });
+    resetSemanticCompletionLifecycleForTests();
+    const intent = decision.kind === 'capture' ? decision.intents[0] : null;
+    assert('a closed Eliquis proposal still reaches medication admission',
+      decision.kind === 'capture'
+      && decision.source === 'llm'
+      && intent?.type === 'medical_capture'
+      && intent.drug === 'Eliquis',
+      (v) => v === true, 'llm medical_capture Eliquis');
+  }
+  {
+    freshDB();
+    let called = false;
+    const text = 'I take Metformin 500 mg twice a day.';
+    const decision = await routeIntent(text, {
+      classifyQuery,
+      classifyLLM: null,
+      llmReady: false,
+      getMedicationSemanticInterpreterCtx: () => ({
+        completion: async () => {
+          called = true;
+          return {
+            content: JSON.stringify({
+              capability: 'medication.capture',
+              confidence: 'high',
+              mentions: ['Metformin 500 mg'],
+              predicate: 'take',
+              focus: 'Metformin 500 mg',
+              score: 0.9,
+            }),
+          };
+        },
+      }),
+    });
+    resetSemanticCompletionLifecycleForTests();
+    const intent = decision.kind === 'capture' ? decision.intents[0] : null;
+    assert('the deterministic medication floor keeps the turn',
+      called === false
+      && decision.kind === 'capture'
+      && decision.source === 'deterministic'
+      && intent?.type === 'medical_capture'
+      && intent.drug === 'Metformin'
+      && intent.drug !== 'Metformin 500 mg',
+      (v) => v === true, 'deterministic Metformin, semantic unused');
+  }
+  {
+    const db = new Database(':memory:');
+    setDB({
+      getAllSync: (s: string, p: unknown[] = []) => db.prepare(s).all(...p),
+      getFirstSync: (s: string, p: unknown[] = []) => db.prepare(s).get(...p) ?? null,
+      runSync: (s: string, p: unknown[] = []) => db.prepare(s).run(...p),
+      execSync: (s: string) => db.exec(s),
+    });
+    await runMigrations();
+    const text = 'The pharmacy filled my Lisinopril 10mg refill today.';
+    const outcome = await processUtterance(text, new ConversationSession(), {
+      classifyQuery,
+      classifyLLM: null,
+      llmReady: false,
+      llmStatus: 'unavailable',
+      getMedicationSemanticInterpreterCtx: () => ({
+        completion: async () => ({
+          content: JSON.stringify({
+            capability: 'medication.capture',
+            confidence: 'high',
+            mentions: ['my Lisinopril 10mg refill'],
+            predicate: 'filled',
+            focus: 'my Lisinopril 10mg refill',
+            score: 0.9,
+          }),
+        }),
+      }),
+    });
+    resetSemanticCompletionLifecycleForTests();
+    const names = getDB().getAllSync<{ name: string }>('SELECT name FROM medications WHERE removed_at IS NULL');
+    assert('refusing an impure focus writes no drug and speaks no capture acknowledgement',
+      outcome.handled === false
+      && outcome.routeDecision.kind === 'needs_clarification'
+      && names.length === 0,
+      (v) => v === true, 'needs_clarification, no medication row');
+  }
+
   assert('UNCHANGED1 hasMedicationDomainEvidence determiner override intact', hasMedicationDomainEvidence("I'm using a new router", 'router'), (v) => v === false, 'false');
   assert('CHANGED2 hasMedicationDomainEvidence lenient trigger REMOVED (Tier-2 closure)', hasMedicationDomainEvidence("I'm taking metformin", 'metformin'), (v) => v === false, 'false');
   assert('UNCHANGED3 detectMedicalEvent vacation-class still declines', detectMedicalEvent("I'm on vacation next week."), (v) => v === null, 'null');
