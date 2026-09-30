@@ -25,13 +25,23 @@ import {
   wrapJourneySemanticCtx,
 } from '../../src/dev/journeyScriptedCompletion.ts';
 import {
+  applyJourneyAcknowledgementResponse,
   buildFiveSliceTurnEvidence,
   parseImmediateRecapDiagLine,
   parseSemanticAdmissionLine,
 } from '../../src/dev/journeyFiveSliceEvidence.ts';
+import { deterministicAcknowledgementSpeech } from '../../src/routing/responseAct.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', RESET = '\x1b[0m';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+
+function countAuthoritativeRows(db: Database.Database): number {
+  const tables = ['lists', 'list_items', 'medications', 'medical_records'];
+  return tables.reduce((sum, table) => {
+    const row = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number };
+    return sum + Number(row.n);
+  }, 0);
+}
 
 function shim(db: Database.Database) {
   return {
@@ -274,6 +284,13 @@ export async function runFiveSliceJourneyHarnessTests() {
   await runMigrations();
   const discourse = new DiscourseContinuityHolder();
   const correctionSession = new ConversationSession();
+  const rowsBeforeIreland = countAuthoritativeRows(correctionDb);
+  const irelandAdmissionLines: string[] = [];
+  const irelandLog = console.log;
+  console.log = ((...args: unknown[]) => {
+    irelandAdmissionLines.push(args.map((arg) => String(arg)).join(' '));
+    irelandLog.apply(console, args as []);
+  }) as typeof console.log;
   armJourneyScriptedCompletion('five_slice_correction_fallthrough');
   const seeded = await processUtterance(
     'about his trip to Ireland',
@@ -281,6 +298,34 @@ export async function runFiveSliceJourneyHarnessTests() {
     depsWith(() => wrapJourneySemanticCtx(null)),
     null, null, null, null, null, discourse,
   );
+  console.log = irelandLog;
+  const rowsAfterIreland = countAuthoritativeRows(correctionDb);
+  const irelandAdmission = parseSemanticAdmissionLine(irelandAdmissionLines.find((line) => line.includes('SEMANTIC_ADMISSION_DONE')) ?? '');
+  const irelandAct = seeded.handled ? undefined : seeded.responseAct;
+  const irelandRoute = seeded.handled ? undefined : seeded.routeDecision;
+  const irelandSerialized = applyJourneyAcknowledgementResponse(seeded, null);
+  assert('journey evidence keeps the Ireland acknowledgement without taking the route',
+    seeded.handled === false
+    && irelandRoute?.kind === 'needs_clarification'
+    && irelandRoute.reason === 'default'
+    && discourse.peekDiscourseMentions().some((mention) => mention.surfaceSpan === 'Ireland' && mention.kind === 'place' && mention.status === 'active' && mention.durable === false)
+    && irelandAct?.kind === 'ACKNOWLEDGE'
+    && deterministicAcknowledgementSpeech(irelandAct) === 'Got it — Ireland.'
+    && irelandAdmission === null
+    && rowsAfterIreland === rowsBeforeIreland
+    && irelandSerialized === 'Got it — Ireland.');
+  const bareDiscourse = new DiscourseContinuityHolder();
+  const bare = await processUtterance(
+    'maybe later',
+    new ConversationSession(),
+    depsWith(() => null),
+    null, null, null, null, null, bareDiscourse,
+  );
+  const bareAct = bare.handled ? undefined : bare.responseAct;
+  assert('an unhandled turn without an acknowledgement does not gain journey response text',
+    bare.handled === false
+    && deterministicAcknowledgementSpeech(bareAct) === null
+    && applyJourneyAcknowledgementResponse(bare, null) === null);
   const seedHits = peekJourneyScriptedCompletions().map((hit) => hit.id);
   clearJourneyScriptedCompletion();
   armJourneyScriptedCompletion('five_slice_correction_fallthrough');

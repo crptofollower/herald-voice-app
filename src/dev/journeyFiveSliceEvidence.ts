@@ -1,6 +1,7 @@
 /**
  * Read-only shaping of journey turn evidence. Does not decide a route.
  */
+import { deterministicAcknowledgementSpeech, type ResponseAct } from '../routing/responseAct';
 import type { JourneyScriptHit } from './journeyScriptedCompletion';
 
 export type FiveSliceDiscourseMention = {
@@ -53,6 +54,20 @@ export function parseSemanticAdmissionLine(line: string): FiveSliceSemanticAdmis
   } catch {
     return null;
   }
+}
+
+/**
+ * Journey envelope response only. Does not select an act or change the utterance result.
+ * An unhandled acknowledgement is copied from the act. Any response already chosen is kept.
+ */
+export function applyJourneyAcknowledgementResponse(outcome: unknown, response: string | null): string | null {
+  if (response != null) return response;
+  if (!outcome || typeof outcome !== 'object') return null;
+  const record = outcome as { handled?: unknown; responseAct?: unknown };
+  if (record.handled !== false) return null;
+  const act = record.responseAct;
+  if (!act || typeof act !== 'object') return null;
+  return deterministicAcknowledgementSpeech(act as ResponseAct);
 }
 
 export function buildFiveSliceTurnEvidence(input: {

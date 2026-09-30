@@ -5,6 +5,7 @@
 import { DeviceEventEmitter, NativeModules, Platform } from 'react-native';
 import { beginSemanticProof, finishSemanticProof } from './semanticJourneyEvidence';
 import {
+  applyJourneyAcknowledgementResponse,
   buildFiveSliceTurnEvidence,
   parseImmediateRecapDiagLine,
   parseSemanticAdmissionLine,
@@ -390,6 +391,7 @@ function describeRouting(
       route_reason = 'reason' in rd ? String(rd.reason ?? '') : route_reason;
     }
   }
+  response = applyJourneyAcknowledgementResponse(o, response);
   const pendingCommit = commit_pending_keys.find((k) => !!k) ?? null;
   if (pendingCommit) route_reason = pendingCommit;
   const capability = deriveCapability(
