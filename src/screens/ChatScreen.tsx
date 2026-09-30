@@ -204,7 +204,7 @@ import { ReminiscenceArcHolder } from '../routing/reminiscenceArc';
 import { formatOperationalListClarification } from '../routing/operationalListContinuity';
 import { CalendarPresentationHolder } from '../routing/calendarPresentation';
 import { processUtterance, applyIntents, type UtteranceOutcome } from '../routing/processUtterance';
-import { continuityLedgerFocus } from '../routing/conversationTurnLedgerWrite';
+import { continuityLedgerFocus, ledgerFocusWithConversationalTopic } from '../routing/conversationTurnLedgerWrite';
 import { mayInvokeBackendStream } from '../utils/llmClassificationOwnership';
 import {
   beginChatScreenMount,
@@ -1438,6 +1438,15 @@ export default function ChatScreen() {
     if (sendingRef.current && !hasConfirmCallPending) return;
     if (!text) return;
 
+    const topicFactsForCurrentTurn = () => {
+      const mentions = discourseRef.current.peekDiscourseMentions()
+        .filter((mention) => mention.status === 'active' && mention.sourceTurnId === discourseRef.current.currentTurn());
+      return {
+        groundedSpans: mentions.map((mention) => mention.surfaceSpan),
+        discourseMentionIds: mentions.map((mention) => mention.mentionId),
+      };
+    };
+
     // ── Input front door ─────────────────────────────────────────────────────
     // Normalize once, here, before ANY logic (capture, routing, display) touches
     // the message. Makes input device-agnostic — curly quotes, unicode dashes/
@@ -2054,6 +2063,7 @@ export default function ChatScreen() {
       const recapOutcome = await answerImmediateSemanticRecap(text, {
         ledgerEntries: conversationLedgerRef.current.peek(Date.now()),
         getInterpreterCtx: getMedicationSemanticInterpreterCtx,
+        discourseMentions: discourseRef.current.peekDiscourseMentions(),
       });
       // Active Subject / Reference Continuity V1 (2026-09-xx). ONE generic
       // opportunity, tried only after recap declines — the two mechanisms'
@@ -2218,7 +2228,14 @@ export default function ChatScreen() {
         // path (unchanged); a resolved 'grounding' outcome attaches its
         // tier:'conversational' focus here — the ONE ledger push this whole
         // block already makes, not a second write.
-        focus: groundedFocus.length > 0 ? groundedFocus : continuityFocus,
+        focus: ledgerFocusWithConversationalTopic(
+          groundedFocus.length > 0 ? groundedFocus : continuityFocus,
+          {
+            operation: ledgerOperation,
+            utterance: text,
+            ...topicFactsForCurrentTurn(),
+          },
+        ),
       });
       addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
       addMessage({ id: generateId('msg'), role: 'assistant', content: realizedClarification.speech, timestamp: Date.now() });
@@ -2548,6 +2565,7 @@ export default function ChatScreen() {
             resolveImmediateRecap: () => answerImmediateSemanticRecap(text, {
               ledgerEntries: conversationLedgerRef.current.peek(Date.now()),
               getInterpreterCtx: getMedicationSemanticInterpreterCtx,
+              discourseMentions: discourseRef.current.peekDiscourseMentions(),
             }),
           });
           offlineReply = projectRealization(outcome.responseAct, seamOutcome.reply).speech;
@@ -2581,7 +2599,11 @@ export default function ChatScreen() {
           outcome: ledgerOutcome,
           authorityTier: ledgerAuthorityTier,
           assistantReplySummary: offlineReply,
-          focus: continuityFocus,
+          focus: ledgerFocusWithConversationalTopic(continuityFocus, {
+            operation: ledgerOperation,
+            utterance: text,
+            ...topicFactsForCurrentTurn(),
+          }),
         });
         addMessage({ id: generateId('msg'), role: 'user',
           content: text, timestamp: Date.now() });

@@ -17,12 +17,14 @@
 // a semantic mapping.
 
 import type { CommitResult, RouteDecision, DomainFocusEnvelope } from './routeIntent';
-import type {
-  ConversationTurnAuthorityTier,
-  ConversationTurnFocusEntry,
-  ConversationTurnFocusTier,
-  ConversationTurnOperation,
-  ConversationTurnOutcome,
+import { isUnsafeContinuityEvidence } from './discourseContinuity';
+import {
+  CONVERSATION_TURN_UTTERANCE_MAX_CHARS,
+  type ConversationTurnAuthorityTier,
+  type ConversationTurnFocusEntry,
+  type ConversationTurnFocusTier,
+  type ConversationTurnOperation,
+  type ConversationTurnOutcome,
 } from './conversationTurnLedger';
 
 export function commitResultOutcome(status: CommitResult['status']): ConversationTurnOutcome {
@@ -218,6 +220,41 @@ export function buildCommitLedgerFocus(
     );
   }
   return primary.concat(extras);
+}
+
+/**
+ * One conversational topic for an ordinary conversational turn that does not
+ * already carry a domain or person focus. User wording only. No model call,
+ * no inferred label, no durable write. A corrected-away mention id is
+ * recorded so recap can drop the topic; this function does not correct.
+ */
+export function ledgerFocusWithConversationalTopic(
+  existing: ConversationTurnFocusEntry[],
+  facts: {
+    operation: ConversationTurnOperation;
+    utterance: string;
+    groundedSpans?: string[];
+    discourseMentionIds?: string[];
+  },
+): ConversationTurnFocusEntry[] {
+  if (existing.length > 0) return existing;
+  if (facts.operation !== 'conversational') return existing;
+  const utterance = facts.utterance.trim();
+  if (!utterance || isUnsafeContinuityEvidence(utterance)) return existing;
+  const spans = [...new Set(
+    (facts.groundedSpans ?? [])
+      .map((span) => span.trim())
+      .filter((span) => span.length > 0 && utterance.includes(span) && !isUnsafeContinuityEvidence(span)),
+  )];
+  const displayValue = (spans.length === 1 ? spans[0]! : utterance).slice(0, CONVERSATION_TURN_UTTERANCE_MAX_CHARS);
+  const discourseMentionIds = [...new Set((facts.discourseMentionIds ?? []).filter((id) => id.length > 0))];
+  return [{
+    kind: 'topic',
+    displayValue,
+    referable: true,
+    tier: 'conversational',
+    ...(discourseMentionIds.length > 0 ? { discourseMentionIds } : {}),
+  }];
 }
 
 /** Orchestration-layer helper: attach continuity identity to an existing ledger write. */

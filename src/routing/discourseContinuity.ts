@@ -189,6 +189,11 @@ function isUnsafeEvidenceLine(text: string): boolean {
   return false;
 }
 
+/** Identifier-shaped lines stay out of continuity display text. */
+export function isUnsafeContinuityEvidence(text: string): boolean {
+  return isUnsafeEvidenceLine(text);
+}
+
 function boundEvidenceText(text: string): string {
   return text.trim().slice(0, TOPIC_EVIDENCE_MAX_CHARS);
 }

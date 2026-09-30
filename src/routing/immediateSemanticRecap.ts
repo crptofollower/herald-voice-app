@@ -221,12 +221,16 @@ export type RecapCandidate = {
  * within this consumer, generically (identity-keyed, not medical_capture-
  * specific).
  */
-export function buildRecapCandidates(entries: ConversationTurnRecord[]): RecapCandidate[] {
+export function buildRecapCandidates(
+  entries: ConversationTurnRecord[],
+  discourseMentions?: { mentionId: string; status: string }[],
+): RecapCandidate[] {
   const chosen: Omit<RecapCandidate, 'index'>[] = [];
   for (let i = entries.length - 1; i >= 0; i--) {
     const record = entries[i];
     for (const focus of record.focus) {
       if (!focus.referable) continue;
+      if (topicSuppressedByCorrection(focus, discourseMentions)) continue;
       const normValue = focus.displayValue.trim().toLowerCase();
       // Matches an already-chosen (more recent) representative either by
       // resolverKey equality, or by kind+displayValue equality when either
@@ -429,9 +433,21 @@ async function answerFromCandidate(c: RecapCandidate, diagSink?: AnswerFromCandi
   return { handled: true, reply, kind };
 }
 
+function topicSuppressedByCorrection(
+  focus: ConversationTurnFocusEntry,
+  discourseMentions: { mentionId: string; status: string }[] | undefined,
+): boolean {
+  if (focus.kind !== 'topic' || !focus.discourseMentionIds?.length || !discourseMentions) return false;
+  const linked = discourseMentions.filter((mention) => focus.discourseMentionIds!.includes(mention.mentionId));
+  if (linked.length === 0) return false;
+  return linked.some((mention) => mention.status === 'corrected_away');
+}
+
 export type ImmediateSemanticRecapDeps = {
   ledgerEntries: ConversationTurnRecord[];
   getInterpreterCtx?: () => LlamaContext | null;
+  /** Existing discourse correction status. Corrected-away topic mentions drop out. */
+  discourseMentions?: { mentionId: string; status: string }[];
 };
 
 /**
@@ -446,7 +462,7 @@ export async function answerImmediateSemanticRecap(
   text: string,
   deps: ImmediateSemanticRecapDeps,
 ): Promise<ImmediateRecapOutcome> {
-  const candidates = buildRecapCandidates(deps.ledgerEntries);
+  const candidates = buildRecapCandidates(deps.ledgerEntries, deps.discourseMentions);
   const diagCandidates = candidates.map(toDiagCandidate);
   const utteranceNormalized = boundDiagText(text, DIAG_UTTERANCE_MAX_CHARS);
 

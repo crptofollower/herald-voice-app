@@ -23,8 +23,9 @@
 // focus:[] forcing, which is no longer needed once tier has nowhere for a
 // domain to smuggle it in from): DomainFocusEnvelope (conversationTurnLedgerWrite.ts)
 // has no tier field at all. There is nothing to trust or distrust from the
-// domain; buildFocusEntry() is the only function in the codebase that
-// constructs a ConversationTurnFocusEntry's `tier`.
+// domain; buildFocusEntry() classifies domain envelopes. Conversational
+// topic publication is the other constructor, and it hardcodes tier
+// 'conversational' — never a domain authority tier.
 
 export const CONVERSATION_TURN_LEDGER_MAX_RECORDS = 12;
 export const CONVERSATION_TURN_LEDGER_TTL_MS = 10 * 60 * 1000; // 10 minutes
@@ -79,12 +80,15 @@ export type ConversationTurnFocusTier =
  * record's intent.
  */
 export type ConversationTurnFocusEntry = {
-  kind: 'person' | 'thing' | 'event' | 'collection' | 'item';
+  kind: 'person' | 'thing' | 'event' | 'collection' | 'item' | 'topic';
   displayValue: string;
   resolverKey?: string;
   referable: boolean;
   role?: 'primary' | 'secondary';
   tier: ConversationTurnFocusTier;
+  /** Discourse mentions whose correction suppresses this topic. Provenance
+   *  for turn index, utterance, and time stays on the enclosing record. */
+  discourseMentionIds?: string[];
 };
 
 export type ConversationTurnRecord = {
@@ -113,9 +117,9 @@ export type ConversationTurnRecord = {
 };
 
 /** Write sites supply `focus` as an already-built ConversationTurnFocusEntry[]
- *  (via conversationTurnLedgerWrite.ts's buildFocusEntry() — the only
- *  function that constructs one) or omit it, defaulting to []. This module
- *  does not interpret, validate, or compute `tier` — see module doc. */
+ *  (domain envelopes via buildFocusEntry(), conversational topics via
+ *  ledgerFocusWithConversationalTopic()) or omit it, defaulting to []. This
+ *  module does not interpret, validate, or compute `tier` — see module doc. */
 export type NewConversationTurnRecord = Omit<ConversationTurnRecord, 'turnIndex' | 'focus'> & {
   focus?: ConversationTurnFocusEntry[];
 };
