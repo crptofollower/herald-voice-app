@@ -5,6 +5,16 @@ import { classifyWithLLM, type ClassifyOutcome } from '../hooks/llmLayers';
 import { beginCtxCompletion, mono as latMono, observeCtxCompletionEnd } from '../utils/latencyInstrument';
 import { noteReferenceInvocation } from '../dev/semanticJourneyEvidence';
 import { runSharedSemanticCompletion, type SemanticCompletionRunOptions } from '../utils/semanticCompletionLifecycle';
+import {
+  DISCOURSE_OUTPUT_MAX_ITEMS,
+  DISCOURSE_OUTPUT_SPAN_MAX_CHARS,
+  closedRecord,
+  discourseBoundedResponseFormat,
+  isDiscourseMarkValue,
+  isDiscourseSpanKind,
+  isDiscourseStructuredKind,
+  parseClosedJson,
+} from './boundedOutputContracts';
 import type { LlamaContext } from 'llama.rn';
 
 export type SpecialistInferenceKind =
@@ -144,7 +154,9 @@ export async function completeBoundedInterpretation(
     return { status: 'unavailable' };
   }
   if (!ctx || typeof ctx.completion !== 'function') return { status: 'unavailable' };
-  const run = await runSharedSemanticCompletion(() => ctx, params, {
+  const completionParams = discourseCompletionParams(kind, params);
+  if (completionParams == null) return { status: 'unavailable' };
+  const run = await runSharedSemanticCompletion(() => ctx, completionParams, {
     callerDeadlineMs: opts?.timeoutMs ?? REFERENCE_SEMANTIC_TIMEOUT_MS,
   });
   if (run.status !== 'ok') return { status: 'unavailable' };
@@ -242,23 +254,33 @@ export type DiscourseMentionProposalItem = {
   kind: string;
 };
 
-/** Current-turn span proposals. Null means admit nothing. Offsets in the payload are ignored. */
+function callerSuppliedOutputConstraint(params: unknown): boolean {
+  if (!params || typeof params !== 'object') return false;
+  const row = params as Record<string, unknown>;
+  return 'response_format' in row || 'json_schema' in row || 'grammar' in row;
+}
+
+/** Discourse completions carry the role schema. Other kinds pass through. A caller-supplied grammar is refused. */
+function discourseCompletionParams(kind: string, params: unknown): unknown | null {
+  if (!isDiscourseStructuredKind(kind)) return params;
+  if (callerSuppliedOutputConstraint(params)) return null;
+  if (!params || typeof params !== 'object' || Array.isArray(params)) return null;
+  return {
+    ...(params as Record<string, unknown>),
+    response_format: discourseBoundedResponseFormat(kind),
+  };
+}
+
+/** Current-turn span proposals. Null means admit nothing. The trimmed text must be one closed array. */
 export function parseDiscourseMentionPayload(raw: string): DiscourseMentionProposalItem[] | null {
-  const start = raw.indexOf('[');
-  const end = raw.lastIndexOf(']');
-  if (start < 0 || end <= start) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw.slice(start, end + 1));
-  } catch {
-    return null;
-  }
-  if (!Array.isArray(parsed)) return null;
+  const parsed = parseClosedJson(raw);
+  if (!Array.isArray(parsed) || parsed.length > DISCOURSE_OUTPUT_MAX_ITEMS) return null;
   const items: DiscourseMentionProposalItem[] = [];
   for (const item of parsed) {
-    if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
-    const row = item as Record<string, unknown>;
-    if (typeof row.span !== 'string' || typeof row.kind !== 'string') return null;
+    const row = closedRecord(item, ['span', 'kind'], ['span', 'kind']);
+    if (!row) return null;
+    if (typeof row.span !== 'string' || row.span.length > DISCOURSE_OUTPUT_SPAN_MAX_CHARS) return null;
+    if (!isDiscourseSpanKind(row.kind)) return null;
     items.push({ span: row.span, kind: row.kind });
   }
   return items;
@@ -320,31 +342,25 @@ function applicabilityValueHasForbiddenKey(value: unknown): boolean {
   return false;
 }
 
-/** Compatibility marks only. Null is fail-closed. Winner fields reject the payload. */
+/** Compatibility marks only. Null is fail-closed. The trimmed text must be one closed object. */
 export function parseDiscourseApplicabilityPayload(raw: string): DiscourseApplicabilityPayload | null {
-  const start = raw.indexOf('{');
-  const end = raw.lastIndexOf('}');
-  if (start < 0 || end <= start) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw.slice(start, end + 1));
-  } catch {
-    return null;
-  }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const parsed = parseClosedJson(raw);
   if (applicabilityValueHasForbiddenKey(parsed)) return null;
-  const row = parsed as Record<string, unknown>;
+  const row = closedRecord(
+    parsed,
+    ['utterance_applicable', 'marks', 'reference_attempt'],
+    ['utterance_applicable', 'marks'],
+  );
+  if (!row) return null;
   if (typeof row.utterance_applicable !== 'boolean' || !Array.isArray(row.marks)) return null;
+  if (row.marks.length > DISCOURSE_OUTPUT_MAX_ITEMS) return null;
   if ('reference_attempt' in row && typeof row.reference_attempt !== 'boolean') return null;
   const marks: Array<{ handle: string; mark: string }> = [];
   for (const item of row.marks) {
-    if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
     if (applicabilityValueHasForbiddenKey(item)) return null;
-    const markRow = item as Record<string, unknown>;
-    if (typeof markRow.handle !== 'string' || typeof markRow.mark !== 'string') return null;
-    if (markRow.mark !== 'compatible' && markRow.mark !== 'incompatible' && markRow.mark !== 'uncertain') {
-      return null;
-    }
+    const markRow = closedRecord(item, ['handle', 'mark'], ['handle', 'mark']);
+    if (!markRow) return null;
+    if (typeof markRow.handle !== 'string' || !isDiscourseMarkValue(markRow.mark)) return null;
     marks.push({ handle: markRow.handle, mark: markRow.mark });
   }
   return {
@@ -414,14 +430,13 @@ function correctionValueHasForbiddenKey(value: unknown): boolean {
 }
 
 function correctionMarks(value: unknown): Array<{ handle: string; mark: string }> | null {
-  if (!Array.isArray(value)) return null;
+  if (!Array.isArray(value) || value.length > DISCOURSE_OUTPUT_MAX_ITEMS) return null;
   const marks: Array<{ handle: string; mark: string }> = [];
   for (const item of value) {
-    if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
     if (correctionValueHasForbiddenKey(item)) return null;
-    const row = item as Record<string, unknown>;
-    if (typeof row.handle !== 'string' || typeof row.mark !== 'string') return null;
-    if (row.mark !== 'compatible' && row.mark !== 'incompatible' && row.mark !== 'uncertain') return null;
+    const row = closedRecord(item, ['handle', 'mark'], ['handle', 'mark']);
+    if (!row) return null;
+    if (typeof row.handle !== 'string' || !isDiscourseMarkValue(row.mark)) return null;
     marks.push({ handle: row.handle, mark: row.mark });
   }
   return marks;
@@ -429,31 +444,26 @@ function correctionMarks(value: unknown): Array<{ handle: string; mark: string }
 
 /** Compatibility sets only. Null rejects the whole payload, including any replacement operation. */
 export function parseDiscourseCorrectionPayload(raw: string): DiscourseCorrectionPayload | null {
-  const start = raw.indexOf('{');
-  const end = raw.lastIndexOf('}');
-  if (start < 0 || end <= start) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw.slice(start, end + 1));
-  } catch {
-    return null;
-  }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const parsed = parseClosedJson(raw);
   if (correctionValueHasForbiddenKey(parsed)) return null;
-  const row = parsed as Record<string, unknown>;
-  if (typeof row.correction_turn !== 'boolean') return null;
+  const row = closedRecord(
+    parsed,
+    ['correction_turn', 'target_marks', 'replacement_marks', 'new_spans'],
+    ['correction_turn', 'target_marks', 'replacement_marks'],
+  );
+  if (!row || typeof row.correction_turn !== 'boolean') return null;
   const targetMarks = correctionMarks(row.target_marks);
   const replacementMarks = correctionMarks(row.replacement_marks);
   if (!targetMarks || !replacementMarks) return null;
   const newSpans: Array<{ span: string; kind: string }> = [];
   if (row.new_spans !== undefined) {
-    if (!Array.isArray(row.new_spans)) return null;
+    if (!Array.isArray(row.new_spans) || row.new_spans.length > DISCOURSE_OUTPUT_MAX_ITEMS) return null;
     for (const item of row.new_spans) {
-      if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
       if (correctionValueHasForbiddenKey(item)) return null;
-      const spanRow = item as Record<string, unknown>;
-      if (typeof spanRow.span !== 'string' || typeof spanRow.kind !== 'string') return null;
-      if (spanRow.kind !== 'person' && spanRow.kind !== 'place' && spanRow.kind !== 'event_or_topic') return null;
+      const spanRow = closedRecord(item, ['span', 'kind'], ['span', 'kind']);
+      if (!spanRow) return null;
+      if (typeof spanRow.span !== 'string' || spanRow.span.length > DISCOURSE_OUTPUT_SPAN_MAX_CHARS) return null;
+      if (!isDiscourseSpanKind(spanRow.kind)) return null;
       newSpans.push({ span: spanRow.span, kind: spanRow.kind });
     }
   }

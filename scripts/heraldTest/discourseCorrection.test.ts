@@ -500,7 +500,7 @@ export async function runDiscourseCorrectionTests() {
                     { handle: trip.mentionId, mark: 'incompatible' },
                   ],
                   replacement_marks: [],
-                  new_spans: [{ span: 'Italy', kind: 'place', start: 0, end: 1 }],
+                  new_spans: [{ span: 'Italy', kind: 'place' }],
                 }),
               };
             }

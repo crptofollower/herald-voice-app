@@ -246,8 +246,8 @@ export async function runDiscourseMentionProposalTests() {
         completion: async (params: { prompt?: string }) => {
           if (typeof params?.prompt === 'string') prompts.push(params.prompt);
           return { text: JSON.stringify([
-            { span: 'trip', kind: 'event_or_topic', start: 0, end: 1 },
-            { span: 'Ireland', kind: 'place', start: 99, end: 100 },
+            { span: 'trip', kind: 'event_or_topic' },
+            { span: 'Ireland', kind: 'place' },
           ]) };
         },
       }),
@@ -292,9 +292,10 @@ export async function runDiscourseMentionProposalTests() {
   }
 
   {
-    assert('the payload parser keeps span and kind and drops offsets',
-      JSON.stringify(parseDiscourseMentionPayload('[{"span":"Ireland","kind":"place","start":3,"end":9}]'))
+    assert('the payload parser accepts a closed span and rejects offset keys',
+      JSON.stringify(parseDiscourseMentionPayload('[{"span":"Ireland","kind":"place"}]'))
         === JSON.stringify([{ span: 'Ireland', kind: 'place' }])
+      && parseDiscourseMentionPayload('[{"span":"Ireland","kind":"place","start":3,"end":9}]') === null
       && parseDiscourseMentionPayload('not json') === null);
   }
 
