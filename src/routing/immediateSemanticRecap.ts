@@ -206,6 +206,12 @@ const RECAP_FRAME_WORDS = new Set([
   'for', 'that', 'this', 'with', 'from', 'have', 'had', 'been', 'are',
 ]);
 
+/** Same short-utterance ceiling as the reference-question prefilter. Not widened for resumption examples. */
+const RESUMPTION_UTTERANCE_MAX_WORDS = 9;
+
+/** Closed structural residue of a resumption utterance. Not a phrase list. */
+const RESUMPTION_STRUCTURAL_WORDS = new Set(['back', 'thing', 'let', 'lets', 'again', 'earlier']);
+
 function contentTokens(text: string): string[] {
   return text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((word) => word.length >= 3 && !RECAP_FRAME_WORDS.has(word));
 }
@@ -243,6 +249,55 @@ function genericTopicWindow(
   }
   topics.reverse();
   return topics.slice(-2);
+}
+
+function conversationalTopicOf(
+  record: ConversationTurnRecord,
+  discourseMentions: { mentionId: string; status: string }[] | undefined,
+): ConversationTurnFocusEntry | null {
+  return record.focus.find((focus) =>
+    focus.kind === 'topic'
+    && focus.tier === 'conversational'
+    && focus.referable
+    && !topicSuppressedByCorrection(focus, discourseMentions)) ?? null;
+}
+
+/** Topics of the conversational segment immediately before the latest interruption.
+ *  The newest record must be a separator. No separator means there is no interrupted thread. */
+function interruptedTopicWindow(
+  entries: ConversationTurnRecord[],
+  discourseMentions: { mentionId: string; status: string }[] | undefined,
+): ConversationTurnFocusEntry[] | null {
+  const now = Date.now();
+  const live = entries.filter((entry) => now - entry.establishedAt <= CONVERSATION_TURN_LEDGER_TTL_MS);
+  let index = live.length - 1;
+  if (index < 0 || !breaksConversationalSegment(live[index]!)) return null;
+  while (index >= 0 && breaksConversationalSegment(live[index]!)) index -= 1;
+  const topics: ConversationTurnFocusEntry[] = [];
+  while (index >= 0 && !breaksConversationalSegment(live[index]!)) {
+    const topic = conversationalTopicOf(live[index]!, discourseMentions);
+    if (topic) topics.push(topic);
+    index -= 1;
+  }
+  if (topics.length === 0) return null;
+  topics.reverse();
+  return topics.slice(-2);
+}
+
+function isResumptionBoundedDeclarative(text: string): boolean {
+  if (!text.trim() || isStructurallyQuestionShaped(text)) return false;
+  const words = text.trim().replace(/[?.!,]+/g, ' ').split(/\s+/).filter(Boolean);
+  return words.length >= 1 && words.length <= RESUMPTION_UTTERANCE_MAX_WORDS;
+}
+
+function substantiveTokens(text: string): string[] {
+  return contentTokens(text).filter((word) => !RESUMPTION_STRUCTURAL_WORDS.has(word));
+}
+
+function topicsOverlapping(text: string, topics: ConversationTurnFocusEntry[]): ConversationTurnFocusEntry[] {
+  const asked = new Set(substantiveTokens(text));
+  if (asked.size === 0) return [];
+  return topics.filter((topic) => contentTokens(topic.displayValue).some((word) => asked.has(word)));
 }
 
 const HONEST_RECAP_MISS = "I don't have anything recent to go on — what were you referring to?";
@@ -393,6 +448,8 @@ export type RecapInterpretationProposal = {
    *  discipline as medicationSemanticInterpretation.ts's provenance checks. */
   selectedIndex: number | null;
   confidence: number;
+  /** Optional act. Absent keeps the prior question-recap parse. */
+  act?: 'recap' | 'resume' | 'none';
 };
 
 export function parseRecapInterpretationProposal(
@@ -419,7 +476,13 @@ export function parseRecapInterpretationProposal(
     if (o.selectedIndex < 0 || o.selectedIndex >= candidateCount) return null; // structural anti-fabrication bound
     selectedIndex = o.selectedIndex;
   }
-  return { isImmediateRecap: o.isImmediateRecap, selectedIndex, confidence: o.confidence };
+  if (o.act !== undefined && o.act !== 'recap' && o.act !== 'resume' && o.act !== 'none') return null;
+  return {
+    isImmediateRecap: o.isImmediateRecap,
+    selectedIndex,
+    confidence: o.confidence,
+    ...(o.act === 'recap' || o.act === 'resume' || o.act === 'none' ? { act: o.act } : {}),
+  };
 }
 
 export const RECAP_INTERPRETATION_SYSTEM_PROMPT = `You classify whether the user is asking Herald to recap or remind them of something THEY just told Herald in this conversation — never a fresh question, never asking about someone else, never asking what Herald itself said.
@@ -428,7 +491,8 @@ Return ONLY a JSON object with these keys:
 isImmediateRecap: true only if the user is asking to be reminded/told again what THEY said/mentioned/told Herald a moment ago
 selectedIndex: the number of the single candidate being asked about, or null if unclear or not applicable
 confidence: number 0 to 1
-Do not explain. Do not add fields.`;
+act: "recap" when they are asking to be reminded, "resume" when they are returning to an interrupted conversation, or "none"
+Do not explain.`;
 
 export function buildRecapInterpretationUserPrompt(raw: string, candidates: RecapCandidate[]): string {
   const list = candidates.map((c) => `${c.index}. ${c.displayValue}`).join('\n');
@@ -735,8 +799,52 @@ export async function answerImmediateSemanticRecap(
     return { handled: false };
   }
   // Candidate presence is not evidence that this turn is asking for a recap.
-  // Ordinary declaratives do not consult Stage B.
+  // Ordinary declaratives do not consult Stage B. A declarative may be a
+  // resumption candidate only when an interrupted topic segment exists, the
+  // utterance adds no unlinked substantive content, and it stays inside the
+  // short-utterance bound. Stage B may then propose resume; it cannot select.
   if (!isStructurallyQuestionShaped(text)) {
+    const segment = interruptedTopicWindow(deps.ledgerEntries, deps.discourseMentions);
+    const substantive = substantiveTokens(text);
+    const linked = segment ? topicsOverlapping(text, segment) : [];
+    const resumptionCandidate = segment !== null
+      && isResumptionBoundedDeclarative(text)
+      && (substantive.length === 0 || linked.length > 0);
+    if (resumptionCandidate && segment) {
+      const segmentCandidates: RecapCandidate[] = segment.map((focus, index) => ({
+        index,
+        kind: focus.kind,
+        displayValue: focus.displayValue,
+        record: deps.ledgerEntries.find((entry) => entry.focus.includes(focus)) ?? deps.ledgerEntries[deps.ledgerEntries.length - 1]!,
+        focus,
+        intentType: null,
+      }));
+      const generation = await generateRecapInterpretationProposal(text, segmentCandidates, deps.getInterpreterCtx!);
+      if (generation.status !== 'ok') {
+        emitDiag({ stageB: { status: generation.status }, selectedCandidateIndex: null, selectedCandidateTier: null, adapterFound: null, rereadOutcome: 'not_applicable', finalResult: 'not_recap' });
+        return { handled: false };
+      }
+      const { proposal } = generation;
+      const stageBDiag: ImmediateRecapDiagStageB = { status: 'ok', isImmediateRecap: proposal.isImmediateRecap, selectedIndex: proposal.selectedIndex, confidence: proposal.confidence };
+      if (proposal.act !== 'resume' || proposal.confidence < RECAP_INTERPRETATION_CONFIDENCE_THRESHOLD) {
+        emitDiag({ stageB: stageBDiag, selectedCandidateIndex: null, selectedCandidateTier: null, adapterFound: null, rereadOutcome: 'not_applicable', finalResult: 'not_recap' });
+        return { handled: false };
+      }
+      if (substantive.length === 0) {
+        emitDiag({ stageB: stageBDiag, selectedCandidateIndex: null, selectedCandidateTier: null, adapterFound: null, rereadOutcome: 'not_applicable', finalResult: 'answered_conversational' });
+        return { handled: true, reply: realizeConversationalRecap(segment.map((topic) => topic.displayValue)), kind: 'conversational_recap' };
+      }
+      if (linked.length === 1) {
+        emitDiag({ stageB: stageBDiag, selectedCandidateIndex: null, selectedCandidateTier: linked[0]!.tier, adapterFound: null, rereadOutcome: 'not_applicable', finalResult: 'answered_conversational' });
+        return { handled: true, reply: realizeConversationalRecap([linked[0]!.displayValue]), kind: 'conversational_recap' };
+      }
+      emitDiag({ stageB: stageBDiag, selectedCandidateIndex: null, selectedCandidateTier: null, adapterFound: null, rereadOutcome: 'not_applicable', finalResult: 'clarify_ambiguous' });
+      return {
+        handled: true,
+        reply: `Did you mean ${linked.slice(0, 3).map((topic) => topic.displayValue).join(' or ')}?`,
+        kind: 'clarify_ambiguous',
+      };
+    }
     emitDiag({
       stageB: { status: 'not_invoked' },
       selectedCandidateIndex: null, selectedCandidateTier: null, adapterFound: null, rereadOutcome: 'not_applicable',
