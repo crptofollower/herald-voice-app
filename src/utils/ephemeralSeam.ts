@@ -210,8 +210,8 @@ export function mayRunGenerativeEphemeralPersonalProse(input: {
 }
 
 export type EphemeralSeamOutcome =
-  | { kind: 'authoritative'; reply: string }
-  | { kind: 'clarify'; reply: string; grantContinuation: boolean }
+  | { kind: 'authoritative'; reply: string; source?: 'recap' }
+  | { kind: 'clarify'; reply: string; grantContinuation: boolean; source?: 'recap' }
   | { kind: 'generative'; reply: string; grantContinuation: boolean };
 
 export async function resolveEphemeralSeam(input: {
@@ -255,9 +255,9 @@ export async function resolveEphemeralSeam(input: {
       // user's disambiguating follow-up turn — the same benefit any other
       // clarify already gets. Every other recap outcome is a final answer.
       if (recap.kind === 'clarify_ambiguous') {
-        return { kind: 'clarify', reply: recap.reply, grantContinuation: true };
+        return { kind: 'clarify', reply: recap.reply, grantContinuation: true, source: 'recap' };
       }
-      return { kind: 'authoritative', reply: recap.reply };
+      return { kind: 'authoritative', reply: recap.reply, source: 'recap' };
     }
   }
 

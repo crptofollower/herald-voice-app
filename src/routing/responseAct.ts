@@ -112,3 +112,8 @@ export function projectRealization(act: ResponseAct | undefined, realizedSpeech:
   if (!act || act.text.length === 0) return { act, speech: realizedSpeech };
   return { act, speech: act.text };
 }
+
+/** Immediate Recap already owns the spoken reply. A same-turn acknowledgement is not supplied to projectRealization. */
+export function realizationActForTurn(recapOwned: boolean, act: ResponseAct | undefined): ResponseAct | undefined {
+  return recapOwned ? undefined : act;
+}

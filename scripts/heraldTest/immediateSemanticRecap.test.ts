@@ -473,7 +473,6 @@ export async function runImmediateSemanticRecapTests() {
     const commit = rec({ focus: [{ kind: 'thing', displayValue: 'Eliquis', referable: true, tier: 'llm_proposal' }] });
     const eligible = [
       'What was the medicine I just mentioned again?',
-      'What was I talking about?',
       'Who was I talking about?',
     ];
     for (const utterance of eligible) {
@@ -488,6 +487,20 @@ export async function runImmediateSemanticRecapTests() {
         && outcome.handled === true
         && outcome.kind === 'proposal_recap');
     }
+  }
+  {
+    const commit = rec({ focus: [{ kind: 'thing', displayValue: 'Eliquis', referable: true, tier: 'llm_proposal' }] });
+    const completions = { n: 0 };
+    const outcome = await answerImmediateSemanticRecap('What was I talking about?', {
+      ledgerEntries: [commit],
+      getInterpreterCtx: hostileRecapCtx({ n: 0 }, completions),
+    });
+    assertTrue('What was I talking about? selects the single non-person candidate without Stage B',
+      !classifyImmediateRecapDeterministic('What was I talking about?')
+      && completions.n === 0
+      && outcome.handled === true
+      && outcome.kind === 'proposal_recap'
+      && outcome.reply.includes('Eliquis'));
   }
   {
     const commit = rec({ focus: [{ kind: 'thing', displayValue: 'Eliquis', referable: true, tier: 'llm_proposal' }] });

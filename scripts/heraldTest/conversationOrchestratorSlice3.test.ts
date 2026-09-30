@@ -60,7 +60,8 @@ export async function runConversationOrchestratorSlice3Tests() {
   assert('ChatScreen consumes a present act and does not infer one',
     chatSrc.includes('projectRealization(outcome.responseAct, outcome.responseText)')
     && chatSrc.includes('projectRealization(outcome.responseAct, rdTier1Response)')
-    && chatSrc.includes('projectRealization(outcome.responseAct, reply)')
+    && chatSrc.includes('realizationActForTurn(recapOutcome.handled, outcome.responseAct)')
+    && chatSrc.includes('projectRealization(\n        realizationActForTurn(recapOutcome.handled, outcome.responseAct),\n        reply,\n      )')
     && chatSrc.includes('projectRealization(outcome.responseAct, notReadyReply)')
     && !chatSrc.includes("responseText.includes(")
     && !chatSrc.includes("responseText.match(")

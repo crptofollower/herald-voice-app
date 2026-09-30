@@ -36,7 +36,11 @@
 import type { LlamaContext } from 'llama.rn';
 import { isCatalogMedicationReadUtterance } from '../utils/detectMedicalEvent';
 import { completeBoundedInterpretation } from './semanticProvider';
-import type { ConversationTurnFocusEntry, ConversationTurnRecord } from './conversationTurnLedger';
+import {
+  CONVERSATION_TURN_LEDGER_TTL_MS,
+  type ConversationTurnFocusEntry,
+  type ConversationTurnRecord,
+} from './conversationTurnLedger';
 import {
   logSemanticRecapInferenceEnd,
   logSemanticRecapInferenceStart,
@@ -160,6 +164,131 @@ export function classifyImmediateRecapDeterministic(text: string): boolean {
   if (ASSISTANT_RECAP_RE.test(t)) return false;
   if (recapYieldsToActiveSubject(t)) return false;
   return IMMEDIATE_RECAP_RE.test(t) || REMIND_ME_RE.test(t);
+}
+
+const GENERIC_WHERE_RE = /^(?:do you know\s+)?where were we\s*[?.!]*$/i;
+const GENERIC_THREAD_RE =
+  /^(?:do you know\s+)?what\s+(?:were\s+we|we\s+were)\s+(?:just\s+)?talking about\s*[?.!]*$/i;
+const GENERIC_SAYING_RE =
+  /^(?:do you know\s+)?what\s+was\s+i\s+(?:just\s+)?saying\s*[?.!]*$/i;
+const BARE_SELF_RECAP_RE =
+  /^(?:what|which)\s+(?:did|was)\s+i\s+(?:just\s+)?(?:tell you|say|mention|saying|telling you|mentioning)\s*[?.!]*$/i;
+const BARE_REMIND_RE =
+  /^remind me what i\s+(?:just\s+)?(?:said|told you|mentioned)\s*[?.!]*$/i;
+const CONTENT_TALKING_ABOUT_RE =
+  /^what\s+was\s+i\s+(?:just\s+)?talking about\s*[?.!]*$/i;
+
+function normalizedRecapText(text: string): string {
+  return normalizeContractions(text.trim()).replace(/\s+/g, ' ');
+}
+
+/** Thread recap of the latest conversational segment. Not a who-question and not a specific discriminator. */
+function isGenericConversationalRecap(text: string): boolean {
+  const t = normalizedRecapText(text);
+  if (!t || isContentTalkingAbout(text)) return false;
+  if (ASSISTANT_RECAP_RE.test(t) || isCatalogMedicationReadUtterance(text)) return false;
+  return GENERIC_WHERE_RE.test(t)
+    || GENERIC_THREAD_RE.test(t)
+    || GENERIC_SAYING_RE.test(t)
+    || BARE_SELF_RECAP_RE.test(t)
+    || BARE_REMIND_RE.test(t);
+}
+
+/** Content-shaped "what was I talking about". Specific selection, never person identity. */
+function isContentTalkingAbout(text: string): boolean {
+  return CONTENT_TALKING_ABOUT_RE.test(normalizedRecapText(text));
+}
+
+const RECAP_FRAME_WORDS = new Set([
+  'what', 'which', 'did', 'was', 'were', 'just', 'tell', 'told', 'telling',
+  'say', 'saying', 'said', 'mention', 'mentioned', 'mentioning', 'about',
+  'the', 'you', 'remind', 'please', 'know', 'where', 'talking', 'and',
+  'for', 'that', 'this', 'with', 'from', 'have', 'had', 'been', 'are',
+]);
+
+function contentTokens(text: string): string[] {
+  return text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((word) => word.length >= 3 && !RECAP_FRAME_WORDS.has(word));
+}
+
+function uniqueContentOverlap(utterance: string, candidates: RecapCandidate[]): RecapCandidate | null {
+  const asked = new Set(contentTokens(utterance));
+  if (asked.size === 0) return null;
+  const hits = candidates.filter((candidate) => contentTokens(candidate.displayValue).some((word) => asked.has(word)));
+  return hits.length === 1 ? hits[0]! : null;
+}
+
+function breaksConversationalSegment(record: ConversationTurnRecord): boolean {
+  if (record.operation === 'capture' || record.operation === 'action' || record.operation === 'clarify_request' || record.operation === 'clarify_resolution') {
+    return true;
+  }
+  return record.focus.some((focus) => focus.referable && focus.kind !== 'topic');
+}
+
+function genericTopicWindow(
+  entries: ConversationTurnRecord[],
+  discourseMentions: { mentionId: string; status: string }[] | undefined,
+): ConversationTurnFocusEntry[] {
+  const now = Date.now();
+  const live = entries.filter((entry) => now - entry.establishedAt <= CONVERSATION_TURN_LEDGER_TTL_MS);
+  const topics: ConversationTurnFocusEntry[] = [];
+  for (let i = live.length - 1; i >= 0; i--) {
+    const record = live[i]!;
+    if (breaksConversationalSegment(record)) break;
+    const topic = record.focus.find((focus) =>
+      focus.kind === 'topic'
+      && focus.tier === 'conversational'
+      && focus.referable
+      && !topicSuppressedByCorrection(focus, discourseMentions));
+    if (topic) topics.push(topic);
+  }
+  topics.reverse();
+  return topics.slice(-2);
+}
+
+const HONEST_RECAP_MISS = "I don't have anything recent to go on — what were you referring to?";
+
+/** Closed user→addressee map for Herald-spoken conversational recap.
+ *  Longer contractions first. Quoted spans are left untouched. Not a
+ *  general pronoun rewriter and not a paraphrase. */
+const CLOSED_PERSPECTIVE: Array<[RegExp, string]> = [
+  [/(?<![\p{L}\p{N}])I['\u2019]m(?![\p{L}\p{N}])/giu, "you're"],
+  [/(?<![\p{L}\p{N}])I['\u2019]ve(?![\p{L}\p{N}])/giu, "you'd"],
+  [/(?<![\p{L}\p{N}])I['\u2019]d(?![\p{L}\p{N}])/giu, "you'd"],
+  [/(?<![\p{L}\p{N}])I['\u2019]ll(?![\p{L}\p{N}])/giu, "you'll"],
+  [/(?<![\p{L}\p{N}])I(?![\p{L}\p{N}'’])/giu, "you"],
+  [/(?<![\p{L}\p{N}])my(?![\p{L}\p{N}])/giu, "your"],
+  [/(?<![\p{L}\p{N}])me(?![\p{L}\p{N}])/giu, "you"],
+];
+
+function shiftUserPerspective(text: string): string {
+  return text.replace(/"[^"]*"|“[^”]*”|[^"“”]+/g, (span) => {
+    if (span.startsWith('"') || span.startsWith('“')) return span;
+    let out = span;
+    for (const [pattern, replacement] of CLOSED_PERSPECTIVE) out = out.replace(pattern, replacement);
+    return out;
+  });
+}
+
+function conversationalRecapClause(displayValue: string): string {
+  return shiftUserPerspective(displayValue.trim().replace(/[.?!]+$/u, '').trim());
+}
+
+function realizeConversationalRecap(displayValues: string[]): string {
+  const clauses = displayValues.map(conversationalRecapClause).filter((clause) => clause.length > 0);
+  if (clauses.length === 0) return HONEST_RECAP_MISS;
+  if (clauses.length === 1) return `You mentioned ${clauses[0]}.`;
+  return `You mentioned ${clauses[0]}, and that ${clauses[1]}.`;
+}
+
+function realizeGenericWindow(topics: ConversationTurnFocusEntry[]): ImmediateRecapOutcome {
+  if (topics.length === 0) {
+    return { handled: true, reply: HONEST_RECAP_MISS, kind: 'honest_miss' };
+  }
+  return {
+    handled: true,
+    reply: realizeConversationalRecap(topics.map((topic) => topic.displayValue)),
+    kind: 'conversational_recap',
+  };
 }
 
 /** Reachability only. The same structural question class already used to
@@ -398,7 +527,7 @@ function frameCandidate(c: RecapCandidate): { reply: string; kind: ImmediateReca
   if (tier === 'llm_proposal') {
     return { reply: `It sounded like you meant ${c.displayValue}, though I'm not fully sure — want to confirm?`, kind: 'proposal_recap' };
   }
-  return { reply: `You mentioned ${c.displayValue}.`, kind: 'conversational_recap' };
+  return { reply: realizeConversationalRecap([c.displayValue]), kind: 'conversational_recap' };
 }
 
 /** Diagnostics-only sink (2026-09-xx device gate) — optional, written to as
@@ -510,10 +639,69 @@ export async function answerImmediateSemanticRecap(
 
   const deterministic = classifyImmediateRecapDeterministic(text);
 
+  if (isGenericConversationalRecap(text)) {
+    const window = genericTopicWindow(deps.ledgerEntries, deps.discourseMentions);
+    if (window.length > 0 || !deterministic) {
+      const outcome = realizeGenericWindow(window);
+      emitDiag({
+        stageB: { status: 'not_invoked' },
+        selectedCandidateIndex: null,
+        selectedCandidateTier: window.length === 1 ? window[0]!.tier : null,
+        adapterFound: null,
+        rereadOutcome: 'not_applicable',
+        finalResult: outcome.kind === 'honest_miss' ? 'no_candidate' : 'answered_conversational',
+      });
+      return outcome;
+    }
+  }
+
+  if (isContentTalkingAbout(text)) {
+    const contentCandidates = candidates.filter((candidate) => candidate.kind !== 'person');
+    const discriminated = uniqueContentOverlap(text, contentCandidates);
+    if (contentCandidates.length === 0) {
+      emitDiag({ stageB: { status: 'not_invoked' }, selectedCandidateIndex: null, selectedCandidateTier: null, adapterFound: null, rereadOutcome: 'not_applicable', finalResult: 'no_candidate' });
+      return { handled: true, reply: HONEST_RECAP_MISS, kind: 'honest_miss' };
+    }
+    if (discriminated || contentCandidates.length === 1) {
+      const chosen = discriminated ?? contentCandidates[0]!;
+      const diagSink: AnswerFromCandidateDiagSink = {};
+      const outcome = await answerFromCandidate(chosen, diagSink);
+      emitDiag({
+        stageB: { status: 'not_invoked' },
+        selectedCandidateIndex: chosen.index,
+        selectedCandidateTier: chosen.focus.tier,
+        adapterFound: diagSink.adapterFound ?? null,
+        rereadOutcome: diagSink.rereadOutcome ?? 'not_applicable',
+        finalResult: diagFinalResultFromOutcome(outcome),
+      });
+      return outcome;
+    }
+    emitDiag({ stageB: { status: 'not_invoked' }, selectedCandidateIndex: null, selectedCandidateTier: null, adapterFound: null, rereadOutcome: 'not_applicable', finalResult: 'clarify_ambiguous' });
+    return {
+      handled: true,
+      reply: `Did you mean ${contentCandidates.slice(0, 3).map((c) => c.displayValue).join(' or ')}?`,
+      kind: 'clarify_ambiguous',
+    };
+  }
+
   if (deterministic) {
     if (candidates.length === 0) {
       emitDiag({ stageB: { status: 'not_invoked' }, selectedCandidateIndex: null, selectedCandidateTier: null, adapterFound: null, rereadOutcome: 'not_applicable', finalResult: 'no_candidate' });
-      return { handled: true, reply: "I don't have anything recent to go on — what were you referring to?", kind: 'honest_miss' };
+      return { handled: true, reply: HONEST_RECAP_MISS, kind: 'honest_miss' };
+    }
+    const discriminated = uniqueContentOverlap(text, candidates);
+    if (discriminated) {
+      const diagSink: AnswerFromCandidateDiagSink = {};
+      const outcome = await answerFromCandidate(discriminated, diagSink);
+      emitDiag({
+        stageB: { status: 'not_invoked' },
+        selectedCandidateIndex: discriminated.index,
+        selectedCandidateTier: discriminated.focus.tier,
+        adapterFound: diagSink.adapterFound ?? null,
+        rereadOutcome: diagSink.rereadOutcome ?? 'not_applicable',
+        finalResult: diagFinalResultFromOutcome(outcome),
+      });
+      return outcome;
     }
     if (candidates.length === 1) {
       const diagSink: AnswerFromCandidateDiagSink = {};
@@ -571,30 +759,20 @@ export async function answerImmediateSemanticRecap(
     emitDiag({ stageB: stageBDiag, selectedCandidateIndex: null, selectedCandidateTier: null, adapterFound: null, rereadOutcome: 'not_applicable', finalResult: 'not_recap' });
     return { handled: false };
   }
-  if (proposal.selectedIndex === null) {
-    if (candidates.length === 1) {
-      const diagSink: AnswerFromCandidateDiagSink = {};
-      const outcome = await answerFromCandidate(candidates[0]!, diagSink);
-      emitDiag({
-        stageB: stageBDiag,
-        selectedCandidateIndex: candidates[0]!.index,
-        selectedCandidateTier: candidates[0]!.focus.tier,
-        adapterFound: diagSink.adapterFound ?? null,
-        rereadOutcome: diagSink.rereadOutcome ?? 'not_applicable',
-        finalResult: diagFinalResultFromOutcome(outcome),
-      });
-      return outcome;
-    }
-    emitDiag({ stageB: stageBDiag, selectedCandidateIndex: null, selectedCandidateTier: null, adapterFound: null, rereadOutcome: 'not_applicable', finalResult: 'clarify_ambiguous' });
-    return {
-      handled: true,
-      reply: `Did you mean ${candidates.slice(0, 3).map((c) => c.displayValue).join(' or ')}?`,
-      kind: 'clarify_ambiguous',
-    };
-  }
-  const selected = candidates[proposal.selectedIndex];
+  const corroborated = uniqueContentOverlap(text, candidates);
+  const indexed = proposal.selectedIndex === null ? null : candidates[proposal.selectedIndex] ?? null;
+  const selected = corroborated
+    ?? (indexed && candidates.length === 1 ? indexed : null)
+    ?? (candidates.length === 1 ? candidates[0]! : null);
   if (!selected) {
-    // defensive; parseRecapInterpretationProposal already bounds-checks
+    if (candidates.length > 1) {
+      emitDiag({ stageB: stageBDiag, selectedCandidateIndex: null, selectedCandidateTier: null, adapterFound: null, rereadOutcome: 'not_applicable', finalResult: 'clarify_ambiguous' });
+      return {
+        handled: true,
+        reply: `Did you mean ${candidates.slice(0, 3).map((c) => c.displayValue).join(' or ')}?`,
+        kind: 'clarify_ambiguous',
+      };
+    }
     emitDiag({ stageB: stageBDiag, selectedCandidateIndex: proposal.selectedIndex, selectedCandidateTier: null, adapterFound: null, rereadOutcome: 'not_applicable', finalResult: 'not_recap' });
     return { handled: false };
   }

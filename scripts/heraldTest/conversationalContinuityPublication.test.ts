@@ -113,7 +113,7 @@ export async function runConversationalContinuityPublicationTests() {
     publish(ledger, JOB);
     const recap = await answerImmediateSemanticRecap('What did I just tell you?', { ledgerEntries: ledger.peek(Date.now()) });
     assertTrue('existing recap owner handles the published job turn', recap.handled === true && recap.kind === 'conversational_recap');
-    assert('existing owner reports the user utterance', recap.handled ? recap.reply : '', `You mentioned ${JOB}.`);
+    assert('existing owner reports the user utterance in second person', recap.handled ? recap.reply : '', "You mentioned you're leaving your job so you're trying to get everything ready for the people taking over.");
     const record = ledger.peek(Date.now()).at(-1);
     assert('published topic is conversational and referable', record?.focus[0], {
       kind: 'topic',
@@ -129,10 +129,12 @@ export async function runConversationalContinuityPublicationTests() {
     publish(ledger, BUSY);
     publish(ledger, JOB);
     const recap = await answerImmediateSemanticRecap('What did I just tell you?', { ledgerEntries: ledger.peek(Date.now()) });
-    assertTrue('two published topics stay with the existing owner', recap.handled === true && recap.kind === 'clarify_ambiguous');
-    assert('existing owner names both user utterances', recap.handled ? recap.reply : '', `Did you mean ${JOB} or ${BUSY}?`);
+    assertTrue('two published topics recap directly', recap.handled === true && recap.kind === 'conversational_recap');
+    const window = "You mentioned you'd had a really busy day, and that you're leaving your job so you're trying to get everything ready for the people taking over.";
+    assert('direct window is the user utterances oldest first', recap.handled ? recap.reply : '', window);
     const generic = await answerImmediateSemanticRecap('Do you know what we were just talking about?', { ledgerEntries: ledger.peek(Date.now()) });
-    assertTrue('generic recap wording is not claimed by publication alone', generic.handled === false);
+    assertTrue('generic recap is owned and direct', generic.handled === true && generic.kind === 'conversational_recap');
+    assert('generic recap uses the same bounded window', generic.handled ? generic.reply : '', window);
     assertTrue('generic recap wording is not Stage A', classifyImmediateRecapDeterministic('Do you know what we were just talking about?') === false);
   }
 
@@ -157,7 +159,8 @@ export async function runConversationalContinuityPublicationTests() {
       focus,
     });
     const recap = await answerImmediateSemanticRecap('What did I just tell you?', { ledgerEntries: ledger.peek(Date.now()) });
-    assert('medical recap is reported speech of the user sentence', recap.handled ? recap.reply : '', `You mentioned ${WORN}.`);
+    assert('medical recap stays user-attributed reported speech', recap.handled ? recap.reply : '', "You mentioned you'd been feeling really worn out since the weekend.");
+    assertTrue('medical recap does not speak the symptom as Herald', recap.handled === true && !recap.reply.includes("I've") && !recap.reply.includes("I'm"));
     assertTrue('medical conversational recap does not invent a dosage', recap.handled && !recap.reply.includes('mg'));
     assert('medical conversational turn writes no medication row', (db.prepare('SELECT COUNT(*) AS n FROM medications').get() as { n: number }).n, beforeMeds);
   }

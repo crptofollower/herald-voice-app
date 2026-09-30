@@ -308,7 +308,7 @@ export async function runConversationTurnLedgerCoverageTests() {
     );
     assertTrue(
       'ChatScreen: offline_fallback ephemeral path also pushes a record',
-      /offlineReply = projectRealization\(outcome\.responseAct, seamOutcome\.reply\)\.speech;[\s\S]*?conversationLedgerRef\.current\.push\(\{\s*\n\s*establishedAt: Date\.now\(\),\s*\n\s*utterance: text,\s*\n\s*intentType: null,\s*\n\s*operation: ledgerOperation,[\s\S]*?assistantReplySummary: offlineReply,/.test(chatSrc),
+      /offlineReply = projectRealization\(\s*\n\s*realizationActForTurn\(seamOutcome\.kind !== 'generative' && seamOutcome\.source === 'recap', outcome\.responseAct\),\s*\n\s*seamOutcome\.reply,\s*\n\s*\)\.speech;[\s\S]*?conversationLedgerRef\.current\.push\(\{\s*\n\s*establishedAt: Date\.now\(\),\s*\n\s*utterance: text,\s*\n\s*intentType: null,\s*\n\s*operation: ledgerOperation,[\s\S]*?assistantReplySummary: offlineReply,/.test(chatSrc),
     );
     assertTrue(
       'ChatScreen: remaining direct applyIntents call sites thread the ledger through',

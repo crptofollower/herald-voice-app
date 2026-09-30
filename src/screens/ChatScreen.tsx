@@ -159,7 +159,7 @@ import {
   establishHardPending,
   releaseContactCollect,
 } from '../routing/hardPendingBoundary';
-import { deterministicAcknowledgementSpeech, projectRealization } from '../routing/responseAct';
+import { deterministicAcknowledgementSpeech, projectRealization, realizationActForTurn } from '../routing/responseAct';
 import { classifyEmergencyCallReply } from '../utils/emergencyCallConfirm';
 import { ConversationalSubjectHolder } from '../routing/conversationalSubject';
 import { MedicationPresentationHolder } from '../routing/medicationPresentation';
@@ -2215,7 +2215,10 @@ export default function ChatScreen() {
         }
         }
       }
-      const realizedClarification = projectRealization(outcome.responseAct, reply);
+      const realizedClarification = projectRealization(
+        realizationActForTurn(recapOutcome.handled, outcome.responseAct),
+        reply,
+      );
       conversationLedgerRef.current.push({
         establishedAt: Date.now(),
         utterance: text,
@@ -2568,7 +2571,10 @@ export default function ChatScreen() {
               discourseMentions: discourseRef.current.peekDiscourseMentions(),
             }),
           });
-          offlineReply = projectRealization(outcome.responseAct, seamOutcome.reply).speech;
+          offlineReply = projectRealization(
+            realizationActForTurn(seamOutcome.kind !== 'generative' && seamOutcome.source === 'recap', outcome.responseAct),
+            seamOutcome.reply,
+          ).speech;
           if (seamOutcome.kind === 'generative' && seamOutcome.grantContinuation) {
             hotRingRef.current.push({
               turnIndex: turnIndexRef.current,

@@ -64,12 +64,12 @@ export function inspectHolds(
   const classified = classifyHoldRecallUtterance(utterance);
   if (classified.mode === 'not_recall') return { kind: 'not_recall' };
   const candidates = inspectableCandidates(holdSet);
-  // Filtered recall with no live hold must not steal existing named-store
-  // reads (e.g. S17 "What did I tell you about Eliquis?"). Whole-set with
-  // no live hold still answers from conversation state only.
-  if (candidates.length === 0) {
-    return classified.mode === 'filtered' ? { kind: 'not_recall' } : { kind: 'empty' };
-  }
+  // Hold-recall speaks only when a live interpretation hold exists.
+  // A whole-set question with no live hold is conversational self-recap,
+  // owned later by Immediate Recap — not an empty durable-memory answer.
+  // Filtered recall with no live hold already declines so it cannot steal
+  // a named-store read (e.g. S17 "What did I tell you about Eliquis?").
+  if (candidates.length === 0) return { kind: 'not_recall' };
   if (classified.mode === 'whole_set') {
     return { kind: 'whole_set', candidates: [...candidates] };
   }

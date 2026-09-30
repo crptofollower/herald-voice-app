@@ -137,17 +137,18 @@ function logActiveSubjectDiag(event: ActiveSubjectDiagEvent): void {
 
 // ─── Stage A — closed structural shapes ────────────────────────────────────
 
-/** Closed first-person identity lookup: who or what, then an auxiliary,
- *  then I or we, then a continuity verb from the closed class
+/** Closed first-person identity lookup: who, then an auxiliary, then I or
+ *  we, then a continuity verb from the closed class
  *  {talking|speaking|chatting} × {about|with|to}, or the existing saying
  *  form. Auxiliary is a separate was, am, are, or were, or a local
  *  who-apostrophe-s contraction (straight or curly) — not a global
  *  contraction expander. Optional temporal filler just before the verb,
  *  and optional just now after. Matching this CONFIRMS the identity-lookup
- *  act (ownership), not the identity answer. Held-out paraphrases stay on
- *  Stage B. */
+ *  act (ownership), not the identity answer. Content-shaped what-questions
+ *  ("what was I talking about") are Immediate Recap, not this act.
+ *  Held-out paraphrases stay on Stage B. */
 const IDENTITY_LOOKUP_RE =
-  /^(?:who|what)(?:['\u2019]s|\s+(?:am|was|were|are))\s+(?:i|we)\s+(?:just\s+)?(?:(?:talking|speaking|chatting)\s+(about|with|to)|saying)(?:\s+just\s+now)?\s*[?.!]*$/i;
+  /^who(?:['\u2019]s|\s+(?:am|was|were|are))\s+(?:i|we)\s+(?:just\s+)?(?:(?:talking|speaking|chatting)\s+(about|with|to)|saying)(?:\s+just\s+now)?\s*[?.!]*$/i;
 
 export type ActiveSubjectIdentityRelation = 'about' | 'with' | 'to';
 

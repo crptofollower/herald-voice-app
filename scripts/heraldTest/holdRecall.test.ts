@@ -77,8 +77,8 @@ export async function runHoldRecallV1Tests() {
 
   {
     const empty = inspectHolds('What did I say?', null);
-    assert('no live hold is empty', empty.kind === 'empty', (v) => v === true, 'empty');
-    assert('empty wording is ephemeral', formatHoldRecall(empty) === HOLD_RECALL_EMPTY_REPLY && !DURABLE_RE.test(HOLD_RECALL_EMPTY_REPLY), (v) => v === true, 'empty reply');
+    assert('no live hold declines whole-set to conversational recap', empty.kind === 'not_recall', (v) => v === true, 'not_recall');
+    assert('declined whole-set does not speak the empty hold reply', formatHoldRecall(empty) === null && !DURABLE_RE.test(HOLD_RECALL_EMPTY_REPLY), (v) => v === true, 'null');
   }
 
   {
@@ -212,7 +212,7 @@ export async function runHoldRecallV1Tests() {
     const { session, deps } = openJourneyDb();
     const discourse = new DiscourseContinuityHolder();
     const outcome = await processUtterance(normalizeInput('What were the things I just mentioned?'), session, deps, null, null, null, null, null, discourse);
-    assert('no hold journey empty', outcome.handled && outcome.source === 'hold_recall' && outcome.responseText === HOLD_RECALL_EMPTY_REPLY, (v) => v === true, 'empty');
+    assert('no hold journey is not empty hold-recall', !(outcome.handled && outcome.source === 'hold_recall') && outcome.responseText !== HOLD_RECALL_EMPTY_REPLY, (v) => v === true, 'not hold_recall');
   }
 
   {
@@ -221,7 +221,7 @@ export async function runHoldRecallV1Tests() {
     await processUtterance(normalizeInput(GARDENIA), session, deps, null, null, null, null, null, discourse);
     for (let i = 0; i < DISCOURSE_TURN_TTL + 1; i++) discourse.beginUserTurn();
     const outcome = await processUtterance(normalizeInput('What did I say?'), session, deps, null, null, null, null, null, discourse);
-    assert('expired hold behaves as no live hold', outcome.handled && outcome.responseText === HOLD_RECALL_EMPTY_REPLY, (v) => v === true, 'empty');
+    assert('expired hold is not empty hold-recall', !(outcome.handled && outcome.source === 'hold_recall') && outcome.responseText !== HOLD_RECALL_EMPTY_REPLY, (v) => v === true, 'not hold_recall');
   }
 
   {
