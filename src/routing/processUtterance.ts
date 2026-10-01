@@ -138,8 +138,10 @@ import {
 } from './calendarContinuation';
 import {
   RecoveryObligationHolder,
+  formatRecoveryAmbiguousClarification,
   isRecoveryRepairSignal,
   isSoftObligationEligible,
+  isUnresolvedCorrectionUtterance,
   realizeRecoveryObligationConsume,
 } from './recoveryObligation';
 import {
@@ -2268,6 +2270,16 @@ export async function processUtterance(
     && routeDecision.reason === 'default'
   ) {
     const mentionCtx = deps.getMedicationSemanticInterpreterCtx?.() ?? null;
+    if (!mentionCtx && isUnresolvedCorrectionUtterance(text)) {
+      const responseText = formatRecoveryAmbiguousClarification();
+      return {
+        handled: true,
+        source: 'discourse_correction',
+        responseText,
+        commits: [],
+        responseAct: clarifyReferenceAct(responseText),
+      };
+    }
     const correction = await considerCurrentTurnDiscourseCorrection(text, discourse, mentionCtx);
     if (correction.kind === 'reply') {
       discourse.establishTopicFromCommittedPersons(text);

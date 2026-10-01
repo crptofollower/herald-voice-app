@@ -35,6 +35,7 @@ import { initLlama, type LlamaContext } from 'llama.rn';
 import {
   GROCERY_SEMANTIC_DECOMPOSITION_ENABLED,
   MEDICATION_SEMANTIC_INTERPRETATION_ENABLED,
+  ONE_HEAVYWEIGHT_NATIVE_CONTEXT,
   SEMANTIC_CAPABILITY_DISPATCH_ENABLED,
 } from '../constants/features';
 import { getModelDir, LARGE_MODEL } from '../utils/modelManager';
@@ -91,8 +92,15 @@ export function useMedicationSemanticInterpreterEngine(): {
   useEffect(() => {
     let cancelled = false;
     const abort = new AbortController();
-    if (!semanticConsumersRequireContext(SEMANTIC_CONSUMERS)) {
+    if (!semanticConsumersRequireContext(SEMANTIC_CONSUMERS) || ONE_HEAVYWEIGHT_NATIVE_CONTEXT) {
       setStatus('unavailable');
+      publishSemanticEngineDiagnostic({
+        semanticEngineStatus: 'unavailable',
+        ensureStatus: 'skipped',
+        initLlama: 'not_started',
+        contextHeld: false,
+        modelFilePresent: false,
+      });
       return () => {
         cancelled = true;
         abort.abort();

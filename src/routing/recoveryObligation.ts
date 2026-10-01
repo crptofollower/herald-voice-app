@@ -94,6 +94,17 @@ export function isRecoveryRepairSignal(text: string): boolean {
   return MISUNDERSTANDING_REPAIR_RE.test(trimmed);
 }
 
+const UNRESOLVED_SHORT_NEGATION_RE = /^no,\s+[A-Za-z][\w'-]*\.?$/i;
+
+/** A correction-shaped utterance the existing repair authority recognizes,
+ *  including a short "No, April" replacement. This does not select a replacement. */
+export function isUnresolvedCorrectionUtterance(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  if (isRecoveryRepairSignal(trimmed)) return true;
+  return UNRESOLVED_SHORT_NEGATION_RE.test(trimmed);
+}
+
 export function formatRecoveryDomainClarification(family: 'calendar' | 'medications'): string {
   if (family === 'medications') {
     return 'Got it — your medications. What did you want to ask?';

@@ -20,6 +20,14 @@ export const LOCAL_LLM_ENABLED = false;
 //   retired classifier, App.tsx Llama-3.2 downloads, or useLocalLLM.
 export const CONVERSATIONAL_WORKER_EXPERIMENT_ENABLED = true;
 
+// ONE_HEAVYWEIGHT_NATIVE_CONTEXT:
+//   Beta residency floor. The conversational Qwen worker is the only
+//   heavyweight native context allowed to init. The Llama semantic context
+//   must not load or stay resident. Semantic consumers keep their existing
+//   null-context fail-closed behavior. Does not retarget those consumers
+//   onto Qwen and does not change deterministic admission.
+export const ONE_HEAVYWEIGHT_NATIVE_CONTEXT = true;
+
 // QWEN_RUNTIME_DIAGNOSTIC_BENCHMARK_ENABLED:
 //   TEMP — Latency V1 / Slice E.2. One-shot init/bench logs on the
 //   experimental Qwen ctx after D.1 warmup. Does not change production

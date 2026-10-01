@@ -18,6 +18,7 @@
 
 import type { CommitResult, RouteDecision, DomainFocusEnvelope } from './routeIntent';
 import { isUnsafeContinuityEvidence } from './discourseContinuity';
+import { isUnresolvedCorrectionUtterance } from './recoveryObligation';
 import {
   CONVERSATION_TURN_UTTERANCE_MAX_CHARS,
   type ConversationTurnAuthorityTier,
@@ -241,6 +242,7 @@ export function ledgerFocusWithConversationalTopic(
   if (facts.operation !== 'conversational') return existing;
   const utterance = facts.utterance.trim();
   if (!utterance || isUnsafeContinuityEvidence(utterance)) return existing;
+  if (isUnresolvedCorrectionUtterance(utterance)) return existing;
   const spans = [...new Set(
     (facts.groundedSpans ?? [])
       .map((span) => span.trim())
