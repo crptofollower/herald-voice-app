@@ -34,7 +34,9 @@ export const RECOLLECTION_SEMANTIC_TIMEOUT_MS = 8000;
 
 // Observational only. OFF ⇒ C4 never awaits the interpreter. Production
 // conversational tail must remain trivial when the local ctx is absent.
-export const RECOLLECTION_SEMANTIC_SHADOW_ENABLED = true;
+// Evaluation (observeRecollectionSemanticShadow) stays callable directly.
+// Beta floor: off so production does not consult the semantic shadow.
+export const RECOLLECTION_SEMANTIC_SHADOW_ENABLED = false;
 
 export type RecollectionSemanticGeneration =
   | { status: 'ok'; disposition: ReminiscenceDisposition; confidence?: number; reason?: string; raw: string; durationMs: number }

@@ -258,12 +258,10 @@ export async function runNaturalRecollectionSemanticNominatorShadowV1Tests(): Pr
       const { db, say } = await fresh({ completionText: '{"disposition":"AUTOBIOGRAPHICAL","confidence":0.9}' });
       const beforeT = snapshotT(db);
       const out = await say(NORTH_STAR);
-      const shadow = peekLastRecollectionSemanticShadow();
       assert('semantic AUTOBIOGRAPHICAL cannot independently write Track R when stub is UNCERTAIN',
         out.handled === false
           && liveR().length === 0
-          && shadow?.modelDisposition === 'AUTOBIOGRAPHICAL'
-          && shadow.stubDisposition === 'UNCERTAIN',
+          && peekLastRecollectionSemanticShadow() == null,
         (v) => v === true, 'true');
       assert('semantic shadow cannot write Track T',
         JSON.stringify(snapshotT(db)) === JSON.stringify(beforeT),
@@ -277,8 +275,7 @@ export async function runNaturalRecollectionSemanticNominatorShadowV1Tests(): Pr
       assert('stub remains V1A admission authority even if semantic says TRANSIENT',
         rows.length === 1
           && rows[0].rawText === CHILDHOOD
-          && peekLastRecollectionSemanticShadow()?.stubDisposition === 'AUTOBIOGRAPHICAL'
-          && peekLastRecollectionSemanticShadow()?.modelDisposition === 'TRANSIENT',
+          && peekLastRecollectionSemanticShadow() == null,
         (v) => v === true, 'true');
     }
 

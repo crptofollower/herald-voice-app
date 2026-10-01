@@ -170,7 +170,7 @@
         {
           "input": "about his trip to Ireland",
           "evidenceClass": "injected",
-          "scriptedCompletionIds": ["fs-recollection-shadow-abstain", "fs-mention-closed"],
+          "scriptedCompletionIds": ["fs-mention-closed"],
           "route_kind": "needs_clarification",
           "zero_delta": true,
           "response_includes": ["Got it — Ireland."],
@@ -181,7 +181,7 @@
         {
           "input": "She mentioned the harbor.",
           "evidenceClass": "injected",
-          "scriptedCompletionIds": ["fs-recollection-shadow-abstain", "fs-correction-rejected", "fs-applicability-ireland", "fs-mention-empty"],
+          "scriptedCompletionIds": ["fs-correction-rejected", "fs-applicability-ireland", "fs-mention-empty"],
           "route_source": "discourse_reflection",
           "route_kind": "discourse_reflection",
           "zero_delta": true,
@@ -200,7 +200,7 @@
         {
           "input": "about his trip to Ireland",
           "evidenceClass": "injected",
-          "scriptedCompletionIds": ["fs-recollection-shadow-abstain", "fs-mention-prose"],
+          "scriptedCompletionIds": ["fs-mention-prose"],
           "route_kind": "needs_clarification",
           "zero_delta": true,
           "discourseMentionCount": 0,
@@ -215,7 +215,7 @@
         {
           "input": "about his trip to Ireland",
           "evidenceClass": "injected",
-          "scriptedCompletionIds": ["fs-recollection-shadow-abstain", "fs-mention-closed"],
+          "scriptedCompletionIds": ["fs-mention-closed"],
           "route_kind": "needs_clarification",
           "zero_delta": true,
           "response_includes": ["Got it — Ireland."],
@@ -232,7 +232,7 @@
         {
           "input": "The pharmacy filled my Lisinopril 10mg refill today.",
           "evidenceClass": "injected",
-          "scriptedCompletionIds": ["fs-focus-purity", "fs-recollection-shadow-abstain", "fs-mention-empty"],
+          "scriptedCompletionIds": ["fs-focus-purity", "fs-mention-empty"],
           "suppliedFocus": "my Lisinopril 10mg refill",
           "route_kind": "needs_clarification",
           "zero_delta": true,

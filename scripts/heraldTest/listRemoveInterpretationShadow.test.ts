@@ -2,7 +2,7 @@
 // list_remove interpretation shadow: exact grounding + authority gates.
 // Qwen output is not ground truth. No writer/pending dependency.
 
-import { computeShadowAuthority, fuzzyLikeCandidates, groundExactReferent, normalizeShadowReferent, parseSemanticProposal, runListRemoveInterpretationShadow, SHADOW_LOG_PREFIX, type SemanticProposal } from '../../src/dev/listRemoveInterpretationShadow.ts';
+import { computeShadowAuthority, evaluateListRemoveInterpretationShadow, fuzzyLikeCandidates, groundExactReferent, normalizeShadowReferent, parseSemanticProposal, SHADOW_LOG_PREFIX, type SemanticProposal } from '../../src/dev/listRemoveInterpretationShadow.ts';
 import { LIST_REMOVE_SHADOW_CORPUS } from '../../src/dev/listRemoveInterpretationShadowCorpus.ts';
 import { LIST_REMOVE_INTERPRETATION_SHADOW_ENABLED } from '../../src/constants/features.ts';
 import fs from 'node:fs';
@@ -271,7 +271,7 @@ export async function runListRemoveInterpretationShadowTests() {
       warns.push(String(args[0] ?? ''));
     }) as typeof console.warn;
     try {
-      await runListRemoveInterpretationShadow({
+      await evaluateListRemoveInterpretationShadow({
         text: 'Remove eggs from my grocery list.',
         snapshot: { captured_at_ms: 0, elapsed_ms: 0, items: [{ id: 'li_eggs', body: 'eggs' }] },
         production: null,
@@ -300,7 +300,7 @@ export async function runListRemoveInterpretationShadowTests() {
     );
   }
 
-  assert('shadow feature flag is on for this experiment APK', LIST_REMOVE_INTERPRETATION_SHADOW_ENABLED, (v) => v === true, 'true');
+  assert('shadow feature flag is off on the product path', LIST_REMOVE_INTERPRETATION_SHADOW_ENABLED, (v) => v === false, 'false');
 
   const total = passed + failures.length;
   console.log(

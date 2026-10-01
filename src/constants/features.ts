@@ -33,8 +33,9 @@ export const QWEN_RUNTIME_DIAGNOSTIC_BENCHMARK_ENABLED = true;
 //   logs a hypothetical authority decision. OFF ⇒ no snapshot, no second
 //   context, no completion, no shadow logs, no production timing from this
 //   path. Never writes, speaks, pending-arms, or shares the conversational
-//   Qwen context.
-export const LIST_REMOVE_INTERPRETATION_SHADOW_ENABLED = true;
+//   Qwen context. Evaluation helpers remain callable outside this gate.
+//   Beta floor: off so the observational context is not resident.
+export const LIST_REMOVE_INTERPRETATION_SHADOW_ENABLED = false;
 
 // PROACTIVE_SURFACING_ENABLED:
 //   Gates Beat 1 medical appointment surfacing on cold mount

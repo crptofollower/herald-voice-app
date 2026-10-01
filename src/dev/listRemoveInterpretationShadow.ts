@@ -330,6 +330,17 @@ export async function runListRemoveInterpretationShadow(input: {
   getShadowCtx: () => LlamaContext | null;
 }): Promise<void> {
   if (!isListRemoveInterpretationShadowEnabled()) return;
+  return evaluateListRemoveInterpretationShadow(input);
+}
+
+/** Evaluation-only observer. Not called from the product path. */
+export async function evaluateListRemoveInterpretationShadow(input: {
+  text: string;
+  snapshot: PreTurnGrocerySnapshot;
+  production: ProductionOwnerRecord | null;
+  asr: ShadowAsrMeta;
+  getShadowCtx: () => LlamaContext | null;
+}): Promise<void> {
   const mutated_ids = productionMutatedGroceryIds(input.snapshot);
   const ctx = input.getShadowCtx();
   let proposal: SemanticProposal | null = null;
