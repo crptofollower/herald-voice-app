@@ -178,6 +178,7 @@ import {
   UNRESOLVED_LIST_REFERENT_REASON,
 } from './operationalListContinuity';
 import { UNRESOLVED_LIST_ADD_SUPERSESSION_REASON } from './sameUtteranceListAddRepair';
+import { releaseResumptionOffer, resolveOwnedResumptionOffer, takeFrozenResumption, RESUMPTION_OFFER_KEY } from './resumptionOffer';
 
 // D0 commit 2 (S54 addendum): the headless pipeline seam. UI (ChatScreen) calls
 // this and renders the result; P-tests call it directly. No React, no UI, no TTS.
@@ -193,7 +194,7 @@ export type RouteDeps = Parameters<typeof routeIntent>[1];
 export type UtteranceOutcome =
   | {
       handled: true;
-      source: 'pending_resume' | 'capture' | 'referent_resume' | 'interpretation' | 'hold_recall' | 'hold_continuity' | 'recent_add_recall' | 'recollection' | 'recovery_obligation' | 'discourse_reflection' | 'discourse_correction' | 'discourse_unresolved_reference';
+      source: 'pending_resume' | 'capture' | 'referent_resume' | 'interpretation' | 'hold_recall' | 'hold_continuity' | 'recent_add_recall' | 'recollection' | 'recovery_obligation' | 'discourse_reflection' | 'discourse_correction' | 'discourse_unresolved_reference' | 'resumption_offer';
       responseText: string;
       commits: CommitResult[];
       /** Presentation hint only. Never speech-parsed. Never a conversational machine. */
@@ -695,6 +696,7 @@ export async function processUtterance(
   //    (ChatScreen speaks the actual emergency reply). No route decision is
   //    ever computed for an emergency utterance.
   if (detectEmergency(text)) {
+    releaseResumptionOffer(session);
     if (session.hasPending()) session.clearPending();
     subject?.clear();
     medicationPresentation?.clear();
@@ -720,6 +722,36 @@ export async function processUtterance(
   //    Obligation Survival V1: a completed read_only interruption (effect
   //    helper only) is realized without clearPending/resolvePending. Non-read_only
   //    does not itself mean supersede.
+  // Resumption offer yields. Anchored yes/no/cancel resolves the frozen
+  // segment. Every other reply clears the slot and continues this utterance.
+  // This branch is before generic resolvePending, so the re-ask ladder and
+  // presentation clears never run for offer:resumption.
+  if (session.peekPendingKey() === RESUMPTION_OFFER_KEY) {
+    if (session.pendingOwnsReply(text)) {
+      const frozen = takeFrozenResumption(session);
+      session.clearPending();
+      const resolved = resolveOwnedResumptionOffer(
+        text,
+        frozen,
+        ledger?.peek(Date.now()) ?? [],
+        discourse?.peekDiscourseMentions(),
+      );
+      if (resolved.focus && ledger) {
+        ledger.push({
+          establishedAt: Date.now(),
+          utterance: text,
+          intentType: null,
+          operation: 'conversational',
+          outcome: 'presented',
+          authorityTier: 'conversational',
+          assistantReplySummary: resolved.reply,
+          focus: resolved.focus,
+        });
+      }
+      return { handled: true, source: 'resumption_offer', responseText: resolved.reply, commits: [] };
+    }
+    releaseResumptionOffer(session);
+  }
   let routedClarificationInterrupt: RouteDecision | undefined;
   let preserveClarificationRead = false;
   if (session.hasPending()) {

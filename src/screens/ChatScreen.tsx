@@ -204,6 +204,7 @@ import { ReminiscenceArcHolder } from '../routing/reminiscenceArc';
 import { formatOperationalListClarification } from '../routing/operationalListContinuity';
 import { CalendarPresentationHolder } from '../routing/calendarPresentation';
 import { processUtterance, applyIntents, type UtteranceOutcome } from '../routing/processUtterance';
+import { appendResumptionOffer } from '../routing/resumptionOffer';
 import { continuityLedgerFocus, ledgerFocusWithConversationalTopic } from '../routing/conversationTurnLedgerWrite';
 import { mayInvokeBackendStream } from '../utils/llmClassificationOwnership';
 import {
@@ -646,6 +647,7 @@ export default function ChatScreen() {
   // the next user message resolves this and executes the original intent.
   const pendingContactCollectRef = useRef<{ action: 'call' | 'navigate' | 'text' | 'confirm_phone' | 'confirm_call'; name: string; body?: string; phone?: string } | null>(null);
   const sessionRef = useRef<ConversationSession>(new ConversationSession());
+  const lastOfferedSegmentKeyRef = useRef<string | null>(null);
   const subjectRef = useRef<ConversationalSubjectHolder>(new ConversationalSubjectHolder());
   const medicationPresentationRef = useRef<MedicationPresentationHolder>(new MedicationPresentationHolder());
   const orderedPresentationRef = useRef<OrderedPresentationHolder>(new OrderedPresentationHolder());
@@ -1988,6 +1990,17 @@ export default function ChatScreen() {
     }
     if (outcome.handled) {
       const realized = projectRealization(outcome.responseAct, outcome.responseText);
+      const offered = appendResumptionOffer({
+        responseText: realized.speech,
+        session: sessionRef.current,
+        ledger: conversationLedgerRef.current,
+        discourseMentions: discourseRef.current.peekDiscourseMentions(),
+        recoveryOpen: recoveryObligationRef.current.isOpenSoft(),
+        emergencyThisTurn: false,
+        lastOfferedSegmentKey: lastOfferedSegmentKeyRef.current,
+      });
+      realized.speech = offered.responseText;
+      lastOfferedSegmentKeyRef.current = offered.lastOfferedSegmentKey;
       addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
       const recoveryChoices =
         outcome.source === 'pending_resume'
@@ -3204,6 +3217,7 @@ export default function ChatScreen() {
           releaseContactCollect(sessionRef.current, pendingContactCollectRef);
           if (sessionRef.current.hasPending()) sessionRef.current.clearPending();
           sessionRef.current = new ConversationSession();
+          lastOfferedSegmentKeyRef.current = null;
           subjectRef.current.clear();
           medicationPresentationRef.current.clear();
           orderedPresentationRef.current.clear();

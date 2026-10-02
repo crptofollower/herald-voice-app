@@ -262,26 +262,64 @@ function conversationalTopicOf(
     && !topicSuppressedByCorrection(focus, discourseMentions)) ?? null;
 }
 
+export type FrozenInterruptedSegment = {
+  /** Ledger turn indices of the frozen topic records, oldest first. */
+  turnIndices: number[];
+  /** Existing topic focus entries, by reference, oldest first. At most two. */
+  topics: ConversationTurnFocusEntry[];
+};
+
 /** Topics of the conversational segment immediately before the latest interruption.
  *  The newest record must be a separator. No separator means there is no interrupted thread. */
-function interruptedTopicWindow(
+export function peekInterruptedSegment(
   entries: ConversationTurnRecord[],
   discourseMentions: { mentionId: string; status: string }[] | undefined,
-): ConversationTurnFocusEntry[] | null {
+): FrozenInterruptedSegment | null {
   const now = Date.now();
   const live = entries.filter((entry) => now - entry.establishedAt <= CONVERSATION_TURN_LEDGER_TTL_MS);
   let index = live.length - 1;
   if (index < 0 || !breaksConversationalSegment(live[index]!)) return null;
   while (index >= 0 && breaksConversationalSegment(live[index]!)) index -= 1;
-  const topics: ConversationTurnFocusEntry[] = [];
+  const found: { topic: ConversationTurnFocusEntry; turnIndex: number }[] = [];
   while (index >= 0 && !breaksConversationalSegment(live[index]!)) {
-    const topic = conversationalTopicOf(live[index]!, discourseMentions);
-    if (topic) topics.push(topic);
+    const record = live[index]!;
+    const topic = conversationalTopicOf(record, discourseMentions);
+    if (topic) found.push({ topic, turnIndex: record.turnIndex });
     index -= 1;
   }
-  if (topics.length === 0) return null;
-  topics.reverse();
-  return topics.slice(-2);
+  if (found.length === 0) return null;
+  found.reverse();
+  const kept = found.slice(-2);
+  return {
+    turnIndices: kept.map((item) => item.turnIndex),
+    topics: kept.map((item) => item.topic),
+  };
+}
+
+function interruptedTopicWindow(
+  entries: ConversationTurnRecord[],
+  discourseMentions: { mentionId: string; status: string }[] | undefined,
+): ConversationTurnFocusEntry[] | null {
+  return peekInterruptedSegment(entries, discourseMentions)?.topics ?? null;
+}
+
+/** Frozen records must still be the same ledger entries. Suppression drops a topic.
+ *  A missing record expires the whole target. Nothing here selects a replacement segment. */
+export function validateFrozenResumptionTopics(
+  live: ConversationTurnRecord[],
+  frozen: FrozenInterruptedSegment,
+  discourseMentions: { mentionId: string; status: string }[] | undefined,
+): ConversationTurnFocusEntry[] | 'expired' {
+  const liveIndices = new Set(live.map((record) => record.turnIndex));
+  if (frozen.turnIndices.some((turnIndex) => !liveIndices.has(turnIndex))) return 'expired';
+  const valid: ConversationTurnFocusEntry[] = [];
+  for (const topic of frozen.topics) {
+    const record = live.find((entry) => entry.focus.includes(topic));
+    if (!record || !frozen.turnIndices.includes(record.turnIndex)) return 'expired';
+    if (topicSuppressedByCorrection(topic, discourseMentions)) continue;
+    valid.push(topic);
+  }
+  return valid;
 }
 
 function isResumptionBoundedDeclarative(text: string): boolean {
@@ -300,7 +338,7 @@ function topicsOverlapping(text: string, topics: ConversationTurnFocusEntry[]): 
   return topics.filter((topic) => contentTokens(topic.displayValue).some((word) => asked.has(word)));
 }
 
-const HONEST_RECAP_MISS = "I don't have anything recent to go on — what were you referring to?";
+export const HONEST_RECAP_MISS = "I don't have anything recent to go on — what were you referring to?";
 
 /** Closed user→addressee map for Herald-spoken conversational recap.
  *  Longer contractions first. Quoted spans are left untouched. Not a
@@ -328,7 +366,7 @@ function conversationalRecapClause(displayValue: string): string {
   return shiftUserPerspective(displayValue.trim().replace(/[.?!]+$/u, '').trim());
 }
 
-function realizeConversationalRecap(displayValues: string[]): string {
+export function realizeConversationalRecap(displayValues: string[]): string {
   const clauses = displayValues.map(conversationalRecapClause).filter((clause) => clause.length > 0);
   if (clauses.length === 0) return HONEST_RECAP_MISS;
   if (clauses.length === 1) return `You mentioned ${clauses[0]}.`;
