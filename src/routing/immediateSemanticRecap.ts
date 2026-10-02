@@ -223,7 +223,7 @@ function uniqueContentOverlap(utterance: string, candidates: RecapCandidate[]): 
   return hits.length === 1 ? hits[0]! : null;
 }
 
-function breaksConversationalSegment(record: ConversationTurnRecord): boolean {
+export function breaksConversationalSegment(record: ConversationTurnRecord): boolean {
   if (record.operation === 'capture' || record.operation === 'action' || record.operation === 'clarify_request' || record.operation === 'clarify_resolution') {
     return true;
   }
@@ -296,7 +296,7 @@ export function peekInterruptedSegment(
   };
 }
 
-function interruptedTopicWindow(
+export function interruptedTopicWindow(
   entries: ConversationTurnRecord[],
   discourseMentions: { mentionId: string; status: string }[] | undefined,
 ): ConversationTurnFocusEntry[] | null {

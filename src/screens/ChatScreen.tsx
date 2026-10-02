@@ -1910,6 +1910,9 @@ export default function ChatScreen() {
       } catch { /* proof only */ }
     };
     noteProofState('before');
+    const turnIndicesBeforeTurn = new Set(
+      conversationLedgerRef.current.peek(Date.now()).map((record) => record.turnIndex),
+    );
     const outcome = await processUtterance(text, sessionRef.current, {
       classifyQuery,
       classifyLLM: async (t: string) => {
@@ -1998,6 +2001,7 @@ export default function ChatScreen() {
         recoveryOpen: recoveryObligationRef.current.isOpenSoft(),
         emergencyThisTurn: false,
         lastOfferedSegmentKey: lastOfferedSegmentKeyRef.current,
+        turnIndicesBeforeTurn,
       });
       realized.speech = offered.responseText;
       lastOfferedSegmentKeyRef.current = offered.lastOfferedSegmentKey;

@@ -7,7 +7,9 @@ import { ConversationSession, CANCEL_RE, CONFIRM_NO_RE, CONFIRM_YES_RE } from '.
 import { establishHardPending } from './hardPendingBoundary';
 import type { ConversationTurnFocusEntry, ConversationTurnLedger, ConversationTurnRecord } from './conversationTurnLedger';
 import {
+  breaksConversationalSegment,
   HONEST_RECAP_MISS,
+  interruptedTopicWindow,
   peekInterruptedSegment,
   realizeConversationalRecap,
   validateFrozenResumptionTopics,
@@ -83,6 +85,18 @@ export function resolveOwnedResumptionOffer(
   };
 }
 
+/** Ledger record this turn appended. Indices already present cannot authorize. */
+export function currentTurnLedgerRecord(
+  live: readonly ConversationTurnRecord[],
+  turnIndicesBeforeTurn: ReadonlySet<number>,
+): ConversationTurnRecord | null {
+  const produced = live.filter((record) => !turnIndicesBeforeTurn.has(record.turnIndex));
+  if (produced.length === 0) return null;
+  const boundary = produced[produced.length - 1]!;
+  if (live[live.length - 1] !== boundary) return null;
+  return boundary;
+}
+
 export function appendResumptionOffer(input: {
   responseText: string;
   session: ConversationSession;
@@ -91,6 +105,8 @@ export function appendResumptionOffer(input: {
   recoveryOpen: boolean;
   emergencyThisTurn: boolean;
   lastOfferedSegmentKey: string | null;
+  /** turnIndex values live in the ledger before this handled turn began. */
+  turnIndicesBeforeTurn: ReadonlySet<number>;
 }): { responseText: string; lastOfferedSegmentKey: string | null; offered: boolean } {
   const keep = {
     responseText: input.responseText,
@@ -99,13 +115,16 @@ export function appendResumptionOffer(input: {
   };
   if (input.emergencyThisTurn || input.recoveryOpen || input.session.hasPending()) return keep;
   const live = input.ledger.peek(Date.now());
-  const newest = live[live.length - 1];
-  if (!newest || !interruptionEligibleForResumptionOffer(newest)) return keep;
+  const current = currentTurnLedgerRecord(live, input.turnIndicesBeforeTurn);
+  if (!current || live[live.length - 1] !== current) return keep;
+  if (!breaksConversationalSegment(current)) return keep;
+  if (!interruptionEligibleForResumptionOffer(current)) return keep;
+  const topics = interruptedTopicWindow(live, input.discourseMentions);
   const segment = peekInterruptedSegment(live, input.discourseMentions);
-  if (!segment) return keep;
+  if (!topics || topics.length === 0 || !segment) return keep;
   const key = segmentKey(segment);
   if (key === input.lastOfferedSegmentKey) return keep;
-  armResumptionOffer(input.session, segment);
+  armResumptionOffer(input.session, { turnIndices: segment.turnIndices, topics });
   const speech = input.responseText.trim();
   return {
     responseText: speech ? `${speech}\n${RESUMPTION_OFFER_TEXT}` : RESUMPTION_OFFER_TEXT,
