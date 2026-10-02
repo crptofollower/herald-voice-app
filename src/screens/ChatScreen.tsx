@@ -2005,6 +2005,16 @@ export default function ChatScreen() {
       });
       realized.speech = offered.responseText;
       lastOfferedSegmentKeyRef.current = offered.lastOfferedSegmentKey;
+      if ('correctionHot' in outcome && outcome.correctionHot) {
+        hotRingRef.current.push({
+          turnIndex: turnIndexRef.current,
+          user: outcome.correctionHot.user,
+          assistant: outcome.correctionHot.assistant,
+          establishedAt: Date.now(),
+          assistantHotPolicy: 'include',
+        });
+        immediateContextAuthorizedRef.current = true;
+      }
       addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
       const recoveryChoices =
         outcome.source === 'pending_resume'

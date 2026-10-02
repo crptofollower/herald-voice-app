@@ -244,7 +244,7 @@ function genericTopicWindow(
       focus.kind === 'topic'
       && focus.tier === 'conversational'
       && focus.referable
-      && !topicSuppressedByCorrection(focus, discourseMentions));
+      && !isTopicSuppressed(focus, discourseMentions, live));
     if (topic) topics.push(topic);
   }
   topics.reverse();
@@ -254,12 +254,13 @@ function genericTopicWindow(
 function conversationalTopicOf(
   record: ConversationTurnRecord,
   discourseMentions: { mentionId: string; status: string }[] | undefined,
+  live: ConversationTurnRecord[],
 ): ConversationTurnFocusEntry | null {
   return record.focus.find((focus) =>
     focus.kind === 'topic'
     && focus.tier === 'conversational'
     && focus.referable
-    && !topicSuppressedByCorrection(focus, discourseMentions)) ?? null;
+    && !isTopicSuppressed(focus, discourseMentions, live)) ?? null;
 }
 
 export type FrozenInterruptedSegment = {
@@ -283,7 +284,7 @@ export function peekInterruptedSegment(
   const found: { topic: ConversationTurnFocusEntry; turnIndex: number }[] = [];
   while (index >= 0 && !breaksConversationalSegment(live[index]!)) {
     const record = live[index]!;
-    const topic = conversationalTopicOf(record, discourseMentions);
+    const topic = conversationalTopicOf(record, discourseMentions, live);
     if (topic) found.push({ topic, turnIndex: record.turnIndex });
     index -= 1;
   }
@@ -316,7 +317,7 @@ export function validateFrozenResumptionTopics(
   for (const topic of frozen.topics) {
     const record = live.find((entry) => entry.focus.includes(topic));
     if (!record || !frozen.turnIndices.includes(record.turnIndex)) return 'expired';
-    if (topicSuppressedByCorrection(topic, discourseMentions)) continue;
+    if (isTopicSuppressed(topic, discourseMentions, live)) continue;
     valid.push(topic);
   }
   return valid;
@@ -452,7 +453,7 @@ export function buildRecapCandidates(
     const record = entries[i];
     for (const focus of record.focus) {
       if (!focus.referable) continue;
-      if (topicSuppressedByCorrection(focus, discourseMentions)) continue;
+      if (isTopicSuppressed(focus, discourseMentions, entries)) continue;
       const normValue = focus.displayValue.trim().toLowerCase();
       // Matches an already-chosen (more recent) representative either by
       // resolverKey equality, or by kind+displayValue equality when either
@@ -672,6 +673,43 @@ function topicSuppressedByCorrection(
   const linked = discourseMentions.filter((mention) => focus.discourseMentionIds!.includes(mention.mentionId));
   if (linked.length === 0) return false;
   return linked.some((mention) => mention.status === 'corrected_away');
+}
+
+function topicIdentity(
+  focus: ConversationTurnFocusEntry,
+  liveEntries: readonly ConversationTurnRecord[],
+): { turnIndex: number; focusIndex: number } | null {
+  for (const record of liveEntries) {
+    const focusIndex = record.focus.indexOf(focus);
+    if (focusIndex >= 0) return { turnIndex: record.turnIndex, focusIndex };
+  }
+  return null;
+}
+
+/** A later live record names this topic's original identity. The record itself stays. */
+export function supersededByLaterRecord(
+  focus: ConversationTurnFocusEntry,
+  liveEntries: readonly ConversationTurnRecord[],
+): boolean {
+  const identity = topicIdentity(focus, liveEntries);
+  if (!identity) return false;
+  let latestTurn = -1;
+  for (const record of liveEntries) {
+    if (record.focus.includes(focus) && record.turnIndex > latestTurn) latestTurn = record.turnIndex;
+  }
+  if (latestTurn < 0) return false;
+  return liveEntries.some((record) =>
+    record.turnIndex > latestTurn
+    && (record.supersedes ?? []).some((ref) => ref.turnIndex === identity.turnIndex && ref.focusIndex === identity.focusIndex));
+}
+
+/** Discourse corrected_away, or a later record superseding this topic. One predicate for every reader. */
+export function isTopicSuppressed(
+  focus: ConversationTurnFocusEntry,
+  discourseMentions: { mentionId: string; status: string }[] | undefined,
+  liveEntries: readonly ConversationTurnRecord[],
+): boolean {
+  return topicSuppressedByCorrection(focus, discourseMentions) || supersededByLaterRecord(focus, liveEntries);
 }
 
 export type ImmediateSemanticRecapDeps = {

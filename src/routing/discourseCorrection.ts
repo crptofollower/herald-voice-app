@@ -57,7 +57,7 @@ function compatibleHandles(
   return chosen;
 }
 
-function clarifySpeech(intro: string, surfaces: readonly string[]): string {
+export function clarifySpeech(intro: string, surfaces: readonly string[]): string {
   return `${intro} ${surfaces.join(', ')}?`;
 }
 

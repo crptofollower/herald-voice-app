@@ -179,6 +179,7 @@ import {
 } from './operationalListContinuity';
 import { UNRESOLVED_LIST_ADD_SUPERSESSION_REASON } from './sameUtteranceListAddRepair';
 import { releaseResumptionOffer, resolveOwnedResumptionOffer, takeFrozenResumption, RESUMPTION_OFFER_KEY } from './resumptionOffer';
+import { admitCorrectionContinuity, resolveCorrectionHold, CORRECTION_CLARIFY_KEY, CORRECTION_CONFIRM_KEY } from './correctionContinuity';
 
 // D0 commit 2 (S54 addendum): the headless pipeline seam. UI (ChatScreen) calls
 // this and renders the result; P-tests call it directly. No React, no UI, no TTS.
@@ -194,9 +195,11 @@ export type RouteDeps = Parameters<typeof routeIntent>[1];
 export type UtteranceOutcome =
   | {
       handled: true;
-      source: 'pending_resume' | 'capture' | 'referent_resume' | 'interpretation' | 'hold_recall' | 'hold_continuity' | 'recent_add_recall' | 'recollection' | 'recovery_obligation' | 'discourse_reflection' | 'discourse_correction' | 'discourse_unresolved_reference' | 'resumption_offer';
+      source: 'pending_resume' | 'capture' | 'referent_resume' | 'interpretation' | 'hold_recall' | 'hold_continuity' | 'recent_add_recall' | 'recollection' | 'recovery_obligation' | 'discourse_reflection' | 'discourse_correction' | 'discourse_unresolved_reference' | 'resumption_offer' | 'correction_continuity';
       responseText: string;
       commits: CommitResult[];
+      /** Present only when this turn applied a correction. The HOT ring writes this pair. */
+      correctionHot?: { user: string; assistant: string };
       /** Presentation hint only. Never speech-parsed. Never a conversational machine. */
       capabilitySurface?: 'grocery' | 'todo' | 'schedule';
       presentedCalendarEventIds?: string[];
@@ -752,6 +755,10 @@ export async function processUtterance(
     }
     releaseResumptionOffer(session);
   }
+  if (session.peekPendingKey() === CORRECTION_CONFIRM_KEY || session.peekPendingKey() === CORRECTION_CLARIFY_KEY) {
+    const held = resolveCorrectionHold(text, session, ledger);
+    if (held) return held;
+  }
   let routedClarificationInterrupt: RouteDecision | undefined;
   let preserveClarificationRead = false;
   if (session.hasPending()) {
@@ -890,6 +897,16 @@ export async function processUtterance(
       return todoHandled('pending_resume', pendingResume.responseText, pendingResume.commits);
     }
     return groceryPending ? groceryHandled('pending_resume', pendingResume.responseText, pendingResume.commits) : pendingResume;
+  }
+  if (!session.hasPending() && ledger) {
+    const corrected = admitCorrectionContinuity({
+      text,
+      session,
+      ledger,
+      discourseMentions: discourse?.peekDiscourseMentions(),
+      knownContacts: deps.captureContext?.contacts,
+    });
+    if (corrected) return corrected;
   }
   if (recoveryObligation?.canContinue()) {
     if (isRecoveryRepairSignal(text)) {

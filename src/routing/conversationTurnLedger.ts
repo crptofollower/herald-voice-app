@@ -89,6 +89,13 @@ export type ConversationTurnFocusEntry = {
   /** Discourse mentions whose correction suppresses this topic. Provenance
    *  for turn index, utterance, and time stays on the enclosing record. */
   discourseMentionIds?: string[];
+  /** RAM-only provenance for a revised topic. The source record is never edited. */
+  derivedFrom?: {
+    turnIndex: number;
+    focusIndex: number;
+    span: [number, number];
+    replacement: string;
+  };
 };
 
 export type ConversationTurnRecord = {
@@ -114,6 +121,8 @@ export type ConversationTurnRecord = {
    *  the domain attached no envelope (legal — see conversationTurnLedgerWrite.ts) —
    *  same "missing focus stays legal" behavior Slice 2 already proved. */
   focus: ConversationTurnFocusEntry[];
+  /** RAM-only. Later records name the original topic identity they replace at read time. */
+  supersedes?: { turnIndex: number; focusIndex: number }[];
 };
 
 /** Write sites supply `focus` as an already-built ConversationTurnFocusEntry[]

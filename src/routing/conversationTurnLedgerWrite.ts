@@ -26,6 +26,7 @@ import {
   type ConversationTurnFocusTier,
   type ConversationTurnOperation,
   type ConversationTurnOutcome,
+  type NewConversationTurnRecord,
 } from './conversationTurnLedger';
 
 export function commitResultOutcome(status: CommitResult['status']): ConversationTurnOutcome {
@@ -257,6 +258,26 @@ export function ledgerFocusWithConversationalTopic(
     tier: 'conversational',
     ...(discourseMentionIds.length > 0 ? { discourseMentionIds } : {}),
   }];
+}
+
+/** Append-only correction record. The source topic record is not an argument and is not edited. */
+export function conversationalCorrectionRecord(input: {
+  utterance: string;
+  assistantReply: string;
+  focus: ConversationTurnFocusEntry[];
+  supersedes: { turnIndex: number; focusIndex: number }[];
+}): NewConversationTurnRecord {
+  return {
+    establishedAt: Date.now(),
+    utterance: input.utterance,
+    intentType: null,
+    operation: 'conversational',
+    outcome: 'presented',
+    authorityTier: 'conversational',
+    assistantReplySummary: input.assistantReply,
+    focus: input.focus,
+    supersedes: input.supersedes,
+  };
 }
 
 /** Orchestration-layer helper: attach continuity identity to an existing ledger write. */

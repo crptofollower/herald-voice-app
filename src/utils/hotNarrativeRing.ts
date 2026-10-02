@@ -1,6 +1,7 @@
 // src/utils/hotNarrativeRing.ts
-// Step 5a: bounded RAM-only HOT narrative ring. Written ONLY from the three
-// authorized Step 4 sites in ChatScreen (ephemeral success ×2, chit_chat read).
+// Step 5a: bounded RAM-only HOT narrative ring. Written from the three
+// authorized Step 4 sites in ChatScreen (ephemeral success ×2, chit_chat read)
+// and the approved correction-continuity site.
 // NOT Memory, NOT authority, NOT durable. Peek semantics — never take-on-read.
 
 export const HOT_RING_TTL_MS = 60 * 60 * 1000; // 1 hour per entry
