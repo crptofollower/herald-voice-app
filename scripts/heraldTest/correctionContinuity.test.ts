@@ -72,20 +72,12 @@ function deps(calls: { n: number }, contacts: string[] = []) {
 }
 
 function publish(ledger: ConversationTurnLedger, utterance: string, mentionIds?: string[]) {
-  const admitted = ledgerFocusWithConversationalTopic([], {
+  // The production topic builder only. No fixture-built topics.
+  const focus = ledgerFocusWithConversationalTopic([], {
     operation: 'conversational',
     utterance,
     ...(mentionIds ? { discourseMentionIds: mentionIds } : {}),
   });
-  const focus = admitted.length > 0 || utterance !== ROUTE
-    ? admitted
-    : [{
-      kind: 'topic' as const,
-      displayValue: utterance,
-      referable: true,
-      tier: 'conversational' as const,
-      ...(mentionIds ? { discourseMentionIds: mentionIds } : {}),
-    }];
   return ledger.push({
     establishedAt: Date.now(),
     utterance,

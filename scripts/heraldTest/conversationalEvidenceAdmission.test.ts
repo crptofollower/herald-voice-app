@@ -25,7 +25,8 @@ import {
 import { answerImmediateSemanticRecap } from '../../src/routing/immediateSemanticRecap.ts';
 import { establishHardPending } from '../../src/routing/hardPendingBoundary.ts';
 import { RecoveryObligationHolder } from '../../src/routing/recoveryObligation.ts';
-import { correctionSpeech } from '../../src/routing/discourseCorrection.ts';
+import { clarifySpeech, correctionSpeech } from '../../src/routing/discourseCorrection.ts';
+import { CORRECTION_CLARIFY_KEY } from '../../src/routing/correctionContinuity.ts';
 import { DISCOURSE_MENTION_PROPOSAL_PROMPT } from '../../src/routing/semanticProvider.ts';
 import {
   EVIDENCE_ACK_REPLY,
@@ -437,6 +438,56 @@ export async function runConversationalEvidenceAdmissionTests() {
       tier: 'conversational',
       discourseMentionIds: ['m1'],
     }]);
+  }
+
+  // Subject-less Conversational Evidence Admission V1: a dropped-subject
+  // progressive declarative is evidence through the same single authority.
+  {
+    const FLYING = 'Flying from Dallas to Rome.';
+    const admitted = [FLYING, 'Going to Ireland next week.', 'Working at Ford now.', 'flying from dallas to rome', 'Heading back to Austin tomorrow.'];
+    for (const utterance of admitted) {
+      assert(`subject-less "${utterance}" is evidence`, canonicalConversationalEvidence(utterance, ROUTE)?.displayValue, utterance);
+    }
+    const refused = [
+      'Going to Ireland next week?',
+      'Flying from Dallas to Rome when?',
+      'Going home.',
+      'Going.',
+      'Calling Mom now.',
+      'Texting Martin about dinner.',
+      'Sending money to Martin.',
+      'Nothing to report.',
+      'During the meeting.',
+      'Remind me about flying to Rome.',
+    ];
+    for (const utterance of refused) {
+      assert(`"${utterance}" is not subject-less evidence`, canonicalConversationalEvidence(utterance, ROUTE), null);
+    }
+    for (const utterance of ["I'm flying from Dallas to Rome.", 'We are flying from Dallas to Rome next week.']) {
+      assert(`subject-bearing "${utterance}" stays evidence`, canonicalConversationalEvidence(utterance, ROUTE)?.displayValue, utterance);
+    }
+    const db = await openDb();
+    const before = rowCounts(db);
+    for (const utterance of ['Setting an alarm for 7.', 'Adding milk to my grocery list.']) {
+      const outcome = await processUtterance(utterance, new ConversationSession(), deps('off'));
+      assertTrue(`capability request "${utterance}" is not conversational evidence`, outcome.handled || outcome.conversationalEvidence == null);
+    }
+    for (const llmStatus of ['unavailable', 'ready'] as const) {
+      const session = new ConversationSession();
+      const ledger = createConversationTurnLedger();
+      const first = await processUtterance(FLYING, session, deps('off', llmStatus), null, null, null, null, null, null, ledger);
+      assertTrue(`${llmStatus}: subject-less turn reaches the default route`, first.handled === false && first.routeDecision.kind === 'needs_clarification' && first.routeDecision.reason === 'default');
+      assert(`${llmStatus}: production evidence is the full utterance`, first.handled ? null : first.conversationalEvidence?.displayValue, FLYING);
+      const turn = await seam(FLYING, llmStatus, !first.handled && first.conversationalEvidence != null, 'That sounds like a long trip.');
+      assert(`${llmStatus}: seam outcome`, turn.outcome.kind, llmStatus === 'ready' ? 'generative' : 'evidence_ack');
+      pushAdmitted(ledger, FLYING, first.handled ? ROUTE : first.routeDecision, turn.outcome.kind === 'generative' ? 'generated' : 'presented');
+      const topics = ledger.peek(Date.now()).flatMap((entry) => entry.focus).filter((entry) => entry.kind === 'topic');
+      assert(`${llmStatus}: one canonical topic, full wording`, topics.map((entry) => entry.displayValue), [FLYING]);
+      const asked = await processUtterance('No, Austin.', session, deps('off', llmStatus), null, null, null, null, null, null, ledger);
+      assert(`${llmStatus}: No, Austin. reaches Correction Continuity ambiguity`, asked.handled ? asked.responseText : '', clarifySpeech('Which one should I correct:', ['Dallas', 'Rome']));
+      assert(`${llmStatus}: ambiguity holds the correction clarify pending`, session.peekPendingKey(), CORRECTION_CLARIFY_KEY);
+    }
+    assert('subject-less admission sqlite delta is zero', rowCounts(db), before);
   }
 
   const total = passed + failures.length;

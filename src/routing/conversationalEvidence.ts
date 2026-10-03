@@ -36,6 +36,10 @@ const DEMONSTRATIVE_RE = /^(this|that|these|those)$/;
 const AUXILIARY_RE = /^(?:am|is|are|was|were|be|been|being|have|has|had|do|does|did|can|could|may|might|must|shall|should|will|would)$/;
 /** Grammatical function words. Not an open verb or noun list. */
 const FUNCTION_WORD_RE = /^(?:the|a|an|my|me|we|our|you|your|he|she|they|it|this|that|these|those|if|when|what|who|why|how|and|but|or|so|for|to|of|in|on|at|by|with|from|about|not|no|yes|ok|okay)$/;
+/** Closed class: prepositions and particles that open a complement. */
+const COMPLEMENT_OPENER_RE = /^(?:to|from|at|in|on|into|onto|with|for|by|about|around|through|over|under|after|before|toward|towards|across|back|out|up|down|off|away)$/;
+/** Closed class: -ing words that are pronouns or prepositions, not predicates. */
+const ING_FUNCTION_RE = /^(?:nothing|something|anything|everything|during|including|regarding|concerning|following|according|pending|considering|excluding|notwithstanding|barring)$/;
 
 export function isConversationalEvidenceRoute(route: ConversationalEvidenceRoute): boolean {
   if (route.kind === 'needs_clarification' && route.reason === 'default') return true;
@@ -133,6 +137,22 @@ function titleCaseFrame(words: string[]): boolean {
   return index + 1 < words.length;
 }
 
+/**
+ * Subject-less progressive declarative: the speaker drops the subject
+ * ("[I'm] flying from …"). An initial -ing predicate followed by a closed
+ * complement opener and at least one more word. Capability requests do not
+ * take this form, and the instruction / question / repair guards run first.
+ */
+function subjectlessParticipleFrame(words: string[]): boolean {
+  const first = words[0] ?? '';
+  const lower = first.toLowerCase();
+  if (!/^[A-Za-z][a-z]+ing$/.test(first) || lower.length < 5) return false;
+  if (ING_FUNCTION_RE.test(lower) || isClosedClassNameToken(first)) return false;
+  const opener = words[1]?.toLowerCase() ?? '';
+  if (!COMPLEMENT_OPENER_RE.test(opener)) return false;
+  return words.length > 2;
+}
+
 function admitsProposition(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;
@@ -147,7 +167,7 @@ function admitsProposition(text: string): boolean {
   if (words.length === 0 || words.length > MAX_TOKENS) return false;
   const first = words[0]!.toLowerCase();
   if (SECOND_PERSON_RE.test(first) || DEMONSTRATIVE_RE.test(first)) return false;
-  return pronounFrame(words) || determinerFrame(words) || titleCaseFrame(words);
+  return pronounFrame(words) || determinerFrame(words) || titleCaseFrame(words) || subjectlessParticipleFrame(words);
 }
 
 /**
