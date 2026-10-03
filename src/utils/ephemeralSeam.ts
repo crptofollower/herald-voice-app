@@ -209,10 +209,13 @@ export function mayRunGenerativeEphemeralPersonalProse(input: {
   return true;
 }
 
+export const EVIDENCE_ACK_REPLY = 'Okay.';
+
 export type EphemeralSeamOutcome =
   | { kind: 'authoritative'; reply: string; source?: 'recap' }
   | { kind: 'clarify'; reply: string; grantContinuation: boolean; source?: 'recap' }
-  | { kind: 'generative'; reply: string; grantContinuation: boolean };
+  | { kind: 'generative'; reply: string; grantContinuation: boolean }
+  | { kind: 'evidence_ack'; reply: typeof EVIDENCE_ACK_REPLY; grantContinuation: false; source?: 'recap' };
 
 export async function resolveEphemeralSeam(input: {
   text: string;
@@ -230,6 +233,12 @@ export async function resolveEphemeralSeam(input: {
   generate: () => Promise<EphemeralResult>;
   /** When true, authoritative owners were already run on this turn (offline path). */
   skipAuthoritativeOwners?: boolean;
+  /**
+   * Conversational Evidence Admission V1. True only when the deterministic
+   * evidence authority already admitted this utterance. Generation fences
+   * do not erase that admission; they select evidence_ack instead of prose.
+   */
+  conversationalEvidenceAdmitted?: boolean;
   /** Prior HOT-ring user/assistant text — evidence only, not a referent binder. */
   threadEvidence?: string;
   /** Conversation Continuity Consumer V1 — Immediate Semantic Recap. Caller
@@ -269,9 +278,21 @@ export async function resolveEphemeralSeam(input: {
       'i',
     ).test(evidence);
     if (!known) {
-      return publishGenerativeReply(buildUnverifiedBiographyInquiryMiss(inquiryName));
+      const published = publishGenerativeReply(buildUnverifiedBiographyInquiryMiss(inquiryName));
+      if (published) return published;
     }
   }
+
+  const admitted = input.conversationalEvidenceAdmitted === true;
+  const pendingBlocks = hasPendingRepairOwnership({
+    hasSessionPending: input.hasPendingSession,
+    hasContactCollectPending: input.hasContactCollectPending,
+  });
+  const evidenceAck = (): EphemeralSeamOutcome => (
+    admitted && input.reason === 'default' && !pendingBlocks
+      ? { kind: 'evidence_ack', reply: EVIDENCE_ACK_REPLY, grantContinuation: false }
+      : { kind: 'clarify', reply: EPHEMERAL_CLARIFY_REPLY, grantContinuation: true }
+  );
 
   const eligible = isEligibleForEphemeralConversation(
     input.text,
@@ -287,8 +308,13 @@ export async function resolveEphemeralSeam(input: {
     threadEvidence: input.threadEvidence,
   });
   if (!mayGenerate) {
-    // Clarify still authorizes the next user turn so a repair ("I'm talking
-    // about you") is not a compounding dead end. It does not write HOT prose.
+    // The fragment fence blocks prose only. Admitted evidence still gets
+    // Okay. Pending, ineligible, and non-default reasons stay clarify.
+    const fragmentBlocked = input.reason === 'default'
+      && !pendingBlocks
+      && eligible
+      && isBareZeroEvidenceOpeningFragment(input.text);
+    if (fragmentBlocked) return evidenceAck();
     return { kind: 'clarify', reply: EPHEMERAL_CLARIFY_REPLY, grantContinuation: true };
   }
 
@@ -302,22 +328,22 @@ export async function resolveEphemeralSeam(input: {
     ephemeralBusy: input.ephemeralBusy,
   });
   if (!canConverse) {
-    return { kind: 'clarify', reply: EPHEMERAL_CLARIFY_REPLY, grantContinuation: true };
+    return evidenceAck();
   }
 
   const ephemeral = await input.generate();
   if (ephemeral.status === 'ok') {
-    return publishGenerativeReply(ephemeral.text);
+    const published = publishGenerativeReply(ephemeral.text);
+    if (published) return published;
+    return evidenceAck();
   }
-  return { kind: 'clarify', reply: EPHEMERAL_CLARIFY_REPLY, grantContinuation: true };
+  return evidenceAck();
 }
 
 function publishGenerativeReply(text: string):
   | { kind: 'generative'; reply: string; grantContinuation: true }
-  | { kind: 'clarify'; reply: string; grantContinuation: true } {
+  | null {
   const reply = withholdAssistantBiography(text);
-  if (!reply) {
-    return { kind: 'clarify', reply: EPHEMERAL_CLARIFY_REPLY, grantContinuation: true };
-  }
+  if (!reply) return null;
   return { kind: 'generative', reply, grantContinuation: true };
 }

@@ -187,8 +187,15 @@ export async function runConversationalContinuityPublicationTests() {
       operation: 'conversational',
       utterance: 'I was talking with Alina about the weekend.',
     });
-    assert('person focus remains the only entry', next.map((entry) => entry.kind), ['person']);
-    assert('person display value is unchanged', next[0]?.displayValue, 'Alina');
+    assert('model narrative person is not ledger focus', next.map((entry) => entry.kind), ['topic']);
+    assert('admitted utterance stays the topic', next[0]?.displayValue, 'I was talking with Alina about the weekend.');
+    const doctor = continuityLedgerFocus({ kind: 'person', displayValue: 'Dr. Smith', resolverKey: 'Dr. Smith', referable: true }, false);
+    const kept = ledgerFocusWithConversationalTopic(doctor, {
+      operation: 'conversational',
+      utterance: 'I was talking with Alina about the weekend.',
+    });
+    assert('deterministic person focus is retained', kept.map((entry) => entry.kind), ['person']);
+    assert('deterministic person display is unchanged', kept[0]?.displayValue, 'Dr. Smith');
   }
 
   {
@@ -213,21 +220,21 @@ export async function runConversationalContinuityPublicationTests() {
     assert('identifier-shaped wording is not published', none, []);
     const one = ledgerFocusWithConversationalTopic([], {
       operation: 'conversational',
-      utterance: 'about his trip to Ireland',
+      utterance: 'He lives in Ireland.',
       groundedSpans: ['Ireland'],
       discourseMentionIds: ['m-ireland'],
     });
-    assert('one grounded user span is the topic display', one[0]?.displayValue, 'Ireland');
+    assert('grounded span does not replace the admitted utterance', one[0]?.displayValue, 'He lives in Ireland.');
     const many = ledgerFocusWithConversationalTopic([], {
       operation: 'conversational',
       utterance: 'Ireland and the harbor',
       groundedSpans: ['Ireland', 'harbor'],
     });
-    assert('multiple spans stay the user utterance', many[0]?.displayValue, 'Ireland and the harbor');
+    assert('a non-admitted fragment publishes no topic', many, []);
     const ledger = createConversationTurnLedger();
     ledger.push({
       establishedAt: Date.now(),
-      utterance: 'about his trip to Ireland',
+      utterance: 'He lives in Ireland.',
       intentType: null,
       operation: 'conversational',
       outcome: 'generated',

@@ -776,10 +776,11 @@ async function admissionAckListsEverySurface() {
     both.handled === false
       && actOf(both) === 'ACKNOWLEDGE'
       && speech === 'Got it — Elena, Ireland.'
-      && both.continuityFocus?.displayValue === 'Elena'
+      && both.continuityFocus === undefined
+      && typeof both.narrativePersonMentionId === 'string'
       && discourse.peekTopic()?.displayName === 'Elena'
       && !/saved|updated/i.test(speech),
-    `${actOf(both)} ${speech} focus=${both.handled ? '' : both.continuityFocus?.displayValue ?? ''}`,
+    `${actOf(both)} ${speech} mention=${both.handled ? '' : both.narrativePersonMentionId ?? ''}`,
   );
   const quiet = await processUtterance('The sky looks grey today.', session, {
     ...deps,

@@ -26,7 +26,7 @@ import {
   type ActiveSubjectIdentityRelation,
 } from '../../src/routing/activeSubjectReference.ts';
 import { DOMAIN_WRITERS } from '../../src/routing/routeIntent.ts';
-import { continuityLedgerFocus } from '../../src/routing/conversationTurnLedgerWrite.ts';
+import { continuityLedgerFocus, ledgerFocusWithConversationalTopic } from '../../src/routing/conversationTurnLedgerWrite.ts';
 import { ConversationalSubjectHolder } from '../../src/routing/conversationalSubject.ts';
 import { DiscourseContinuityHolder, qualifyingNarrativePersonNames } from '../../src/routing/discourseContinuity.ts';
 import { DISCOURSE_MENTION_PROPOSAL_PROMPT } from '../../src/routing/semanticProvider.ts';
@@ -616,6 +616,7 @@ export async function runActiveSubjectReferenceTests() {
   ) {
     if (outcome.handled) return;
     const isRead = outcome.routeDecision.kind === 'device_read';
+    const route = outcome.routeDecision;
     ledger.push({
       establishedAt: Date.now(),
       utterance: text,
@@ -624,7 +625,13 @@ export async function runActiveSubjectReferenceTests() {
       outcome: isRead ? 'presented' : 'generated',
       authorityTier: isRead ? 'deterministic' : 'conversational',
       assistantReplySummary: null,
-      focus: continuityLedgerFocus(outcome.continuityFocus, outcome.continuityReferenceOnly === true),
+      focus: isRead
+        ? continuityLedgerFocus(outcome.continuityFocus, outcome.continuityReferenceOnly === true)
+        : ledgerFocusWithConversationalTopic(
+          continuityLedgerFocus(outcome.continuityFocus, outcome.continuityReferenceOnly === true),
+          { operation: 'conversational', utterance: text, routeDecision: route },
+        ),
+      ...(outcome.narrativePersonMentionId ? { narrativePersonMentionId: outcome.narrativePersonMentionId } : {}),
     });
   }
 
@@ -639,13 +646,17 @@ export async function runActiveSubjectReferenceTests() {
     assertTrue('narrative: unhandled (not a domain write)', outcome.handled === false);
     assert('narrative: WCS stores Paul', discourse.peekTopic()?.displayName, 'Paul');
     assertTrue('narrative: Flow C not armed', !subject.hasLive());
-    assertTrue('narrative: orchestration exposes exactly-one person focus', !outcome.handled && outcome.continuityFocus?.kind === 'person' && outcome.continuityFocus.displayValue === 'Paul');
-    assertTrue('narrative: referenceOnly publication', !outcome.handled && outcome.continuityReferenceOnly === true);
+    assertTrue('narrative: no ledger person continuityFocus', outcome.handled === false && outcome.continuityFocus === undefined);
+    assertTrue('narrative: mention annotation is present', outcome.handled === false && typeof outcome.narrativePersonMentionId === 'string' && outcome.narrativePersonMentionId.length > 0);
     publishContinuity(ledger, text, outcome);
     const published = ledger.peek(Date.now()).flatMap((e) => e.focus);
-    assert('narrative: ledger focus tier is conversational', published[0]?.tier, 'conversational');
-    assertTrue('narrative: no resolverKey (not a stored contact)', published[0]?.resolverKey === undefined);
-    const who = await answerActiveSubjectReference('Who was I talking about?', { ledgerEntries: ledger.peek(Date.now()) });
+    assertTrue('narrative: ledger focus is not a person', published.every((entry) => entry.kind !== 'person'));
+    assert('narrative: canonical topic is the utterance', published.find((entry) => entry.kind === 'topic')?.displayValue, text);
+    assertTrue('narrative: topic has no resolverKey', published.every((entry) => entry.resolverKey === undefined));
+    const who = await answerActiveSubjectReference('Who was I talking about?', {
+      ledgerEntries: ledger.peek(Date.now()),
+      discourseMentions: discourse.peekDiscourseMentions(),
+    });
     assertTrue('narrative: identity resolves Paul', who.handled === true && who.kind === 'identity' && who.reply.includes('Paul'));
     assertTrue('narrative: Level-1 reply is not a stored-contact claim', who.handled === true && !/number|phone|contact/i.test(who.reply));
   }

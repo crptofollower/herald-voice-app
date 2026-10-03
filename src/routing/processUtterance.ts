@@ -4,6 +4,7 @@ import { mayPreserveExistingClarification, withRoutedEffect } from './routedOper
 import type { IntentRecord } from '../hooks/llmLayers';
 import type { ConversationTurnLedger } from './conversationTurnLedger';
 import { commitResultOutcome, captureAuthorityTier, buildFocusEntry, buildCommitLedgerFocus } from './conversationTurnLedgerWrite';
+import { canonicalConversationalEvidence, conversationalTurnFocus } from './conversationalEvidence';
 import { answerRecentCommittedAddRecall } from './recentActionRecall';
 import {
   bindFollowingTurnListReferent,
@@ -215,6 +216,10 @@ export type UtteranceOutcome =
       /** Orchestration publishes this on the turn's existing ledger write. */
       continuityFocus?: DomainFocusEnvelope;
       continuityReferenceOnly?: boolean;
+      /** Deterministic conversational evidence. Independent of model state. */
+      conversationalEvidence?: { displayValue: string };
+      /** Replaces 3B narrative person focus. Not itself focus. */
+      narrativePersonMentionId?: string;
       responseAct?: ResponseAct;
     };
 
@@ -2313,6 +2318,33 @@ export async function processUtterance(
     arc.close();
   }
   let admissionAck: ResponseAct | undefined;
+  const conversationalEvidence = canonicalConversationalEvidence(text, routeDecision);
+  const recordAdmittedDiscourseTurn = (responseText: string) => {
+    if (!conversationalEvidence || !ledger) return;
+    const live = ledger.peek(Date.now());
+    if (live.some((record) => record.utterance === conversationalEvidence.displayValue && record.focus.some((entry) => entry.kind === 'topic' && entry.displayValue === conversationalEvidence.displayValue))) {
+      return;
+    }
+    const mentionIds = discourse
+      ? discourse.peekDiscourseMentions()
+        .filter((mention) => mention.status === 'active' && mention.sourceTurnId === discourse.currentTurn())
+        .map((mention) => mention.mentionId)
+      : [];
+    ledger.push({
+      establishedAt: Date.now(),
+      utterance: text,
+      intentType: null,
+      operation: 'conversational',
+      outcome: 'presented',
+      authorityTier: 'conversational',
+      assistantReplySummary: responseText,
+      focus: conversationalTurnFocus({
+        evidence: conversationalEvidence,
+        retainedFocus: [],
+        discourseMentionIds: mentionIds,
+      }),
+    });
+  };
   if (
     discourse
     && routeDecision.kind === 'needs_clarification'
@@ -2321,6 +2353,7 @@ export async function processUtterance(
     const mentionCtx = deps.getMedicationSemanticInterpreterCtx?.() ?? null;
     if (!mentionCtx && isUnresolvedCorrectionUtterance(text)) {
       const responseText = formatRecoveryAmbiguousClarification();
+      recordAdmittedDiscourseTurn(responseText);
       return {
         handled: true,
         source: 'discourse_correction',
@@ -2332,6 +2365,7 @@ export async function processUtterance(
     const correction = await considerCurrentTurnDiscourseCorrection(text, discourse, mentionCtx);
     if (correction.kind === 'reply') {
       discourse.establishTopicFromCommittedPersons(text);
+      recordAdmittedDiscourseTurn(correction.speech);
       return {
         handled: true,
         source: 'discourse_correction',
@@ -2350,6 +2384,7 @@ export async function processUtterance(
       if (mentionCtx) {
         await populateCurrentTurnDiscourseMentions(text, mentionCtx, discourse);
       }
+      recordAdmittedDiscourseTurn(applied.speech);
       return {
         handled: true,
         source: 'discourse_reflection',
@@ -2362,6 +2397,7 @@ export async function processUtterance(
     }
     if (applied?.outcome === 'unresolved') {
       const responseText = unresolvedReferenceSpeech();
+      recordAdmittedDiscourseTurn(responseText);
       return {
         handled: true,
         source: 'discourse_unresolved_reference',
@@ -2381,18 +2417,23 @@ export async function processUtterance(
     if (admissionSpeech) admissionAck = acknowledgeAct(admissionSpeech);
     }
   }
+  let narrativePersonMentionId: string | undefined;
   if (
-    !continuityFocus
+    discourse
+    && !continuityFocus
     && !personEstablished
     && exactlyOneNarrativePerson
     && admitsNarrativeContinuityPublication(routeDecision)
   ) {
-    continuityFocus = {
-      kind: 'person',
-      displayValue: exactlyOneNarrativePerson,
-      referable: true,
-    };
-    continuityReferenceOnly = true;
+    const turn = discourse.currentTurn();
+    const people = discourse.peekDiscourseMentions().filter((mention) =>
+      mention.sourceTurnId === turn
+      && mention.status === 'active'
+      && mention.kind === 'person'
+      && mention.durable === false
+      && mention.surfaceSpan === exactlyOneNarrativePerson
+    );
+    if (people.length === 1) narrativePersonMentionId = people[0]!.mentionId;
   }
   const routeAct = admissionAck ?? actForRoute(routeDecision);
   if (routeDecision.kind === 'device_read' && routeDecision.reason === 'family:read') {
@@ -2429,5 +2470,7 @@ export async function processUtterance(
     ...(continuityFocus
       ? { continuityFocus, continuityReferenceOnly: continuityReferenceOnly === true }
       : {}),
+    ...(conversationalEvidence ? { conversationalEvidence } : {}),
+    ...(narrativePersonMentionId ? { narrativePersonMentionId } : {}),
   };
 }

@@ -1971,6 +1971,8 @@ export default function ChatScreen() {
     const continuityFocus = !outcome.handled
       ? continuityLedgerFocus(outcome.continuityFocus, outcome.continuityReferenceOnly === true)
       : [];
+    const admittedEvidence = !outcome.handled ? outcome.conversationalEvidence ?? null : null;
+    const establishingMentionId = !outcome.handled ? outcome.narrativePersonMentionId : undefined;
     if (shadowSnapshot) {
       const rd = outcome.handled ? undefined : outcome.routeDecision;
       const action = rd && rd.kind === 'device_action' ? rd.actionIntent : undefined;
@@ -2194,6 +2196,7 @@ export default function ChatScreen() {
           hotRawEntryCount: hotRingRef.current._rawEntries().length,
           hotPeekedEntryCount: hotContextForGeneration.length,
           generate: () => runEphemeralGenerate(adoptedRecovery, 'needs_clarification_default'),
+          conversationalEvidenceAdmitted: admittedEvidence != null,
           threadEvidence: hotContextForGeneration
             .map((e) => (e.assistantHotPolicy === 'include' ? `${e.user}\n${e.assistant}` : e.user))
             .join('\n'),
@@ -2224,6 +2227,10 @@ export default function ChatScreen() {
           ledgerOperation = 'clarify_request';
           ledgerOutcome = 'clarified';
           ledgerAuthorityTier = 'conversational';
+        } else if (seamOutcome.kind === 'evidence_ack') {
+          ledgerOperation = 'conversational';
+          ledgerOutcome = 'presented';
+          ledgerAuthorityTier = 'conversational';
         } else if (seamOutcome.kind === 'authoritative') {
           ledgerOperation = 'read';
           ledgerOutcome = 'presented';
@@ -2235,7 +2242,9 @@ export default function ChatScreen() {
           routeReason: outcome.routeDecision.reason,
           recapHandled: recapOutcome.handled,
           activeSubjectHandled: activeSubjectOutcome.handled,
-          seamKind: seamOutcome.kind,
+          seamKind: seamOutcome.kind === 'clarify' || seamOutcome.kind === 'generative' || seamOutcome.kind === 'authoritative'
+            ? seamOutcome.kind
+            : null,
           hasPending: sessionRef.current.hasPending(),
         })) {
           recoveryObligationRef.current.establish();
@@ -2263,9 +2272,19 @@ export default function ChatScreen() {
           {
             operation: ledgerOperation,
             utterance: text,
-            ...topicFactsForCurrentTurn(),
+            discourseMentionIds: topicFactsForCurrentTurn().discourseMentionIds,
+            routeDecision: outcome.routeDecision,
           },
         ),
+        ...(() => {
+          const groundingMentionId = activeSubjectOutcome.handled && activeSubjectOutcome.kind === 'grounding'
+            ? activeSubjectOutcome.narrativePersonMentionId
+            : undefined;
+          const narrativePersonMentionId = groundedFocus.length > 0
+            ? undefined
+            : groundingMentionId ?? establishingMentionId;
+          return narrativePersonMentionId ? { narrativePersonMentionId } : {};
+        })(),
       });
       addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
       addMessage({ id: generateId('msg'), role: 'assistant', content: realizedClarification.speech, timestamp: Date.now() });
@@ -2586,6 +2605,7 @@ export default function ChatScreen() {
             hotRawEntryCount: hotRingRef.current._rawEntries().length,
             hotPeekedEntryCount: hotContextForGeneration.length,
             generate: runEphemeralGenerate,
+            conversationalEvidenceAdmitted: admittedEvidence != null,
             threadEvidence: hotContextForGeneration
               .map((e) => (e.assistantHotPolicy === 'include' ? `${e.user}\n${e.assistant}` : e.user))
               .join('\n'),
@@ -2618,6 +2638,9 @@ export default function ChatScreen() {
             clarifyRepairTurnRef.current = turnIndexRef.current;
             ledgerOperation = 'clarify_request';
             ledgerOutcome = 'clarified';
+          } else if (seamOutcome.kind === 'evidence_ack') {
+            ledgerOperation = 'conversational';
+            ledgerOutcome = 'presented';
           } else if (seamOutcome.kind === 'authoritative') {
             ledgerOperation = 'read';
             ledgerOutcome = 'presented';
@@ -2635,8 +2658,10 @@ export default function ChatScreen() {
           focus: ledgerFocusWithConversationalTopic(continuityFocus, {
             operation: ledgerOperation,
             utterance: text,
-            ...topicFactsForCurrentTurn(),
+            discourseMentionIds: topicFactsForCurrentTurn().discourseMentionIds,
+            routeDecision,
           }),
+          ...(establishingMentionId && ledgerOperation === 'conversational' ? { narrativePersonMentionId: establishingMentionId } : {}),
         });
         addMessage({ id: generateId('msg'), role: 'user',
           content: text, timestamp: Date.now() });

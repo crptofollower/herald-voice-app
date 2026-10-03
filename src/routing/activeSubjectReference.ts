@@ -63,7 +63,12 @@
 
 import type { LlamaContext } from 'llama.rn';
 import { completeBoundedInterpretation } from './semanticProvider';
-import type { ConversationTurnFocusEntry, ConversationTurnRecord } from './conversationTurnLedger';
+import {
+  CONVERSATION_TURN_LEDGER_MAX_RECORDS,
+  CONVERSATION_TURN_LEDGER_TTL_MS,
+  type ConversationTurnFocusEntry,
+  type ConversationTurnRecord,
+} from './conversationTurnLedger';
 import { buildRecapCandidates, type RecapCandidate } from './immediateSemanticRecap';
 import type { DiscourseMention } from './discourseContinuity';
 import {
@@ -491,7 +496,7 @@ export type ActiveSubjectOutcome =
   | { handled: true; kind: 'content'; reply: string; focus: ConversationTurnFocusEntry[] }
   /** Minimal neutral acknowledgment only — never a phrase implying the
    *  proposition was saved or persisted as personal truth. */
-  | { handled: true; kind: 'grounding'; reply: typeof ACTIVE_SUBJECT_GROUNDING_ACK; focus: ConversationTurnFocusEntry[] }
+  | { handled: true; kind: 'grounding'; reply: typeof ACTIVE_SUBJECT_GROUNDING_ACK; focus: ConversationTurnFocusEntry[]; narrativePersonMentionId?: string }
   | { handled: true; kind: 'ambiguous'; reply: string; resume: (userText: string) => Promise<CommitResult> };
 
 export type ActiveSubjectReferenceDeps = {
@@ -501,6 +506,58 @@ export type ActiveSubjectReferenceDeps = {
   discourseMentions?: readonly DiscourseMention[];
   getInterpreterCtx?: () => LlamaContext | null;
 };
+
+/**
+ * Read-time only. A ledger annotation plus a live non-durable person mention
+ * becomes a conversational person candidate. The ledger record is not written
+ * back. Corrected, superseded, stale, or missing mentions contribute nothing.
+ */
+export function projectNarrativePersons(
+  entries: readonly ConversationTurnRecord[],
+  mentions: readonly DiscourseMention[],
+  nowMs: number = Date.now(),
+): ConversationTurnRecord[] {
+  const byId = new Map(mentions.map((mention) => [mention.mentionId, mention]));
+  const live = entries.filter((entry) => nowMs - entry.establishedAt <= CONVERSATION_TURN_LEDGER_TTL_MS);
+  const windowed = live.slice(-CONVERSATION_TURN_LEDGER_MAX_RECORDS);
+  const inWindow = new Set(windowed);
+  return entries.map((entry) => {
+    if (!inWindow.has(entry)) return entry;
+    const mentionId = entry.narrativePersonMentionId;
+    if (!mentionId) return entry;
+    const mention = byId.get(mentionId);
+    if (!mention) return entry;
+    if (mention.kind !== 'person' || mention.status !== 'active' || mention.durable !== false) return entry;
+    const synthetic: ConversationTurnFocusEntry = {
+      kind: 'person',
+      displayValue: mention.surfaceSpan,
+      referable: true,
+      tier: 'conversational',
+      discourseMentionIds: [mentionId],
+    };
+    return { ...entry, focus: [...entry.focus, synthetic] };
+  });
+}
+
+function projectedNarrativeMentionId(focus: ConversationTurnFocusEntry): string | undefined {
+  const id = focus.discourseMentionIds?.length === 1 ? focus.discourseMentionIds[0] : undefined;
+  if (!id) return undefined;
+  if (focus.kind !== 'person' || focus.tier !== 'conversational' || focus.resolverKey) return undefined;
+  return id;
+}
+
+function mergeIdentityCandidates(mentions: RecapCandidate[], ledger: RecapCandidate[]): RecapCandidate[] {
+  const merged = [...mentions];
+  const seen = new Set(mentions.map((candidate) => candidate.displayValue.trim().toLowerCase()));
+  for (const candidate of ledger) {
+    if (candidate.kind !== 'person' || !candidate.focus.resolverKey) continue;
+    const key = candidate.displayValue.trim().toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(candidate);
+  }
+  return merged.map((candidate, index) => ({ ...candidate, index }));
+}
 
 /** Active current-conversation people, in mention order. Corrected-away and
  *  non-person mentions are not candidates. No resolver key is attached. */
@@ -604,9 +661,11 @@ export async function answerActiveSubjectReference(
         ? 'content_lookup'
         : 'identity_lookup';
 
+  const projectedEntries = projectNarrativePersons(deps.ledgerEntries, deps.discourseMentions ?? []);
+  const ledgerCandidates = buildRecapCandidates(projectedEntries);
   const allCandidates = isClosedIdentity && deps.discourseMentions != null
-    ? discoursePersonRecapCandidates(deps.discourseMentions)
-    : buildRecapCandidates(deps.ledgerEntries);
+    ? mergeIdentityCandidates(discoursePersonRecapCandidates(deps.discourseMentions), ledgerCandidates)
+    : ledgerCandidates;
   const diagSink: ActiveSubjectResolutionDiagSink = {};
   const resolution = await resolveActiveSubjectCandidate(
     t,
@@ -658,17 +717,26 @@ export async function answerActiveSubjectReference(
   const candidate = resolution.candidate;
 
   if (isGrounding) {
-    const focus = buildFocusEntry(
-      { kind: candidate.kind, displayValue: candidate.displayValue, resolverKey: candidate.focus.resolverKey, referable: true },
-      { status: 'committed', source: 'deterministic', referenceOnly: true },
-    );
+    const narrativePersonMentionId = projectedNarrativeMentionId(candidate.focus);
+    const focus = narrativePersonMentionId
+      ? []
+      : buildFocusEntry(
+        { kind: candidate.kind, displayValue: candidate.displayValue, resolverKey: candidate.focus.resolverKey, referable: true },
+        { status: 'committed', source: 'deterministic', referenceOnly: true },
+      );
     emit({
       act, targetKind, candidates: eligibleCandidates, fastPathUsed: diagSink.fastPathUsed ?? false,
       semanticStageInvoked: diagSink.semanticStageInvoked ?? false, semanticResult: diagSink.semanticResult ?? 'selected',
       selectedCandidateIndex: candidate.index, selectedCandidateKind: candidate.kind, resultingFocusTier: focus[0]?.tier ?? null,
       pendingArmed: false, finalOutcome: 'grounded',
     });
-    return { handled: true, kind: 'grounding', reply: ACTIVE_SUBJECT_GROUNDING_ACK, focus };
+    return {
+      handled: true,
+      kind: 'grounding',
+      reply: ACTIVE_SUBJECT_GROUNDING_ACK,
+      focus,
+      ...(narrativePersonMentionId ? { narrativePersonMentionId } : {}),
+    };
   }
 
   const kind: 'identity' | 'content' = isClosedContent ? 'content' : 'identity';

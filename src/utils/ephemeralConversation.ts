@@ -42,7 +42,7 @@ export { isHeraldSelfReferentConversationalShape } from './ephemeralSelfReferent
 const OPINION_SEEKING_RE =
   /\b(do|don'?t)\s+you\s+(think|believe|feel|reckon|suppose)\b|\bwhat\s+would\s+you\s+do\b|\bhow\s+does\s+(?:that|this|it)\s+sound\b|\bcan\s+you\s+believe\b|\bwasn'?t\s+(?:that|it)\b|\bwouldn'?t\s+(?:that|it)\s+be\b/i;
 
-const INTERROGATIVE_RE =
+export const INTERROGATIVE_RE =
   /\?\s*$|^\s*(who|what|when|where|why|how|do|does|did|is|are|was|were|can|could|would|will|should)\b/i;
 
 // --- 2026-08-15 amendment: Gap A (tell-me framing) and Gap B (embedded

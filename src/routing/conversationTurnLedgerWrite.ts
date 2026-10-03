@@ -17,10 +17,12 @@
 // a semantic mapping.
 
 import type { CommitResult, RouteDecision, DomainFocusEnvelope } from './routeIntent';
-import { isUnsafeContinuityEvidence } from './discourseContinuity';
-import { isUnresolvedCorrectionUtterance } from './recoveryObligation';
 import {
-  CONVERSATION_TURN_UTTERANCE_MAX_CHARS,
+  canonicalConversationalEvidence,
+  conversationalTurnFocus,
+  type ConversationalEvidenceRoute,
+} from './conversationalEvidence';
+import {
   type ConversationTurnAuthorityTier,
   type ConversationTurnFocusEntry,
   type ConversationTurnFocusTier,
@@ -225,10 +227,11 @@ export function buildCommitLedgerFocus(
 }
 
 /**
- * One conversational topic for an ordinary conversational turn that does not
- * already carry a domain or person focus. User wording only. No model call,
- * no inferred label, no durable write. A corrected-away mention id is
- * recorded so recap can drop the topic; this function does not correct.
+ * Conversational topic publication delegates to conversationalTurnFocus.
+ * Grounded spans are ignored: they must not shrink the canonical utterance.
+ * When the caller has already selected a conversational operation and does
+ * not pass a route, the admission position is the default clarification
+ * route — the grammar in canonicalConversationalEvidence still decides.
  */
 export function ledgerFocusWithConversationalTopic(
   existing: ConversationTurnFocusEntry[],
@@ -237,27 +240,19 @@ export function ledgerFocusWithConversationalTopic(
     utterance: string;
     groundedSpans?: string[];
     discourseMentionIds?: string[];
+    routeDecision?: ConversationalEvidenceRoute;
   },
 ): ConversationTurnFocusEntry[] {
-  if (existing.length > 0) return existing;
-  if (facts.operation !== 'conversational') return existing;
-  const utterance = facts.utterance.trim();
-  if (!utterance || isUnsafeContinuityEvidence(utterance)) return existing;
-  if (isUnresolvedCorrectionUtterance(utterance)) return existing;
-  const spans = [...new Set(
-    (facts.groundedSpans ?? [])
-      .map((span) => span.trim())
-      .filter((span) => span.length > 0 && utterance.includes(span) && !isUnsafeContinuityEvidence(span)),
-  )];
-  const displayValue = (spans.length === 1 ? spans[0]! : utterance).slice(0, CONVERSATION_TURN_UTTERANCE_MAX_CHARS);
-  const discourseMentionIds = [...new Set((facts.discourseMentionIds ?? []).filter((id) => id.length > 0))];
-  return [{
-    kind: 'topic',
-    displayValue,
-    referable: true,
-    tier: 'conversational',
-    ...(discourseMentionIds.length > 0 ? { discourseMentionIds } : {}),
-  }];
+  void facts.groundedSpans;
+  if (facts.operation !== 'conversational') {
+    return conversationalTurnFocus({ evidence: null, retainedFocus: existing });
+  }
+  const route = facts.routeDecision ?? { kind: 'needs_clarification', reason: 'default' };
+  return conversationalTurnFocus({
+    evidence: canonicalConversationalEvidence(facts.utterance, route),
+    retainedFocus: existing,
+    discourseMentionIds: facts.discourseMentionIds,
+  });
 }
 
 /** Append-only correction record. The source topic record is not an argument and is not edited. */

@@ -123,6 +123,13 @@ export type ConversationTurnRecord = {
   focus: ConversationTurnFocusEntry[];
   /** RAM-only. Later records name the original topic identity they replace at read time. */
   supersedes?: { turnIndex: number; focusIndex: number }[];
+  /**
+   * Active Subject preservation. The single current-turn discourse mention
+   * id that used to be published as narrative person focus. Metadata only:
+   * not focus, not a resolver key, not read by correction, recap, topic
+   * windows, or segment breaks.
+   */
+  narrativePersonMentionId?: string;
 };
 
 /** Write sites supply `focus` as an already-built ConversationTurnFocusEntry[]
