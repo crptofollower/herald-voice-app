@@ -149,6 +149,27 @@ export async function runEmergencyAuthorityV3Tests() {
   ];
   for (const text of explicitEmergencyTrue) check(`E1 explicit declaration true: ${text}`, detectEmergency(text) === true);
   for (const text of explicitEmergencyFalse) check(`E1 explicit declaration false: ${text}`, detectEmergency(text) === false);
+  const reportedDeclaration = [
+    'she said, this is an emergency',
+    'this is an emergency, she said',
+    'he told me this is an emergency',
+    'I heard someone say this is an emergency',
+    'she yelled, "this is an emergency"',
+  ];
+  for (const text of reportedDeclaration) {
+    const session = new ConversationSession();
+    const { deps, spy } = makeDeps();
+    const outcome = await processUtterance(text, session, deps);
+    check(
+      `reported declaration is not hard Stage A: ${text}`,
+      detectEmergency(text) === false
+        && outcome.handled === true
+        && outcome.source === 'emergency_clarify'
+        && spy.classify === 0
+        && spy.llm === 0
+        && session.peekPendingKey() === EMERGENCY_CLARIFY_KEY,
+    );
+  }
 
   const chat = fs.readFileSync(path.join(root, 'src/screens/ChatScreen.tsx'), 'utf8');
   const dispatchStart = chat.indexOf('const dispatchEmergency = useCallback');
@@ -223,6 +244,13 @@ export async function runEmergencyAuthorityV3Tests() {
     'CAN YOU HELP ME STAND UP',
     'help me stand',
   ];
+  const infinitiveRecall = [
+    'Help me to stand up',
+    'Can you help me to stand?',
+    'help me to get up',
+    'can you help me to get out',
+    'help me to get off the floor',
+  ];
   for (const text of recall) {
     const session = new ConversationSession();
     const { deps, spy } = makeDeps();
@@ -244,6 +272,22 @@ export async function runEmergencyAuthorityV3Tests() {
     const outcome = await processUtterance(text, session, deps);
     check(
       `stand recall asks only: ${text}`,
+      detectEmergency(text) === false
+        && detectDirectEmergencyService(text) === false
+        && outcome.handled === true
+        && outcome.source === 'emergency_clarify'
+        && outcome.responseText === EMERGENCY_CLARIFY_QUESTION
+        && session.peekPendingKey() === EMERGENCY_CLARIFY_KEY
+        && spy.classify === 0
+        && spy.llm === 0,
+    );
+  }
+  for (const text of infinitiveRecall) {
+    const session = new ConversationSession();
+    const { deps, spy } = makeDeps();
+    const outcome = await processUtterance(text, session, deps);
+    check(
+      `infinitive recall asks only: ${text}`,
       detectEmergency(text) === false
         && detectDirectEmergencyService(text) === false
         && outcome.handled === true

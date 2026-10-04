@@ -65,7 +65,6 @@ const MODIFIER_WORDS = new Set([
 
 function matchesSignal0Clause(clause: string): boolean {
   if (/\bcall for help\b/i.test(clause) && isDirectAddressToHerald(clause)) return true;
-  if (isExplicitEmergencyDeclaration(clause)) return true;
   if (/\bsend help\b/i.test(clause) && isDirectAddressToHerald(clause)) return true;
   return false;
 }
@@ -102,6 +101,7 @@ function isContentFreeBarePlea(clause: string): boolean {
 }
 
 function matchesEmergencySignal0(text: string): boolean {
+  if (isExplicitEmergencyDeclaration(text)) return true;
   for (const clause of splitDirectAddressClauses(text.trim())) {
     if (matchesSignal0Clause(clause)) return true;
   }
@@ -118,9 +118,13 @@ function normalizeClauseWords(clause: string): string[] {
     .filter(Boolean);
 }
 
-/** Exact declaration, optionally after a Herald vocative. Not a substring search. */
-function isExplicitEmergencyDeclaration(clause: string): boolean {
-  let words = normalizeClauseWords(clause);
+/**
+ * The utterance itself is the declaration. A leading Herald vocative or
+ * interjection may precede it. Extra propositional words, including a
+ * reporting clause, leave a remainder that is not the declaration.
+ */
+function isExplicitEmergencyDeclaration(text: string): boolean {
+  let words = normalizeClauseWords(text);
   if (words[0] === 'hey') words = words.slice(1);
   if (words[0] === 'please') words = words.slice(1);
   if (words[0] === 'herald') words = words.slice(1);
