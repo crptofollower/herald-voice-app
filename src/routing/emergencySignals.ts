@@ -65,8 +65,7 @@ const MODIFIER_WORDS = new Set([
 
 function matchesSignal0Clause(clause: string): boolean {
   if (/\bcall for help\b/i.test(clause) && isDirectAddressToHerald(clause)) return true;
-  if (/\bi(?:'m| am) having an emergency\b/i.test(clause)) return true;
-  if (/\bthis is an emergency\b/i.test(clause) && isDirectAddressToHerald(clause)) return true;
+  if (isExplicitEmergencyDeclaration(clause)) return true;
   if (/\bsend help\b/i.test(clause) && isDirectAddressToHerald(clause)) return true;
   return false;
 }
@@ -117,6 +116,19 @@ function normalizeClauseWords(clause: string): string[] {
     .trim()
     .split(' ')
     .filter(Boolean);
+}
+
+/** Exact declaration, optionally after a Herald vocative. Not a substring search. */
+function isExplicitEmergencyDeclaration(clause: string): boolean {
+  let words = normalizeClauseWords(clause);
+  if (words[0] === 'hey') words = words.slice(1);
+  if (words[0] === 'please') words = words.slice(1);
+  if (words[0] === 'herald') words = words.slice(1);
+  if (words[0] === 'please') words = words.slice(1);
+  const joined = words.join(' ');
+  return joined === 'this is an emergency'
+    || joined === "i'm having an emergency"
+    || joined === 'i am having an emergency';
 }
 
 function isHeraldVocativeClause(clause: string): boolean {

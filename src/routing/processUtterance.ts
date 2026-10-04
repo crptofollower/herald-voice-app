@@ -782,9 +782,10 @@ export async function processUtterance(
     if (held) return held;
   }
   if (session.peekPendingKey() === EMERGENCY_CLARIFY_KEY) {
-    // Mic silence and an empty transcript are not a yes/no reply. They must
-    // not classify, re-ask, release, promote, replay, or expire this slot.
-    if (text.trim().length === 0) {
+    // No recognizable lexical content is not a yes/no reply. Empty text,
+    // whitespace, and punctuation-only input must not classify, re-ask,
+    // release, promote, replay, or move this slot's clock.
+    if (!/[a-z0-9]/i.test(text)) {
       return {
         handled: true,
         source: 'emergency_clarify',

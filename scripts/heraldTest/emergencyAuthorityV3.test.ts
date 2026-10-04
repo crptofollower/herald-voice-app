@@ -132,7 +132,23 @@ export async function runEmergencyAuthorityV3Tests() {
   ];
   for (const text of heraldEmergencyTrue) check(`Herald emergency hard true: ${text}`, detectEmergency(text) === true);
   for (const text of heraldEmergencyFalse) check(`Herald emergency hard false: ${text}`, detectEmergency(text) === false);
-  check("E1 I'm having an emergency stays hard", detectEmergency("I'm having an emergency") === true);
+  const explicitEmergencyTrue = [
+    'this is an emergency',
+    'This is an emergency.',
+    'Herald, this is an emergency',
+    "I'm having an emergency",
+  ];
+  const explicitEmergencyFalse = [
+    'this is not an emergency',
+    "this isn't an emergency",
+    "I don't think this is an emergency",
+    'is this an emergency?',
+    'what is an emergency?',
+    'my emergency contact is Shannon',
+    'I told Herald about the emergency yesterday',
+  ];
+  for (const text of explicitEmergencyTrue) check(`E1 explicit declaration true: ${text}`, detectEmergency(text) === true);
+  for (const text of explicitEmergencyFalse) check(`E1 explicit declaration false: ${text}`, detectEmergency(text) === false);
 
   const chat = fs.readFileSync(path.join(root, 'src/screens/ChatScreen.tsx'), 'utf8');
   const dispatchStart = chat.indexOf('const dispatchEmergency = useCallback');
@@ -141,7 +157,15 @@ export async function runEmergencyAuthorityV3Tests() {
   const directAt = chat.indexOf('if (detectDirectEmergencyService(text))');
   const stageAAt = chat.indexOf('if (detectEmergency(text))');
   const directBlock = chat.slice(directAt, stageAAt);
+  const utteranceAt = chat.indexOf('processUtterance(');
+  const silenceAt = chat.indexOf("processUtterance('', sessionRef.current");
+  const sendEnd = chat.indexOf('const handleSend = useCallback');
   check('direct-service block precedes Stage A', directAt > sendStart && directAt < stageAAt);
+  check(
+    'contentful user path reaches processUtterance only after direct-service and Stage A',
+    sendStart < directAt && directAt < stageAAt && stageAAt < utteranceAt && utteranceAt < sendEnd && silenceAt > sendEnd,
+  );
+  check('no-recognizable-speech calls processUtterance with an empty string', chat.includes("processUtterance('', sessionRef.current"));
   check('direct-service arms the existing 911 confirm_call payload', directBlock.includes("{ action: 'confirm_call', name: '911', phone: '911' }"));
   check('direct-service block does not dispatch, link, or clear Law 0 holders', !directBlock.includes('dispatchEmergency') && !directBlock.includes('Linking') && !directBlock.includes('subjectRef') && !directBlock.includes('hotRingRef'));
   check('dispatchEmergency body is unchanged by the direct-service block', !dispatchBody.includes('detectDirectEmergencyService') && dispatchBody.includes("action: 'confirm_call', name: '911', phone: '911'") && dispatchBody.includes('Herald alert: I may need help.'));
@@ -191,6 +215,14 @@ export async function runEmergencyAuthorityV3Tests() {
     'could you help me get out',
     'i cant get myself up',
   ];
+  const standRecall = [
+    'Can you help me stand up?',
+    'can you help me stand up',
+    'help me stand up',
+    'Can you help me stand?',
+    'CAN YOU HELP ME STAND UP',
+    'help me stand',
+  ];
   for (const text of recall) {
     const session = new ConversationSession();
     const { deps, spy } = makeDeps();
@@ -204,6 +236,22 @@ export async function runEmergencyAuthorityV3Tests() {
         && spy.classify === 0
         && spy.llm === 0
         && proposeEmergency(text)?.source === 'recall_trigger',
+    );
+  }
+  for (const text of standRecall) {
+    const session = new ConversationSession();
+    const { deps, spy } = makeDeps();
+    const outcome = await processUtterance(text, session, deps);
+    check(
+      `stand recall asks only: ${text}`,
+      detectEmergency(text) === false
+        && detectDirectEmergencyService(text) === false
+        && outcome.handled === true
+        && outcome.source === 'emergency_clarify'
+        && outcome.responseText === EMERGENCY_CLARIFY_QUESTION
+        && session.peekPendingKey() === EMERGENCY_CLARIFY_KEY
+        && spy.classify === 0
+        && spy.llm === 0,
     );
   }
 
@@ -277,10 +325,36 @@ export async function runEmergencyAuthorityV3Tests() {
     );
     await processUtterance('   ', session, deps);
     check('blank transcript does not consume the clarification', readEmergencyClarification(session)?.askCount === 0 && session.peekPendingKey() === EMERGENCY_CLARIFY_KEY);
+    for (const noise of ['.', '...', '?', '!', ' ?! ', '---']) {
+      const ignored = await processUtterance(noise, session, deps);
+      const record = readEmergencyClarification(session);
+      check(
+        `no lexical content does not consume: ${JSON.stringify(noise)}`,
+        outcomeSource(ignored) === 'emergency_clarify'
+          && record?.askCount === 0
+          && record?.original === before?.original
+          && record?.establishedAt === before?.establishedAt
+          && session.peekPendingKey() === EMERGENCY_CLARIFY_KEY,
+      );
+    }
     const unresolved = await processUtterance('maybe tomorrow', session, deps);
     check('silence does not advance the ask into a release', unresolved.handled === true && unresolved.source === 'emergency_clarify' && unresolved.responseText === EMERGENCY_CLARIFY_REASK && session.peekPendingKey() === EMERGENCY_CLARIFY_KEY);
     const promoted = await processUtterance('yes', session, deps);
     check('a real yes after silence still promotes', promoted.handled === true && promoted.source === 'emergency' && session.hasPending() === false);
+  }
+
+  {
+    const original = "I can't breathe";
+    const session = new ConversationSession();
+    const { deps } = makeDeps();
+    await processUtterance(original, session, deps);
+    await processUtterance('...', session, deps);
+    await processUtterance('?', session, deps);
+    const declined = await processUtterance('no', session, deps);
+    check(
+      'a real no after punctuation-only input still replays',
+      declined.replayOf === original && outcomeSource(declined) !== 'emergency_clarify' && session.peekPendingKey() !== EMERGENCY_CLARIFY_KEY,
+    );
   }
 
   const realNow = Date.now;
@@ -316,6 +390,14 @@ export async function runEmergencyAuthorityV3Tests() {
       outcomeSource(silent) === 'emergency_clarify'
         && session.peekPendingKey() === EMERGENCY_CLARIFY_KEY
         && readEmergencyClarification(session)?.askCount === 0,
+    );
+    const punctuation = await processUtterance('...', session, deps);
+    check(
+      'punctuation past the deadline does not expire the clarification',
+      outcomeSource(punctuation) === 'emergency_clarify'
+        && session.peekPendingKey() === EMERGENCY_CLARIFY_KEY
+        && readEmergencyClarification(session)?.askCount === 0
+        && readEmergencyClarification(session)?.establishedAt === 1_700_000_000_000,
     );
     const expired = await processUtterance('pumpkin', session, deps);
     check('a later real turn still expires after the deadline', outcomeSource(expired) !== 'emergency_clarify' && session.peekPendingKey() !== EMERGENCY_CLARIFY_KEY);
