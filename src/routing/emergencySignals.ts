@@ -14,7 +14,9 @@ export { isDirectDistressHelpMe };
 
 export const EMERGENCY_SIGNALS = [
   /\bi\b.{0,15}\bneed(?:s|ed)?\s+help\b|\bcall for help\b|\bi('m| am) having an emergency\b|\bthis is an emergency\b|\bsend help\b/i,
-  /\bherald\b.{0,40}\bemergency\b/i,
+  // Herald-addressed emergency is not this pattern. Admission is the
+  // clause-owned form in matchesHeraldAddressedEmergency.
+  /^(?:hey\s+)?herald\s+emergency$/i,
 ];
 
 const BARE_CORES = new Set([
@@ -107,29 +109,102 @@ function matchesEmergencySignal0(text: string): boolean {
   return false;
 }
 
+function normalizeClauseWords(clause: string): string[] {
+  return clause
+    .toLowerCase()
+    .replace(/[^a-z0-9'\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(Boolean);
+}
+
+function isHeraldVocativeClause(clause: string): boolean {
+  return /^(?:hey\s+)?(?:please\s+)?herald$/.test(normalizeClauseWords(clause).join(' '));
+}
+
+function isExactEmergencyClause(clause: string): boolean {
+  return /^(?:please\s+)?emergency$/.test(normalizeClauseWords(clause).join(' '));
+}
+
+function isHeraldEmergencyClause(clause: string): boolean {
+  return /^(?:hey\s+)?(?:please\s+)?herald(?:\s+please)?\s+emergency$/.test(normalizeClauseWords(clause).join(' '));
+}
+
+/** Clause-owned Herald + emergency. Token proximity is not authority. */
+function matchesHeraldAddressedEmergency(text: string): boolean {
+  const clauses = splitDirectAddressClauses(text.trim());
+  if (clauses.some(isHeraldEmergencyClause)) return true;
+  return clauses.some(isHeraldVocativeClause) && clauses.some(isExactEmergencyClause);
+}
+
 export function detectEmergency(text: string): boolean {
   if (matchesEmergencySignal0(text)) return true;
-  if (EMERGENCY_SIGNALS[1].test(text)) return true;
+  if (matchesHeraldAddressedEmergency(text)) return true;
   for (const clause of splitDirectAddressClauses(text.trim())) {
     if (isContentFreeBarePlea(clause)) return true;
   }
   return false;
 }
 
-/**
- * Explicit request to contact emergency services. This is not Stage A and
- * does not dispatch. ChatScreen arms the existing 911 confirm_call.
- */
-export function detectDirectEmergencyService(text: string): boolean {
-  const trimmed = text.trim();
-  if (!trimmed) return false;
-  if (/\b(?:do not|don't|dont)\s+call\b/i.test(trimmed)) return false;
-  if (/\bcall(?:ed|ing)?\s+(?:911|emergency services)\b/i.test(trimmed) && !/\bcall\s+(?:911|emergency services)\b/i.test(trimmed)) {
-    return false;
+const SERVICE_OBJECTS = new Set([
+  '911',
+  'nine one one',
+  'an ambulance',
+  'the ambulance',
+  'emergency services',
+]);
+
+const REQUEST_MODALS = new Set(['can', 'could', 'would', 'will']);
+
+function splitServiceRequestClauses(text: string): string[] {
+  return text.split(/[.!?,;?]+|\bbut\b|\band\b/i).map((clause) => clause.trim()).filter(Boolean);
+}
+
+function isServiceRequestLeadIn(clause: string): boolean {
+  let words = normalizeClauseWords(clause);
+  if (words.length === 0) return false;
+  if (words[0] === 'hey') words = words.slice(1);
+  if (words[0] === 'please') words = words.slice(1);
+  if (words[0] === 'herald') words = words.slice(1);
+  if (words[0] === 'please') words = words.slice(1);
+  if (words[0] === 'help' && words[1] === 'me') words = words.slice(2);
+  return words.length === 0;
+}
+
+function isDirectServiceRequestClause(clause: string): boolean {
+  let words = normalizeClauseWords(clause);
+  if (words.length === 0) return false;
+  if (words[words.length - 1] === 'please') words = words.slice(0, -1);
+  if (words[0] === 'hey') words = words.slice(1);
+  if (words[0] === 'please') words = words.slice(1);
+  if (words[0] === 'herald') words = words.slice(1);
+  if (words[0] === 'please') words = words.slice(1);
+  if (REQUEST_MODALS.has(words[0] ?? '') && words[1] === 'you') {
+    words = words.slice(2);
+    if (words[0] === 'please') words = words.slice(1);
   }
-  const addressed = '(?:please\\s+)?(?:(?:can|could|would|will)\\s+you\\s+)?(?:herald\\s*,?\\s*)?(?:help\\s+me\\s*,?\\s*)?';
-  const call911 = new RegExp(`\\b${addressed}call\\s+911\\b`, 'i');
-  const callServices = new RegExp(`\\b${addressed}call\\s+emergency\\s+services\\b`, 'i');
-  const ambulance = new RegExp(`\\b${addressed}(?:call|get|send)\\s+(?:me\\s+)?(?:an?\\s+|the\\s+)?ambulance\\b`, 'i');
-  return call911.test(trimmed) || callServices.test(trimmed) || ambulance.test(trimmed);
+  if (words[0] === 'help' && words[1] === 'me') words = words.slice(2);
+  if (words[0] === 'i' && words[1] === 'need' && words[2] === 'you' && words[3] === 'to') words = words.slice(4);
+  if (words[0] === 'please') words = words.slice(1);
+  if (words[0] !== 'call') return false;
+  words = words.slice(1);
+  if (words[0] === 'me') words = words.slice(1);
+  return SERVICE_OBJECTS.has(words.join(' '));
+}
+
+/**
+ * A complete clause is a direct request to Herald to call a closed emergency
+ * service. This is not Stage A and does not dispatch. ChatScreen arms the
+ * existing 911 confirm_call only after this returns true.
+ */
+export function detectEmergencyServiceRequest(text: string): boolean {
+  const clauses = splitServiceRequestClauses(text.trim());
+  if (clauses.length === 0) return false;
+  if (!clauses.some(isDirectServiceRequestClause)) return false;
+  return clauses.every((clause) => isDirectServiceRequestClause(clause) || isServiceRequestLeadIn(clause));
+}
+
+export function detectDirectEmergencyService(text: string): boolean {
+  return detectEmergencyServiceRequest(text);
 }

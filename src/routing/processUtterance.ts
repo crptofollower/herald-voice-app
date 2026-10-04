@@ -782,6 +782,16 @@ export async function processUtterance(
     if (held) return held;
   }
   if (session.peekPendingKey() === EMERGENCY_CLARIFY_KEY) {
+    // Mic silence and an empty transcript are not a yes/no reply. They must
+    // not classify, re-ask, release, promote, replay, or expire this slot.
+    if (text.trim().length === 0) {
+      return {
+        handled: true,
+        source: 'emergency_clarify',
+        responseText: '',
+        commits: [],
+      };
+    }
     const record = readEmergencyClarification(session);
     const expired = !record || Date.now() - record.establishedAt > EMERGENCY_CLARIFY_TTL_MS;
     if (expired) {

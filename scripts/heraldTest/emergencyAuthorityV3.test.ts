@@ -13,6 +13,7 @@ import {
   EMERGENCY_CLARIFY_REASK,
   EMERGENCY_CLARIFY_RELEASE,
   EMERGENCY_CLARIFY_TTL_MS,
+  readEmergencyClarification,
 } from '../../src/routing/hardPendingBoundary';
 import { setDB } from '../../src/db/schema';
 
@@ -92,6 +93,10 @@ export async function runEmergencyAuthorityV3Tests() {
     'call an ambulance',
     'please call the ambulance',
     'can you call emergency services',
+    'I need you to call 911',
+    'will you call 911',
+    'call nine one one',
+    'could you please call 911',
   ];
   const directFalse = [
     'Help me',
@@ -101,9 +106,33 @@ export async function runEmergencyAuthorityV3Tests() {
     'I called 911 yesterday',
     "don't call 911",
     'I need help',
+    'should I call 911?',
+    'when should someone call an ambulance?',
+    'she said call 911',
+    'he told me to call 911',
+    'add 911 to my contacts',
+    'put 911 in my note',
+    'schedule an ambulance drill',
+    'she said, call 911',
+    'should I call an ambulance?',
+    'he asked me to call emergency services',
   ];
   for (const text of directTrue) check(`direct service true: ${text}`, detectDirectEmergencyService(text) === true);
   for (const text of directFalse) check(`direct service false: ${text}`, detectDirectEmergencyService(text) === false);
+
+  const heraldEmergencyTrue = ['Herald, emergency', 'Herald emergency', 'Hey Herald, emergency'];
+  const heraldEmergencyFalse = [
+    "Herald, this isn't an emergency",
+    'Herald, my emergency contact is Shannon',
+    'Herald, tell me about my emergency contacts',
+    'I told Herald about the emergency yesterday',
+    'Does Herald know my emergency contact?',
+    'Herald, this is not an emergency',
+    'I told Herald, emergency',
+  ];
+  for (const text of heraldEmergencyTrue) check(`Herald emergency hard true: ${text}`, detectEmergency(text) === true);
+  for (const text of heraldEmergencyFalse) check(`Herald emergency hard false: ${text}`, detectEmergency(text) === false);
+  check("E1 I'm having an emergency stays hard", detectEmergency("I'm having an emergency") === true);
 
   const chat = fs.readFileSync(path.join(root, 'src/screens/ChatScreen.tsx'), 'utf8');
   const dispatchStart = chat.indexOf('const dispatchEmergency = useCallback');
@@ -152,6 +181,15 @@ export async function runEmergencyAuthorityV3Tests() {
     'i cant breathe',
     'i cant get up',
     'passout',
+    'I passed out',
+    'I cant get myself up',
+    "I can't get out",
+    'Can you help me get up?',
+    "I'm passing out",
+    'I passedout',
+    'help me get up',
+    'could you help me get out',
+    'i cant get myself up',
   ];
   for (const text of recall) {
     const session = new ConversationSession();
@@ -219,6 +257,32 @@ export async function runEmergencyAuthorityV3Tests() {
     check('second unresolved releases with no action', second.handled === true && second.source === 'emergency_clarify' && second.responseText === EMERGENCY_CLARIFY_RELEASE && session.hasPending() === false);
   }
 
+  {
+    const session = new ConversationSession();
+    const { deps } = makeDeps();
+    await processUtterance('I passed out', session, deps);
+    const before = readEmergencyClarification(session);
+    const silent = await processUtterance('', session, deps);
+    const after = readEmergencyClarification(session);
+    check(
+      'silence does not consume the clarification',
+      silent.handled === true
+        && silent.source === 'emergency_clarify'
+        && silent.responseText !== EMERGENCY_CLARIFY_REASK
+        && silent.responseText !== EMERGENCY_CLARIFY_RELEASE
+        && session.peekPendingKey() === EMERGENCY_CLARIFY_KEY
+        && after?.askCount === 0
+        && after?.original === before?.original
+        && after?.establishedAt === before?.establishedAt,
+    );
+    await processUtterance('   ', session, deps);
+    check('blank transcript does not consume the clarification', readEmergencyClarification(session)?.askCount === 0 && session.peekPendingKey() === EMERGENCY_CLARIFY_KEY);
+    const unresolved = await processUtterance('maybe tomorrow', session, deps);
+    check('silence does not advance the ask into a release', unresolved.handled === true && unresolved.source === 'emergency_clarify' && unresolved.responseText === EMERGENCY_CLARIFY_REASK && session.peekPendingKey() === EMERGENCY_CLARIFY_KEY);
+    const promoted = await processUtterance('yes', session, deps);
+    check('a real yes after silence still promotes', promoted.handled === true && promoted.source === 'emergency' && session.hasPending() === false);
+  }
+
   const realNow = Date.now;
   try {
     let now = 1_700_000_000_000;
@@ -235,6 +299,26 @@ export async function runEmergencyAuthorityV3Tests() {
     now += EMERGENCY_CLARIFY_TTL_MS + 1;
     const expired = await processUtterance('pumpkin', expiredSession, deps);
     check('TTL past 120 seconds releases and processes the new turn', outcomeSource(expired) !== 'emergency_clarify' && expiredSession.peekPendingKey() !== EMERGENCY_CLARIFY_KEY);
+  } finally {
+    Date.now = realNow;
+  }
+
+  try {
+    let now = 1_700_000_000_000;
+    Date.now = () => now;
+    const session = new ConversationSession();
+    const { deps } = makeDeps();
+    await processUtterance('I feel dizzy', session, deps);
+    now += EMERGENCY_CLARIFY_TTL_MS + 1;
+    const silent = await processUtterance('', session, deps);
+    check(
+      'silence past the deadline does not expire the clarification',
+      outcomeSource(silent) === 'emergency_clarify'
+        && session.peekPendingKey() === EMERGENCY_CLARIFY_KEY
+        && readEmergencyClarification(session)?.askCount === 0,
+    );
+    const expired = await processUtterance('pumpkin', session, deps);
+    check('a later real turn still expires after the deadline', outcomeSource(expired) !== 'emergency_clarify' && session.peekPendingKey() !== EMERGENCY_CLARIFY_KEY);
   } finally {
     Date.now = realNow;
   }
