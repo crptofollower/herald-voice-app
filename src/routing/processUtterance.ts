@@ -11,7 +11,20 @@ import {
   followingTurnListReferentFailClosedSpeech,
 } from './followingTurnListReferent';
 import { ConversationSession, CONFIRM_YES_RE, CONFIRM_NO_RE, CANCEL_RE } from './conversationSession';
-import { establishHardPending } from './hardPendingBoundary';
+import {
+  EMERGENCY_CLARIFY_KEY,
+  EMERGENCY_CLARIFY_QUESTION,
+  EMERGENCY_CLARIFY_REASK,
+  EMERGENCY_CLARIFY_RELEASE,
+  EMERGENCY_CLARIFY_TTL_MS,
+  establishHardPending,
+  establishEmergencyClarification,
+  noteEmergencyClarificationReask,
+  readEmergencyClarification,
+  releaseEmergencyClarification,
+} from './hardPendingBoundary';
+import { proposeEmergency } from './emergencyProposal';
+import { classifyEmergencyCallReply } from '../utils/emergencyCallConfirm';
 import {
   acknowledgeAct,
   actForCommits,
@@ -196,7 +209,7 @@ export type RouteDeps = Parameters<typeof routeIntent>[1];
 export type UtteranceOutcome =
   | {
       handled: true;
-      source: 'pending_resume' | 'capture' | 'referent_resume' | 'interpretation' | 'hold_recall' | 'hold_continuity' | 'recent_add_recall' | 'recollection' | 'recovery_obligation' | 'discourse_reflection' | 'discourse_correction' | 'discourse_unresolved_reference' | 'resumption_offer' | 'correction_continuity';
+      source: 'pending_resume' | 'capture' | 'referent_resume' | 'interpretation' | 'hold_recall' | 'hold_continuity' | 'recent_add_recall' | 'recollection' | 'recovery_obligation' | 'discourse_reflection' | 'discourse_correction' | 'discourse_unresolved_reference' | 'resumption_offer' | 'correction_continuity' | 'emergency_clarify';
       responseText: string;
       commits: CommitResult[];
       /** Present only when this turn applied a correction. The HOT ring writes this pair. */
@@ -207,8 +220,9 @@ export type UtteranceOutcome =
       presentedCalendarEvents?: Array<{ id: string; title: string; start_ms: number; all_day: number }>;
       calendarReadReason?: string;
       responseAct?: ResponseAct;
+      replayOf?: string;
     }
-  | { handled: true; source: 'emergency' }
+  | { handled: true; source: 'emergency'; replayOf?: string }
   | {
       handled: false;
       routeDecision: RouteDecision;
@@ -221,6 +235,7 @@ export type UtteranceOutcome =
       /** Replaces 3B narrative person focus. Not itself focus. */
       narrativePersonMentionId?: string;
       responseAct?: ResponseAct;
+      replayOf?: string;
     };
 
 function groceryHandled(
@@ -646,6 +661,7 @@ export async function processUtterance(
   reminiscenceArc?: ReminiscenceArcHolder | null,
   recoveryObligation?: RecoveryObligationHolder | null,
   todoPresentation?: TodoPresentationHolder | null,
+  options?: { suppressEmergencyProposal?: boolean; replayDepth?: number },
 ): Promise<UtteranceOutcome> {
   const turnId = getActiveTurnId();
   latLog('processUtterance START', { turnId });
@@ -705,6 +721,7 @@ export async function processUtterance(
   //    ever computed for an emergency utterance.
   if (detectEmergency(text)) {
     releaseResumptionOffer(session);
+    releaseEmergencyClarification(session);
     if (session.hasPending()) session.clearPending();
     subject?.clear();
     medicationPresentation?.clear();
@@ -763,6 +780,76 @@ export async function processUtterance(
   if (session.peekPendingKey() === CORRECTION_CONFIRM_KEY || session.peekPendingKey() === CORRECTION_CLARIFY_KEY) {
     const held = resolveCorrectionHold(text, session, ledger);
     if (held) return held;
+  }
+  if (session.peekPendingKey() === EMERGENCY_CLARIFY_KEY) {
+    const record = readEmergencyClarification(session);
+    const expired = !record || Date.now() - record.establishedAt > EMERGENCY_CLARIFY_TTL_MS;
+    if (expired) {
+      releaseEmergencyClarification(session);
+    } else {
+      const verdict = classifyEmergencyCallReply(text);
+      if (verdict === 'yes') {
+        releaseEmergencyClarification(session);
+        releaseResumptionOffer(session);
+        if (session.hasPending()) session.clearPending();
+        subject?.clear();
+        medicationPresentation?.clear();
+        orderedPresentation?.clear();
+        calendarPresentation?.clear();
+        calendarContinuation?.clear();
+        discourse?.clear();
+        recoveryObligation?.clear();
+        todoPresentation?.clear();
+        arc.clear();
+        return { handled: true, source: 'emergency' };
+      }
+      if (verdict === 'no' || verdict === 'reject_with_content') {
+        const original = record.original;
+        releaseEmergencyClarification(session);
+        if ((options?.replayDepth ?? 0) >= 1) {
+          return {
+            handled: true,
+            source: 'emergency_clarify',
+            responseText: EMERGENCY_CLARIFY_RELEASE,
+            commits: [],
+            replayOf: original,
+          };
+        }
+        const replayed = await processUtterance(
+          original,
+          session,
+          deps,
+          subject,
+          medicationPresentation,
+          orderedPresentation,
+          calendarPresentation,
+          calendarContinuation,
+          discourse,
+          ledger,
+          reminiscenceArc,
+          recoveryObligation,
+          todoPresentation,
+          { suppressEmergencyProposal: true, replayDepth: (options?.replayDepth ?? 0) + 1 },
+        );
+        return { ...replayed, replayOf: original };
+      }
+      if (record.askCount >= 1) {
+        releaseEmergencyClarification(session);
+        return {
+          handled: true,
+          source: 'emergency_clarify',
+          responseText: EMERGENCY_CLARIFY_RELEASE,
+          commits: [],
+        };
+      }
+      noteEmergencyClarificationReask(session);
+      return {
+        handled: true,
+        source: 'emergency_clarify',
+        responseText: EMERGENCY_CLARIFY_REASK,
+        commits: [],
+      };
+    }
   }
   let routedClarificationInterrupt: RouteDecision | undefined;
   let preserveClarificationRead = false;
@@ -912,6 +999,18 @@ export async function processUtterance(
       knownContacts: deps.captureContext?.contacts,
     });
     if (corrected) return corrected;
+  }
+  if (!options?.suppressEmergencyProposal && (options?.replayDepth ?? 0) < 1 && !session.hasPending()) {
+    const proposal = proposeEmergency(text);
+    if (proposal) {
+      establishEmergencyClarification(session, text);
+      return {
+        handled: true,
+        source: 'emergency_clarify',
+        responseText: EMERGENCY_CLARIFY_QUESTION,
+        commits: [],
+      };
+    }
   }
   if (recoveryObligation?.canContinue()) {
     if (isRecoveryRepairSignal(text)) {

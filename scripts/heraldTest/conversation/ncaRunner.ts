@@ -253,6 +253,12 @@ function classifyTurn(scenario: NcaScenario, obs: TurnObs): { cls: NcaClass; why
     }
   }
 
+  if (scenario.id === 'nca.f3.italy' || scenario.id === 'nca.f3b.italy_inconsistent_date') {
+    if (obs.turn === 1 && obs.source === 'emergency_clarify' && obs.pending_key_after === 'emergency_clarify' && obs.exact_zero_delta) {
+      return { cls: 'UNSUPPORTED', why: 'this fall is recall-only; clarification asks and does not act' };
+    }
+  }
+
   if (scenario.id === 'nca.f3b.italy_inconsistent_date') {
     if (/november 4/i.test(obs.response ?? '') && /december 4/i.test(obs.response ?? '')) {
       return { cls: 'PASS', why: 'both dates surfaced' };

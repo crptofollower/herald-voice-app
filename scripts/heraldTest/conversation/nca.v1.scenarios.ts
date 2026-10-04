@@ -118,7 +118,7 @@ export const NCA_V1_SCENARIOS: NcaScenario[] = [
       'How long are Shannon and I staying after they leave?',
       'What did I tell you about our anniversary?',
     ],
-    notes: 'Natural kin identification; do not invent missing dates.',
+    notes: 'Natural kin identification; do not invent missing dates. "this fall" is an approved Stage B recall false positive: ask, do not act.',
   },
   {
     id: 'nca.f3b.italy_inconsistent_date',
@@ -126,7 +126,7 @@ export const NCA_V1_SCENARIOS: NcaScenario[] = [
     title: 'Family travel with internal date contradiction',
     mustPass: false,
     turns: [ITALY_INCONSISTENT, 'When do we get back?'],
-    notes: 'Must not silently pick November 4 vs December 4.',
+    notes: 'Must not silently pick November 4 vs December 4. "this fall" is an approved Stage B recall false positive: ask, do not act.',
   },
   {
     id: 'nca.f4.travel_obligations',

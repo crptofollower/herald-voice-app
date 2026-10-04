@@ -217,7 +217,7 @@ import {
   logRealizationDoneIfSemanticTurn,
   logFinalResponsePath,
 } from '../utils/latencyInstrument';
-import { detectEmergency } from '../routing/emergencySignals';
+import { detectDirectEmergencyService, detectEmergency } from '../routing/emergencySignals';
 import type { IntentRecord } from '../hooks/llmLayers';
 import { dispatchRead, dispatchAction, launchAppAndCompose, releaseOverlappingContactCollect } from './chat/dispatch';
 import { bindOsFiniteSmsDisambiguate } from '../routing/callTextReadiness';
@@ -1455,6 +1455,7 @@ export default function ChatScreen() {
     // spaces from any keyboard or speech engine are folded to a canonical form so
     // nothing downstream has to care which device produced the text.
     text = normalizeInput(text);
+    const displayText = text;
     if (!text) return;
     if (inputSource === 'speech') {
       noteSpeechSendStarted();
@@ -1549,6 +1550,18 @@ export default function ChatScreen() {
     };
     const conversationalSeamLlmStatus =
       experimentalConvStatus === 'ready' ? 'ready' : llmStatus;
+
+    if (detectDirectEmergencyService(text)) {
+      releaseContactCollect(sessionRef.current, pendingContactCollectRef);
+      if (sessionRef.current.hasPending()) sessionRef.current.clearPending();
+      armContactCollect(sessionRef.current, pendingContactCollectRef, { action: 'confirm_call', name: '911', phone: '911' });
+      const reply = `I don't have an emergency contact set up yet — do you want me to call 911?`;
+      addMessage({ id: generateId('msg'), role: 'user', content: displayText, timestamp: Date.now() });
+      addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
+      speak(reply);
+      setInputText('');
+      return;
+    }
 
     // ── Law 0 bridge (interim, Step 3) ─────────────────────────────────────────
     // Catches emergency BEFORE the 1 legacy ref-pending can intercept or
@@ -1943,6 +1956,7 @@ export default function ChatScreen() {
       resolveContact: resolveContactPhoneRef.current ?? undefined,
       getMedicationSemanticInterpreterCtx,
     }, subjectRef.current, medicationPresentationRef.current, orderedPresentationRef.current, calendarPresentationRef.current, calendarContinuationRef.current, discourseRef.current, conversationLedgerRef.current, reminiscenceArcRef.current, recoveryObligationRef.current, todoPresentationRef.current);
+    if (outcome.replayOf) text = outcome.replayOf;
     journeyOutcome = outcome;
     noteSendProcessingReturned();
     noteDeterministicSendProcessingReturned();
@@ -2017,7 +2031,7 @@ export default function ChatScreen() {
         });
         immediateContextAuthorizedRef.current = true;
       }
-      addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+      addMessage({ id: generateId('msg'), role: 'user', content: displayText, timestamp: Date.now() });
       const recoveryChoices =
         outcome.source === 'pending_resume'
           ? outcome.commits.find(
@@ -2053,7 +2067,7 @@ export default function ChatScreen() {
     if (outcome.routeDecision.kind === 'not_ready') {
       const notReadyReply = "Give me a moment — I'm still waking up. Say that again?";
       const realizedNotReady = projectRealization(outcome.responseAct, notReadyReply);
-      addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+      addMessage({ id: generateId('msg'), role: 'user', content: displayText, timestamp: Date.now() });
       addMessage({ id: generateId('msg'), role: 'assistant', content: realizedNotReady.speech, timestamp: Date.now() });
       speak(realizedNotReady.speech);
       sendingRef.current = false;
@@ -2286,7 +2300,7 @@ export default function ChatScreen() {
           return narrativePersonMentionId ? { narrativePersonMentionId } : {};
         })(),
       });
-      addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+      addMessage({ id: generateId('msg'), role: 'user', content: displayText, timestamp: Date.now() });
       addMessage({ id: generateId('msg'), role: 'assistant', content: realizedClarification.speech, timestamp: Date.now() });
       logFinalResponsePath({
         pathKind: recapOutcome.handled
@@ -2363,7 +2377,7 @@ export default function ChatScreen() {
       // Legal document add/remove: ack is already set by householdCapture to reflect
       // the actual commit result (captured:true = wrote/removed, captured:false = gap).
       // Speak exactly what was returned — never invent a success ack for a failed write.
-      addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+      addMessage({ id: generateId('msg'), role: 'user', content: displayText, timestamp: Date.now() });
       addMessage({ id: generateId('msg'), role: 'assistant', content: householdResult.ack, timestamp: Date.now() });
       speak(householdResult.ack);
       sendingRef.current = false;
@@ -2380,7 +2394,7 @@ export default function ChatScreen() {
           if (medCategory === 'medication') {
             const guessedName = guessMedicationName(text);
             if (!guessedName || guessedName.length < 2) {
-              addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+              addMessage({ id: generateId('msg'), role: 'user', content: displayText, timestamp: Date.now() });
               const reply = "Which medication did you want me to note?";
               addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
               speak(reply);
@@ -2397,7 +2411,7 @@ export default function ChatScreen() {
               undefined,
               conversationLedgerRef.current,
             );
-            addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+            addMessage({ id: generateId('msg'), role: 'user', content: displayText, timestamp: Date.now() });
             addMessage({ id: generateId('msg'), role: 'assistant', content: responseText, timestamp: Date.now() });
             speak(responseText);
             await runCommitEffects(commits, {
@@ -2425,7 +2439,7 @@ export default function ChatScreen() {
               undefined,
               conversationLedgerRef.current,
             );
-            addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+            addMessage({ id: generateId('msg'), role: 'user', content: displayText, timestamp: Date.now() });
             addMessage({ id: generateId('msg'), role: 'assistant', content: responseText, timestamp: Date.now() });
             speak(responseText);
             await runCommitEffects(commits, {
@@ -2444,7 +2458,7 @@ export default function ChatScreen() {
     }
     // Profile update — local SQLite, runs before offline gate
     if (rdActionIntent?.type === 'profile_update') {
-      addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+      addMessage({ id: generateId('msg'), role: 'user', content: displayText, timestamp: Date.now() });
       try {
         const { field, value } = rdActionIntent;
         const PROFILE_FIELD_MAP: Record<string, string> = {
@@ -2507,7 +2521,7 @@ export default function ChatScreen() {
       }
       if (!rdActionIntent && localFactsWritten) {
         const reply = "Got it — I'll remember that. You can ask me about it anytime.";
-        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+        addMessage({ id: generateId('msg'), role: 'user', content: displayText, timestamp: Date.now() });
         addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: Date.now() });
         speak(reply);
         sendingRef.current = false;
@@ -2524,7 +2538,7 @@ export default function ChatScreen() {
         if (famIntent) {
           const famAnswer = answerFamilyRead(famIntent);
           addMessage({ id: generateId('msg'), role: 'user',
-            content: text, timestamp: Date.now() });
+            content: displayText, timestamp: Date.now() });
           addMessage({ id: generateId('msg'), role: 'assistant',
             content: famAnswer, timestamp: Date.now() });
           speak(famAnswer);
@@ -2535,7 +2549,7 @@ export default function ChatScreen() {
         const localAnswer = answerFromDevice(text);
         if (localAnswer) {
           addMessage({ id: generateId('msg'), role: 'user',
-            content: text, timestamp: Date.now() });
+            content: displayText, timestamp: Date.now() });
           addMessage({ id: generateId('msg'), role: 'assistant',
             content: localAnswer, timestamp: Date.now() });
           speak(localAnswer);
@@ -2546,7 +2560,7 @@ export default function ChatScreen() {
 
         const readReplyOfflineHeld = tryReadIntentFromMeta(heldReadMeta);
         if (readReplyOfflineHeld) {
-          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: Date.now() });
+          addMessage({ id: generateId('msg'), role: 'user', content: displayText, timestamp: Date.now() });
           addMessage({ id: generateId('msg'), role: 'assistant', content: readReplyOfflineHeld, timestamp: Date.now() });
           speak(readReplyOfflineHeld);
           sendingRef.current = false;
@@ -2664,7 +2678,7 @@ export default function ChatScreen() {
           ...(establishingMentionId && ledgerOperation === 'conversational' ? { narrativePersonMentionId: establishingMentionId } : {}),
         });
         addMessage({ id: generateId('msg'), role: 'user',
-          content: text, timestamp: Date.now() });
+          content: displayText, timestamp: Date.now() });
         addMessage({ id: generateId('msg'), role: 'assistant',
           content: offlineReply, timestamp: Date.now() });
         speak(offlineReply);
@@ -2761,7 +2775,7 @@ export default function ChatScreen() {
       const probeAnswer = fam2 ? answerFamilyRead(fam2) : answerFromDevice(text);
       const reply = probeAnswer
         ?? "I'm not sure I'm following you — can you help me understand?";
-      addMessage({ id: generateId("msg"), role: "user", content: text, timestamp: now });
+      addMessage({ id: generateId("msg"), role: "user", content: displayText, timestamp: now });
       addMessage({ id: generateId("msg"), role: "assistant", content: reply, timestamp: now + 1 });
       speak(reply);
       sendingRef.current = false;
@@ -2775,7 +2789,7 @@ export default function ChatScreen() {
     const famIntentOnline = detectFamilyRead(text);
     if (famIntentOnline) {
       const famAnswer = answerFamilyRead(famIntentOnline);
-      addMessage({ id: generateId("msg"), role: "user", content: text, timestamp: now });
+      addMessage({ id: generateId("msg"), role: "user", content: displayText, timestamp: now });
       addMessage({ id: generateId("msg"), role: "assistant", content: famAnswer, timestamp: now + 1 });
       speak(famAnswer);
       sendingRef.current = false;
@@ -2787,7 +2801,7 @@ export default function ChatScreen() {
       addMessage({
         id: generateId("msg"),
         role: "user",
-        content: text,
+        content: displayText,
         timestamp: now,
       });
       addMessage({
@@ -2804,7 +2818,7 @@ export default function ChatScreen() {
 
     const readReplyOnline = tryReadIntentFromMeta(heldReadMeta);
     if (readReplyOnline) {
-      addMessage({ id: generateId("msg"), role: "user", content: text, timestamp: now });
+      addMessage({ id: generateId("msg"), role: "user", content: displayText, timestamp: now });
       addMessage({ id: generateId("msg"), role: "assistant", content: readReplyOnline, timestamp: now + 1 });
       speak(readReplyOnline);
       sendingRef.current = false;
@@ -2815,7 +2829,7 @@ export default function ChatScreen() {
     // PRE-B F1: explicit backend authority — fallthrough is never network permission.
     if (!mayInvokeBackendStream(routeDecision)) {
       const reply = "I'm not sure I'm following you — can you help me understand?";
-      addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: now });
+      addMessage({ id: generateId('msg'), role: 'user', content: displayText, timestamp: now });
       addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: now + 1 });
       speak(reply);
       sendingRef.current = false;
@@ -2833,7 +2847,7 @@ export default function ChatScreen() {
           // "I need location permission to check tomorrow's forecast."
           const reply =
             "I can't get your location right now, so I can't check tomorrow's weather.";
-          addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: now });
+          addMessage({ id: generateId('msg'), role: 'user', content: displayText, timestamp: now });
           addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: now + 1 });
           speak(reply);
           sendingRef.current = false;
@@ -2846,7 +2860,7 @@ export default function ChatScreen() {
       const nwsResult = await fetchNwsTomorrowForecast(nwsLat, nwsLng);
       if (nwsResult) {
         const reply = `${nwsResult.periodTitle}: ${nwsResult.forecastText}`;
-        addMessage({ id: generateId('msg'), role: 'user', content: text, timestamp: now });
+        addMessage({ id: generateId('msg'), role: 'user', content: displayText, timestamp: now });
         addMessage({ id: generateId('msg'), role: 'assistant', content: reply, timestamp: now + 1 });
         speak(reply);
         setActiveSurface({ kind: 'weather', weather: nwsResult });
@@ -2861,7 +2875,7 @@ export default function ChatScreen() {
     addMessage({
       id: generateId("msg"),
       role: "user",
-      content: text,
+      content: displayText,
       timestamp: now,
     });
 

@@ -109,22 +109,22 @@ export async function runLawZeroTests() {
     assert('L6b classifyQuery runs — utterance reaches its downstream owner', spy.called, v => v === true, 'classifyQuery called');
   }
 
-  // ── L7: LAW0-K1 — bare "Can you help me?" remains Law 0 on the live boundary ──
+  // ── L7: modal-you capability is not Stage A and not Stage B ──
   {
     const session = new ConversationSession();
     const { deps, spy } = makeDeps();
     const outcome = await processUtterance('Can you help me?', session, deps as any);
-    assert('L7a bare Can you help me? remains emergency', outcome, v => v.handled === true && v.source === 'emergency', "{ handled: true, source: 'emergency' }");
-    assert('L7b classifyQuery never invoked for bare addressee plea', spy.called, v => v === false, 'classifyQuery never called');
+    assert('L7a Can you help me? is not emergency', outcome, v => !(v.handled === true && v.source === 'emergency'), 'not emergency');
+    assert('L7b classifyQuery runs for the capability question', spy.called, v => v === true, 'classifyQuery called');
   }
 
-  // ── L8: LAW0-K1 — unknown remainder stays emergency; classifier does not run ──
+  // ── L8: breath is Stage B clarification, not Law 0 and not a model call ──
   {
     const session = new ConversationSession();
     const { deps, spy } = makeDeps();
     const outcome = await processUtterance('Can you help me breathe?', session, deps as any);
-    assert('L8a Can you help me breathe? remains emergency', outcome, v => v.handled === true && v.source === 'emergency', "{ handled: true, source: 'emergency' }");
-    assert('L8b classifyQuery never invoked for unknown help-me remainder', spy.called, v => v === false, 'classifyQuery never called');
+    assert('L8a Can you help me breathe? asks clarification', outcome, v => v.handled === true && v.source === 'emergency_clarify', 'emergency_clarify');
+    assert('L8b classifyQuery never invoked for the recall proposal', spy.called, v => v === false, 'classifyQuery never called');
   }
 
   const total = passed + failures.length;

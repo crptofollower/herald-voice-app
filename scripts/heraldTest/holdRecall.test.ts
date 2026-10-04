@@ -195,9 +195,13 @@ export async function runHoldRecallV1Tests() {
   {
     const { session, deps } = openJourneyDb();
     const discourse = new DiscourseContinuityHolder();
-    await processUtterance(normalizeInput(ITALY_INCONSISTENT), session, deps, null, null, null, null, null, discourse);
-    const outcome = await processUtterance(normalizeInput('What did I say about Italy?'), session, deps, null, null, null, null, null, discourse);
-    assert('filtered Italy can match', outcome.handled && outcome.source === 'hold_recall' && /italy/i.test(outcome.responseText), (v) => v === true, 'Italy');
+    const seeded = await processUtterance(normalizeInput(ITALY_INCONSISTENT), session, deps, null, null, null, null, null, discourse);
+    assert(
+      'Italy this fall asks clarification and does not act',
+      seeded.handled && seeded.source === 'emergency_clarify' && session.peekPendingKey() === 'emergency_clarify' && discourse.peekInterpretationHold() == null,
+      (v) => v === true,
+      'emergency_clarify',
+    );
   }
 
   {

@@ -7,6 +7,19 @@ import type { ConversationSession, PendingSlot } from './conversationSession';
 
 export const CONTACT_COLLECT_PENDING_KEY = 'contact_collect';
 export const ACTIVE_SUBJECT_CLARIFY_KEY = 'active_subject_clarify';
+export const EMERGENCY_CLARIFY_KEY = 'emergency_clarify';
+export const EMERGENCY_CLARIFY_TTL_MS = 120_000;
+export const EMERGENCY_CLARIFY_QUESTION = 'Are you having an emergency and do you need emergency help now?';
+export const EMERGENCY_CLARIFY_REASK = 'Please say yes or no — do you need emergency help now?';
+export const EMERGENCY_CLARIFY_RELEASE = "If you need emergency help, say 'help me' or 'call 911'.";
+
+export type EmergencyClarificationRecord = {
+  original: string;
+  establishedAt: number;
+  askCount: number;
+};
+
+const emergencyClarification = new WeakMap<ConversationSession, EmergencyClarificationRecord>();
 
 export type ContactCollectPayload = {
   action: 'call' | 'navigate' | 'text' | 'confirm_phone' | 'confirm_call';
@@ -66,6 +79,31 @@ export function releaseContactCollect(
   if (session.peekPendingKey() === CONTACT_COLLECT_PENDING_KEY) {
     session.clearPending();
   }
+}
+
+/** RAM-only Stage C record. No timer. A new session has no record. */
+export function establishEmergencyClarification(session: ConversationSession, original: string, establishedAt = Date.now()): void {
+  emergencyClarification.set(session, { original, establishedAt, askCount: 0 });
+  establishHardPending(session, {
+    pendingKey: EMERGENCY_CLARIFY_KEY,
+    resume: async () => ({ status: 'noop', ack: '' }),
+  });
+}
+
+export function readEmergencyClarification(session: ConversationSession): EmergencyClarificationRecord | null {
+  if (session.peekPendingKey() !== EMERGENCY_CLARIFY_KEY) return null;
+  return emergencyClarification.get(session) ?? null;
+}
+
+export function noteEmergencyClarificationReask(session: ConversationSession): void {
+  const record = emergencyClarification.get(session);
+  if (!record || session.peekPendingKey() !== EMERGENCY_CLARIFY_KEY) return;
+  emergencyClarification.set(session, { ...record, askCount: record.askCount + 1 });
+}
+
+export function releaseEmergencyClarification(session: ConversationSession): void {
+  emergencyClarification.delete(session);
+  if (session.peekPendingKey() === EMERGENCY_CLARIFY_KEY) session.clearPending();
 }
 
 export function contactCollectOwnsTurn(

@@ -397,8 +397,8 @@ export async function runOrderedPresentationTests() {
     insertItem(db, 'g1', 'Milk', '2026-01-01T00:00:00.000Z');
     presentGrocery(ordered, subject, medication);
     const em = await say('Can you help me?');
-    assert('OP76 Law 0', em, v => v.source === 'emergency', 'emergency');
-    assert('OP77 Law 0 clears', ordered.hasLive(), v => v === false, 'cleared');
+    assert('OP76 capability question is not Law 0', em, v => !(v.handled === true && v.source === 'emergency'), 'not emergency');
+    assert('OP77 ordinary turn releases unused grocery', ordered.hasLive(), v => v === false, 'cleared');
   }
 
   {
