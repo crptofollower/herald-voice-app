@@ -2,26 +2,26 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { processUtterance } from '../../src/routing/processUtterance.ts';
-import { ConversationSession } from '../../src/routing/conversationSession.ts';
-import { detectDirectEmergencyService, detectEmergency } from '../../src/routing/emergencySignals.ts';
-import { proposeEmergency } from '../../src/routing/emergencyProposal.ts';
-import { classifyEmergencyCallReply } from '../../src/utils/emergencyCallConfirm.ts';
+import { processUtterance } from '../../src/routing/processUtterance';
+import { ConversationSession } from '../../src/routing/conversationSession';
+import { detectDirectEmergencyService, detectEmergency } from '../../src/routing/emergencySignals';
+import { proposeEmergency } from '../../src/routing/emergencyProposal';
+import { classifyEmergencyCallReply } from '../../src/utils/emergencyCallConfirm';
 import {
   EMERGENCY_CLARIFY_KEY,
   EMERGENCY_CLARIFY_QUESTION,
   EMERGENCY_CLARIFY_REASK,
   EMERGENCY_CLARIFY_RELEASE,
   EMERGENCY_CLARIFY_TTL_MS,
-} from '../../src/routing/hardPendingBoundary.ts';
-import { setDB } from '../../src/db/schema.ts';
+} from '../../src/routing/hardPendingBoundary';
+import { setDB } from '../../src/db/schema';
 
 setDB({
   getAllSync: () => [],
   getFirstSync: () => null,
   runSync: () => ({ changes: 0, lastInsertRowId: 0 }),
   execSync: () => {},
-});
+} as unknown as Parameters<typeof setDB>[0]);
 
 const BOLD = '\x1b[1m';
 const RED = '\x1b[31m';
@@ -58,6 +58,10 @@ export async function runEmergencyAuthorityV3Tests() {
     };
     return { deps, spy };
   };
+
+  const outcomeSource = (outcome: Awaited<ReturnType<typeof processUtterance>>): string | undefined => (
+    'source' in outcome ? outcome.source : undefined
+  );
 
   const project = (outcome: Awaited<ReturnType<typeof processUtterance>>, session: ConversationSession) => {
     if (outcome.handled) {
@@ -199,10 +203,10 @@ export async function runEmergencyAuthorityV3Tests() {
     const control = await processUtterance(original, controlSession, controlDeps.deps, null, null, null, null, null, null, null, null, null, null, { suppressEmergencyProposal: true });
     await processUtterance(original, liveSession, liveDeps.deps);
     const replay = await processUtterance('no', liveSession, liveDeps.deps);
-    check('no replays the original exactly once', replay.replayOf === original && replay.source !== 'emergency_clarify' && liveSession.peekPendingKey() !== EMERGENCY_CLARIFY_KEY);
+    check('no replays the original exactly once', replay.replayOf === original && outcomeSource(replay) !== 'emergency_clarify' && liveSession.peekPendingKey() !== EMERGENCY_CLARIFY_KEY);
     check('replay durable delta equals the control ordinary turn', project(replay, liveSession) === project(control, controlSession));
     const second = await processUtterance('no', liveSession, liveDeps.deps);
-    check('replay does not loop back into a proposal', second.replayOf === undefined && second.source !== 'emergency');
+    check('replay does not loop back into a proposal', second.replayOf === undefined && outcomeSource(second) !== 'emergency');
   }
 
   {
@@ -230,7 +234,7 @@ export async function runEmergencyAuthorityV3Tests() {
     await processUtterance('I feel dizzy', expiredSession, deps);
     now += EMERGENCY_CLARIFY_TTL_MS + 1;
     const expired = await processUtterance('pumpkin', expiredSession, deps);
-    check('TTL past 120 seconds releases and processes the new turn', expired.source !== 'emergency_clarify' && expiredSession.peekPendingKey() !== EMERGENCY_CLARIFY_KEY);
+    check('TTL past 120 seconds releases and processes the new turn', outcomeSource(expired) !== 'emergency_clarify' && expiredSession.peekPendingKey() !== EMERGENCY_CLARIFY_KEY);
   } finally {
     Date.now = realNow;
   }
@@ -265,7 +269,7 @@ export async function runEmergencyAuthorityV3Tests() {
       },
     });
     const distress = await processUtterance("I can't breathe", session, deps);
-    check('KNOWN-V3-LIMITATION unrelated pending is not replaced by distress', distress.source !== 'emergency_clarify' && session.peekPendingKey() === 'medical_capture' && resumeCalls === 1);
+    check('KNOWN-V3-LIMITATION unrelated pending is not replaced by distress', outcomeSource(distress) !== 'emergency_clarify' && session.peekPendingKey() === 'medical_capture' && resumeCalls === 1);
     const stageA = await processUtterance('Help me', session, deps);
     check('Stage A still preempts an unrelated pending', stageA.handled === true && stageA.source === 'emergency' && session.hasPending() === false);
     check('call 911 remains a direct-service preemption, not Stage B', detectDirectEmergencyService('call 911') === true && proposeEmergency('call 911')?.possibleEmergency === true && detectEmergency('call 911') === false);
