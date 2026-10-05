@@ -11,6 +11,7 @@ import { ConversationSession } from '../../src/routing/conversationSession.ts';
 import type { IntentRecord } from '../../src/hooks/llmLayers.ts';
 import type { Contact } from '../../src/db/contactsDB.ts';
 import { findContactByName, findContactByRelationship, setOsPersonCapabilitySearch, attachPhoneToContactById } from '../../src/db/contactsDB.ts';
+import { resolveContactPhoneLookup } from '../../src/utils/deviceContactLookup';
 
 const BOLD='\x1b[1m',RED='\x1b[31m',GREEN='\x1b[32m',DIM='\x1b[2m',RESET='\x1b[0m';
 
@@ -1301,6 +1302,46 @@ export async function runContactCallTests() {
         v => v.status === 'noop' && !v.phone,
         'noop re-ask path; no dial');
     }
+  }
+
+  {
+    const person = 'Jordan';
+    freshDB();
+    const decision = await routeIntent(`call ${person}`, {
+      classifyQuery: async () => ({
+        tier: 1 as const,
+        actionIntent: { type: 'call' as const, contact: person },
+        reason: 'action:call',
+      }),
+      classifyLLM: null,
+      llmReady: false,
+      resolveContact: () => resolveContactPhoneLookup(person, {
+        findContactByRelationship: () => null,
+        findContactByName: () => null,
+        loadDeviceContacts: async () => ({
+          getPermissionsAsync: async () => ({ status: 'denied' }),
+          getContactsAsync: async () => ({ data: [] }),
+          fields: { PhoneNumbers: 'phoneNumbers', Name: 'name', FirstName: 'firstName', LastName: 'lastName' },
+        }),
+        deadlineMs: 50,
+      }),
+    });
+    const intent = decision.kind === 'capture' ? decision.intents[0] : null;
+    const onCapture = decision.kind === 'capture' && !!intent && intent.type === 'contact_call';
+    assert('T-CT-BOUND unresolved lookup stays on the contact_call capture path',
+      onCapture, v => v === true, 'capture contact_call');
+    const pending = intent ? await DOMAIN_WRITERS['contact_call']!.add(intent, `call ${person}`) : null;
+    const armed = pending?.status === 'pending' && pending.pendingKey === 'contact_call';
+    assert('T-CT-BOUND unresolved lookup arms contact_call pending',
+      armed, v => v === true, 'contact_call');
+    const prompt = pending?.status === 'pending' ? pending.prompt : '';
+    assert('T-CT-BOUND unknown-contact prompt asks for a number',
+      /number for/i.test(prompt) && prompt.includes(person), v => v === true, `number for ${person}`);
+    const effect = pending?.status === 'committed' ? pending.effect : null;
+    assert('T-CT-BOUND lookup failure does not arm a dial',
+      effect == null || effect.kind !== 'dial', v => v === true, 'no dial effect');
+    assert('T-CT-BOUND lookup failure does not arm an SMS',
+      effect == null || effect.kind !== 'sms', v => v === true, 'no sms effect');
   }
 
   const total = passed + failures.length;

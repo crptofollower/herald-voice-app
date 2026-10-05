@@ -241,12 +241,12 @@ import {
   setOsPersonCapabilitySearch,
 } from "../db/contactsDB";
 import {
-  osDestinationShape,
   osNameFullyCovered,
   osNameQuery,
   refineOsNameQuery,
   selectPhoneableOsDestinations,
 } from "../utils/osContactDestination";
+import { loadExpoDeviceContactsClient, resolveContactPhoneLookup } from "../utils/deviceContactLookup";
 import { writeMedicalRecord, writeMedication, writeMedicalContact, guessMedicationName, confirmMedicationCapture, deactivateMedicationByName } from "../db/medicalDB";
 import { extractDosage } from "../utils/detectMedicalEvent";
 import { drainPendingWrites, getPendingCount, queueWrite } from "../db/pendingWritesDB";
@@ -497,55 +497,15 @@ export default function ChatScreen() {
   type ResolveContactFn = (nameOrRelation: string) => Promise<{ phone: string; name: string; contactId?: string; source: 'herald' | 'device' } | { phone: null; name: string; source: 'device'; candidateNames: string[]; deviceCandidates: { name: string; phone: string }[] } | null>;
   const resolveContactPhoneRef = useRef<ResolveContactFn | null>(null);
 
-  // ── resolveContactPhone ──────────────────────────────────────────────────────
-  // Resolves a name or relationship to a phone number.
-  // Pass 1: Herald contacts table (contactsDB) — fastest, device SQLite
-  // Pass 2: OS device contacts via expo-contacts — broader coverage
-  // Returns null if not found — caller handles graceful fallback.
+  // Herald contacts first. Device contacts only when permission is already granted.
+  // Native permission and query awaits are bounded; this path never requests permission.
 
-  const resolveContactPhone = async (nameOrRelation: string): Promise<{ phone: string; name: string; contactId?: string; source: 'herald' | 'device' } | { phone: null; name: string; source: 'device'; candidateNames: string[]; deviceCandidates: { name: string; phone: string }[] } | null> => {
-    const clean = nameOrRelation.trim().toLowerCase().replace(/^(?:my|the|a)\s+/, '');
-
-    // Pass 1: Herald contacts table
-    const byRelation = findContactByRelationship(clean);
-    if (byRelation?.phone) {
-      return { phone: byRelation.phone, name: byRelation.name, contactId: byRelation.id, source: 'herald' as const };
-    }
-    const byName = findContactByName(clean);
-    if (byName?.phone) {
-      return { phone: byName.phone, name: byName.name, contactId: byName.id, source: 'herald' as const };
-    }
-
-    const osQuery = osNameQuery(nameOrRelation, byRelation?.name ?? byName?.name);
-    if (!osQuery) return null;
-
-    // Pass 2: OS device contacts
-    try {
-      const Contacts = await import('expo-contacts');
-      const { status } = await Contacts.requestPermissionsAsync();
-      if (status !== 'granted') return null;
-
-      const { data } = await Contacts.getContactsAsync({
-        fields: [
-          Contacts.Fields.PhoneNumbers,
-          Contacts.Fields.Name,
-          Contacts.Fields.FirstName,
-          Contacts.Fields.LastName,
-        ],
-      });
-
-      if (!data?.length) return null;
-
-      const destinations = selectPhoneableOsDestinations(data, osQuery);
-      const shape = osDestinationShape(destinations, nameOrRelation);
-      if (!shape) return null;
-      return shape;
-    } catch (e) {
-      console.warn('[resolveContactPhone] expo-contacts failed:', e);
-    }
-
-    return null;
-  };
+  const resolveContactPhone = (nameOrRelation: string) =>
+    resolveContactPhoneLookup(nameOrRelation, {
+      findContactByRelationship,
+      findContactByName,
+      loadDeviceContacts: loadExpoDeviceContactsClient,
+    });
   resolveContactPhoneRef.current = resolveContactPhone;
 
   // OS capability search for resolvePersonCapability — constrained to the

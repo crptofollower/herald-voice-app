@@ -184,24 +184,30 @@ export async function runOsAmbiguityTests() {
     '../../src/screens/ChatScreen.tsx',
   );
   const chatSrc = fs.readFileSync(chatScreenPath, 'utf8');
-  const resolveFnStart = chatSrc.indexOf('const resolveContactPhone = async');
+  const resolveFnStart = chatSrc.indexOf('const resolveContactPhone =');
   const resolveFnEnd = chatSrc.indexOf('resolveContactPhoneRef.current = resolveContactPhone');
   const resolveFnSrc = resolveFnStart >= 0 && resolveFnEnd > resolveFnStart
     ? chatSrc.slice(resolveFnStart, resolveFnEnd)
     : '';
+  const lookupSrc = fs.readFileSync(path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    '../../src/utils/deviceContactLookup.ts',
+  ), 'utf8');
+  const ownedSrc = `${resolveFnSrc}\n${lookupSrc}`;
 
   // ── Source locks: ChatScreen.resolveContactPhone Pass-2 ─────────────────
   assert('T-OSA-SRC-1 no exact-only short-circuit ternary in resolveContactPhone',
-    resolveFnSrc.includes('exactMatches.length > 0 ? exactMatches : partialMatches'),
+    ownedSrc.includes('exactMatches.length > 0 ? exactMatches : partialMatches'),
     v => v === false,
     'ternary absent from resolveContactPhone');
+  const destinationLock =
+    resolveFnSrc.includes('resolveContactPhoneLookup')
+    && lookupSrc.includes('selectPhoneableOsDestinations')
+    && lookupSrc.includes('osDestinationShape')
+    && !ownedSrc.includes('.slice(0, 5)');
   assert('T-OSA-SRC-2 resolveContactPhone uses selectPhoneableOsDestinations + osDestinationShape',
-    {
-      select: resolveFnSrc.includes('selectPhoneableOsDestinations'),
-      shape: resolveFnSrc.includes('osDestinationShape'),
-      slice: resolveFnSrc.includes('.slice(0, 5)'),
-    },
-    v => v.select && v.shape && !v.slice,
+    destinationLock,
+    v => v === true,
     'shared destination helper; no top-five slice');
 
   // ── Named-person: ChatScreen OS match algorithm (mirrors Pass-2) ─────────
