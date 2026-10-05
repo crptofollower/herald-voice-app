@@ -51,6 +51,52 @@ function ambiguousCount(hit: { phone?: string | null; deviceCandidates?: { name:
   return hit.deviceCandidates?.length ?? -1;
 }
 
+type LookupClock = NonNullable<Parameters<typeof resolveContactPhoneLookup>[1]['clock']>;
+
+function autoClock(): LookupClock & { now: () => number } {
+  let t = 0;
+  const waiters: Array<{ at: number; resolve: () => void; cancelled: boolean }> = [];
+  let pumping = false;
+  function pump() {
+    if (pumping) return;
+    pumping = true;
+    queueMicrotask(() => {
+      pumping = false;
+      for (let i = waiters.length - 1; i >= 0; i--) {
+        if (waiters[i].cancelled) waiters.splice(i, 1);
+      }
+      if (waiters.length === 0) return;
+      let nextAt = waiters[0].at;
+      for (const waiter of waiters) {
+        if (waiter.at < nextAt) nextAt = waiter.at;
+      }
+      t = nextAt;
+      const due: Array<{ resolve: () => void }> = [];
+      for (let i = waiters.length - 1; i >= 0; i--) {
+        if (waiters[i].at <= t) due.push(waiters.splice(i, 1)[0]);
+      }
+      for (const waiter of due) waiter.resolve();
+      if (waiters.some((waiter) => !waiter.cancelled)) setTimeout(() => pump(), 0);
+    });
+  }
+  return {
+    now: () => t,
+    schedule(ms: number) {
+      const entry = { at: t + ms, resolve: () => {}, cancelled: false };
+      const done = new Promise<void>((resolve) => {
+        entry.resolve = resolve;
+        waiters.push(entry);
+      });
+      pump();
+      return { done, cancel: () => { entry.cancelled = true; } };
+    },
+  };
+}
+
+function clockDelay(clock: LookupClock, ms: number): Promise<void> {
+  return clock.schedule(ms).done;
+}
+
 export async function runDeviceContactLookupBoundTests() {
   const failures: Array<{ label: string; got: unknown; expected: string }> = [];
   let passed = 0;
@@ -235,6 +281,268 @@ export async function runDeviceContactLookupBoundTests() {
       ambiguousCount(hit),
       (v) => v === 2,
       'phone null, two candidates');
+  }
+
+  {
+    const BUDGET = 5_000;
+    const clock = autoClock();
+    let permissionRemaining = -1;
+    let queryRemaining = -1;
+    const hit = await resolveContactPhoneLookup(PERSON, {
+      findContactByRelationship: none,
+      findContactByName: none,
+      deadlineMs: BUDGET,
+      clock,
+      loadDeviceContacts: () => clockDelay(clock, 4_900).then(() => client({
+        getPermissionsAsync: async () => {
+          permissionRemaining = BUDGET - clock.now();
+          return { status: 'granted' };
+        },
+        getContactsAsync: async () => {
+          queryRemaining = BUDGET - clock.now();
+          return { data: [row(PERSON, '555-010-0199')] };
+        },
+      })),
+    });
+    assert('import that uses 4.9s leaves about 0.1s for later stages',
+      permissionRemaining,
+      (v) => v === 100,
+      '100ms remaining at permission');
+    assert('contacts stage after a 4.9s import also sees only the remainder',
+      queryRemaining,
+      (v) => v === 100,
+      '100ms remaining at contacts query');
+    assert('a match that finishes inside the shared remainder still resolves',
+      devicePhone(hit),
+      (v) => v === '5550100199',
+      'device phone 5550100199');
+    assert('4.9s import does not consume a second full budget',
+      clock.now(),
+      (v) => v === 4_900,
+      'clock at 4900');
+  }
+
+  {
+    const BUDGET = 5_000;
+    const clock = autoClock();
+    let queryRemaining = -1;
+    await resolveContactPhoneLookup(PERSON, {
+      findContactByRelationship: none,
+      findContactByName: none,
+      deadlineMs: BUDGET,
+      clock,
+      loadDeviceContacts: () => clockDelay(clock, 3_000).then(() => client({
+        getPermissionsAsync: () => clockDelay(clock, 1_900).then(() => ({ status: 'granted' })),
+        getContactsAsync: async () => {
+          queryRemaining = BUDGET - clock.now();
+          return { data: [] };
+        },
+      })),
+    });
+    assert('import plus permission leave contacts only the remainder',
+      queryRemaining,
+      (v) => v === 100,
+      '100ms remaining at contacts query');
+  }
+
+  {
+    const clock = autoClock();
+    let permissionCalls = 0;
+    let queryCalls = 0;
+    const hit = await resolveContactPhoneLookup(PERSON, {
+      findContactByRelationship: none,
+      findContactByName: none,
+      deadlineMs: 5_000,
+      clock,
+      loadDeviceContacts: () => clockDelay(clock, 4_900).then(() => client({
+        getPermissionsAsync: () => {
+          permissionCalls++;
+          return clockDelay(clock, 4_900).then(() => ({ status: 'granted' }));
+        },
+        getContactsAsync: () => {
+          queryCalls++;
+          return clockDelay(clock, 4_900).then(() => ({ data: [row(PERSON, '555-010-0199')] }));
+        },
+      })),
+    });
+    assert('three 4.9s stage attempts finish on the 5s total, not 15s',
+      clock.now(),
+      (v) => v === 5_000,
+      'clock at 5000');
+    assert('shared deadline exhaustion returns unresolved', hit, (v) => v === null, 'null');
+    assert('permission starts on the remainder after a 4.9s import',
+      permissionCalls,
+      (v) => v === 1,
+      '1 permission check');
+    assert('contacts query does not start after the total deadline is gone',
+      queryCalls,
+      (v) => v === 0,
+      '0 queries');
+  }
+
+  {
+    const clock = autoClock();
+    let queryCalls = 0;
+    let release: (value: { data: ReturnType<typeof row>[] }) => void = () => {};
+    const hung = new Promise<{ data: ReturnType<typeof row>[] }>((resolve) => { release = resolve; });
+    const hit = await resolveContactPhoneLookup(PERSON, {
+      findContactByRelationship: none,
+      findContactByName: none,
+      deadlineMs: 5_000,
+      clock,
+      loadDeviceContacts: async () => client({
+        getPermissionsAsync: () => clockDelay(clock, 4_900).then(() => ({ status: 'granted' })),
+        getContactsAsync: () => {
+          queryCalls++;
+          return hung;
+        },
+      }),
+    });
+    assert('fast import, 4.9s permission, and hung contacts finish near 5s',
+      clock.now(),
+      (v) => v === 5_000,
+      'clock at 5000');
+    assert('hung contacts after a long permission check return unresolved',
+      hit,
+      (v) => v === null,
+      'null');
+    release({ data: [row(PERSON, '5550009999')] });
+    await Promise.resolve();
+    assert('late contacts settlement after the total deadline stays unresolved',
+      hit,
+      (v) => v === null,
+      'still null');
+    assert('late contacts settlement does not count as another query',
+      queryCalls,
+      (v) => v === 1,
+      '1 query');
+  }
+
+  {
+    const clock = autoClock();
+    const hit = await resolveContactPhoneLookup(PERSON, {
+      findContactByRelationship: none,
+      findContactByName: none,
+      deadlineMs: 5_000,
+      clock,
+      loadDeviceContacts: () => clockDelay(clock, 100).then(() => client({
+        getPermissionsAsync: () => clockDelay(clock, 100).then(() => ({ status: 'granted' })),
+        getContactsAsync: async () => ({ data: [row(PERSON, '555-010-0199')] }),
+      })),
+    });
+    assert('valid device contact completing inside the total deadline resolves',
+      devicePhone(hit),
+      (v) => v === '5550100199',
+      'device phone 5550100199');
+    assert('in-budget lookup does not run out the full deadline',
+      clock.now(),
+      (v) => v === 200,
+      'clock at 200');
+  }
+
+  {
+    let loaded = 0;
+    const hit = await resolveContactPhoneLookup(PERSON, {
+      findContactByRelationship: none,
+      findContactByName: none,
+      deadlineMs: 0,
+      loadDeviceContacts: async () => { loaded++; return client({}); },
+    });
+    assert('exhausted deadline returns unresolved before native work', hit, (v) => v === null, 'null');
+    assert('exhausted deadline does not import contacts', loaded, (v) => v === 0, '0 loads');
+  }
+
+  {
+    const clock = autoClock();
+    let queried = 0;
+    let release: (value: { status: string }) => void = () => {};
+    const hung = new Promise<{ status: string }>((resolve) => { release = resolve; });
+    const hit = await resolveContactPhoneLookup(PERSON, {
+      findContactByRelationship: none,
+      findContactByName: none,
+      deadlineMs: 5_000,
+      clock,
+      loadDeviceContacts: async () => client({
+        getPermissionsAsync: () => hung,
+        getContactsAsync: async () => { queried++; return { data: [row(PERSON, '5550001111')] }; },
+      }),
+    });
+    assert('permission still pending at the total deadline returns unresolved',
+      hit,
+      (v) => v === null,
+      'null');
+    release({ status: 'granted' });
+    await Promise.resolve();
+    assert('late permission grant after the total deadline does not query contacts',
+      queried,
+      (v) => v === 0,
+      '0 queries');
+    const later = await resolveContactPhoneLookup(PERSON, {
+      findContactByRelationship: none,
+      findContactByName: none,
+      deadlineMs: 20,
+      loadDeviceContacts: async () => client({
+        getPermissionsAsync: async () => ({ status: 'denied' }),
+        getContactsAsync: async () => { queried++; return { data: [row(PERSON, '5550001111')] }; },
+      }),
+    });
+    assert('a later lookup is not changed by the timed-out permission',
+      later,
+      (v) => v === null,
+      'null');
+    assert('a later lookup does not inherit the timed-out query',
+      queried,
+      (v) => v === 0,
+      '0 queries');
+  }
+
+  {
+    let queried = 0;
+    const hit = await resolveContactPhoneLookup(PERSON, {
+      findContactByRelationship: none,
+      findContactByName: none,
+      deadlineMs: 50,
+      loadDeviceContacts: async () => client({
+        getPermissionsAsync: async () => undefined as unknown as { status: string },
+        getContactsAsync: async () => { queried++; return { data: [row(PERSON, '5550001111')] }; },
+      }),
+    });
+    assert('undefined permission result returns unresolved', hit, (v) => v === null, 'null');
+    assert('undefined permission result does not query contacts', queried, (v) => v === 0, '0 queries');
+  }
+
+  {
+    const hit = await resolveContactPhoneLookup(PERSON, {
+      findContactByRelationship: none,
+      findContactByName: none,
+      deadlineMs: 50,
+      loadDeviceContacts: async () => client({
+        getContactsAsync: async () => undefined as unknown as { data: ReturnType<typeof row>[] },
+      }),
+    });
+    assert('undefined contacts result returns unresolved', hit, (v) => v === null, 'null');
+  }
+
+  {
+    const hit = await resolveContactPhoneLookup(PERSON, {
+      findContactByRelationship: none,
+      findContactByName: none,
+      deadlineMs: 50,
+      loadDeviceContacts: async () => client({
+        getContactsAsync: async () => ({ data: null }),
+      }),
+    });
+    assert('null contacts payload returns unresolved', hit, (v) => v === null, 'null');
+  }
+
+  {
+    const hit = await resolveContactPhoneLookup(PERSON, {
+      findContactByRelationship: none,
+      findContactByName: none,
+      deadlineMs: 50,
+      loadDeviceContacts: async () => ({} as DeviceContactsClient),
+    });
+    assert('malformed contacts module returns unresolved', hit, (v) => v === null, 'null');
   }
 
   const helperSrc = fs.readFileSync(path.join(ROOT, 'src/utils/deviceContactLookup.ts'), 'utf8');
