@@ -61,10 +61,11 @@ function isRealName(v: string | undefined | null): v is string {
   return true;
 }
 
-/** Residence only. "works in advertising" is not a place and is not captured. */
+/** Residence only. "works in advertising" is not a place and is not captured.
+ *  A trailing sentence mark is not part of the place. An internal period stays. */
 function extractResidence(raw: string): string | undefined {
   const m = raw.match(/\b(?:lives?|moved|stays?)\s+in\s+([A-Z][A-Za-z.'’-]*(?:\s+[A-Z][A-Za-z.'’-]*){0,3})/);
-  const place = m?.[1]?.trim();
+  const place = m?.[1]?.replace(/[.!?]+$/g, '').trim();
   if (!place) return undefined;
   if (FAMILY_RELATIONS.includes(place.toLowerCase())) return undefined;
   if (PLACEHOLDER_NAMES.has(place.toLowerCase())) return undefined;

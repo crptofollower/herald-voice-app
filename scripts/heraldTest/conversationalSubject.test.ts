@@ -1570,6 +1570,63 @@ export async function runConversationalSubjectTests() {
     assert('FR17 doctor subject still renews', subject.hasLive(), v => v === true && subject.peek()?.entityId === 'Dr. Smith', 'Smith still live');
   }
 
+  // ── Residence sentence boundary ──
+  {
+    const { db, say } = freshFlow();
+    const stated = await say('My son Alex lives in Chicago.');
+    assert('PB1 a sentence period is not part of the confirmation', stated,
+      v => v.handled === true && v.source === 'capture'
+        && v.responseText.includes('Alex, your son, in Chicago — that right?')
+        && !v.responseText.includes('Chicago.'),
+      'Chicago without a trailing period');
+    const yes = await say('yes');
+    const row = db.prepare('SELECT location FROM contacts').get() as { location: string } | undefined;
+    assert('PB2 confirmed Chicago is stored without the period', { ack: yes.handled === true ? yes.responseText : '', location: row?.location },
+      v => v.location === 'Chicago' && v.ack === "I'll remember Alex is your son in Chicago.",
+      'Chicago');
+    const he = await say('Where does he live?');
+    assert('PB3 recall speaks the stored Chicago', he,
+      v => v.handled === true && v.source === 'referent_resume' && v.responseText === 'Alex lives in Chicago.',
+      'Alex lives in Chicago.');
+  }
+  {
+    const { db, say } = freshFlow();
+    const stated = await say('My son Alex lives in St. Louis.');
+    assert('PB4 an internal period stays and the sentence period does not', stated,
+      v => v.handled === true && v.source === 'capture'
+        && v.responseText.includes('Alex, your son, in St. Louis — that right?')
+        && !v.responseText.includes('St. Louis.'),
+      'St. Louis');
+    const yes = await say('yes');
+    const row = db.prepare('SELECT location FROM contacts').get() as { location: string } | undefined;
+    assert('PB5 confirmed St. Louis keeps the internal period', { ack: yes.handled === true ? yes.responseText : '', location: row?.location },
+      v => v.location === 'St. Louis' && v.ack === "I'll remember Alex is your son in St. Louis.",
+      'St. Louis');
+    const he = await say('Where does he live?');
+    assert('PB6 recall speaks the stored St. Louis', he,
+      v => v.handled === true && v.source === 'referent_resume' && v.responseText === 'Alex lives in St. Louis.',
+      'Alex lives in St. Louis.');
+  }
+  {
+    const { db, say } = freshFlow();
+    const stated = await say('My son Alex lives in Chicago and works in advertising.');
+    const yes = await say('yes');
+    const row = db.prepare('SELECT location FROM contacts').get() as { location: string } | undefined;
+    assert('PB7 a multi-clause residence still stores Chicago', { prompt: stated.handled === true ? stated.responseText : '', location: row?.location, ack: yes.handled === true ? yes.responseText : '' },
+      v => v.prompt.includes('in Chicago —') && !v.prompt.includes('Chicago.')
+        && v.location === 'Chicago' && v.ack === "I'll remember Alex is your son in Chicago.",
+      'Chicago, no job punctuation');
+  }
+  {
+    const { db, say } = freshFlow();
+    await say('My son Alex lives in Chicago.');
+    const no = await say('no');
+    const count = db.prepare('SELECT COUNT(*) AS n FROM contacts').get() as { n: number };
+    assert('PB8 rejecting a punctuated residence writes nothing', { text: no.handled === true ? no.responseText : '', n: count.n },
+      v => v.n === 0 && /correct name/i.test(v.text),
+      '0 rows');
+  }
+
   const total = passed + failures.length;
   console.log(`\n${BOLD}Contract: ${passed}/${total} passed${failures.length > 0 ? ` — ${RED}${failures.length} FAILED${RESET}` : ` — ${GREEN}all green${RESET}`}${RESET}\n`);
   return { passed, failed: failures.length, total, failures };
