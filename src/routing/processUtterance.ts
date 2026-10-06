@@ -60,8 +60,10 @@ import {
   answerReferentYearBoundedVisit,
   isReferentEpisodeTimeQuestion,
   answerReferentEpisodeTime,
+  answerReferentResidence,
   type ConversationalSubject,
 } from './conversationalSubject';
+import { findContactById } from '../db/contactsDB';
 import { EPISODE_RECALL_LIMIT } from '../db/episodeRead';
 import { listActiveEpisodes } from '../db/episodesWriter';
 import { realizeEpisodePerspective } from '../utils/episodeCapture';
@@ -990,6 +992,22 @@ export async function processUtterance(
       commits: [result] as CommitResult[],
       ...(pendingAct ? { responseAct: pendingAct } : {}),
     };
+    if (
+      result.status === 'committed'
+      && (pendingKey === 'family_capture' || pendingKey === 'family_capture_correction_confirm')
+      && result.focus?.kind === 'person'
+      && result.focus.resolverKey
+    ) {
+      const row = findContactById(result.focus.resolverKey);
+      const displayName = row?.name?.trim();
+      if (row?.id && displayName && displayName.length >= 2) {
+        subject?.establishFamily({
+          entityId: row.id,
+          displayName,
+          relationship: row.relationship?.trim() || null,
+        });
+      }
+    }
     const groceryPending =
       (result.status === 'committed' || result.status === 'noop')
       && result.focus?.kind === 'collection'
@@ -1803,6 +1821,13 @@ export async function processUtterance(
           subject.establishMedical({ entityId: live.entityId, displayName: live.displayName });
           return { handled: true, source: 'referent_resume', responseText, commits: [] };
         }
+      }
+    }
+    if (live) {
+      const residence = answerReferentResidence(live, text);
+      if (residence) {
+        subject.clear();
+        return { handled: true, source: 'referent_resume', responseText: residence, commits: [] };
       }
     }
     const unused = subject.peek();

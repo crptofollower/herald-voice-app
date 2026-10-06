@@ -856,7 +856,13 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
           const ack = composeCaptureAck('family_capture', location
             ? `I'll remember ${personName} is your ${relation} in ${location}.`
             : `I'll remember ${personName} is your ${relation}.`);
-          return { status: 'committed', ack };
+          return {
+            status: 'committed',
+            ack,
+            focus: wrote.contactId
+              ? { kind: 'person', displayValue: personName, resolverKey: wrote.contactId, referable: true }
+              : undefined,
+          };
         } catch {
           return { status: 'failed', ack: "I had trouble holding onto that — say it once more?" };
         }
@@ -881,7 +887,24 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
                 if (!isRealName(correctedName)) {
                   return { status: 'noop', ack: '' };
                 }
-                return commitNamed(correctedName);
+                if (!location) return commitNamed(correctedName);
+                const correctedPrompt = `${correctedName}, your ${relation}, in ${location} — that right?`;
+                return {
+                  status: 'pending',
+                  prompt: correctedPrompt,
+                  pendingKey: 'family_capture_correction_confirm',
+                  resume: async (confirmText: string): Promise<CommitResult> => {
+                    const { CONFIRM_YES_RE, CONFIRM_NO_RE } = await import('./conversationSession');
+                    const t = confirmText.trim();
+                    if (CONFIRM_NO_RE.test(t)) {
+                      return { status: 'noop', ack: "No problem — I won't remember that." };
+                    }
+                    if (!CONFIRM_YES_RE.test(t)) {
+                      return { status: 'noop', ack: '' };
+                    }
+                    return commitNamed(correctedName);
+                  },
+                };
               },
             };
           }

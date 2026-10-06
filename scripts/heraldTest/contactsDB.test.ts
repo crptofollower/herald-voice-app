@@ -24,6 +24,7 @@ const SCHEMA_SQL = `
     entity_id TEXT,
     os_contact_id TEXT,
     notes TEXT,
+    location TEXT,
     last_contact TEXT,
     is_emergency INTEGER DEFAULT 0,
     created_at TEXT NOT NULL,

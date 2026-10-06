@@ -38,6 +38,7 @@ import {
   type CalendarEvidenceScope,
 } from '../conversation/calendarEvidenceRealization';
 import { findContactById } from '../db/contactsDB';
+import { FAMILY_RELATION_WORD, familyRelationMatches } from '../utils/familyRead';
 import { getEpisodeById } from '../db/episodesWriter';
 import { getServiceProviderById } from '../utils/householdRead';
 import { now } from '../utils/heraldClock';
@@ -119,6 +120,52 @@ export function isReferentVisitOutcomeQuestion(text: string): boolean {
   if (!m) return false;
   void m[1]; // pronoun discarded — not a selector, no gender inference
   return true;
+}
+
+// Residence follow-up. Pronoun form is eligibility only. The live subject's
+// contact id is the identity. Gender and a database-wide search are not.
+const REFERENT_RESIDENCE_PRONOUN_RE = /^\s*where\s+does\s+(he|she|they)\s+live\s*[?.!]?\s*$/i;
+const REFERENT_RESIDENCE_RELATION_RE = new RegExp(
+  `^\\s*where\\s+does\\s+my\\s+${FAMILY_RELATION_WORD}\\s+live\\s*[?.!]?\\s*$`,
+  'i',
+);
+
+export function isReferentResidencePronounQuestion(text: string): boolean {
+  const m = text.match(REFERENT_RESIDENCE_PRONOUN_RE);
+  if (!m) return false;
+  void m[1];
+  return true;
+}
+
+export function referentResidenceRelation(text: string): string | null {
+  return text.match(REFERENT_RESIDENCE_RELATION_RE)?.[1]?.toLowerCase() ?? null;
+}
+
+function residenceFromContactId(entityId: string): string {
+  const row = findContactById(entityId);
+  const name = row?.name?.trim();
+  if (!row || !name || name.length < 2) return `I don't know who you mean.`;
+  const city = row.location?.trim();
+  if (!city) return `I don't have where ${name} lives saved yet.`;
+  return `${name} lives in ${city}.`;
+}
+
+/**
+ * One residence act. Returns speech when this subject owns the question.
+ * Null means the act does not claim the turn (explicit relation, different person).
+ * Never selects a different contact to fill a missing city.
+ */
+export function answerReferentResidence(subject: ConversationalSubject, text: string): string | null {
+  if (isReferentResidencePronounQuestion(text)) {
+    if (subject.domain !== 'family_contact') return `I don't know who you mean.`;
+    return residenceFromContactId(subject.entityId);
+  }
+  const spoken = referentResidenceRelation(text);
+  if (!spoken) return null;
+  if (subject.domain === 'family_contact' && familyRelationMatches(subject.relationship, spoken)) {
+    return residenceFromContactId(subject.entityId);
+  }
+  return null;
 }
 
 export function isReferentPhoneQuestion(text: string): boolean {

@@ -10,6 +10,7 @@ import { setDB } from '../../src/db/schema.ts';
 import { detectFamilyRead, answerFamilyRead } from '../../src/utils/familyRead.ts';
 import { detectFamilyCapture } from '../../src/utils/familyCapture.ts';
 import { writeContactRaw } from '../../src/db/contactsDB.ts';
+import { DOMAIN_WRITERS } from '../../src/routing/routeIntent.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
 const SCHEMA_SQL = `
@@ -141,7 +142,7 @@ export async function runFamilyContractTests() {
   assert('C4 my son David lives in Austin', detectFamilyCapture('my son David lives in Austin'), capRel(['son','David']), 'son/David');
   assert('C5 my wife is Shannon',       detectFamilyCapture('my wife is Shannon'),       capRel(['wife','Shannon']),     'wife/Shannon');
   assert('C6 father-in-law David lives in Little Elm Texas', detectFamilyCapture('my father-in-law David lives in Little Elm Texas'), capRel(['father-in-law','David']), 'father-in-law/David');
-  assert('C7 location deferred (no location field)', detectFamilyCapture('my son David lives in Austin'), (v) => v.length === 1 && v[0].location === undefined, 'location undefined');
+  assert('C7 residence is the city', detectFamilyCapture('my son David lives in Austin'), (v) => v.length === 1 && v[0].location === 'Austin', 'location Austin');
   assert('C8 read guard: who is my wife', detectFamilyCapture('who is my wife'),          capNone, '[]');
   assert("C9 read guard: what's my son's name", detectFamilyCapture("what's my son's name"), capNone, '[]');
   assert('C10 compound: my two sons Grant and Tyler', detectFamilyCapture('my two sons Grant and Tyler'), capNone, '[]');
@@ -171,6 +172,85 @@ export async function runFamilyContractTests() {
       && v.some((i) => i.name === 'Grant')
       && v.some((i) => i.name === 'Hunter'),
     'two family_capture records: Grant + Hunter');
+
+  const alexUtterance = 'My son Alex lives in Chicago and works in advertising.';
+  assert('C21 natural statement captures son Alex in Chicago',
+    detectFamilyCapture(alexUtterance),
+    (v) => v.length === 1 && v[0].type === 'family_capture' && v[0].relation === 'son' && v[0].name === 'Alex' && v[0].location === 'Chicago',
+    'son/Alex/Chicago');
+  assert('C22 occupation is not a capture field',
+    detectFamilyCapture(alexUtterance),
+    (v) => v.length === 1 && !JSON.stringify(v).toLowerCase().includes('advertising'),
+    'no advertising');
+  assert('C23 works-in without a residence stores no location',
+    detectFamilyCapture('my son Alex works in advertising'),
+    (v) => v.length === 1 && v[0].name === 'Alex' && v[0].location === undefined && !JSON.stringify(v).toLowerCase().includes('advertising'),
+    'name only, no job');
+
+  {
+    const db = freshDB();
+    addContact(db, 'Alex', 'son', 'Chicago');
+    const intent = detectFamilyRead('Where does Alex live?');
+    assert('R1a where-name is a location question', intent, (v) => v !== null && v.personName === 'Alex' && v.locationQuestion === true, 'Alex location');
+    const answer = intent ? answerFamilyRead(intent) : '';
+    assert('R1b answers the stored city only', answer, (v) => v.includes('Alex') && v.includes('Chicago') && !/advertis/i.test(v), 'Alex lives in Chicago');
+  }
+  {
+    const db = freshDB();
+    addContact(db, 'Alex', 'son', null);
+    const answer = answerFamilyRead(detectFamilyRead('Where does Alex live?')!);
+    assert('R2 missing city is not invented', answer, (v) => /don't have where/i.test(v) && !/chicago|advertis/i.test(v), 'honest miss');
+  }
+  {
+    const db = freshDB();
+    addContact(db, 'Alex', 'son', 'Chicago');
+    const answer = answerFamilyRead(detectFamilyRead('Where does he live?')!);
+    assert('R3 pronoun without a subject does not pick the only city', answer, (v) => /don't know who you mean/i.test(v) && !/Alex|Chicago|advertis/i.test(v), 'clarify, no city');
+  }
+  {
+    const db = freshDB();
+    addContact(db, 'Alex', 'son', 'Chicago');
+    addContact(db, 'Grant', 'son', 'Austin');
+    const answer = answerFamilyRead(detectFamilyRead('Where does he live?')!);
+    assert('R4 pronoun without a subject does not guess between sons', answer, (v) => /don't know who you mean/i.test(v) && !/Alex|Grant|Chicago|Austin|advertis/i.test(v), 'clarify');
+  }
+  {
+    freshDB();
+    const answer = answerFamilyRead(detectFamilyRead('Where does Alex live?')!);
+    assert('R5 unknown person is not invented', answer, (v) => /don't have Alex saved/i.test(v) && !/chicago|advertis/i.test(v), 'no invented Alex');
+  }
+  {
+    const db = freshDB();
+    addContact(db, 'Alex', 'son', 'Chicago');
+    const answer = answerFamilyRead(detectFamilyRead('Where does my son live?')!);
+    assert('R6 where does my son live uses the stored city', answer, (v) => v.includes('Alex') && v.includes('Chicago') && !/advertis/i.test(v), 'Alex in Chicago');
+  }
+
+  {
+    const db = freshDB();
+    const captured = detectFamilyCapture(alexUtterance);
+    const pending = await DOMAIN_WRITERS.family_capture.add(captured[0], alexUtterance);
+    assert('W4a confirmation is required', pending.status, (v) => v === 'pending', 'pending');
+    const prompt = pending.status === 'pending' ? pending.prompt : '';
+    assert('W4b prompt names Alex in Chicago and not the job', prompt, (v) => v.includes('Alex') && v.includes('Chicago') && !/advertis/i.test(v), 'Alex, Chicago, no job');
+    if (pending.status === 'pending') await pending.resume('no');
+    const count = db.prepare('SELECT COUNT(*) AS n FROM contacts').get().n;
+    assert('W4c rejection writes nothing', count, (v) => v === 0, '0 rows');
+  }
+  {
+    const db = freshDB();
+    const captured = detectFamilyCapture(alexUtterance);
+    const pending = await DOMAIN_WRITERS.family_capture.add(captured[0], alexUtterance);
+    const committed = pending.status === 'pending' ? await pending.resume('yes') : pending;
+    assert('W5a yes commits', committed.status, (v) => v === 'committed', 'committed');
+    const row = db.prepare('SELECT name, relationship, location, notes FROM contacts').get();
+    assert('W5b stored son Alex in Chicago', row, (v) => v && v.name === 'Alex' && v.relationship === 'son' && v.location === 'Chicago', 'Alex/son/Chicago');
+    assert('W5c occupation is not stored', JSON.stringify(row ?? {}), (v) => !/advertis/i.test(v), 'no advertising');
+    const answer = answerFamilyRead(detectFamilyRead('Where does Alex live?')!);
+    assert('W5d recall is only the stored city', answer, (v) => v.includes('Chicago') && v.includes('Alex') && !/advertis/i.test(v), 'Chicago');
+    const he = answerFamilyRead(detectFamilyRead('Where does he live?')!);
+    assert('W5e the reader does not resolve he by a stored city', he, (v) => /don't know who you mean/i.test(v) && !/Chicago|advertis/i.test(v), 'clarify');
+  }
 
   // ── Writer collision (BUG B — same name, two relationships) ──
   {

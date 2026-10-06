@@ -37,6 +37,7 @@ export interface Contact {
   entity_id?: string;
   os_contact_id?: string;  // links to device contact if matched
   notes?: string;
+  location?: string | null;
   last_contact?: string;   // ISO date
   is_emergency?: number;  // 1 = emergency contact, 0 = normal
   created_at: string;
@@ -212,12 +213,14 @@ export function writeContactValidated(
              birthday      = COALESCE(?, birthday),
              importance    = MAX(importance, ?),
              notes         = COALESCE(?, notes),
+             location      = COALESCE(?, location),
              is_emergency  = COALESCE(?, is_emergency),
              updated_at    = ?
            WHERE id = ?;`,
           [
             contact.phone ?? null, contact.address ?? null, contact.email ?? null,
             contact.birthday ?? null, contact.importance ?? 5, contact.notes ?? null,
+            contact.location ?? null,
             contact.is_emergency ?? null, now, existing.id,
           ]
         );
@@ -238,13 +241,13 @@ export function writeContactValidated(
       db.runSync(
         `INSERT INTO contacts
            (id, name, relationship, phone, address, email, birthday, importance,
-            entity_id, os_contact_id, notes, is_emergency, last_contact, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+            entity_id, os_contact_id, notes, location, is_emergency, last_contact, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
         [
           id, name, contact.relationship ?? null, contact.phone ?? null,
           contact.address ?? null, contact.email ?? null, contact.birthday ?? null,
           contact.importance ?? 5, entityId, contact.os_contact_id ?? null,
-          contact.notes ?? null, contact.is_emergency ?? 0, contact.last_contact ?? null,
+          contact.notes ?? null, contact.location ?? null, contact.is_emergency ?? 0, contact.last_contact ?? null,
           now, now,
         ]
       );

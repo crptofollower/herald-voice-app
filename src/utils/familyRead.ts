@@ -15,7 +15,16 @@
 
 import { getDB } from '../db/schema';
 
-export type FamilyReadIntent = { relation: string | null; spoken: string };
+export type FamilyReadIntent = {
+  relation: string | null;
+  spoken: string;
+  /** Name in "where does Alex live?" */
+  personName?: string;
+  /** Pronoun residence is not resolved here. The conversational subject holder owns it. */
+  pronoun?: 'he' | 'she' | 'they';
+  /** Ask only for a stored city. Never invent one. */
+  locationQuestion?: boolean;
+};
 
 // Spoken relation word → canonical contacts.relationship values (person-as-entity:
 // a person may match a relation; we return ALL who match, never one).
@@ -49,7 +58,7 @@ export const FAMILY_SYNONYMS: Record<string, string[]> = {
 // Alternation order is intentional: JS | is left-first, so longer compounds MUST
 // precede their roots. Otherwise "father" matches at the hyphen boundary inside
 // "father-in-law" and "who is my father-in-law" is mis-read as plain "father".
-const FAMILY_RELATION_WORD =
+export const FAMILY_RELATION_WORD =
   '(father-in-law|mother-in-law|brother-in-law|sister-in-law|son-in-law|daughter-in-law|wife|husband|spouse|partner|grandson|granddaughter|son|daughter|child|children|kids?|kid|mom|mother|dad|father|brother|sister)';
 
 const FAMILY_RELATION_KEYS = Object.keys(FAMILY_SYNONYMS);
@@ -58,6 +67,15 @@ const FAMILY_RELATION_KEYS = Object.keys(FAMILY_SYNONYMS);
  * Distinct canonical family-relation keys already stored on contacts.
  * Identity evidence only — not a preference reader.
  */
+/** Spoken relation vs a stored contacts.relationship. Synonym list only; not a person selector. */
+export function familyRelationMatches(stored: string | null | undefined, spoken: string): boolean {
+  const rel = (stored ?? '').trim().toLowerCase();
+  const key = spoken.trim().toLowerCase();
+  if (!rel || !key) return false;
+  const canon = FAMILY_SYNONYMS[key] ?? [key];
+  return canon.includes(rel);
+}
+
 export function listEstablishedFamilyRelationKeys(): string[] {
   const db = getDB();
   try {
@@ -89,6 +107,20 @@ export function detectFamilyRead(text: string): FamilyReadIntent | null {
     return null;
   }
 
+  const whereName = t.match(/\bwhere\s+does\s+([A-Za-z][A-Za-z'\-]+)\s+live\b/i);
+  if (whereName && !/^my$/i.test(whereName[1])) {
+    const who = whereName[1];
+    if (/^he$/i.test(who)) return { relation: null, spoken: 'he', pronoun: 'he', locationQuestion: true };
+    if (/^she$/i.test(who)) return { relation: null, spoken: 'she', pronoun: 'she', locationQuestion: true };
+    if (/^they$/i.test(who)) return { relation: null, spoken: 'they', pronoun: 'they', locationQuestion: true };
+    if (/^them$/i.test(who)) return null;
+    return { relation: null, spoken: who, personName: who, locationQuestion: true };
+  }
+  const whereRel = t.match(new RegExp(`\\bwhere\\s+does\\s+my\\s+${FAMILY_RELATION_WORD}\\s+live\\b`, 'i'));
+  if (whereRel) {
+    return { relation: whereRel[1].toLowerCase(), spoken: whereRel[1].toLowerCase(), locationQuestion: true };
+  }
+
   // Typeless overview: "tell me about my family", "what do you know about my family"
   if (/\b(about|know).*\bmy\s+family\b/i.test(t) || /\bmy\s+family\b/i.test(t)) {
     return { relation: null, spoken: 'family' };
@@ -110,9 +142,30 @@ export function detectFamilyRead(text: string): FamilyReadIntent | null {
 type ContactRow = { name: string; relationship: string | null; location: string | null };
 
 // Single read authority. Contacts-only, all members per relation, NULL-safe.
+function locationAnswer(people: ContactRow[], label: string): string {
+  if (people.length !== 1) {
+    if (people.length === 0) return `I don't have ${label} saved yet.`;
+    return `I know more than one person that could fit. I won't guess.`;
+  }
+  const city = (people[0].location ?? '').trim();
+  if (!city) return `I don't have where ${label} lives saved yet.`;
+  return `${people[0].name.trim()} lives in ${city}.`;
+}
+
 export function answerFamilyRead(intent: FamilyReadIntent): string {
   const db = getDB();
   try {
+    if (intent.pronoun) {
+      return `I don't know who you mean.`;
+    }
+    if (intent.locationQuestion && intent.personName) {
+      const rows = db.getAllSync<ContactRow>(
+        `SELECT name, relationship, location FROM contacts
+         WHERE LOWER(name) = ? AND removed_at IS NULL;`,
+        [intent.personName.toLowerCase()],
+      );
+      return locationAnswer(rows, intent.personName);
+    }
     let rows: ContactRow[];
     if (intent.relation === null) {
       // Typeless: everyone with any family relationship.
@@ -150,6 +203,10 @@ export function answerFamilyRead(intent: FamilyReadIntent): string {
       seen.add(k);
       return true;
     });
+
+    if (intent.locationQuestion) {
+      return locationAnswer(people, `your ${intent.spoken}`);
+    }
 
     if (people.length === 0) {
       if (intent.relation === null) {
@@ -217,7 +274,16 @@ type FamilyResolveRow = {
 function loadFamilyReadRows(intent: FamilyReadIntent): FamilyResolveRow[] {
   const db = getDB();
   let rows: FamilyResolveRow[];
-  if (intent.relation === null) {
+  if (intent.pronoun) {
+    rows = [];
+  } else if (intent.personName) {
+    rows = db.getAllSync<FamilyResolveRow>(
+      `SELECT id, name, relationship FROM contacts
+       WHERE LOWER(name) = ? AND removed_at IS NULL
+       ORDER BY importance DESC, name ASC;`,
+      [intent.personName.toLowerCase()],
+    );
+  } else if (intent.relation === null) {
     rows = db.getAllSync<FamilyResolveRow>(
       `SELECT id, name, relationship FROM contacts
        WHERE relationship IN

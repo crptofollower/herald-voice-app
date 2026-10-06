@@ -7,11 +7,9 @@
 // single-member patterns, bias to NOT capture on ambiguity.
 //
 // SCOPE (Build 50, Path B — single member, relation + name ONLY):
-//   - LOCATION DEFERRED: no live reader surfaces a captured city today
-//     (tierRouter inline branch reads no location; contacts.location has no
-//     writer; capturePerson's fact-string location is parsed by no reader).
-//     Capturing a city would be a write with no honest read-back, so the
-//     detector drops it. The writer's location branch is left intact but unfed.
+//   - LOCATION: a single "lives/moved/stays in <Place>" city is attached when
+//     the place is in the utterance. Occupation and other predicates are not
+//     family_capture fields and are left unstored.
 //   - COMPOUND DEFERRED (50b): "two sons", name-lists, and two-relation
 //     utterances BAIL (return []) rather than half-capture one member — a
 //     recoverable miss, never a silent drop (Spine §5). Compound also needs the
@@ -50,7 +48,8 @@ const READ_GUARD =
 const PLACEHOLDER_NAMES = new Set([
   'unknown', 'unnamed', 'none', 'n/a', 'someone', 'somebody',
   'that', 'this', 'it', 'he', 'she', 'they', 'him', 'her', 'them',
-  'lives', 'live', 'is', 'in', 'name', 'named', 'and',
+  'lives', 'live', 'lived', 'living', 'works', 'work', 'working',
+  'is', 'was', 'in', 'name', 'named', 'and',
   'also', 'actually', 'really', 'just', 'now', 'uh', 'um',
 ]);
 function isRealName(v: string | undefined | null): v is string {
@@ -62,6 +61,16 @@ function isRealName(v: string | undefined | null): v is string {
   return true;
 }
 
+/** Residence only. "works in advertising" is not a place and is not captured. */
+function extractResidence(raw: string): string | undefined {
+  const m = raw.match(/\b(?:lives?|moved|stays?)\s+in\s+([A-Z][A-Za-z.'’-]*(?:\s+[A-Z][A-Za-z.'’-]*){0,3})/);
+  const place = m?.[1]?.trim();
+  if (!place) return undefined;
+  if (FAMILY_RELATIONS.includes(place.toLowerCase())) return undefined;
+  if (PLACEHOLDER_NAMES.has(place.toLowerCase())) return undefined;
+  return place;
+}
+
 export function detectFamilyCapture(text: string): IntentRecord[] {
   const raw = text.trim();
   if (!raw) return [];
@@ -70,7 +79,16 @@ export function detectFamilyCapture(text: string): IntentRecord[] {
   // Compound → defer to 50b. Never half-capture.
   const countCompound = new RegExp(`\\b(two|three|four|five|both|couple of|a couple of)\\s+(?:${REL})s?\\b`, 'i');
   const dualRelation  = new RegExp(`\\bmy\\s+(?:${REL})\\b[^.?]*\\band\\s+my\\s+(?:${REL})\\b`, 'i');
-  const nameList      = new RegExp(`\\bmy\\s+(?:${REL})s?\\b[^.?]*\\b[A-Za-z][A-Za-z'\\-]+\\s+and\\s+[A-Za-z][A-Za-z'\\-]+`, 'i');
+  const nameListPair = raw.match(
+    new RegExp(`\\bmy\\s+(?:${REL})s?\\b[^.?]*\\b([A-Za-z][A-Za-z'\\-]+)\\s+and\\s+([A-Za-z][A-Za-z'\\-]+)`, 'i'),
+  );
+  const nameList = !!(
+    nameListPair
+    && isRealName(nameListPair[1])
+    && isRealName(nameListPair[2])
+    && !FAMILY_RELATIONS.includes(nameListPair[1].toLowerCase())
+    && !FAMILY_RELATIONS.includes(nameListPair[2].toLowerCase())
+  );
   // Have-form compound: "I have a son named Hunter and another son named Grant"
   // — none of the three guards above catch this shape (no "my", no count word).
   // Two relation words joined by "and" inside one have-sentence → bail, never
@@ -94,7 +112,7 @@ export function detectFamilyCapture(text: string): IntentRecord[] {
       return names.map((name) => ({ type: 'family_capture' as const, relation, name }));
     }
   }
-  if (countCompound.test(raw) || dualRelation.test(raw) || nameList.test(raw)) return [];
+  if (countCompound.test(raw) || dualRelation.test(raw) || nameList) return [];
   if (haveCompound.test(raw)) return [];
 
   // Single-member patterns — most specific first. Name is one token.
@@ -115,8 +133,8 @@ export function detectFamilyCapture(text: string): IntentRecord[] {
     if (!relation) continue;
     if (!isRealName(nm)) continue;
     if (FAMILY_RELATIONS.includes(nm.toLowerCase())) continue; // "my son daughter" → skip
-    // Location intentionally omitted (deferred). Relation + name only.
-    return [{ type: 'family_capture', relation, name: nm }];
+    const location = extractResidence(raw);
+    return [{ type: 'family_capture', relation, name: nm, ...(location ? { location } : {}) }];
   }
   return [];
 }

@@ -1438,6 +1438,138 @@ export async function runConversationalSubjectTests() {
       v => v === before, String(before));
   }
 
+  // ── Family residence authority ──
+  {
+    const { db, say, subject } = freshFlow();
+    const stated = await say('My son Alex lives in Chicago and works in advertising.');
+    assert('FR1 confirmation names Alex in Chicago and not the job', stated,
+      v => v.handled === true && v.source === 'capture'
+        && v.responseText.includes('Alex') && v.responseText.includes('Chicago') && !/advertis/i.test(v.responseText),
+      'confirm Alex, Chicago, no job');
+    const yes = await say('yes');
+    const row = db.prepare('SELECT id, name, relationship, location, notes FROM contacts').get() as { id: string; name: string; location: string; notes: string | null } | undefined;
+    const live = subject.peek();
+    assert('FR2 yes commits Alex in Chicago', { status: yes.handled === true ? yes.source : '', row },
+      v => v.status === 'pending_resume' && v.row?.name === 'Alex' && v.row.location === 'Chicago' && !/advertis/i.test(JSON.stringify(v.row)),
+      'committed Alex/Chicago');
+    assert('FR3 the commit establishes that contact id', live,
+      v => v?.domain === 'family_contact' && v.entityId === row?.id && v.displayName === 'Alex' && v.relationship === 'son',
+      'family subject Alex by id');
+    db.prepare('UPDATE contacts SET location = ? WHERE id = ?').run('Evanston', row?.id);
+    const he = await say('Where does he live?');
+    assert('FR4 he re-reads the established contact id', he,
+      v => v.handled === true && v.source === 'referent_resume'
+        && v.responseText.includes('Alex') && v.responseText.includes('Evanston')
+        && !/Chicago|Grant|advertis/i.test(v.responseText),
+      'Alex lives in Evanston');
+    assert('FR5 residence consume clears the subject', subject.hasLive(), v => v === false, 'cleared');
+  }
+  {
+    const { db, say, subject } = freshFlow();
+    const alexId = writeContactRaw({ name: 'Alex', relationship: 'son', importance: 7 });
+    const grantId = writeContactRaw({ name: 'Grant', relationship: 'son', importance: 7 });
+    db.prepare('UPDATE contacts SET location = ? WHERE id = ?').run('Chicago', alexId);
+    db.prepare('UPDATE contacts SET location = ? WHERE id = ?').run('Austin', grantId);
+    subject.establishFamily({ entityId: alexId, displayName: 'Alex', relationship: 'son' });
+    const he = await say('Where does he live?');
+    assert('FR6 active Alex wins over Grant', he,
+      v => v.handled === true && v.source === 'referent_resume'
+        && v.responseText.includes('Alex') && v.responseText.includes('Chicago')
+        && !/Grant|Austin/.test(v.responseText),
+      'Alex in Chicago');
+  }
+  {
+    const { db, say, subject } = freshFlow();
+    const alexId = writeContactRaw({ name: 'Alex', relationship: 'son', importance: 7 });
+    const grantId = writeContactRaw({ name: 'Grant', relationship: 'son', importance: 7 });
+    db.prepare('UPDATE contacts SET location = ? WHERE id = ?').run('Chicago', alexId);
+    db.prepare('UPDATE contacts SET location = ? WHERE id = ?').run('Austin', grantId);
+    subject.establishFamily({ entityId: alexId, displayName: 'Alex', relationship: 'son' });
+    const son = await say('Where does my son live?');
+    assert('FR7 my son uses the established son, not the other city', son,
+      v => v.handled === true && v.source === 'referent_resume'
+        && v.responseText.includes('Alex') && v.responseText.includes('Chicago')
+        && !/Grant|Austin/.test(v.responseText),
+      'Alex in Chicago');
+  }
+  {
+    const { db, say } = freshFlow();
+    const alexId = writeContactRaw({ name: 'Alex', relationship: 'son', importance: 7 });
+    db.prepare('UPDATE contacts SET location = ? WHERE id = ?').run('Chicago', alexId);
+    const he = await say('Where does he live?');
+    const text = he.handled === true ? he.responseText : (he.handled === false && he.routeDecision.kind === 'device_read' ? he.routeDecision.response : '');
+    assert('FR8 no subject clarifies even when one city exists', text,
+      v => /don't know who you mean/i.test(v) && !/Alex|Chicago/.test(v),
+      'clarify, no Alex');
+  }
+  {
+    const { db, say } = freshFlow();
+    const alexId = writeContactRaw({ name: 'Alex', relationship: 'son', importance: 7 });
+    const grantId = writeContactRaw({ name: 'Grant', relationship: 'son', importance: 7 });
+    db.prepare('UPDATE contacts SET location = ? WHERE id = ?').run('Chicago', alexId);
+    db.prepare('UPDATE contacts SET location = ? WHERE id = ?').run('Austin', grantId);
+    const son = await say('Where does my son live?');
+    const text = son.handled === false && son.routeDecision.kind === 'device_read' ? son.routeDecision.response : '';
+    assert('FR9 two sons without a subject clarify', text,
+      v => /won't guess/i.test(v) && !/Alex|Grant|Chicago|Austin/.test(v),
+      'clarify');
+  }
+  {
+    const { db, say, subject } = freshFlow();
+    const alexId = writeContactRaw({ name: 'Alex', relationship: 'son', importance: 7 });
+    const grantId = writeContactRaw({ name: 'Grant', relationship: 'son', importance: 7 });
+    db.prepare('UPDATE contacts SET location = ? WHERE id = ?').run(null, alexId);
+    db.prepare('UPDATE contacts SET location = ? WHERE id = ?').run('Austin', grantId);
+    subject.establishFamily({ entityId: alexId, displayName: 'Alex', relationship: 'son' });
+    const he = await say('Where does he live?');
+    assert('FR10 missing city stays on Alex', he,
+      v => v.handled === true && v.source === 'referent_resume'
+        && /don't have where Alex lives/i.test(v.responseText)
+        && !/Grant|Austin/.test(v.responseText),
+      'unknown Alex, not Grant');
+  }
+  {
+    const { db, say } = freshFlow();
+    await say('My son Alex lives in Chicago and works in advertising.');
+    const no = await say('no');
+    const afterNo = db.prepare('SELECT COUNT(*) AS n FROM contacts').get() as { n: number };
+    assert('FR11 rejection writes nothing', { prompt: no.handled === true ? no.responseText : '', n: afterNo.n },
+      v => v.n === 0 && /correct name/i.test(v.prompt),
+      '0 rows, ask for the name');
+    const sam = await say('Sam');
+    const afterSam = db.prepare('SELECT COUNT(*) AS n FROM contacts').get() as { n: number };
+    assert('FR12 corrected name is proposed with the city and not written yet', { prompt: sam.handled === true ? sam.responseText : '', n: afterSam.n },
+      v => v.n === 0 && v.prompt.includes('Sam') && v.prompt.includes('Chicago') && !/advertis/i.test(v.prompt),
+      'pending Sam in Chicago, 0 rows');
+    const decline = await say('no');
+    const afterDecline = db.prepare('SELECT COUNT(*) AS n FROM contacts').get() as { n: number };
+    assert('FR13 declining the corrected proposal writes nothing', { text: decline.handled === true ? decline.responseText : '', n: afterDecline.n },
+      v => v.n === 0 && /won't remember/i.test(v.text),
+      '0 rows');
+  }
+  {
+    const { say, subject } = freshFlow();
+    writeContactRaw({ name: 'Shannon', relationship: 'wife', phone: '2145550100', importance: 8 });
+    await say('Who is my wife?');
+    const phone = await say("What's her phone number?");
+    assert('FR14 phone act still reads Shannon by the established subject', phone,
+      v => v.handled === true && v.source === 'referent_resume'
+        && v.responseText.includes('Shannon') && v.responseText.includes(spokenPhone('2145550100')),
+      "Shannon's number");
+    assert('FR15 phone consume still clears', subject.hasLive(), v => v === false, 'cleared');
+  }
+  {
+    const { say, subject } = freshFlow();
+    seedTwoDoctorOutcomes();
+    await say('When did I see Dr. Smith?');
+    const told = await say('What did he tell me?');
+    assert('FR16 doctor outcome act is unchanged', told,
+      v => v.handled === true && v.source === 'referent_resume'
+        && v.responseText.includes(SMITH_OUTCOME) && !v.responseText.includes(PATEL_OUTCOME),
+      'Smith outcome');
+    assert('FR17 doctor subject still renews', subject.hasLive(), v => v === true && subject.peek()?.entityId === 'Dr. Smith', 'Smith still live');
+  }
+
   const total = passed + failures.length;
   console.log(`\n${BOLD}Contract: ${passed}/${total} passed${failures.length > 0 ? ` — ${RED}${failures.length} FAILED${RESET}` : ` — ${GREEN}all green${RESET}`}${RESET}\n`);
   return { passed, failed: failures.length, total, failures };

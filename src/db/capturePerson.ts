@@ -17,6 +17,7 @@ export function capturePerson(p: {
     relationship,
     phone: p.phone,
     address: p.address,
+    location: p.location?.trim() || undefined,
     importance: p.importance ?? (relationship ? 7 : 5),
   }, {
     exclusiveLabels: relationship ? exclusiveStatedRelationshipPeers(relationship) : null,

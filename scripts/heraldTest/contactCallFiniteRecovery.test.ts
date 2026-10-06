@@ -23,7 +23,7 @@ const SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS contacts (
     id TEXT PRIMARY KEY, name TEXT NOT NULL, relationship TEXT, phone TEXT,
     address TEXT, email TEXT, birthday TEXT, importance INTEGER DEFAULT 5,
-    entity_id TEXT, os_contact_id TEXT, notes TEXT, last_contact TEXT,
+    entity_id TEXT, os_contact_id TEXT, notes TEXT, location TEXT, last_contact TEXT,
     is_emergency INTEGER DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, removed_at TEXT
   );
 `;
