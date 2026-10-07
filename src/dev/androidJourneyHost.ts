@@ -187,6 +187,7 @@ const SUBMIT_EVENT = 'DebugJourneySubmitTurn';
 const RESET_EVENT = 'DebugJourneyResetScenario';
 const TEARDOWN_EVENT = 'DebugJourneyTeardown';
 const SPEECH_PROBE_EVENT = 'DebugJourneySpeechProbe';
+const COLD_START_VOICE_EVENT = 'DebugJourneyColdStartVoice';
 const TALK_SESSION_HANDOFF_EVENT = 'DebugJourneyTalkSessionHandoff';
 const SEMANTIC_ENGINE_PROBE_EVENT = 'DebugJourneySemanticEngineProbe';
 const SPEECH_PRODUCTION_PATH_EVENT = 'DebugJourneySpeechProductionPath';
@@ -199,6 +200,7 @@ let subscription: { remove: () => void } | null = null;
 let resetSubscription: { remove: () => void } | null = null;
 let teardownSubscription: { remove: () => void } | null = null;
 let speechProbeSubscription: { remove: () => void } | null = null;
+let coldStartVoiceSubscription: { remove: () => void } | null = null;
 let talkSessionHandoffSubscription: { remove: () => void } | null = null;
 let semanticEngineProbeSubscription: { remove: () => void } | null = null;
 let speechProductionPathSubscription: { remove: () => void } | null = null;
@@ -774,6 +776,61 @@ async function waitFor(pred: () => boolean, timeoutMs: number): Promise<{ met: b
   return { met: pred(), waitedMs: Date.now() - t0 };
 }
 
+function publicSpeechRing(): Array<{ event: string; extra: Record<string, unknown> }> {
+  const keep = ['type', 'reason', 'applied', 'budgetMs', 'identifier', 'coldStart', 'resolution', 'path', 'result', 'count', 'voicePinned', 'warm'];
+  return snapshotSpeechLifecycleRing().map((row) => {
+    const extra: Record<string, unknown> = {};
+    for (const key of keep) {
+      if (row.extra && key in row.extra) extra[key] = row.extra[key];
+    }
+    return { event: row.event, extra };
+  });
+}
+
+async function runColdStartVoiceCheck(rearm: boolean): Promise<void> {
+  const sendMessage = runtime?.sendMessage;
+  const startRecording = runtime?.startRecording;
+  if (!sendMessage || !startRecording) {
+    emitComplete({
+      schema: 'herald.journey.cold_tts.v1',
+      status: 'FAIL',
+      failReason: 'runtime_unbound',
+    });
+    return;
+  }
+  resetSpeechLifecycleRing();
+  try {
+    await sendMessage('hello', 'typed');
+  } catch (e) {
+    emitComplete({
+      schema: 'herald.journey.cold_tts.v1',
+      status: 'FAIL',
+      failReason: e instanceof Error ? e.message : 'send_message_threw',
+      ring: publicSpeechRing(),
+    });
+    return;
+  }
+  const speakingNow = () => !!runtime?.peekSpeaking?.();
+  const ttsAssert = await waitFor(speakingNow, 20000);
+  const ttsClear = ttsAssert.met ? await waitFor(() => !speakingNow(), 70000) : { met: false, waitedMs: 0 };
+  const rearmBlocked = speakingNow();
+  if (rearm && !rearmBlocked) {
+    await startRecording('manual_button', 'open');
+  }
+  emitComplete({
+    schema: 'herald.journey.cold_tts.v1',
+    status: 'PASS',
+    failReason: null,
+    sendMessageReturned: true,
+    speakingBecameTrue: ttsAssert.met,
+    speakingCleared: ttsClear.met,
+    rearmBlocked,
+    rearmRequested: rearm,
+    ttsClearWaitMs: ttsClear.waitedMs,
+    ring: publicSpeechRing(),
+  });
+}
+
 async function runSpeechLifecycleProbe(): Promise<void> {
   const startRecording = runtime?.startRecording;
   if (!startRecording) {
@@ -1152,6 +1209,10 @@ export function onboardAndroidJourneyHost(): void {
   speechProbeSubscription = DeviceEventEmitter.addListener(SPEECH_PROBE_EVENT, () => {
     void runSpeechLifecycleProbe();
   });
+  coldStartVoiceSubscription = DeviceEventEmitter.addListener(COLD_START_VOICE_EVENT, (payload) => {
+    const rearm = !!(payload && payload.rearm === true);
+    void runColdStartVoiceCheck(rearm);
+  });
   talkSessionHandoffSubscription = DeviceEventEmitter.addListener(TALK_SESSION_HANDOFF_EVENT, () => {
     void runTalkSessionHandoffProbe();
   });
@@ -1182,6 +1243,8 @@ export function teardownAndroidJourneyHost(): void {
   teardownSubscription = null;
   speechProbeSubscription?.remove();
   speechProbeSubscription = null;
+  coldStartVoiceSubscription?.remove();
+  coldStartVoiceSubscription = null;
   talkSessionHandoffSubscription?.remove();
   talkSessionHandoffSubscription = null;
   semanticEngineProbeSubscription?.remove();

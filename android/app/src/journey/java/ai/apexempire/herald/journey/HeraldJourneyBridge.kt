@@ -21,6 +21,7 @@ object HeraldJourneyBridge {
   private const val RESET_EVENT = "DebugJourneyResetScenario"
   private const val TEARDOWN_EVENT = "DebugJourneyTeardown"
   private const val SPEECH_PROBE_EVENT = "DebugJourneySpeechProbe"
+  private const val COLD_START_VOICE_EVENT = "DebugJourneyColdStartVoice"
   private const val DEFAULT_TIMEOUT_MS = 60_000L
   private const val HOST_READY_TIMEOUT_MS = 60_000L
 
@@ -157,6 +158,40 @@ object HeraldJourneyBridge {
     seenTurnIds.clear()
     return if (!completed || json == null) {
       JSONObject().put("schema", "herald.journey.reset.v1").put("status", "FAIL").put("failReason", "timeout").toString()
+    } else json
+  }
+
+  fun probeColdStartVoice(rearm: Boolean, timeoutMs: Long = 90_000L): String {
+    if (!inFlight.compareAndSet(false, true)) {
+      return JSONObject().put("schema", "herald.journey.cold_tts.v1").put("status", "FAIL").put("failReason", "duplicate_or_in_flight").toString()
+    }
+    lastJson.set(null)
+    expectedTurnId.set(null)
+    val latch = CountDownLatch(1)
+    waiter.set(latch)
+    val ctx = reactContext
+    if (ctx == null) {
+      inFlight.set(false)
+      waiter.set(null)
+      return JSONObject().put("schema", "herald.journey.cold_tts.v1").put("status", "FAIL").put("failReason", "react_context_missing").toString()
+    }
+    try {
+      val params = Arguments.createMap()
+      params.putBoolean("rearm", rearm)
+      ctx
+        .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
+        .emit(COLD_START_VOICE_EVENT, params)
+    } catch (e: Exception) {
+      inFlight.set(false)
+      waiter.set(null)
+      return JSONObject().put("schema", "herald.journey.cold_tts.v1").put("status", "FAIL").put("failReason", "emit_failed").toString()
+    }
+    val completed = latch.await(timeoutMs, TimeUnit.MILLISECONDS)
+    val json = lastJson.get()
+    waiter.set(null)
+    inFlight.set(false)
+    return if (!completed || json == null) {
+      JSONObject().put("schema", "herald.journey.cold_tts.v1").put("status", "FAIL").put("failReason", "timeout").toString()
     } else json
   }
 

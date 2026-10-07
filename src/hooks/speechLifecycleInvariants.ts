@@ -5,6 +5,54 @@
 
 export const LISTENING_READY_TIMEOUT_MS = 4000;
 export const TTS_TERMINAL_FAILSAFE_MS = 12000;
+/**
+ * Cold embedded-pipeline load on API 34 was observed at 33s, with no native
+ * terminal and no PCM until that load finished. The first utterance may stay
+ * owned for the ordinary playback budget plus that load. Later utterances
+ * keep the 12s budget. This is not a second speech engine.
+ */
+export const TTS_COLD_START_FAILSAFE_MS = TTS_TERMINAL_FAILSAFE_MS + 33000;
+/** Bound for getAvailableVoicesAsync. It establishes the TTS service only. */
+export const TTS_VOICE_DISCOVERY_BUDGET_MS = 8000;
+
+export type OnDeviceVoiceCandidate = {
+  identifier: string;
+  name: string;
+  language: string;
+};
+
+function voiceHaystack(voice: OnDeviceVoiceCandidate): string {
+  return `${voice.identifier} ${voice.name}`;
+}
+
+/** Google TTS rejects en-us-x-iog-server for this app identifier. */
+export function isRejectedServerVoice(voice: OnDeviceVoiceCandidate): boolean {
+  return /server/i.test(voiceHaystack(voice));
+}
+
+/** True only when the identifier is an explicit lstm-embedded pipeline, not a generic local alias. */
+export function isEmbeddedOnDeviceVoice(voice: OnDeviceVoiceCandidate): boolean {
+  if (isRejectedServerVoice(voice)) return false;
+  return /lstm-embedded/i.test(voice.identifier);
+}
+
+/**
+ * Pin an English voice only when its identifier is an explicit embedded
+ * pipeline. A generic local alias, a server voice, or an empty list returns
+ * null so Android TTS keeps its own available local fallback.
+ */
+export function selectOnDeviceEnglishVoice(voices: readonly OnDeviceVoiceCandidate[]): string | null {
+  const embeddedEnglish = voices.filter((voice) =>
+    isEmbeddedOnDeviceVoice(voice) && /^en([-_]|$)/i.test(voice.language));
+  const preferred = embeddedEnglish.find((voice) => /iog-lstm-embedded/i.test(voice.identifier))
+    ?? embeddedEnglish[0];
+  return preferred?.identifier ?? null;
+}
+
+/** Warm turns keep the 12s stall budget. The first pipeline load uses the cold bound. */
+export function ttsOwnershipBudgetMs(nativePipelineWarm: boolean): number {
+  return nativePipelineWarm ? TTS_TERMINAL_FAILSAFE_MS : TTS_COLD_START_FAILSAFE_MS;
+}
 
 export type ListeningReadySource =
   | 'native_start'

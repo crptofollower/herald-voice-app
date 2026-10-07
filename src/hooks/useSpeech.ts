@@ -50,9 +50,12 @@ import { createTurnStartGate } from "./turnStartGate";
 import { getActiveTurnId, log as latLog, mono as latMono } from "../utils/latencyInstrument";
 import {
   TTS_TERMINAL_FAILSAFE_MS,
+  TTS_VOICE_DISCOVERY_BUDGET_MS,
   applyExpoSpeechTerminal,
   applyTtsTerminalFailsafe,
+  selectOnDeviceEnglishVoice,
   speechLifecycleLog,
+  ttsOwnershipBudgetMs,
 } from "./speechLifecycleInvariants";
 
 export { applyExpoSpeechTerminal } from "./speechLifecycleInvariants";
@@ -126,6 +129,9 @@ export function useSpeech(ensureMicSuspendedRef: EnsureMicSuspendedRef) {
   const expoQueueRef = useRef<string[]>([]);
   const expoSpeakingRef  = useRef(false); // guards overlapping expo-speech fallbacks
   const failsafeRef = useRef<{ gen: number; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const embeddedVoiceRef = useRef<string | null | undefined>(undefined);
+  const voiceDiscoveryRef = useRef<Promise<string | null> | null>(null);
+  const engineWarmRef = useRef(false);
 
   const clearFailsafe = (gen: number) => {
     if (failsafeRef.current && failsafeRef.current.gen === gen) {
@@ -134,11 +140,12 @@ export function useSpeech(ensureMicSuspendedRef: EnsureMicSuspendedRef) {
     }
   };
 
-  const armFailsafe = (gen: number) => {
+  const armFailsafe = (gen: number, budgetMs: number = TTS_TERMINAL_FAILSAFE_MS) => {
     if (failsafeRef.current) {
       clearTimeout(failsafeRef.current.timer);
       failsafeRef.current = null;
     }
+    speechLifecycleLog('TTS_FAILSAFE_ARMED', { gen, budgetMs, warm: engineWarmRef.current });
     failsafeRef.current = {
       gen,
       timer: setTimeout(() => {
@@ -155,10 +162,40 @@ export function useSpeech(ensureMicSuspendedRef: EnsureMicSuspendedRef) {
             speechLifecycleLog('SPEAKING_RELEASED', { gen, reason: 'failsafe' });
           },
         });
-        speechLifecycleLog('TTS_TERMINAL', { gen, type: 'failsafe', applied });
-      }, TTS_TERMINAL_FAILSAFE_MS),
+        speechLifecycleLog('TTS_TERMINAL', { gen, type: 'failsafe', applied, budgetMs });
+      }, budgetMs),
     };
   };
+
+  // getAvailableVoicesAsync is the supported readiness call. It binds the TTS
+  // service. It does not load the embedded pipeline and it does not speak.
+  const ensureOnDeviceVoice = useCallback((): Promise<string | null> => {
+    if (embeddedVoiceRef.current !== undefined) return Promise.resolve(embeddedVoiceRef.current);
+    if (!voiceDiscoveryRef.current) {
+      voiceDiscoveryRef.current = (async () => {
+        try {
+          const voices = await Promise.race([
+            ExpoSpeech.getAvailableVoicesAsync(),
+            new Promise<never>((_, reject) => {
+              setTimeout(() => reject(new Error('voice_discovery_timeout')), TTS_VOICE_DISCOVERY_BUDGET_MS);
+            }),
+          ]);
+          const selected = selectOnDeviceEnglishVoice(voices);
+          embeddedVoiceRef.current = selected;
+          speechLifecycleLog('TTS_VOICE_SELECTED', {
+            identifier: selected ?? 'none',
+            count: voices.length,
+          });
+          return selected;
+        } catch {
+          embeddedVoiceRef.current = null;
+          speechLifecycleLog('TTS_VOICE_SELECTED', { identifier: 'none', reason: 'discovery_failed' });
+          return null;
+        }
+      })();
+    }
+    return voiceDiscoveryRef.current;
+  }, []);
 
   const streamEndedRef = useRef(true);      // true = no stream currently open
   const turnSuppressedRef = useRef(false);  // true = mic suspend failed, stay silent this turn
@@ -255,6 +292,10 @@ export function useSpeech(ensureMicSuspendedRef: EnsureMicSuspendedRef) {
       genRef.current += 1;
     };
   }, []);
+
+  useEffect(() => {
+    void ensureOnDeviceVoice();
+  }, [ensureOnDeviceVoice]);
 
   // ── Playback loop (Nova path -- currently dead code, ON_DEVICE_TTS is always true) ──
   const runPlaybackLoop = useCallback(async (gen: number) => {
@@ -371,7 +412,8 @@ export function useSpeech(ensureMicSuspendedRef: EnsureMicSuspendedRef) {
     expoSpeakingRef.current = true;
     latLog('TTS initiation', { turnId: getActiveTurnId(), engine: 'expo-speech' });
     const utteranceGen = genRef.current;
-    speechLifecycleLog('EXPO_SPEECH_DISPATCH', { gen: utteranceGen });
+    const voice = embeddedVoiceRef.current;
+    speechLifecycleLog('EXPO_SPEECH_DISPATCH', { gen: utteranceGen, voicePinned: typeof voice === 'string' });
     const onTerminal = () => {
       clearFailsafe(utteranceGen);
       const applied = applyExpoSpeechTerminal({
@@ -382,10 +424,19 @@ export function useSpeech(ensureMicSuspendedRef: EnsureMicSuspendedRef) {
       });
       speechLifecycleLog('TTS_TERMINAL', { gen: utteranceGen, type: 'native', applied });
     };
-    armFailsafe(utteranceGen);
+    const onNativeStart = () => {
+      if (utteranceGen !== genRef.current) return;
+      const coldStart = !engineWarmRef.current;
+      engineWarmRef.current = true;
+      speechLifecycleLog('TTS_NATIVE_START', { gen: utteranceGen, coldStart });
+      armFailsafe(utteranceGen, TTS_TERMINAL_FAILSAFE_MS);
+    };
+    armFailsafe(utteranceGen, ttsOwnershipBudgetMs(engineWarmRef.current));
     ExpoSpeech.speak(next, {
       rate: 0.9,
       pitch: 1.0,
+      ...(typeof voice === 'string' && voice.length > 0 ? { voice } : {}),
+      onStart: onNativeStart,
       onDone: onTerminal,
       onError: onTerminal,
       onStopped: onTerminal,
@@ -407,6 +458,8 @@ export function useSpeech(ensureMicSuspendedRef: EnsureMicSuspendedRef) {
       });
 
       (async () => {
+        await ensureOnDeviceVoice();
+        if (gen !== genRef.current) return;
         if (turnSuppressedRef.current) return;
 
         const started = await ensureTurnStarted();
@@ -436,17 +489,18 @@ export function useSpeech(ensureMicSuspendedRef: EnsureMicSuspendedRef) {
         runPlaybackLoop(gen);
       })();
     },
-    [ensureTurnStarted, drainExpoQueue, runFetchLoop, runPlaybackLoop]
+    [ensureTurnStarted, drainExpoQueue, runFetchLoop, runPlaybackLoop, ensureOnDeviceVoice]
   );
 
   // ── speak -- one-shot (greeting / non-streamed / deterministic replies) ────
   const speak = useCallback(
     async (text: string) => {
       latLog('speak requested', { turnId: getActiveTurnId(), charLen: cleanForSpeech(text).length });
+      await ensureOnDeviceVoice();
       await stop();
       enqueueSentence(text, { isLast: true });
     },
-    [stop, enqueueSentence]
+    [stop, enqueueSentence, ensureOnDeviceVoice]
   );
 
   // ── finishStream -- caller (ChatScreen) calls this exactly when the

@@ -6,12 +6,15 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   LISTENING_READY_TIMEOUT_MS,
+  TTS_COLD_START_FAILSAFE_MS,
   TTS_TERMINAL_FAILSAFE_MS,
   applyExpoSpeechTerminal,
   applyListeningReadyTimeout,
   applyTtsTerminalFailsafe,
   claimsListeningReady,
+  selectOnDeviceEnglishVoice,
   talkAttemptAdmission,
+  ttsOwnershipBudgetMs,
 } from '../../src/hooks/speechLifecycleInvariants.ts';
 
 const BOLD = '\x1b[1m', RED = '\x1b[31m', GREEN = '\x1b[32m', DIM = '\x1b[2m', RESET = '\x1b[0m';
@@ -199,6 +202,98 @@ export async function runSpeechLifecycleInvariantsV1Tests() {
         && o.chatSrc.includes('peekSpeaking:');
     },
     'speech probe bound to production ownership');
+
+  const voices = [
+    { identifier: 'en-us-x-iog-server', name: 'en-US-language', language: 'en-US' },
+    { identifier: 'en-au-x-aud-local', name: 'en-au-x-aud-lstm-embedded', language: 'en-AU' },
+    { identifier: 'en-us-x-hol-lstm-embedded', name: 'English embedded', language: 'en-US' },
+    { identifier: 'en-us-x-iog-lstm-embedded', name: 'English lstm embedded', language: 'en-US' },
+    { identifier: 'es-us-x-local', name: 'Spanish local', language: 'es-US' },
+  ];
+  assert('SLI-24 embedded English lstm voice is preferred over the rejected server voice',
+    selectOnDeviceEnglishVoice(voices),
+    v => v === 'en-us-x-iog-lstm-embedded',
+    'en-us-x-iog-lstm-embedded');
+  assert('SLI-25 a server-only list is not pinned',
+    selectOnDeviceEnglishVoice([{ identifier: 'en-us-x-iog-server', name: 'en-US-language', language: 'en-US' }]),
+    v => v === null,
+    'null');
+  assert('SLI-26 non-English embedded voices are not selected',
+    selectOnDeviceEnglishVoice([{ identifier: 'es-us-x-local', name: 'Spanish local', language: 'es-US' }]),
+    v => v === null,
+    'null');
+  assert('SLI-27 a generic local alias is not pinned',
+    {
+      sfg: selectOnDeviceEnglishVoice([{ identifier: 'en-us-x-sfg-local', name: 'English local', language: 'en-US' }]),
+      aud: selectOnDeviceEnglishVoice([{ identifier: 'en-au-x-aud-local', name: 'English (Australia)', language: 'en-AU' }]),
+      namedOnly: selectOnDeviceEnglishVoice([{ identifier: 'en-au-x-aud-local', name: 'en-au-x-aud-lstm-embedded', language: 'en-AU' }]),
+    },
+    v => {
+      const o = v as { sfg: string | null; aud: string | null; namedOnly: string | null };
+      return o.sfg === null && o.aud === null && o.namedOnly === null;
+    },
+    'null');
+  assert('SLI-28 cold ownership budget covers the observed 33s pipeline load',
+    { cold: ttsOwnershipBudgetMs(false), warm: ttsOwnershipBudgetMs(true), coldConst: TTS_COLD_START_FAILSAFE_MS },
+    v => {
+      const o = v as { cold: number; warm: number; coldConst: number };
+      return o.warm === 12000 && o.cold === 45000 && o.coldConst === 45000 && o.cold === TTS_TERMINAL_FAILSAFE_MS + 33000;
+    },
+    'warm 12s, cold 45s');
+  assert('SLI-29 production discovers voices without speaking a warmup utterance',
+    speechSrc,
+    v => typeof v === 'string'
+      && v.includes('getAvailableVoicesAsync')
+      && v.includes('selectOnDeviceEnglishVoice')
+      && v.includes('ensureOnDeviceVoice')
+      && !v.includes("ExpoSpeech.speak('")
+      && !v.includes('warmup'),
+    'voice list only; no spoken probe');
+  assert('SLI-30 first utterance arms the cold budget and onStart restores the 12s stall budget',
+    speechSrc,
+    v => typeof v === 'string'
+      && v.includes('ttsOwnershipBudgetMs(engineWarmRef.current)')
+      && v.includes('onStart: onNativeStart')
+      && v.includes('armFailsafe(utteranceGen, TTS_TERMINAL_FAILSAFE_MS)')
+      && v.includes("speechLifecycleLog('TTS_NATIVE_START'"),
+    'cold budget until native start, then 12s');
+  assert('SLI-31 onStart does not dispatch another utterance',
+    speechSrc.slice(speechSrc.indexOf('const onNativeStart'), speechSrc.indexOf('armFailsafe(utteranceGen, ttsOwnershipBudgetMs')),
+    v => typeof v === 'string' && !v.includes('ExpoSpeech.speak'),
+    'no second speak from onStart');
+
+  let failedSpeaking = true;
+  const failedRelease = applyTtsTerminalFailsafe({
+    failsafeGen: 4,
+    currentGen: 4,
+    markNativeIdle: () => { failedSpeaking = false; },
+    releaseSpeaking: () => { failedSpeaking = false; },
+  });
+  let recoveredSpeaking = true;
+  const staleAfterFailure = applyExpoSpeechTerminal({
+    callbackGen: 4,
+    currentGen: 5,
+    markNativeIdle: () => { recoveredSpeaking = false; },
+    continueDrain: () => { recoveredSpeaking = false; },
+  });
+  assert('SLI-33 an empty voice list and a discovery failure both leave the pin unset',
+    { empty: selectOnDeviceEnglishVoice([]), speechSrc },
+    v => {
+      const o = v as { empty: string | null; speechSrc: string };
+      return o.empty === null
+        && o.speechSrc.includes('embeddedVoiceRef.current = null')
+        && o.speechSrc.includes("reason: 'discovery_failed'")
+        && o.speechSrc.includes('return null');
+    },
+    'null pin; discovery failure caches null');
+  assert('SLI-32 a genuine TTS failure releases speaking and a stale callback cannot clear the next generation',
+    { failedRelease, failedSpeaking, staleAfterFailure, recoveredSpeaking },
+    v => {
+      const o = v as { failedRelease: string; failedSpeaking: boolean; staleAfterFailure: string; recoveredSpeaking: boolean };
+      return o.failedRelease === 'applied' && o.failedSpeaking === false
+        && o.staleAfterFailure === 'stale' && o.recoveredSpeaking === true;
+    },
+    'failure releases gen 4; stale callback leaves gen 5 speaking');
 
   console.log(`\n${BOLD}Speech Lifecycle Invariants V1: ${passed} passed, ${failures.length} failed${RESET}`);
   return { passed, failed: failures.length, total: passed + failures.length, failures };
