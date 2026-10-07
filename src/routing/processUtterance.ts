@@ -916,6 +916,16 @@ export async function processUtterance(
     }
   }
   if (session.hasPending() && !preserveClarificationRead) {
+    const pendingKeyAtEntry = session.peekPendingKey();
+    const familyConfirmReleaseKey =
+      pendingKeyAtEntry === 'family_capture' || pendingKeyAtEntry === 'llm_confirm:family_capture';
+    let preResolved: CommitResult | undefined;
+    if (familyConfirmReleaseKey) {
+      preResolved = await session.resolvePending(text);
+    }
+    const releasedFamilyConfirm =
+      !!preResolved && preResolved.status === 'noop' && preResolved.exit === 'released';
+    if (!releasedFamilyConfirm) {
     const protectedIds = new Set(
       recoveryObligation?.peek()?.scope.kind === 'presented_sets'
         && isSoftObligationEligible(recoveryObligation.peek()!, softView())
@@ -945,8 +955,8 @@ export async function processUtterance(
     if (!(todoSetId && protectedIds.has(todoSetId))) todoPresentation?.clear();
     calendarContinuation?.clear();
     syncSoft();
-    const pendingKey = session.peekPendingKey();
-    const result = await session.resolvePending(text);
+    const pendingKey = pendingKeyAtEntry;
+    const result = preResolved ?? await session.resolvePending(text);
     // Generic pending-resume hook: covers every resume closure uniformly
     // (both applyIntents' own LLM-confirm closure, already separately
     // instrumented above, and any other pending built elsewhere — e.g.
@@ -1018,6 +1028,7 @@ export async function processUtterance(
       return todoHandled('pending_resume', pendingResume.responseText, pendingResume.commits);
     }
     return groceryPending ? groceryHandled('pending_resume', pendingResume.responseText, pendingResume.commits) : pendingResume;
+    }
   }
   if (!session.hasPending() && ledger) {
     const corrected = admitCorrectionContinuity({

@@ -130,12 +130,12 @@ export async function runPipelineTests() {
     const t1 = await say('my wife is Shannon');
     assert('P3a pending confirm live', t1, (v) => v.handled === true && v.responseText.includes('wife'), 'confirm prompt');
     const t2 = await say('ok my daughter is Shannon');
-    assert('P3b Law 2: unresolvable reply re-asks — does NOT re-route as a fresh capture', t2, (v) => v.handled === true && v.source === 'pending_resume', 'pending_resume, not fresh capture');
-    assert('P3b2 wife-pending stays pending — never leaks', session.hasPending(), (v) => v === true, 'true');
+    assert('P3b unrecognized family reply is routed once, not re-asked', t2, (v) => v.handled === true && v.source === 'capture' && v.responseText.includes('daughter') && !v.responseText.includes('say that again'), 'fresh daughter capture, not DEFAULT_REASK');
+    assert('P3b2 the dropped wife confirm does not remain the pending', session.peekPendingKey() === 'family_capture' && t2.handled === true && t2.responseText.includes('daughter'), (v) => v === true, 'daughter confirm is the live pending');
     assert('P3c nothing committed yet', rows().length, (v) => v === 0, '0 rows');
     const t3 = await say('yes');
-    assert('P3d original wife pending still resolves on a real yes', t3, (v) => v.handled === true && v.responseText.includes('Shannon'), 'commits Shannon');
-    assert('P3e one contact row after commit', rows(), (v) => v.length === 1 && v[0].relationship === 'wife', '1 row, wife');
+    assert('P3d yes commits the routed daughter capture', t3, (v) => v.handled === true && v.responseText.includes('Shannon'), 'commits Shannon');
+    assert('P3e one contact row after commit', rows(), (v) => v.length === 1 && v[0].relationship === 'daughter', '1 row, daughter');
   }
   {
     const { say, rows } = freshPipeline();

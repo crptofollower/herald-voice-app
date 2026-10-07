@@ -70,12 +70,12 @@ export function actForCommits(commits: readonly CommitShape[], text: string): Re
   return undefined;
 }
 
-export function actForPendingResolution(result: CommitShape & { ack?: string; prompt?: string; exit?: 'cancelled' }): ResponseAct | undefined {
+export function actForPendingResolution(result: CommitShape & { ack?: string; prompt?: string; exit?: 'cancelled' | 'released' }): ResponseAct | undefined {
   if (result.status === 'noop' && result.exit === 'cancelled') return { kind: 'CANCELLED', text: result.ack ?? '' };
   if (result.status === 'committed') return executionResultAct(result.ack ?? '');
   if (result.status === 'pending' && result.pendingKey) return requestConfirmationAct(result.prompt ?? '', result.pendingKey);
-  // Failed and any other noop stay untyped. `exit: 'cancelled'` is the only
-  // noop discriminator this boundary trusts.
+  // Failed, a family-confirm release, and any other noop stay untyped.
+  // `exit: 'cancelled'` is the only noop that selects CANCELLED.
   return undefined;
 }
 

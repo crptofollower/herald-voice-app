@@ -239,10 +239,18 @@ export async function runRecoveryObligationV1Tests() {
     recovery.establish();
     const steal = await say("No, that's not what I meant. I was asking about my calendar.");
     assert(
-      'J recovery sentence stays pending-owned',
-      steal.handled && steal.source === 'pending_resume',
+      'J unrecognized family confirm does not stay pending',
+      session.peekPendingKey() !== 'family_capture',
     );
-    assert('J still family_capture or released by domain, not recovery', steal.source !== 'recovery_obligation');
+    assert(
+      'J sentence is not the family DEFAULT_REASK',
+      !(steal.handled && steal.source === 'pending_resume'
+        && steal.responseText === "I'm not sure I'm following — can you say that again?"),
+    );
+    assert(
+      'J recovery runs only after the family confirm is dropped',
+      steal.handled && steal.source === 'recovery_obligation',
+    );
     session.clearPending();
     recovery.clear();
   }

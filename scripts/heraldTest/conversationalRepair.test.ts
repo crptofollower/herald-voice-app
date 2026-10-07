@@ -88,7 +88,7 @@ function readOutcome(db: Database.Database, id: string) {
 
 async function armFamily(
   session: ConversationSession,
-  opts: { name?: string; relation?: string; location?: string } = {},
+  opts: { name?: string; relation?: string; location?: string; rawPhrase?: string } = {},
 ): Promise<Extract<CommitResult, { status: 'pending' }>> {
   const result = await DOMAIN_WRITERS.family_capture!.add(
     {
@@ -97,7 +97,7 @@ async function armFamily(
       relation: opts.relation ?? 'wife',
       location: opts.location ?? 'Austin',
     },
-    'my wife Shannon lives in Austin',
+    opts.rawPhrase ?? 'my wife Shannon lives in Austin',
   );
   if (result.status !== 'pending') throw new Error(`expected family pending, got ${result.status}`);
   session.setPending({
@@ -203,19 +203,20 @@ export async function runConversationalRepairTests() {
     void db;
   }
 
-  // F4: "No thanks" → unresolved/re-ask ladder (unchanged baseline)
+  // F4: "No thanks" is not yes/no/correction/cancel. Family confirm releases it.
   {
-    freshDB();
+    const db = freshDB();
     const session = new ConversationSession();
     const armed = await armFamily(session);
     const result = await session.resolvePending('No thanks');
-    assert('F4a No thanks → still pending (not correction, not reject-ack)', result,
-      v => (v as any).status === 'pending' && (v as any).pendingKey === 'family_capture',
-      'pending / family_capture');
-    assert('F4b No thanks uses DEFAULT_REASK (no domain reaskPrompt on family confirm)', result,
-      v => (v as any).prompt === "I'm not sure I'm following — can you say that again?",
-      'DEFAULT_REASK');
-    assert('F4c session still pending after No thanks', session.hasPending(), v => v === true, 'true');
+    assert('F4a No thanks → released, not a correction confirm', result,
+      v => (v as any).status === 'noop' && (v as any).exit === 'released',
+      'noop / released');
+    assert('F4b No thanks is not DEFAULT_REASK and does not keep family_capture', result,
+      v => (v as any).prompt !== "I'm not sure I'm following — can you say that again?"
+        && session.peekPendingKey() !== 'family_capture',
+      'released, not DEFAULT_REASK');
+    assert('F4c No thanks writes nothing', contactCount(db), v => v === 0, '0 contacts');
     void armed;
   }
 
@@ -228,22 +229,21 @@ export async function runConversationalRepairTests() {
     await armFamily(session);
     const result = await session.resolvePending("No, that's fine.");
     assert(
-      'S16.13a "No, that\'s fine." → NOT family_capture_correction_confirm; F4-identical re-ask, no write',
+      'S16.13a "No, that\'s fine." → NOT family_capture_correction_confirm; released, no write',
       {
         status: (result as any).status,
+        exit: (result as any).exit,
         key: (result as any).pendingKey,
-        prompt: (result as any).prompt,
         pending: session.hasPending(),
         rows: contactCount(db),
       },
       v =>
-        (v as any).status === 'pending'
-        && (v as any).key === 'family_capture'
+        (v as any).status === 'noop'
+        && (v as any).exit === 'released'
         && (v as any).key !== 'family_capture_correction_confirm'
-        && (v as any).prompt === "I'm not sure I'm following — can you say that again?"
-        && (v as any).pending === true
+        && (v as any).pending === false
         && (v as any).rows === 0,
-      'pending / family_capture / DEFAULT_REASK / no write',
+      'released / no write',
     );
   }
   {
@@ -252,22 +252,21 @@ export async function runConversationalRepairTests() {
     await armFamily(session);
     const result = await session.resolvePending("No, I don't think so.");
     assert(
-      'S16.13b "No, I don\'t think so." → NOT family_capture_correction_confirm; F4-identical re-ask, no write',
+      'S16.13b "No, I don\'t think so." → NOT family_capture_correction_confirm; released, no write',
       {
         status: (result as any).status,
+        exit: (result as any).exit,
         key: (result as any).pendingKey,
-        prompt: (result as any).prompt,
         pending: session.hasPending(),
         rows: contactCount(db),
       },
       v =>
-        (v as any).status === 'pending'
-        && (v as any).key === 'family_capture'
+        (v as any).status === 'noop'
+        && (v as any).exit === 'released'
         && (v as any).key !== 'family_capture_correction_confirm'
-        && (v as any).prompt === "I'm not sure I'm following — can you say that again?"
-        && (v as any).pending === true
+        && (v as any).pending === false
         && (v as any).rows === 0,
-      'pending / family_capture / DEFAULT_REASK / no write',
+      'released / no write',
     );
   }
 
@@ -399,9 +398,14 @@ export async function runConversationalRepairTests() {
   {
     freshDB();
     const session = new ConversationSession();
-    await armFamily(session, { name: 'Bob', relation: 'brother', location: 'Dallas' });
+    await armFamily(session, {
+      name: 'Bob',
+      relation: 'brother',
+      location: 'Dallas',
+      rawPhrase: 'my brother Bob lives in Dallas',
+    });
     const result = await session.resolvePending("i meant Robert");
-    assert('S16.1 correction replaces name only; relation+location remain in prompt', result,
+    assert('S16.1 correction replaces name only; this brother\'s Dallas remains in the prompt', result,
       v => (v as any).prompt === 'Robert, your brother, in Dallas — that right?',
       'Robert, your brother, in Dallas — that right?');
   }
@@ -450,11 +454,11 @@ export async function runConversationalRepairTests() {
       const session = new ConversationSession();
       await armFamily(session);
       const result = await session.resolvePending(phrase);
-      assert(`S16.5 family "${phrase}" → re-ask ladder, not correction_confirm`, result,
-        v => (v as any).status === 'pending'
-          && (v as any).pendingKey === 'family_capture'
-          && (v as any).pendingKey !== 'family_capture_correction_confirm',
-        'pending / family_capture (not correction)');
+      assert(`S16.5 family "${phrase}" → released, not correction_confirm`, result,
+        v => (v as any).status === 'noop'
+          && (v as any).exit === 'released'
+          && session.peekPendingKey() !== 'family_capture_correction_confirm',
+        'released / not correction');
     }
     for (const phrase of traps) {
       const db = freshDB();
@@ -528,11 +532,11 @@ export async function runConversationalRepairTests() {
     await armFamily(session, { name: 'Shannon', relation: 'wife', location: 'Austin' });
     const curly = "no, it\u2019s Jennifer";
     const result = await session.resolvePending(curly); // NOT normalized
-    assert('S16.8c unnormalized curly marker → fail-safe re-ask (not crash, not false correction)', result,
-      v => (v as any).status === 'pending'
-        && (v as any).pendingKey === 'family_capture'
-        && (v as any).pendingKey !== 'family_capture_correction_confirm',
-      'DEFAULT_REASK / family_capture');
+    assert('S16.8c unnormalized curly marker → fail-safe release (not crash, not false correction)', result,
+      v => (v as any).status === 'noop'
+        && (v as any).exit === 'released'
+        && session.peekPendingKey() !== 'family_capture_correction_confirm',
+      'released / not a false correction');
   }
 
   // §16.9 — A1 grep already in F2c/M1c; pin every correctable-path prompt seen in this suite via helper on family markers

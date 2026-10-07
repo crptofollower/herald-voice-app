@@ -29,7 +29,7 @@ import { generateCapabilityProposal, admitCapabilityProposal, WIRED_READ_CAPABIL
 import { admitDispatchedSemanticRead } from './semanticAdmission';
 import { evaluateSemanticDispatchEligibility } from './semanticDispatchEligibility';
 import { isClosedActiveSubjectIdentityLookup } from './activeSubjectReference';
-import { detectFamilyCapture } from '../utils/familyCapture';
+import { detectFamilyCapture, residenceForCapturedMember } from '../utils/familyCapture';
 import { detectPersonAssociationCapture, addPersonAssociationCapture } from '../utils/personAssociationCapture';
 import { detectEpisodeCapture, addEpisodeCapture } from '../utils/episodeCapture';
 import { getDB } from '../db/schema';
@@ -144,7 +144,7 @@ export type CommitResult =
       /** Proposed semantic identity, pre-confirmation — see DomainFocusEnvelope. */
       focus?: DomainFocusEnvelope;
       referenceOnly?: boolean }
-  | { status: 'noop';      ack: string; focus?: DomainFocusEnvelope; referenceOnly?: boolean; exit?: 'cancelled' }
+  | { status: 'noop';      ack: string; focus?: DomainFocusEnvelope; referenceOnly?: boolean; exit?: 'cancelled' | 'released' }
   | { status: 'failed';    ack: string; focus?: DomainFocusEnvelope; referenceOnly?: boolean };
 
 export type ResolveContactFn = (n: string) => Promise<{phone:string;name:string;contactId?:string;source:'herald'|'device'}|{phone:null;name:string;source:'device';candidateNames:string[];deviceCandidates:{name:string;phone:string}[]}|null>;
@@ -826,7 +826,10 @@ export const DOMAIN_WRITERS: Partial<Record<string, DomainWriter>> = {
       };
       const famName = intent.name?.trim();
       const relation = intent.relation?.trim();
-      const location = intent.location?.trim() || undefined;
+      // Residence belongs to this member only. A model location slot is not authority.
+      const location = famName && relation
+        ? residenceForCapturedMember(rawPhrase, famName, relation)
+        : undefined;
       if (!relation) {
         return { status: 'failed', ack: "I didn't catch the relationship — who are they to you?" };
       }

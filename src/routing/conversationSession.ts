@@ -120,6 +120,11 @@ export function matchCandidateToken(
 
 const DEFAULT_STANDARD_BUDGET = 2;
 
+/** Family confirmations only. Other pending keys keep the re-ask ladder. */
+function isFamilyConfirmReleaseKey(key: string): boolean {
+  return key === 'family_capture' || key === 'llm_confirm:family_capture';
+}
+
 function releaseAck(kind: PendingKind): string {
   return kind === 'destructive'
     ? "Let's leave everything as it is for now — just tell me again if you want to change anything."
@@ -207,6 +212,15 @@ export class ConversationSession {
             resume: corrected.resume,
           };
         }
+      }
+      // Yes, no, correction, and cancel already ran. An unrecognized reply to a
+      // family confirmation is not an answer: drop the slot with no write and
+      // let the caller route this same utterance once. Silence and other input
+      // with no letters or digits is not that reply — same predicate as
+      // emergency clarify — so the re-ask ladder still owns it.
+      if (isFamilyConfirmReleaseKey(slot.pendingKey) && /[a-z0-9]/i.test(userText)) {
+        this.pending = null;
+        return { status: 'noop', ack: '', exit: 'released' };
       }
       slot.budget -= 1;
       if (slot.budget <= 0) {
